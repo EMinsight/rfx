@@ -24,6 +24,7 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,9 @@ def optimize(
     num_periods: float = 20.0,
     verbose: bool = True,
     skip_preflight: bool = False,
+    checkpoint_every: int | None = None,
+    emit_time_series: bool = True,
+    n_warmup: int = 0,
 ) -> OptimizeResult:
     """Run gradient-based optimization on a design region.
 
@@ -112,12 +116,33 @@ def optimize(
     OptimizeResult
     """
     sim._auto_preflight(skip=skip_preflight, context="optimize")
-    grid = sim._build_grid()
 
-    # Compute design-region grid indices, clamped to interior (exclude CPML).
-    lo_idx = list(grid.position_to_index(region.corner_lo))
-    hi_idx = list(grid.position_to_index(region.corner_hi))
-    pads = (grid.pad_x, grid.pad_y, grid.pad_z)
+    # #64: dispatch to NU or uniform grid. The differentiable pipeline
+    # is then the same (sim.forward with eps_override + pec_mask_override),
+    # so optimize() automatically inherits checkpoint_every, emit_time_series,
+    # and NU support as forward() gains them.
+    is_nonuniform = (
+        sim._dz_profile is not None
+        or sim._dx_profile is not None
+        or sim._dy_profile is not None
+    )
+    if is_nonuniform:
+        grid = sim._build_nonuniform_grid()
+        from rfx.nonuniform import position_to_index as _nu_pos_to_idx
+        lo_idx = list(_nu_pos_to_idx(grid, region.corner_lo))
+        hi_idx = list(_nu_pos_to_idx(grid, region.corner_hi))
+        pads = (grid.cpml_layers, grid.cpml_layers, grid.cpml_layers)
+        base_materials, _, _, base_pec_mask = sim._assemble_materials_nu(grid)
+        period = 1.0 / float(sim._freq_max)
+        _n_steps_auto = int(np.ceil(num_periods * period / float(grid.dt)))
+    else:
+        grid = sim._build_grid()
+        lo_idx = list(grid.position_to_index(region.corner_lo))
+        hi_idx = list(grid.position_to_index(region.corner_hi))
+        pads = (grid.pad_x, grid.pad_y, grid.pad_z)
+        base_materials, _, _, base_pec_mask, _, _ = sim._assemble_materials(grid)
+        _n_steps_auto = grid.num_timesteps(num_periods=num_periods)
+
     dims = (grid.nx, grid.ny, grid.nz)
     for d in range(3):
         lo_idx[d] = max(lo_idx[d], pads[d])
@@ -137,11 +162,8 @@ def optimize(
         init_latent = jnp.zeros(design_shape, dtype=jnp.float32)
 
     eps_min, eps_max = region.eps_range
-    base_materials, debye_spec, lorentz_spec, base_pec_mask, _, _ = sim._assemble_materials(grid)
     base_eps_r = base_materials.eps_r
-    base_sigma = base_materials.sigma
-    base_mu_r = base_materials.mu_r
-    _n_steps = n_steps if n_steps is not None else grid.num_timesteps(num_periods=num_periods)
+    _n_steps = n_steps if n_steps is not None else _n_steps_auto
 
     # Adam state
     m = jnp.zeros_like(init_latent)
@@ -153,29 +175,28 @@ def optimize(
     it_count = [0]  # mutable counter for verbose inside forward()
 
     def forward(lat):
-        """Forward pass: latent -> eps -> simulation -> objective."""
+        """Forward pass: latent -> eps_override -> sim.forward() -> objective."""
         eps_design = _latent_to_eps(lat, eps_min, eps_max)
 
         si, sj, sk = lo_idx
         ei, ej, ek = hi_idx
-        eps_r = base_eps_r.at[si:ei+1, sj:ej+1, sk:ek+1].set(eps_design)
-
-        from rfx.core.yee import MaterialArrays
-        materials = MaterialArrays(eps_r=eps_r, sigma=base_sigma, mu_r=base_mu_r)
+        eps_override = base_eps_r.at[si:ei+1, sj:ej+1, sk:ek+1].set(eps_design)
 
         if verbose and it_count[0] == 0:
             cells = grid.nx * grid.ny * grid.nz
+            mesh_kind = "NU" if is_nonuniform else "uniform"
             print(f"  optimize: n_steps={_n_steps}, grid={grid.shape} "
-                  f"({cells/1e6:.1f}M cells)")
+                  f"({cells/1e6:.1f}M cells, {mesh_kind} mesh)")
 
-        result = sim._forward_from_materials(
-            grid,
-            materials,
-            debye_spec,
-            lorentz_spec,
+        result = sim.forward(
+            eps_override=eps_override,
+            pec_mask_override=base_pec_mask,
             n_steps=_n_steps,
             checkpoint=True,
-            pec_mask=base_pec_mask,
+            checkpoint_every=checkpoint_every,
+            emit_time_series=emit_time_series,
+            n_warmup=n_warmup,
+            skip_preflight=True,  # already done at optimize() entry
         )
         import inspect
         sig = inspect.signature(objective)
