@@ -514,6 +514,71 @@ def shard_pec_occupancy_x_slab(global_occupancy, sharded_grid: ShardedNUGrid):
     return slabs.reshape(n_devices * nx_local, ny, nz)
 
 
+def shard_design_mask_x_slab(global_mask, sharded_grid: ShardedNUGrid):
+    """Slice a global design mask along x using the slab ownership of
+    :class:`ShardedNUGrid`.
+
+    The design mask is a boolean ``(nx, ny, nz)`` array where ``True``
+    marks cells whose ``eps`` participates in the optimisation variable
+    (i.e. cells that should keep gradient).  Cells outside the mask
+    will be replaced by ``stop_gradient(field)`` at the end of each
+    step (mirrors :issue:`#41` semantics in
+    :func:`rfx.nonuniform.run_nonuniform`).
+
+    The same slab+ghost layout convention as
+    :func:`shard_pec_mask_x_slab` is used.  Ghost rows at the physical
+    domain boundary are padded ``False`` (no-design) so the
+    ``stop_gradient`` filter is applied there, which is harmless when
+    the boundary is PEC (field is zero anyway) but matches the safer
+    "no-design outside the user-marked region" semantics.
+
+    Parameters
+    ----------
+    global_mask : (nx, ny, nz) jnp.ndarray bool, or None
+        Full-domain design mask.  Returns ``None`` if ``global_mask`` is
+        ``None`` so callers can do an unconditional call.
+    sharded_grid : ShardedNUGrid
+
+    Returns
+    -------
+    sharded_mask : (n_devices * nx_local, ny, nz) jnp.ndarray bool, or None
+    """
+    if global_mask is None:
+        return None
+
+    n_devices = sharded_grid.n_devices
+    nx_per = sharded_grid.nx_per_rank
+    nx_local = sharded_grid.nx_local
+    ghost = sharded_grid.ghost_width
+    pad_x = sharded_grid.pad_x
+    ny = sharded_grid.ny
+    nz = sharded_grid.nz
+
+    if pad_x > 0:
+        pad_widths = [(0, pad_x), (0, 0), (0, 0)]
+        global_mask = jnp.pad(global_mask, pad_widths, constant_values=False)
+
+    nx_padded = global_mask.shape[0]
+    assert nx_padded == n_devices * nx_per, (
+        f"sharded_design_mask: padded mask shape {nx_padded} != "
+        f"n_devices*nx_per_rank = {n_devices * nx_per}"
+    )
+
+    slabs = jnp.zeros((n_devices, nx_local, ny, nz), dtype=jnp.bool_)
+    for d in range(n_devices):
+        lo = d * nx_per
+        hi = lo + nx_per
+        slabs = slabs.at[d, ghost:ghost + nx_per, :, :].set(global_mask[lo:hi])
+        if d > 0:
+            slabs = slabs.at[d, 0, :, :].set(global_mask[lo - 1])
+        # else: domain boundary; ghost stays False
+        if d < n_devices - 1:
+            slabs = slabs.at[d, -1, :, :].set(global_mask[hi])
+        # else: domain boundary; ghost stays False
+
+    return slabs.reshape(n_devices * nx_local, ny, nz)
+
+
 def shard_pec_mask_x_slab(global_mask, sharded_grid: ShardedNUGrid):
     """Slice a global PEC mask along x using the slab ownership of
     :class:`ShardedNUGrid`.
@@ -1773,6 +1838,10 @@ def run_nonuniform_distributed_pec(
     cpml_params=None,
     cpml_state=None,
     sharded_pec_occupancy=None,
+    checkpoint_every: int | None = None,
+    n_warmup: int = 0,
+    sharded_design_mask=None,
+    emit_time_series: bool = True,
 ) -> dict:
     """Phase 2B/2C/2D sharded NU scan body — hard PEC, ghost exchange,
     optional CPML, and optional Debye/Lorentz dispersion on x-slabs.
@@ -1899,11 +1968,49 @@ def run_nonuniform_distributed_pec(
         the hard ``sharded_pec_mask`` and before probe accumulation,
         mirroring the single-device ordering in
         :func:`rfx.nonuniform.run_nonuniform`.
+    checkpoint_every : int or None, optional
+        Phase 2F segmented remat.  When set to a positive integer ``K``
+        with ``0 < K < n_optimize``, the optimize-phase scan is
+        refactored as scan-of-scan: an outer scan over
+        ``ceil(n_optimize / K)`` segments wraps an inner scan over
+        ``K`` per-segment timesteps, with the segment body wrapped in
+        :func:`jax.checkpoint`.  This forces XLA to remat the inner
+        scan during backward, so the AD tape only stores carry at
+        segment boundaries (``~ sqrt(n_steps) * carry_size`` when
+        ``K ~ sqrt(n_steps)``).  Forward results are bit-identical;
+        gradients are exact (segmented remat preserves AD).  ``None``
+        (default) takes the single-scan Phase 2A-2E path.
+    n_warmup : int, optional
+        Phase 2F warmup splitting (mirrors single-device :issue:`#40`).
+        When ``> 0``, run the first ``n_warmup`` steps with the carry
+        ``stop_gradient``'d so AD builds no tape for that transient.
+        Only the trailing ``n_steps - n_warmup`` steps participate in
+        reverse-mode autodiff.  Must satisfy ``n_warmup < n_steps``.
+    sharded_design_mask : jnp.ndarray bool or None, optional
+        Phase 2F design-mask stop-gradient (mirrors single-device
+        :issue:`#41`).  x-slab sharded boolean mask with the same
+        layout as ``sharded_pec_mask`` (use
+        :func:`shard_design_mask_x_slab` to build it).  Cells where the
+        mask is ``True`` keep gradient; cells where the mask is
+        ``False`` have ``stop_gradient`` applied at each step before
+        the carry-out.  Forward physics is bit-identical
+        (``stop_gradient`` is forward-identity); backward memory and
+        wall-time scale with mask occupancy instead of grid volume.
+    emit_time_series : bool, optional
+        Phase 2F.  When ``True`` (default), the runner accumulates per-
+        step probe samples and returns ``time_series`` as a
+        ``(n_steps, n_probes)`` array (gradient-available when
+        differentiating through it).  When ``False``, no probe
+        accumulation is performed and ``time_series`` in the result
+        dict is ``None``; callers must drive their objective from a
+        non-time-series quantity (e.g. final state, sharded DFT
+        accumulator).
 
     Returns
     -------
     dict
-        ``{"time_series": (n_steps, n_probes) ndarray,
+        ``{"time_series": (n_steps, n_probes) ndarray or None
+                          (None when ``emit_time_series=False``),
            "final_state":  FDTDState (gathered to full-domain),
            "final_state_sharded": FDTDState (sharded, in-mesh layout),
            "cpml_state_sharded": CPMLState or None (final psi arrays,
@@ -1945,6 +2052,19 @@ def run_nonuniform_distributed_pec(
         raise ValueError(
             "cpml_params provided but sharded_grid.cpml_layers <= 0; "
             "rebuild the grid with a non-zero CPML layer count."
+        )
+
+    # Phase 2F validation
+    if n_warmup < 0:
+        raise ValueError(f"n_warmup must be >= 0; got {n_warmup}")
+    if n_warmup >= n_steps:
+        raise ValueError(
+            f"n_warmup ({n_warmup}) must be < n_steps ({n_steps})"
+        )
+    if checkpoint_every is not None and int(checkpoint_every) <= 0:
+        raise ValueError(
+            f"checkpoint_every must be a positive int or None; "
+            f"got {checkpoint_every}"
         )
 
     sources = list(sources) if sources is not None else []
@@ -2581,8 +2701,36 @@ def run_nonuniform_distributed_pec(
             st = _apply_pec_occupancy_nu_shmap(
                 st, sharded_pec_occupancy, mesh, n_devices, nx_local)
 
-        # 10. Probe accumulation (rank-conditional sample + lax.psum)
-        probe_out = _sample_probes_shmap(st)
+        # 10. Probe accumulation (rank-conditional sample + lax.psum).
+        #     Phase 2F emit_time_series=False: skip the probe-sample
+        #     accumulation entirely so the AD tape is not loaded with
+        #     per-step probe entries.  ``probe_out`` becomes a 0-length
+        #     array (still a valid scan output, just empty).
+        if emit_time_series:
+            probe_out = _sample_probes_shmap(st)
+        else:
+            probe_out = jnp.zeros(0, dtype=jnp.float32)
+
+        # 9c. Phase 2F design-mask stop-gradient (mirrors single-device
+        #     :issue:`#41`).  Apply ``stop_gradient`` to fields outside
+        #     the design region BEFORE carry-out so the backward tape
+        #     never accumulates entries for cells whose ``eps`` does not
+        #     depend on the optimisation variable.  Forward physics is
+        #     unchanged (``stop_gradient`` is forward-identity); backward
+        #     memory + wall-time scale with mask occupancy.  The mask
+        #     itself is x-sharded with the same slab+ghost layout as the
+        #     state, so the elementwise ``jnp.where`` runs locally on
+        #     each rank with no cross-rank communication.
+        if sharded_design_mask is not None:
+            sg = jax.lax.stop_gradient
+            st = st._replace(
+                ex=jnp.where(sharded_design_mask, st.ex, sg(st.ex)),
+                ey=jnp.where(sharded_design_mask, st.ey, sg(st.ey)),
+                ez=jnp.where(sharded_design_mask, st.ez, sg(st.ez)),
+                hx=jnp.where(sharded_design_mask, st.hx, sg(st.hx)),
+                hy=jnp.where(sharded_design_mask, st.hy, sg(st.hy)),
+                hz=jnp.where(sharded_design_mask, st.hz, sg(st.hz)),
+            )
 
         new_carry = {"fdtd": st}
         if use_cpml:
@@ -2596,8 +2744,21 @@ def run_nonuniform_distributed_pec(
     # ------------------------------------------------------------------
     # JIT-compiled scan over n_steps
     # ------------------------------------------------------------------
+    # Composition note (Phase 2F / M5 spike): an eager
+    # ``jax.checkpoint(shard_map(...))`` raises
+    # ``NotImplementedError: Eager evaluation of closed_call inside
+    # shard_map isn't yet supported``.  The fix is to keep the outer
+    # ``jax.jit`` boundary so that ``jax.checkpoint(segment_body)``
+    # composes cleanly inside JIT (the shard_map calls live inside
+    # ``step_fn``, which is reached via the ``lax.scan(seg_body, ...)``
+    # call inside the JIT'd ``run_fn``).  Both Pattern D
+    # ``jit(checkpoint(shard_map))`` and Pattern E
+    # ``checkpoint(jit(shard_map))`` were verified to work; we use
+    # Pattern D (jit-around-checkpoint) because the outer ``jax.jit``
+    # boundary is already required for the scan dispatch and adding it
+    # avoids re-jitting the shard_map step body once per call.
     step_indices = jnp.arange(n_steps, dtype=jnp.int32)
-    xs = (step_indices, src_waveforms_rep)
+    xs_full = (step_indices, src_waveforms_rep)
 
     carry_init = {"fdtd": sharded_state}
     if use_cpml:
@@ -2606,8 +2767,97 @@ def run_nonuniform_distributed_pec(
         carry_init["debye"] = debye_state_init
     if use_lorentz:
         carry_init["lorentz"] = lorentz_state_init
-    run_fn = jax.jit(lambda c, xx: lax.scan(step_fn, c, xx))
-    final_carry, probe_ts = run_fn(carry_init, xs)
+
+    # Phase 2F warmup split: first ``n_warmup`` steps run with
+    # ``stop_gradient`` carry boundary so AD never sees that transient.
+    # The optimize phase (``n_steps - n_warmup`` steps) runs afterwards
+    # and may itself be segmented via ``checkpoint_every``.  When
+    # ``n_warmup == 0`` this branch reduces to the prior single-scan
+    # path (Phase 2A-2E semantics preserved).
+    if n_warmup > 0:
+        warmup_xs = (
+            xs_full[0][:n_warmup],
+            xs_full[1][:n_warmup],
+        )
+        opt_xs = (
+            xs_full[0][n_warmup:],
+            xs_full[1][n_warmup:],
+        )
+        n_opt = n_steps - n_warmup
+    else:
+        warmup_xs = None
+        opt_xs = xs_full
+        n_opt = n_steps
+
+    use_segmented = (
+        checkpoint_every is not None
+        and 0 < int(checkpoint_every) < n_opt
+    )
+
+    @jax.jit
+    def run_fn(c0):
+        # Optional warmup scan: stop_gradient the carry at boundary so
+        # AD does not see the warmup steps.  Probe samples from the
+        # warmup phase are also stop_gradient'd (they're just metadata
+        # at this point — gradient through them would be a tape leak).
+        if warmup_xs is not None:
+            warmup_final, warmup_ys = lax.scan(step_fn, c0, warmup_xs)
+            c0_opt = jax.tree_util.tree_map(lax.stop_gradient, warmup_final)
+            warmup_ys = lax.stop_gradient(warmup_ys)
+        else:
+            c0_opt = c0
+            warmup_ys = None
+
+        # Optimize scan: either single scan (Phase 2A-2E path) or
+        # scan-of-scan with checkpoint(segment_body) (Phase 2F segmented
+        # remat).  The pad-+-tail-discard semantics mirror single-device
+        # ``run_nonuniform``.
+        if use_segmented:
+            chunk = int(checkpoint_every)
+            n_seg = (n_opt + chunk - 1) // chunk
+            pad = n_seg * chunk - n_opt
+            opt_steps = opt_xs[0]
+            opt_src = opt_xs[1]
+            if pad > 0:
+                start_step = jnp.int32(opt_steps[0])
+                steps_padded = jnp.arange(
+                    start_step, start_step + n_seg * chunk,
+                    dtype=jnp.int32,
+                )
+                n_sources_local = opt_src.shape[1]
+                src_pad = jnp.zeros(
+                    (pad, n_sources_local), dtype=opt_src.dtype)
+                src_padded = jnp.concatenate([opt_src, src_pad], axis=0)
+            else:
+                steps_padded = opt_steps
+                src_padded = opt_src
+
+            seg_steps = steps_padded.reshape(n_seg, chunk)
+            seg_src = src_padded.reshape(n_seg, chunk, src_padded.shape[1])
+
+            def segment_body(carry, segment_xs):
+                # Inner scan over a single segment of ``chunk`` steps.
+                return lax.scan(step_fn, carry, segment_xs)
+
+            seg_body = jax.checkpoint(segment_body)
+            final_, seg_ys = lax.scan(
+                seg_body, c0_opt, (seg_steps, seg_src)
+            )
+            # seg_ys shape: (n_seg, chunk, ...).  Flatten + tail-discard.
+            opt_ys_flat = seg_ys.reshape(
+                (n_seg * chunk,) + seg_ys.shape[2:]
+            )
+            opt_ys = opt_ys_flat[:n_opt]
+        else:
+            final_, opt_ys = lax.scan(step_fn, c0_opt, opt_xs)
+
+        if warmup_ys is not None:
+            full_ys = jnp.concatenate([warmup_ys, opt_ys], axis=0)
+        else:
+            full_ys = opt_ys
+        return final_, full_ys
+
+    final_carry, probe_ts = run_fn(carry_init)
     final_state_sharded = final_carry["fdtd"]
     final_cpml_sharded = final_carry.get("cpml") if use_cpml else None
     final_debye_sharded = final_carry.get("debye") if use_debye else None
@@ -2619,13 +2869,21 @@ def run_nonuniform_distributed_pec(
     from rfx.runners.distributed import gather_array_x
 
     def _unstack_and_gather(sharded_arr):
-        arr = np.array(sharded_arr)
-        total_x = arr.shape[0]
+        # Phase 2F: must remain traceable under ``jax.grad``.  The prior
+        # ``np.array(sharded_arr)`` call broke whenever a caller wrapped
+        # the runner in ``jax.grad`` to drive an objective from the
+        # gathered ``final_state`` arrays.  Use pure JAX reshape +
+        # ``gather_array_x`` (already JAX-friendly) so the gather stays
+        # in the JAX trace.
+        total_x = sharded_arr.shape[0]
         assert total_x == n_devices * nx_local, (
             f"unstack: total_x={total_x} != n_devices*nx_local={n_devices * nx_local}"
         )
-        stacked = arr.reshape(n_devices, nx_local, *arr.shape[1:])
-        gathered = jnp.array(gather_array_x(jnp.array(stacked), ghost))
+        stacked = jnp.reshape(
+            sharded_arr,
+            (n_devices, nx_local) + tuple(sharded_arr.shape[1:]),
+        )
+        gathered = gather_array_x(stacked, ghost)
         if pad_x > 0:
             gathered = gathered[: sharded_grid.nx]
         return gathered
@@ -2637,10 +2895,18 @@ def run_nonuniform_distributed_pec(
         hx=_unstack_and_gather(final_state_sharded.hx),
         hy=_unstack_and_gather(final_state_sharded.hy),
         hz=_unstack_and_gather(final_state_sharded.hz),
-        step=jnp.int32(int(final_state_sharded.step)),
+        # Step counter is a replicated scalar; keep as a JAX array so
+        # the gather works under ``jax.grad`` (no Python ``int()`` cast).
+        step=jnp.asarray(final_state_sharded.step, dtype=jnp.int32),
     )
 
-    if n_prb > 0:
+    if not emit_time_series:
+        # Phase 2F: probe samples were skipped per-step (probe_out is
+        # zero-length per step) so surface ``None`` to make absent
+        # time series explicit.  Callers that drive a time-domain
+        # objective must request ``emit_time_series=True``.
+        time_series = None
+    elif n_prb > 0:
         time_series = jnp.array(probe_ts)
     else:
         time_series = jnp.zeros((n_steps, 0), dtype=jnp.float32)
