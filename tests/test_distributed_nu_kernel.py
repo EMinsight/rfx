@@ -406,3 +406,362 @@ def test_build_sharded_nu_grid_position_to_index_deterministic():
     i2, _, _ = position_to_index(grid, (pos_x, pos_y, pos_z))
     assert i2 // sg.nx_per_rank == got_rank
     assert (i2 % sg.nx_per_rank) + sg.ghost_width == got_local_i
+
+
+# ---------------------------------------------------------------------------
+# Phase 2B: hard-PEC + ghost-exchange sharded NU scan body tests
+# ---------------------------------------------------------------------------
+
+import jax  # noqa: E402
+
+from rfx.runners.distributed_nu import (  # noqa: E402
+    run_nonuniform_distributed_pec,
+    shard_pec_mask_x_slab,
+)
+from rfx.nonuniform import (  # noqa: E402
+    run_nonuniform,
+    position_to_index as _phase2b_pos_to_idx,
+    make_current_source as _phase2b_make_current_source,
+)
+from rfx.simulation import SourceSpec, ProbeSpec  # noqa: E402
+from tests._distributed_nu_tolerances import (  # noqa: E402
+    assert_class_b_parity,
+)
+
+
+_PHASE2B_REQUIRES_2DEV = pytest.mark.skipif(
+    jax.device_count() < 2,
+    reason=(
+        "Phase 2B distributed-NU PEC tests need >=2 JAX devices "
+        "(set XLA_FLAGS=--xla_force_host_platform_device_count=2)."
+    ),
+)
+
+
+def _phase2b_build_test_grid(nx_physical=16, ny=8, nz=8, dx0=1e-3, ratio=1.2):
+    """Small NU grid (cpml=0, hard-PEC cavity) for Phase 2B parity tests."""
+    dx_profile = _graded_profile(nx_physical, dx0, ratio=ratio)
+    dz_profile = np.full(nz, dx0)
+    grid = make_nonuniform_grid(
+        (nx_physical * dx0, ny * dx0), dz_profile, dx0,
+        cpml_layers=0,
+        dx_profile=dx_profile,
+    )
+    return grid
+
+
+def _phase2b_make_materials(grid):
+    """Vacuum (eps=mu=1, sigma=0) materials shaped like ``grid``."""
+    nx, ny, nz = grid.nx, grid.ny, grid.nz
+    return MaterialArrays(
+        eps_r=jnp.ones((nx, ny, nz), dtype=jnp.float32),
+        sigma=jnp.zeros((nx, ny, nz), dtype=jnp.float32),
+        mu_r=jnp.ones((nx, ny, nz), dtype=jnp.float32),
+    )
+
+
+def _phase2b_gauss_waveform(t, t0=8e-12, tau=2.5e-12):
+    return jnp.exp(-((t - t0) ** 2) / (2.0 * tau ** 2))
+
+
+def _phase2b_shard_mat(materials, sharded_grid):
+    """Shard a full-domain MaterialArrays for Phase 2B's runner."""
+    n_devices = sharded_grid.n_devices
+    nx_local = sharded_grid.nx_local
+    ghost = sharded_grid.ghost_width
+    pad_x = sharded_grid.pad_x
+
+    devices = jax.devices()[:n_devices]
+    from jax.sharding import Mesh, NamedSharding
+    mesh = Mesh(np.array(devices), axis_names=("x",))
+    shd = NamedSharding(mesh, P("x"))
+
+    if pad_x > 0:
+        pad = ((0, pad_x), (0, 0), (0, 0))
+        materials = MaterialArrays(
+            eps_r=jnp.pad(materials.eps_r, pad, constant_values=1.0),
+            sigma=jnp.pad(materials.sigma, pad, constant_values=0.0),
+            mu_r=jnp.pad(materials.mu_r, pad, constant_values=1.0),
+        )
+
+    from rfx.runners.distributed import _split_materials
+    mat_slabs = _split_materials(materials, n_devices, ghost)
+
+    def _shard_stacked(arr):
+        n_dev = arr.shape[0]
+        rest = arr.shape[1:]
+        return jax.device_put(arr.reshape(n_dev * rest[0], *rest[1:]), shd)
+
+    return MaterialArrays(
+        eps_r=_shard_stacked(mat_slabs.eps_r),
+        sigma=_shard_stacked(mat_slabs.sigma),
+        mu_r=_shard_stacked(mat_slabs.mu_r),
+    )
+
+
+from jax.sharding import PartitionSpec as P  # noqa: E402
+
+
+@_PHASE2B_REQUIRES_2DEV
+def test_distributed_pec_only_2device_matches_single_device():
+    """Class B forward parity: 2-device distributed run should match the
+    single-device ``run_nonuniform`` reference at the final step on a
+    small NU PEC cavity.
+
+    Source on rank 0 interior, probe on rank 1 interior, so the signal
+    crosses the seam.  Hard PEC at all 6 domain faces (no CPML).
+    """
+    devices = jax.devices()[:2]
+    n_devices = 2
+    n_steps = 60
+
+    grid = _phase2b_build_test_grid(nx_physical=16, ny=8, nz=8, ratio=1.2)
+    materials = _phase2b_make_materials(grid)
+
+    # Source: global x-index 4 (rank 0), probe: global x-index 12 (rank 1)
+    src_idx = (4, 4, 4)
+    prb_idx = (12, 4, 4)
+    src_si, src_sj, src_sk, src_comp, src_wf = _phase2b_make_current_source(
+        grid, src_idx, "ez", _phase2b_gauss_waveform, n_steps, materials,
+    )
+    src_spec = SourceSpec(
+        i=int(src_si), j=int(src_sj), k=int(src_sk),
+        component=src_comp, waveform=jnp.asarray(src_wf),
+    )
+    prb_spec = ProbeSpec(
+        i=int(prb_idx[0]), j=int(prb_idx[1]), k=int(prb_idx[2]),
+        component="ez",
+    )
+
+    # Single-device reference
+    single_out = run_nonuniform(
+        grid=grid,
+        materials=materials,
+        n_steps=n_steps,
+        sources=[src_spec],
+        probes=[prb_spec],
+    )
+    ts_single = jnp.asarray(single_out["time_series"])[:, 0]
+
+    # 2-device distributed run
+    sharded_grid = build_sharded_nu_grid(grid, n_devices=n_devices,
+                                         exchange_interval=1)
+    sharded_mat = _phase2b_shard_mat(materials, sharded_grid)
+    out = run_nonuniform_distributed_pec(
+        sharded_grid=sharded_grid,
+        sharded_materials=sharded_mat,
+        sharded_pec_mask=None,
+        n_steps=n_steps,
+        sources=[src_spec],
+        probes=[prb_spec],
+        n_devices=n_devices,
+        devices=devices,
+    )
+    ts_dist = jnp.asarray(out["time_series"])[:, 0]
+
+    assert ts_dist.shape == ts_single.shape, (
+        f"shape mismatch: dist={ts_dist.shape}, single={ts_single.shape}"
+    )
+
+    assert_class_b_parity(ts_single, ts_dist,
+                          label="phase2b_pec_only_2device_parity")
+
+
+@_PHASE2B_REQUIRES_2DEV
+def test_distributed_pec_only_seam_no_double_zeroing():
+    """Class D seam isolation: a PEC mask cell exactly at the slab seam
+    is zeroed exactly once.
+
+    Place a single PEC cell at global x-index ``nx_per_rank`` (rank 1's
+    first real cell).  The Phase 2B mask runner must mask this cell
+    once (rank 1's sharded mask has it True at slab-local index
+    ``ghost``); rank 0's slab must NOT see it as a real cell (only as
+    its right ghost) so apply_pec_mask on rank 0 must not act on it.
+
+    Verification: the distributed run must match the single-device
+    reference (which applies the mask exactly once).
+    """
+    devices = jax.devices()[:2]
+    n_devices = 2
+    n_steps = 30
+
+    grid = _phase2b_build_test_grid(nx_physical=16, ny=8, nz=8, ratio=1.0)
+    materials = _phase2b_make_materials(grid)
+    nx, ny, nz = grid.nx, grid.ny, grid.nz
+
+    # Build a PEC mask with a single cell exactly at the slab seam.
+    sharded_grid = build_sharded_nu_grid(grid, n_devices=n_devices)
+    seam_i = sharded_grid.nx_per_rank  # global x-index of rank 1's first real cell
+    seam_j = ny // 2
+    seam_k = nz // 2
+    pec_mask = jnp.zeros((nx, ny, nz), dtype=jnp.bool_)
+    # Mark a 1x1x1 PEC cell + its left neighbour so the tangential mask
+    # in apply_pec_mask sees a PEC neighbour (otherwise the thin-sheet
+    # rule preserves the field — no double-zeroing risk to detect).
+    pec_mask = pec_mask.at[seam_i, seam_j, seam_k].set(True)
+    pec_mask = pec_mask.at[seam_i - 1, seam_j, seam_k].set(True)
+    pec_mask = pec_mask.at[seam_i + 1, seam_j, seam_k].set(True)
+
+    src_idx = (4, 4, 4)
+    src_si, src_sj, src_sk, src_comp, src_wf = _phase2b_make_current_source(
+        grid, src_idx, "ez", _phase2b_gauss_waveform, n_steps, materials,
+    )
+    src_spec = SourceSpec(
+        i=int(src_si), j=int(src_sj), k=int(src_sk),
+        component=src_comp, waveform=jnp.asarray(src_wf),
+    )
+    # Probe on rank 1, away from the seam, so the seam-mask physics
+    # propagates into the sampled signal.
+    prb_spec = ProbeSpec(i=12, j=4, k=4, component="ez")
+
+    # Single-device reference (applies the mask once via apply_pec_mask)
+    single_out = run_nonuniform(
+        grid=grid,
+        materials=materials,
+        n_steps=n_steps,
+        pec_mask=pec_mask,
+        sources=[src_spec],
+        probes=[prb_spec],
+    )
+    ts_single = jnp.asarray(single_out["time_series"])[:, 0]
+
+    # Distributed run with the same PEC mask
+    sharded_mat = _phase2b_shard_mat(materials, sharded_grid)
+    sharded_mask = shard_pec_mask_x_slab(pec_mask, sharded_grid)
+    out = run_nonuniform_distributed_pec(
+        sharded_grid=sharded_grid,
+        sharded_materials=sharded_mat,
+        sharded_pec_mask=sharded_mask,
+        n_steps=n_steps,
+        sources=[src_spec],
+        probes=[prb_spec],
+        n_devices=n_devices,
+        devices=devices,
+    )
+    ts_dist = jnp.asarray(out["time_series"])[:, 0]
+
+    # If the seam cell were double-zeroed, the field profile would
+    # decay differently — Class B forward parity catches that.
+    assert_class_b_parity(ts_single, ts_dist,
+                          label="phase2b_seam_no_double_zeroing")
+
+
+@_PHASE2B_REQUIRES_2DEV
+def test_distributed_pec_mask_override_union_semantics():
+    """Geometry-defined PEC + override union must match single-device.
+
+    The single-device path takes ``pec_mask = geom_mask | override_mask``
+    before passing to the runner.  We replicate that union at the host
+    level (mirroring ``Simulation.forward()`` semantics) and verify
+    the distributed runner produces the identical probe time-series.
+    """
+    devices = jax.devices()[:2]
+    n_devices = 2
+    n_steps = 30
+
+    grid = _phase2b_build_test_grid(nx_physical=16, ny=8, nz=8, ratio=1.0)
+    materials = _phase2b_make_materials(grid)
+    nx, ny, nz = grid.nx, grid.ny, grid.nz
+
+    # "Geometry" PEC slab: a thin sheet at x=10
+    geom_mask = jnp.zeros((nx, ny, nz), dtype=jnp.bool_)
+    geom_mask = geom_mask.at[10, 2:6, 2:6].set(True)
+    geom_mask = geom_mask.at[11, 2:6, 2:6].set(True)
+    # "Override" PEC: another small block at x=5 inside rank 0
+    override_mask = jnp.zeros((nx, ny, nz), dtype=jnp.bool_)
+    override_mask = override_mask.at[5, 3:5, 3:5].set(True)
+    override_mask = override_mask.at[6, 3:5, 3:5].set(True)
+    union_mask = geom_mask | override_mask
+
+    src_idx = (2, 4, 4)
+    src_si, src_sj, src_sk, src_comp, src_wf = _phase2b_make_current_source(
+        grid, src_idx, "ez", _phase2b_gauss_waveform, n_steps, materials,
+    )
+    src_spec = SourceSpec(
+        i=int(src_si), j=int(src_sj), k=int(src_sk),
+        component=src_comp, waveform=jnp.asarray(src_wf),
+    )
+    prb_spec = ProbeSpec(i=13, j=4, k=4, component="ez")
+
+    single_out = run_nonuniform(
+        grid=grid, materials=materials, n_steps=n_steps,
+        pec_mask=union_mask,
+        sources=[src_spec], probes=[prb_spec],
+    )
+    ts_single = jnp.asarray(single_out["time_series"])[:, 0]
+
+    sharded_grid = build_sharded_nu_grid(grid, n_devices=n_devices)
+    sharded_mat = _phase2b_shard_mat(materials, sharded_grid)
+    sharded_mask = shard_pec_mask_x_slab(union_mask, sharded_grid)
+    out = run_nonuniform_distributed_pec(
+        sharded_grid=sharded_grid,
+        sharded_materials=sharded_mat,
+        sharded_pec_mask=sharded_mask,
+        n_steps=n_steps,
+        sources=[src_spec],
+        probes=[prb_spec],
+        n_devices=n_devices,
+        devices=devices,
+    )
+    ts_dist = jnp.asarray(out["time_series"])[:, 0]
+
+    assert_class_b_parity(ts_single, ts_dist,
+                          label="phase2b_pec_mask_override_union")
+
+
+@_PHASE2B_REQUIRES_2DEV
+def test_distributed_h_ghost_exchange_recovers_global_field():
+    """Class B parity test for H-update + ghost exchange with no PEC mask
+    and no source.
+
+    Initialise the E field with a localised non-zero pattern that
+    straddles the slab seam, then run a short forward (no source).  The
+    distributed scan body's H update + ghost exchange should produce
+    H-field evolution that matches the single-device run_nonuniform
+    reference at the probe.
+    """
+    devices = jax.devices()[:2]
+    n_devices = 2
+    n_steps = 20
+
+    grid = _phase2b_build_test_grid(nx_physical=16, ny=8, nz=8, ratio=1.0)
+    materials = _phase2b_make_materials(grid)
+
+    # Inject a soft source so we have a non-trivial time series to compare;
+    # this still tests the H ghost exchange because the signal must cross
+    # the seam to reach the probe.
+    n_steps_run = 40
+    src_idx = (3, 4, 4)
+    src_si, src_sj, src_sk, src_comp, src_wf = _phase2b_make_current_source(
+        grid, src_idx, "ez", _phase2b_gauss_waveform, n_steps_run, materials,
+    )
+    src_spec = SourceSpec(
+        i=int(src_si), j=int(src_sj), k=int(src_sk),
+        component=src_comp, waveform=jnp.asarray(src_wf),
+    )
+    # Probe in rank 1 sampling Hy (so the H ghost exchange is the
+    # critical step transporting the signal)
+    prb_spec = ProbeSpec(i=12, j=4, k=4, component="hy")
+
+    single_out = run_nonuniform(
+        grid=grid, materials=materials, n_steps=n_steps_run,
+        sources=[src_spec], probes=[prb_spec],
+    )
+    ts_single = jnp.asarray(single_out["time_series"])[:, 0]
+
+    sharded_grid = build_sharded_nu_grid(grid, n_devices=n_devices)
+    sharded_mat = _phase2b_shard_mat(materials, sharded_grid)
+    out = run_nonuniform_distributed_pec(
+        sharded_grid=sharded_grid,
+        sharded_materials=sharded_mat,
+        sharded_pec_mask=None,
+        n_steps=n_steps_run,
+        sources=[src_spec],
+        probes=[prb_spec],
+        n_devices=n_devices,
+        devices=devices,
+    )
+    ts_dist = jnp.asarray(out["time_series"])[:, 0]
+
+    assert_class_b_parity(ts_single, ts_dist,
+                          label="phase2b_h_ghost_exchange_global_field")
