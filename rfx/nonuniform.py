@@ -28,7 +28,7 @@ from rfx.core.yee import (
     FDTDState, MaterialArrays, init_state,
     update_h_nu, update_e_nu, EPS_0, MU_0,
 )
-from rfx.boundaries.pec import apply_pec, apply_pec_mask
+from rfx.boundaries.pec import apply_pec, apply_pec_mask, apply_pec_occupancy
 
 C0 = 1.0 / np.sqrt(float(EPS_0) * float(MU_0))
 
@@ -65,13 +65,29 @@ class NonUniformGrid(NamedTuple):
         return (self.nx, self.ny, self.nz)
 
 
-def _pad_profile(profile: np.ndarray, cpml_layers: int) -> np.ndarray:
+def _is_tracer(x) -> bool:
+    """True when ``x`` is a JAX tracer (mesh-as-design-variable path)."""
+    import jax
+    return isinstance(x, jax.core.Tracer)
+
+
+def _pad_profile(profile, cpml_layers: int):
     """Pad a 1-D cell-size profile with CPML cells on both ends.
 
     CPML uses constant spacing matching the boundary cell size, so the
     padding on each end is ``cpml_layers`` copies of ``profile[0]`` and
     ``profile[-1]``, respectively.
+
+    When ``profile`` is a JAX tracer the padding stays in-trace (needed
+    for ``jax.grad`` w.r.t. ``dz_profile`` — mesh-as-design-variable).
+    Otherwise the numpy path is used, preserving the Python-float ``dt``
+    that Simulation-level callers depend on.
     """
+    if _is_tracer(profile):
+        prof = jnp.asarray(profile, dtype=jnp.float32)
+        lo_pad = jnp.full(cpml_layers, prof[0])
+        hi_pad = jnp.full(cpml_layers, prof[-1])
+        return jnp.concatenate([lo_pad, prof, hi_pad])
     lo_pad = np.full(cpml_layers, float(profile[0]))
     hi_pad = np.full(cpml_layers, float(profile[-1]))
     return np.concatenate([lo_pad, np.asarray(profile, dtype=np.float64), hi_pad])
@@ -162,8 +178,14 @@ def make_nonuniform_grid(
     # --- CFL from minimum cell size on every axis ---
     dx_min = float(np.min(dx_full))
     dy_min = float(np.min(dy_full))
-    dz_min = float(np.min(dz_full))
-    dt = 0.99 / (C0 * np.sqrt(1 / dx_min ** 2 + 1 / dy_min ** 2 + 1 / dz_min ** 2))
+    if _is_tracer(dz_full):
+        dz_min = jnp.min(dz_full)
+        dt = 0.99 / (C0 * jnp.sqrt(1 / dx_min ** 2 + 1 / dy_min ** 2 + 1 / dz_min ** 2))
+    else:
+        dz_min = float(np.min(dz_full))
+        dt = float(
+            0.99 / (C0 * np.sqrt(1 / dx_min ** 2 + 1 / dy_min ** 2 + 1 / dz_min ** 2))
+        )
 
     # --- Per-cell arrays + inverse spacings ---
     dx_arr = jnp.asarray(dx_full, dtype=jnp.float32)
@@ -178,7 +200,7 @@ def make_nonuniform_grid(
         nx=nx, ny=ny, nz=nz,
         dx=float(dx), dy=dy_boundary,
         dx_arr=dx_arr, dy_arr=dy_arr, dz=dz_arr,
-        dt=float(dt), cpml_layers=cpml_layers,
+        dt=dt, cpml_layers=cpml_layers,
         inv_dx=inv_dx, inv_dy=inv_dy, inv_dz=inv_dz,
         inv_dx_h=inv_dx_h, inv_dy_h=inv_dy_h, inv_dz_h=inv_dz_h,
     )
@@ -477,6 +499,7 @@ def run_nonuniform(
     n_steps: int,
     *,
     pec_mask=None,
+    pec_occupancy=None,
     sources: list = None,
     probes: list = None,
     wire_ports: list = None,
@@ -543,6 +566,7 @@ def run_nonuniform(
         cpml_grid = grid
 
     use_pec_mask = pec_mask is not None
+    use_pec_occupancy = pec_occupancy is not None
 
     if sources:
         src_waveforms = jnp.stack([jnp.array(s[4]) for s in sources], axis=-1)
@@ -697,6 +721,8 @@ def run_nonuniform(
         st = apply_pec(st)
         if use_pec_mask:
             st = apply_pec_mask(st, pec_mask)
+        if use_pec_occupancy:
+            st = apply_pec_occupancy(st, pec_occupancy)
 
         # Lumped RLC ADE update (after E update + boundaries, before sources)
         new_rlc_states = None

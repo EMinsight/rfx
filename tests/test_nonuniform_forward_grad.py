@@ -90,19 +90,53 @@ def test_forward_nonuniform_grad_eps_matches_fd():
 
 # --- Known gaps (not yet plumbed into the NU forward path) ---------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "pec_occupancy_override (soft-PEC continuous occupancy) is not "
-        "yet supported on the NU forward path; run_nonuniform has no "
-        "occupancy field plumbed through its scan body. Hard PEC via "
-        "pec_mask_override works. Flipping this to XPASS means someone "
-        "wired occupancy through the NU scan — update the API to accept."
-    ),
-)
-def test_forward_nonuniform_pec_occupancy_unsupported():
+def test_forward_nonuniform_pec_occupancy_accepted():
+    """``pec_occupancy_override`` now flows through the NU scan body.
+
+    Issue #45 (sentinel 1 in ``nu_known_limits.md``): soft-PEC continuous
+    occupancy is plumbed through ``run_nonuniform`` and applied after
+    each E update (mirrors the uniform path). A zero-occupancy field is
+    bit-identical to the no-occupancy baseline; a full-occupancy field
+    inside a shielded inner box damps the probe trace to zero.
+    """
     sim = _build_sim()
     g = sim._build_nonuniform_grid()
-    occ = jnp.zeros(g.shape, dtype=jnp.float32)
-    # Expected to raise ValueError in api.forward().
-    sim.forward(pec_occupancy_override=occ, n_steps=20)
+
+    # Baseline: no occupancy field at all.
+    fr_base = sim.forward(n_steps=50)
+    ts_base = np.asarray(fr_base.time_series)
+
+    # Zero occupancy must produce a bit-identical result to the baseline.
+    occ_zero = jnp.zeros(g.shape, dtype=jnp.float32)
+    fr_zero = sim.forward(pec_occupancy_override=occ_zero, n_steps=50)
+    ts_zero = np.asarray(fr_zero.time_series)
+    assert np.allclose(ts_base, ts_zero, atol=0.0, rtol=0.0), (
+        "zero pec_occupancy should be a no-op — got difference "
+        f"max={np.max(np.abs(ts_base - ts_zero)):.3e}"
+    )
+
+    # Full-occupancy shell around the probe must shrink the probe trace
+    # (soft-PEC zeros tangential E just like hard PEC for 1.0 occupancy).
+    occ_shield = jnp.ones(g.shape, dtype=jnp.float32)
+    fr_shield = sim.forward(pec_occupancy_override=occ_shield, n_steps=50)
+    ts_shield = np.asarray(fr_shield.time_series)
+    assert float(np.max(np.abs(ts_shield))) < 1e-6, (
+        "full occupancy should zero the probe — got max "
+        f"{float(np.max(np.abs(ts_shield))):.3e}"
+    )
+
+
+def test_forward_nonuniform_pec_occupancy_grad():
+    """AD grad w.r.t. ``pec_occupancy_override`` is finite on the NU path."""
+    sim = _build_sim()
+    g = sim._build_nonuniform_grid()
+    occ0 = jnp.full(g.shape, 0.1, dtype=jnp.float32)
+
+    def loss(occ):
+        fr = sim.forward(pec_occupancy_override=occ, n_steps=40)
+        return jnp.sum(fr.time_series ** 2)
+
+    grad = jax.grad(loss)(occ0)
+    assert grad.shape == occ0.shape
+    assert jnp.all(jnp.isfinite(grad)), "pec_occupancy grad has NaN/Inf"
+    assert float(jnp.max(jnp.abs(grad))) > 0.0, "pec_occupancy grad is identically zero"

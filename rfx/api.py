@@ -3489,6 +3489,7 @@ class Simulation:
         eps_override: jnp.ndarray | None = None,
         sigma_override: jnp.ndarray | None = None,
         pec_mask_override: jnp.ndarray | None = None,
+        pec_occupancy_override: jnp.ndarray | None = None,
         n_steps: int,
         checkpoint: bool = True,
         emit_time_series: bool = True,
@@ -3514,6 +3515,7 @@ class Simulation:
             eps_override=eps_override,
             sigma_override=sigma_override,
             pec_mask_override=pec_mask_override,
+            pec_occupancy_override=pec_occupancy_override,
             checkpoint=checkpoint,
             emit_time_series=emit_time_series,
             checkpoint_every=checkpoint_every,
@@ -3584,12 +3586,6 @@ class Simulation:
             or self._dy_profile is not None
         )
         if is_nonuniform:
-            if pec_occupancy_override is not None:
-                raise ValueError(
-                    "pec_occupancy_override is not yet supported on the "
-                    "non-uniform forward path (run_nonuniform has no soft-PEC "
-                    "occupancy field). Use pec_mask_override for hard PEC."
-                )
             # Let the NU runner build grid/materials so it can apply the
             # NU-aware pec_mask and port/source setup against per-axis widths.
             if n_steps is None:
@@ -3600,6 +3596,7 @@ class Simulation:
                 eps_override=eps_override,
                 sigma_override=sigma_override,
                 pec_mask_override=pec_mask_override,
+                pec_occupancy_override=pec_occupancy_override,
                 n_steps=n_steps,
                 checkpoint=checkpoint,
                 emit_time_series=emit_time_series,

@@ -86,10 +86,16 @@ class CPMLState(NamedTuple):
     psi_hz_yhi: jnp.ndarray
 
 
+def _is_tracer(x) -> bool:
+    """True when ``x`` is a JAX tracer (mesh-as-design-variable path)."""
+    import jax
+    return isinstance(x, jax.core.Tracer)
+
+
 def _cpml_profile(
     n_layers: int,
-    dt: float,
-    dx: float,
+    dt,
+    dx,
     order: int = 2,
     kappa_max: float = 1.0,
     R_asymptotic: float = 1e-15,
@@ -118,19 +124,24 @@ def _cpml_profile(
     EPS_0 = 8.854187817e-12
     MU_0 = 1.2566370614e-6
 
-    eta = np.sqrt(MU_0 / EPS_0)  # ≈ 376.73 Ω
+    # Stay in-trace when dt/dx are JAX tracers (mesh-as-design-variable
+    # path); fall back to numpy for the standard concrete-grid case so
+    # CPMLParams stays a constant pytree under JIT.
+    xp = jnp if (_is_tracer(dt) or _is_tracer(dx)) else np
+
+    eta = float(np.sqrt(MU_0 / EPS_0))  # ≈ 376.73 Ω (constant)
     d = n_layers * dx             # PML physical thickness
     # σ_max from target reflection (Meep formula):
     #   R = exp(-2 * σ_max * d / ((m+1) * η))
     #   => σ_max = -ln(R) * (m+1) / (2 * η * d)
-    sigma_max = -np.log(R_asymptotic) * (order + 1) / (2.0 * eta * d)
+    sigma_max = -float(np.log(R_asymptotic)) * (order + 1) / (2.0 * eta * d)
     # For CFS-CPML (κ>1), scale σ_max by κ_max (Gedney recommendation).
-    sigma_max *= kappa_max
+    sigma_max = sigma_max * kappa_max
 
     # Graded profiles: polynomial from max at outer boundary (index 0)
     # to 0 at interior edge (index n-1) for the lo face.
     # The hi face uses jnp.flip() to reverse this.
-    rho = 1.0 - np.arange(n_layers, dtype=np.float64) / max(n_layers - 1, 1)
+    rho = 1.0 - xp.arange(n_layers, dtype=xp.float32) / max(n_layers - 1, 1)
     sigma = sigma_max * rho**order
     # κ graded from kappa_max (outer) to 1.0 (inner): κ(ρ) = 1 + (κ_max - 1) * ρ^m
     kappa = 1.0 + (kappa_max - 1.0) * rho**order
@@ -138,31 +149,38 @@ def _cpml_profile(
 
     # Update coefficients
     denom = sigma * kappa + kappa**2 * alpha
-    b = np.exp(-(sigma / kappa + alpha) * dt / EPS_0)
-    c = np.where(denom > 1e-30, sigma * (b - 1.0) / denom, 0.0)
+    b = xp.exp(-(sigma / kappa + alpha) * dt / EPS_0)
+    c = xp.where(denom > 1e-30, sigma * (b - 1.0) / denom, 0.0)
 
     return CPMLParams(
-        sigma=jnp.array(sigma, dtype=jnp.float32),
-        kappa=jnp.array(kappa, dtype=jnp.float32),
-        alpha=jnp.array(alpha, dtype=jnp.float32),
-        b=jnp.array(b, dtype=jnp.float32),
-        c=jnp.array(c, dtype=jnp.float32),
+        sigma=jnp.asarray(sigma, dtype=jnp.float32),
+        kappa=jnp.asarray(kappa, dtype=jnp.float32),
+        alpha=jnp.asarray(alpha, dtype=jnp.float32),
+        b=jnp.asarray(b, dtype=jnp.float32),
+        c=jnp.asarray(c, dtype=jnp.float32),
     )
 
 
-def _get_axis_cell_sizes(grid) -> tuple[float, float, float, float]:
+def _get_axis_cell_sizes(grid):
     """Extract per-axis cell sizes from Grid or NonUniformGrid.
 
     Returns (dx, dy, dz_lo, dz_hi) where dz_lo/dz_hi are the constant
     cell sizes in the z-lo and z-hi CPML padding regions.  For uniform
     grids all four values equal grid.dx.
+
+    On the mesh-as-design-variable path, ``dz_arr`` may be a JAX tracer;
+    indexed reads are preserved in-trace (no ``float()`` cast).
     """
     dx = float(grid.dx)
     dy = float(getattr(grid, 'dy', dx))
     dz_arr = getattr(grid, 'dz', None)
     if dz_arr is not None and len(dz_arr) > 0:
-        dz_lo = float(dz_arr[0])
-        dz_hi = float(dz_arr[-1])
+        if _is_tracer(dz_arr):
+            dz_lo = dz_arr[0]
+            dz_hi = dz_arr[-1]
+        else:
+            dz_lo = float(dz_arr[0])
+            dz_hi = float(dz_arr[-1])
     else:
         dz_lo = dx
         dz_hi = dx

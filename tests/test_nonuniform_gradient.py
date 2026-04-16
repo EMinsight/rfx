@@ -88,40 +88,64 @@ def test_grad_wrt_source_amplitude_matches_fd():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Geometry gradient blocked: make_nonuniform_grid calls np.asarray "
-        "and float(np.min) on the dz_profile input before any JAX op "
-        "touches it — a host boundary that breaks AD. Requires refactoring "
-        "grid construction to stay in trace (see Step 5 of "
-        "docs/research_notes/2026-04-15_nonuniform_completion_handoff.md). "
-        "When this flips to XPASS the hole has closed."
-    ),
-)
-def test_grad_wrt_dz_profile_blocked():
-    """Differentiating w.r.t. dz_profile must fail loudly until Step 5."""
-    def loss_fn(dz):
-        grid = make_nonuniform_grid(
-            domain_xy=(0.005, 0.005), dz_profile=dz,
-            dx=0.5e-3, cpml_layers=4,
-        )
-        nx, ny, nz = grid.shape
-        shape = (nx, ny, nz)
-        materials = MaterialArrays(
-            eps_r=jnp.ones(shape, dtype=jnp.float32),
-            mu_r=jnp.ones(shape, dtype=jnp.float32),
-            sigma=jnp.zeros(shape, dtype=jnp.float32),
-        )
-        base = _base_waveform(40, grid.dt)
-        sources = [(nx // 2, ny // 2, nz // 2, "ez", base)]
-        probes = [(nx // 2, ny // 2, nz // 2 - 1, "ez")]
-        out = run_nonuniform(grid, materials, 40,
-                             sources=sources, probes=probes)
-        return jnp.sum(out["time_series"] ** 2)
+def _loss_from_dz(dz):
+    """Loss function closure that threads dz_profile into grid + scan."""
+    grid = make_nonuniform_grid(
+        domain_xy=(0.005, 0.005), dz_profile=dz,
+        dx=0.5e-3, cpml_layers=4,
+    )
+    nx, ny, nz = grid.shape
+    shape = (nx, ny, nz)
+    materials = MaterialArrays(
+        eps_r=jnp.ones(shape, dtype=jnp.float32),
+        mu_r=jnp.ones(shape, dtype=jnp.float32),
+        sigma=jnp.zeros(shape, dtype=jnp.float32),
+    )
+    base = _base_waveform(40, grid.dt)
+    sources = [(nx // 2, ny // 2, nz // 2, "ez", base)]
+    probes = [(nx // 2, ny // 2, nz // 2 - 1, "ez")]
+    out = run_nonuniform(grid, materials, 40,
+                         sources=sources, probes=probes)
+    return jnp.sum(out["time_series"] ** 2)
 
+
+def test_grad_wrt_dz_profile_flows():
+    """AD grad w.r.t. ``dz_profile`` is finite and non-trivial.
+
+    Previously ``xfail(strict=True)`` because ``make_nonuniform_grid`` and
+    ``_cpml_profile`` had host boundaries (``np.asarray`` /
+    ``float(np.min)`` / ``float(dz_arr[0])``) that broke the JAX trace.
+    Issue #45 removed those boundaries so ``dz_profile`` now flows as a
+    tracer through grid construction, CFL / ``dt`` derivation, and the
+    CPML profile.  This unblocks mesh-as-design-variable inverse design.
+    """
     dz0 = jnp.asarray([0.5e-3] * 5 + [0.3e-3] * 4, dtype=jnp.float32)
-    # Expected to raise TracerArrayConversionError / TypeError —
-    # xfail(strict=True) captures both positive-grad and raised outcomes
-    # as a failure.  We call jax.grad so any raise counts as xfail.
-    _ = jax.grad(loss_fn)(dz0)
+    grad_ad = jax.grad(_loss_from_dz)(dz0)
+    assert grad_ad.shape == dz0.shape
+    assert jnp.all(jnp.isfinite(grad_ad)), "dz_profile grad contains NaN/Inf"
+    # At least one cell moves the loss non-trivially — verifies the
+    # tracer actually propagates (constant-zero would also be finite).
+    assert float(jnp.max(jnp.abs(grad_ad))) > 1.0
+
+
+def test_grad_wrt_dz_profile_matches_fd():
+    """AD↔FD agreement on the dominant cell (#4, near the source).
+
+    Float32 + scalar FD is noisy on cells with tiny gradient magnitudes,
+    so we pin the check to the dominant cell where both AD and FD are
+    well above the numerical floor.  Tolerance is generous (<5 %) to
+    keep the test robust across JAX / CUDA versions.
+    """
+    dz0 = jnp.asarray([0.5e-3] * 5 + [0.3e-3] * 4, dtype=jnp.float32)
+    grad_ad = jax.grad(_loss_from_dz)(dz0)
+    i = int(jnp.argmax(jnp.abs(grad_ad)))
+    h = 1e-6
+    ep = jnp.asarray(np.eye(len(dz0), dtype=np.float32)[i]) * h
+    lp = float(_loss_from_dz(dz0 + ep))
+    lm = float(_loss_from_dz(dz0 - ep))
+    grad_fd = (lp - lm) / (2.0 * h)
+    rel_err = abs(float(grad_ad[i]) - grad_fd) / max(abs(grad_fd), 1e-12)
+    assert rel_err < 0.05, (
+        f"dominant-cell #{i}: AD {float(grad_ad[i]):.4e} vs FD {grad_fd:.4e} "
+        f"— rel_err {rel_err:.4%} above 5 % threshold"
+    )
