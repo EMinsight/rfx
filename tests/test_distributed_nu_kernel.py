@@ -417,6 +417,7 @@ import jax  # noqa: E402
 from rfx.runners.distributed_nu import (  # noqa: E402
     run_nonuniform_distributed_pec,
     shard_pec_mask_x_slab,
+    shard_pec_occupancy_x_slab,
 )
 from rfx.nonuniform import (  # noqa: E402
     run_nonuniform,
@@ -1502,3 +1503,155 @@ def test_distributed_dispersion_drift_over_time():
         ts_single, ts_dist,
         label="phase2d_dispersion_drift_over_time",
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: soft PEC (pec_occupancy) sharded scan body tests
+# ---------------------------------------------------------------------------
+
+
+@_PHASE2B_REQUIRES_2DEV
+def test_distributed_pec_occupancy_2device_matches_single_device():
+    """Class B forward parity for soft-PEC occupancy.
+
+    Place a small block of ``pec_occupancy`` (float) inside rank 1 and
+    verify that the 2-device distributed run matches the single-device
+    ``run_nonuniform`` reference at the final step.  The source sits on
+    rank 0, so the signal crosses the seam and interacts with the soft
+    conductor.
+    """
+    devices = jax.devices()[:2]
+    n_devices = 2
+    n_steps = 60
+
+    grid = _phase2b_build_test_grid(nx_physical=16, ny=8, nz=8, ratio=1.2)
+    materials = _phase2b_make_materials(grid)
+    nx, ny, nz = grid.nx, grid.ny, grid.nz
+
+    # Soft-PEC block on rank 1 (global x in [11, 13], y/z 3:5).
+    occ = jnp.zeros((nx, ny, nz), dtype=jnp.float32)
+    occ = occ.at[11:14, 3:5, 3:5].set(1.0)
+
+    src_idx = (4, 4, 4)
+    src_si, src_sj, src_sk, src_comp, src_wf = _phase2b_make_current_source(
+        grid, src_idx, "ez", _phase2b_gauss_waveform, n_steps, materials,
+    )
+    src_spec = SourceSpec(
+        i=int(src_si), j=int(src_sj), k=int(src_sk),
+        component=src_comp, waveform=jnp.asarray(src_wf),
+    )
+    # Probe on rank 1, downstream of the soft block, so the soft-PEC
+    # interaction shows up in the time series.
+    prb_spec = ProbeSpec(i=14, j=4, k=4, component="ez")
+
+    # Single-device reference: run_nonuniform with pec_occupancy
+    single_out = run_nonuniform(
+        grid=grid,
+        materials=materials,
+        n_steps=n_steps,
+        pec_occupancy=occ,
+        sources=[src_spec],
+        probes=[prb_spec],
+    )
+    ts_single = jnp.asarray(single_out["time_series"])[:, 0]
+
+    # 2-device distributed run with sharded occupancy
+    sharded_grid = build_sharded_nu_grid(grid, n_devices=n_devices,
+                                         exchange_interval=1)
+    sharded_mat = _phase2b_shard_mat(materials, sharded_grid)
+    sharded_occ = shard_pec_occupancy_x_slab(occ, sharded_grid)
+    out = run_nonuniform_distributed_pec(
+        sharded_grid=sharded_grid,
+        sharded_materials=sharded_mat,
+        sharded_pec_mask=None,
+        n_steps=n_steps,
+        sources=[src_spec],
+        probes=[prb_spec],
+        n_devices=n_devices,
+        devices=devices,
+        sharded_pec_occupancy=sharded_occ,
+    )
+    ts_dist = jnp.asarray(out["time_series"])[:, 0]
+
+    assert ts_dist.shape == ts_single.shape, (
+        f"shape mismatch: dist={ts_dist.shape}, single={ts_single.shape}"
+    )
+
+    assert_class_b_parity(ts_single, ts_dist,
+                          label="phase2e_pec_occupancy_2device_parity")
+
+
+@_PHASE2B_REQUIRES_2DEV
+def test_distributed_pec_occupancy_seam_no_double_application():
+    """Class D seam isolation: a soft-PEC occupancy cell exactly at the
+    slab seam must be applied exactly once.
+
+    Place ``occ=1.0`` at global x-index ``nx_per_rank`` (rank 1's first
+    real cell) along with neighbouring occupancy so the per-component
+    tangential rule (``occ * jnp.maximum(roll(+1), roll(-1))``) yields
+    a non-zero contribution.  The distributed run must match the
+    single-device reference, which applies the field once.
+
+    If the seam cell were double-applied, the multiplicative
+    soft-zeroing factor at the seam would compound, producing a
+    distinguishable probe trace.
+    """
+    devices = jax.devices()[:2]
+    n_devices = 2
+    n_steps = 30
+
+    grid = _phase2b_build_test_grid(nx_physical=16, ny=8, nz=8, ratio=1.0)
+    materials = _phase2b_make_materials(grid)
+    nx, ny, nz = grid.nx, grid.ny, grid.nz
+
+    sharded_grid = build_sharded_nu_grid(grid, n_devices=n_devices)
+    seam_i = sharded_grid.nx_per_rank  # rank 1's first real cell, global x
+    seam_j = ny // 2
+    seam_k = nz // 2
+
+    # Soft-PEC at the seam plus its left/right neighbours so the
+    # tangential occupancy rule sees a non-zero neighbour and does not
+    # silently cancel (otherwise no double-application would be visible).
+    occ = jnp.zeros((nx, ny, nz), dtype=jnp.float32)
+    occ = occ.at[seam_i - 1, seam_j, seam_k].set(1.0)
+    occ = occ.at[seam_i, seam_j, seam_k].set(1.0)
+    occ = occ.at[seam_i + 1, seam_j, seam_k].set(1.0)
+
+    src_idx = (4, 4, 4)
+    src_si, src_sj, src_sk, src_comp, src_wf = _phase2b_make_current_source(
+        grid, src_idx, "ez", _phase2b_gauss_waveform, n_steps, materials,
+    )
+    src_spec = SourceSpec(
+        i=int(src_si), j=int(src_sj), k=int(src_sk),
+        component=src_comp, waveform=jnp.asarray(src_wf),
+    )
+    prb_spec = ProbeSpec(i=12, j=4, k=4, component="ez")
+
+    # Single-device reference: applies occupancy exactly once.
+    single_out = run_nonuniform(
+        grid=grid,
+        materials=materials,
+        n_steps=n_steps,
+        pec_occupancy=occ,
+        sources=[src_spec],
+        probes=[prb_spec],
+    )
+    ts_single = jnp.asarray(single_out["time_series"])[:, 0]
+
+    sharded_mat = _phase2b_shard_mat(materials, sharded_grid)
+    sharded_occ = shard_pec_occupancy_x_slab(occ, sharded_grid)
+    out = run_nonuniform_distributed_pec(
+        sharded_grid=sharded_grid,
+        sharded_materials=sharded_mat,
+        sharded_pec_mask=None,
+        n_steps=n_steps,
+        sources=[src_spec],
+        probes=[prb_spec],
+        n_devices=n_devices,
+        devices=devices,
+        sharded_pec_occupancy=sharded_occ,
+    )
+    ts_dist = jnp.asarray(out["time_series"])[:, 0]
+
+    assert_class_b_parity(ts_single, ts_dist,
+                          label="phase2e_pec_occupancy_seam_no_double_application")

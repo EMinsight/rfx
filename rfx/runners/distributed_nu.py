@@ -435,6 +435,85 @@ def build_sharded_nu_grid(
 # Phase 2B: hard-PEC + ghost-exchange sharded NU scan body
 # ---------------------------------------------------------------------------
 
+def shard_pec_occupancy_x_slab(global_occupancy, sharded_grid: ShardedNUGrid):
+    """Slice a global PEC occupancy field along x using the slab ownership of
+    :class:`ShardedNUGrid`.
+
+    The PEC occupancy field is a float ``(nx, ny, nz)`` array with values in
+    ``[0, 1]`` (0 = no conductor, 1 = full PEC).  This is the soft / relaxed
+    analogue of :func:`shard_pec_mask_x_slab` and mirrors its slab layout
+    convention exactly: each rank owns the cells in its real-cell range, and
+    the ghost cells at the slab seam carry the neighbour rank's occupancy so
+    that the per-component tangential occupancy (built via
+    ``occ * jnp.maximum(roll(occ, +1), roll(occ, -1))``) sees the correct
+    neighbour at the first / last real cell.
+
+    Parameters
+    ----------
+    global_occupancy : (nx, ny, nz) jnp.ndarray, or None
+        Full-domain PEC occupancy.  Returns ``None`` if ``global_occupancy``
+        is ``None`` so callers can do an unconditional call.
+    sharded_grid : ShardedNUGrid
+
+    Returns
+    -------
+    sharded_occupancy : (n_devices * nx_local, ny, nz) jnp.ndarray, or None
+        x-sharded occupancy with ``P("x")`` layout.  Each device sees
+        ``(nx_local, ny, nz)``.
+
+    Notes
+    -----
+    Ghost cells at physical domain boundaries are padded with ``0.0``
+    (no occupancy).  This differs from :func:`shard_pec_mask_x_slab`,
+    which pads with ``True`` so :func:`apply_pec_mask`'s tangential rule
+    still recognises the boundary face as PEC.  For the occupancy
+    primitive, the boundary face is enforced separately by
+    :func:`_apply_pec_face_nu_shmap`, so the soft-PEC ghost padding stays
+    at ``0.0`` to avoid biasing the soft-occupancy contribution at the
+    domain edge.
+    """
+    if global_occupancy is None:
+        return None
+
+    n_devices = sharded_grid.n_devices
+    nx_per = sharded_grid.nx_per_rank
+    nx_local = sharded_grid.nx_local
+    ghost = sharded_grid.ghost_width
+    pad_x = sharded_grid.pad_x
+    ny = sharded_grid.ny
+    nz = sharded_grid.nz
+
+    # Pad along x with occupancy=0.0 (no soft PEC in the high-x pad cells)
+    if pad_x > 0:
+        pad_widths = [(0, pad_x), (0, 0), (0, 0)]
+        global_occupancy = jnp.pad(
+            global_occupancy, pad_widths, constant_values=0.0
+        )
+
+    nx_padded = global_occupancy.shape[0]
+    assert nx_padded == n_devices * nx_per, (
+        f"sharded_pec_occupancy: padded shape {nx_padded} != "
+        f"n_devices*nx_per_rank = {n_devices * nx_per}"
+    )
+
+    dtype = global_occupancy.dtype
+    slabs = jnp.zeros((n_devices, nx_local, ny, nz), dtype=dtype)
+    for d in range(n_devices):
+        lo = d * nx_per
+        hi = lo + nx_per
+        slabs = slabs.at[d, ghost:ghost + nx_per, :, :].set(
+            global_occupancy[lo:hi]
+        )
+        if d > 0:
+            slabs = slabs.at[d, 0, :, :].set(global_occupancy[lo - 1])
+        # else: domain boundary at x_lo — leave ghost row at 0.0
+        if d < n_devices - 1:
+            slabs = slabs.at[d, -1, :, :].set(global_occupancy[hi])
+        # else: domain boundary at x_hi — leave ghost row at 0.0
+
+    return slabs.reshape(n_devices * nx_local, ny, nz)
+
+
 def shard_pec_mask_x_slab(global_mask, sharded_grid: ShardedNUGrid):
     """Slice a global PEC mask along x using the slab ownership of
     :class:`ShardedNUGrid`.
@@ -687,6 +766,64 @@ def _apply_pec_mask_nu_shmap(state: FDTDState, sharded_pec_mask, mesh,
         return ex, ey, ez
 
     ex, ey, ez = _pec_mask(state.ex, state.ey, state.ez, sharded_pec_mask)
+    return state._replace(ex=ex, ey=ey, ez=ez)
+
+
+def _apply_pec_occupancy_nu_shmap(state: FDTDState, sharded_pec_occupancy,
+                                  mesh, n_devices: int,
+                                  nx_local: int) -> FDTDState:
+    """Apply soft PEC occupancy to x-sharded fields.
+
+    This is the differentiable analogue of :func:`_apply_pec_mask_nu_shmap`
+    and mirrors :func:`rfx.boundaries.pec.apply_pec_occupancy` on a slab
+    decomposition.  Each rank owns the occupancy contribution inside its
+    real-cell range ``[ghost, ghost + nx_per_rank)``; ghost rows are
+    forced to ``0.0`` before the soft-zero is applied so a single seam
+    cell is never folded into both neighbouring ranks.
+
+    The occupancy at the first / last real cell sees the seam-neighbour's
+    occupancy via the ghost row populated by
+    :func:`shard_pec_occupancy_x_slab`, which keeps the
+    ``jnp.maximum(roll(+1), roll(-1))`` neighbour rule consistent with
+    the single-device path.
+    """
+    if sharded_pec_occupancy is None:
+        return state
+
+    @partial(
+        shard_map,
+        mesh=mesh,
+        in_specs=(P("x"), P("x"), P("x"), P("x")),
+        out_specs=(P("x"), P("x"), P("x")),
+        check_rep=False,
+    )
+    def _pec_occ(ex, ey, ez, occ):
+        occ = jnp.clip(occ.astype(ex.dtype), 0.0, 1.0)
+
+        occ_ex = occ * jnp.maximum(
+            jnp.roll(occ, 1, axis=0), jnp.roll(occ, -1, axis=0))
+        occ_ey = occ * jnp.maximum(
+            jnp.roll(occ, 1, axis=1), jnp.roll(occ, -1, axis=1))
+        occ_ez = occ * jnp.maximum(
+            jnp.roll(occ, 1, axis=2), jnp.roll(occ, -1, axis=2))
+
+        # Force ghost rows to 0.0 so seam cells in another rank's slab are
+        # not double-applied; real cells span [ghost, nx_local - ghost).
+        ghost = 1
+        zero_row = jnp.zeros_like(occ_ex[0:ghost, :, :])
+        occ_ex = occ_ex.at[0:ghost, :, :].set(zero_row)
+        occ_ex = occ_ex.at[nx_local - ghost:nx_local, :, :].set(zero_row)
+        occ_ey = occ_ey.at[0:ghost, :, :].set(zero_row)
+        occ_ey = occ_ey.at[nx_local - ghost:nx_local, :, :].set(zero_row)
+        occ_ez = occ_ez.at[0:ghost, :, :].set(zero_row)
+        occ_ez = occ_ez.at[nx_local - ghost:nx_local, :, :].set(zero_row)
+
+        ex = ex * (1.0 - occ_ex)
+        ey = ey * (1.0 - occ_ey)
+        ez = ez * (1.0 - occ_ez)
+        return ex, ey, ez
+
+    ex, ey, ez = _pec_occ(state.ex, state.ey, state.ez, sharded_pec_occupancy)
     return state._replace(ex=ex, ey=ey, ez=ez)
 
 
@@ -1635,6 +1772,7 @@ def run_nonuniform_distributed_pec(
     devices=None,
     cpml_params=None,
     cpml_state=None,
+    sharded_pec_occupancy=None,
 ) -> dict:
     """Phase 2B/2C/2D sharded NU scan body — hard PEC, ghost exchange,
     optional CPML, and optional Debye/Lorentz dispersion on x-slabs.
@@ -1673,7 +1811,7 @@ def run_nonuniform_distributed_pec(
         7. Ghost exchange of E                       via lax.ppermute
         8. apply_pec on physical domain faces        via shard_map
         9. apply_pec_mask (geometry + override)      via shard_map
-        # Phase 2E: apply_pec_occupancy here
+        9b. apply_pec_occupancy (soft PEC)           via shard_map  [if occupancy]
        10. Probe accumulation (rank-conditional sum) via lax.psum
 
     ADE Ordering Contract (Phase 2D — V3 plan lines 679-698)
@@ -1754,6 +1892,13 @@ def run_nonuniform_distributed_pec(
         :func:`shard_cpml_state_x_slab` applied to the second return
         value of :func:`init_cpml_for_sharded_nu`).  Required when
         ``cpml_params`` is not None.
+    sharded_pec_occupancy : jnp.ndarray float or None, optional
+        x-slab sharded soft-PEC occupancy field (Phase 2E).  Same layout
+        as ``sharded_pec_mask`` but float-valued in ``[0, 1]``.  Use
+        :func:`shard_pec_occupancy_x_slab` to build it.  Applied after
+        the hard ``sharded_pec_mask`` and before probe accumulation,
+        mirroring the single-device ordering in
+        :func:`rfx.nonuniform.run_nonuniform`.
 
     Returns
     -------
@@ -2426,14 +2571,15 @@ def run_nonuniform_distributed_pec(
             st = _apply_pec_mask_nu_shmap(
                 st, sharded_pec_mask, mesh, n_devices, nx_local)
 
-        # Phase 2E: apply_pec_occupancy here
-        # ------------------------------------------------------------------
-        # Phase 2E will splice soft-PEC (pec_occupancy_override) in at
-        # this point — after hard PEC mask, before probe accumulation.
-        # The single-device NU path already accepts and applies
-        # pec_occupancy; this distributed path needs the sharded
-        # equivalent (V3 plan lines 700-715).
-        # ------------------------------------------------------------------
+        # 9b. Phase 2E: soft-PEC occupancy (differentiable analogue of the
+        #     hard mask).  Mirrors single-device ordering in
+        #     ``rfx.nonuniform.run_nonuniform``: applied after the hard
+        #     mask and before probe accumulation.  Seam ghost rows are
+        #     zeroed inside the helper so a seam cell is applied exactly
+        #     once.
+        if sharded_pec_occupancy is not None:
+            st = _apply_pec_occupancy_nu_shmap(
+                st, sharded_pec_occupancy, mesh, n_devices, nx_local)
 
         # 10. Probe accumulation (rank-conditional sample + lax.psum)
         probe_out = _sample_probes_shmap(st)
