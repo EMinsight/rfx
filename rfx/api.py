@@ -1643,8 +1643,19 @@ class Simulation:
         return "".join(axis for axis in "xyz" if axis in axes_in_use) or "x"
 
     def _build_grid(self, *, extra_waveguide_axes: str = "") -> Grid:
+        # Remove periodic axes from CPML allocation — CPML on a periodic
+        # axis fights the wrap-around and corrupts the physics
+        # (issue #68). Default is "xyz"; the waveguide-port path overrides
+        # with a port-normal-PEC filter.
+        def _filter_periodic(axes: str) -> str:
+            if not self._periodic_axes:
+                return axes
+            return "".join(ax for ax in axes if ax not in self._periodic_axes)
+
         if self._waveguide_ports or extra_waveguide_axes:
-            cpml_axes = self._waveguide_cpml_axes(extra_waveguide_axes)
+            cpml_axes = _filter_periodic(
+                self._waveguide_cpml_axes(extra_waveguide_axes)
+            )
             return Grid(
                 freq_max=self._freq_max,
                 domain=self._domain,
@@ -1660,6 +1671,7 @@ class Simulation:
             domain=self._domain,
             dx=self._dx,
             cpml_layers=self._cpml_layers,
+            cpml_axes=_filter_periodic("xyz"),
             mode=self._mode,
             kappa_max=self._cpml_kappa_max,
             pec_faces=self._pec_faces,
@@ -2965,6 +2977,12 @@ class Simulation:
         # Zero out thickness for PEC-overridden faces
         if "z_lo" in self._pec_faces:
             cpml_thick_xyz[2] = 0  # z_lo is PEC, no CPML absorption there
+        # Zero out thickness for periodic axes — CPML is not allocated
+        # there (see _build_grid) so the geometry/probe/source in-CPML
+        # warnings should treat those axes as CPML-free (issue #68).
+        for _ax_idx, _ax_name in enumerate("xyz"):
+            if _ax_name in self._periodic_axes:
+                cpml_thick_xyz[_ax_idx] = 0
 
         # P1.1: Floquet + non-uniform mesh — no silent fallback allowed
         if self._floquet_ports and self._dz_profile is not None:
@@ -3036,14 +3054,20 @@ class Simulation:
         # CPML modifies field-update equations with absorbing coefficients;
         # any structure placed there is effectively eaten by the absorber
         # and produces physically meaningless results (issue #61).
+        # Periodic axes have no CPML (see _build_grid — issue #68), so
+        # the per-axis thresholds above already carry `cpml_thick_xyz[ax]
+        # == 0` on those axes and the check naturally skips.
         if cpml_thickness > 0 and self._boundary == "cpml":
             for entry in self._geometry:
                 if hasattr(entry.shape, "bounding_box"):
                     try:
                         c1, c2 = entry.shape.bounding_box()
                         for ax in range(min(3, len(self._domain))):
+                            ax_thickness = cpml_thick_xyz[ax]
+                            if ax_thickness <= 0:
+                                continue
                             d = self._domain[ax] if ax < len(self._domain) else self._domain[-1]
-                            if c1[ax] < cpml_thickness * 0.3 or c2[ax] > d - cpml_thickness * 0.3:
+                            if c1[ax] < ax_thickness * 0.3 or c2[ax] > d - ax_thickness * 0.3:
                                 _w.warn(
                                     f"Material '{entry.material_name}' extends "
                                     f"into CPML region along {'xyz'[ax]}-axis. "
