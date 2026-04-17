@@ -216,7 +216,17 @@ def _split_lorentz_coeffs(coeffs: LorentzCoeffs, n_devices, ghost=1):
     """Split LorentzCoeffs arrays along x into per-device slabs."""
     ca = split_array_x(coeffs.ca, n_devices, ghost, pad_value=0.0)
     cb = split_array_x(coeffs.cb, n_devices, ghost, pad_value=0.0)
-    cc = split_array_x(coeffs.cc, n_devices, ghost, pad_value=0.0)
+    # cc = 1 / safe_gamma; the mixed Debye+Lorentz path computes
+    # `gamma_base = 1 / cc`, so padding cc=0 at physical-boundary ghosts
+    # yields gamma_base=inf and `numer_base = ca*gamma_base = 0*inf = NaN`.
+    # Forward stays bit-perfect (ghost cells drop before output assembly),
+    # but in backward `cb_mixed[ghost] * curl = 0 * NaN = NaN` leaks the
+    # NaN from the ghost's cb_mixed into real cells' hy/hz gradients and
+    # ultimately into d_loss/d_eps at the first/last x cells.  Pad with
+    # the vacuum cc value (1/EPS_0) so gamma_base=EPS_0 is finite at
+    # ghosts; ca/alpha/beta stay padded with 0 so the ghost update is a
+    # no-op forward.
+    cc = split_array_x(coeffs.cc, n_devices, ghost, pad_value=float(1.0 / EPS_0))
 
     n_poles = coeffs.a.shape[0]
 

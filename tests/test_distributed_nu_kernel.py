@@ -1345,6 +1345,107 @@ def test_distributed_mixed_dispersion_2device_matches_single_device():
 
 
 @_PHASE2B_REQUIRES_2DEV
+def test_distributed_mixed_dispersion_grad_no_corner_nan():
+    """Phase 4 regression (2026-04-17): mixed Debye+Lorentz backward must
+    produce NaN-free gradient.
+
+    The Phase 4 calibration run surfaced a NaN leak at the rank-0 and
+    rank-(N-1) first/last x cells of the eps gradient whenever both
+    Debye and Lorentz poles were active on the distributed NU path.
+    Root cause: ``_split_lorentz_coeffs`` / ``shard_lorentz_coeffs_x_slab``
+    padded ``lorentz_coeffs.cc`` with 0.0 at ghost / high-x PEC cells, so
+    the mixed formula's ``gamma_base = 1 / cc = inf`` combined with
+    ``numer_base = ca * gamma_base = 0 * inf = NaN`` in forward.  Forward
+    stayed bit-perfect (ghost cells drop before output assembly) but
+    backward propagated ``NaN * 0 = NaN`` through ``cb_mixed[ghost] *
+    curl`` into real-cell hy/hz gradients and on into ``d_loss/d_eps``
+    at the physical-boundary x cells.
+
+    The fix pads ``cc`` with the vacuum ``1 / EPS_0`` value so
+    ``gamma_base = EPS_0`` at ghosts and the mixed cascade produces
+    finite no-op updates.  This regression test fails WITHOUT the fix
+    (NaN count ~2 * ny * nz) and passes WITH the fix.
+    """
+    from rfx import Simulation, Box
+
+    devices = jax.devices()[:2]
+    n_devices = 2
+    n_steps = 30
+
+    # Minimum-scale repro that keeps CI cost low but still exercises the
+    # mixed-dispersion distributed path.  Transverse extent must satisfy
+    # `nx_per_rank > 2 * cpml_layers` — with 2 ranks and cpml=8, the
+    # post-CPML grid (~40 cells) gives nx_per=20, well above 16.
+    nx, ny_g, nz_g = 24, 24, 48
+    dx = 1e-3
+    sim = Simulation(
+        freq_max=5e9,
+        domain=(nx * dx, ny_g * dx, nz_g * dx),
+        dx=dx,
+        boundary="cpml",
+        cpml_layers=8,
+        dx_profile=np.full(nx, dx),
+        dz_profile=np.full(nz_g, dx),
+    )
+    debye_poles = [_phase2d_debye_pole()]
+    lorentz_poles = [_phase2d_lorentz_pole()]
+    sim.add_material(
+        "disp_slab",
+        eps_r=2.0,
+        debye_poles=debye_poles,
+        lorentz_poles=lorentz_poles,
+    )
+    margin = (8 + 2) * dx
+    sim.add(
+        Box(
+            (margin, margin, 6 * dx),
+            (nx * dx - margin, ny_g * dx - margin, (nz_g - 6) * dx),
+        ),
+        material="disp_slab",
+    )
+    src_i = max(10, nx // 4)
+    prb_i = min(nx - 11, 3 * nx // 4)
+    sim.add_source(
+        position=(src_i * dx, (ny_g // 2) * dx, (nz_g // 2) * dx),
+        component="ez",
+    )
+    sim.add_probe(
+        position=(prb_i * dx, (ny_g // 2) * dx, (nz_g // 2) * dx),
+        component="ez",
+    )
+
+    nu_grid = sim._build_nonuniform_grid()
+    gnx, gny, gnz = int(nu_grid.nx), int(nu_grid.ny), int(nu_grid.nz)
+    eps_init = jnp.ones((gnx, gny, gnz), dtype=jnp.float32)
+
+    def _loss(eps):
+        res = sim.forward(
+            eps_override=eps,
+            n_steps=n_steps,
+            emit_time_series=True,
+            distributed=True,
+            devices=devices,
+        )
+        return jnp.sum(res.time_series ** 2)
+
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        grad = jax.grad(_loss)(eps_init)
+
+    grad_np = np.asarray(grad)
+    nan_count = int(np.isnan(grad_np).sum())
+    assert nan_count == 0, (
+        f"Distributed NU mixed-dispersion backward produced "
+        f"{nan_count} NaN gradient cells (expected 0). "
+        f"NaN x-rows: {sorted(set(np.argwhere(np.isnan(grad_np))[:, 0].tolist()))}. "
+        f"This is the #44 Phase 4 corner-NaN regression — check "
+        f"that `lorentz_coeffs.cc` is padded with a nonzero value in "
+        f"`_split_lorentz_coeffs` and `shard_lorentz_coeffs_x_slab`."
+    )
+
+
+@_PHASE2B_REQUIRES_2DEV
 def test_distributed_debye_seam_ade_ordering_isolated():
     """Phase 2D Class D — ADE Ordering Contract seam-isolation gate.
 

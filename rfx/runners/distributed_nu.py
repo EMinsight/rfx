@@ -1262,10 +1262,15 @@ def shard_lorentz_coeffs_x_slab(lorentz_coeffs, sharded_grid: ShardedNUGrid,
     if pad_x > 0:
         pad3 = ((0, pad_x), (0, 0), (0, 0))
         pad4 = ((0, 0), (0, pad_x), (0, 0), (0, 0))
+        # See `_split_lorentz_coeffs` docstring for the rationale: cc must
+        # pad with the vacuum 1/EPS_0 so `gamma_base = 1/cc` is finite in
+        # the mixed Debye+Lorentz path (avoids 0*inf = NaN leaking into
+        # backward gradients at the x-boundary).
         lorentz_coeffs_padded = LorentzCoeffs(
             ca=jnp.pad(lorentz_coeffs.ca, pad3, constant_values=0.0),
             cb=jnp.pad(lorentz_coeffs.cb, pad3, constant_values=0.0),
-            cc=jnp.pad(lorentz_coeffs.cc, pad3, constant_values=0.0),
+            cc=jnp.pad(lorentz_coeffs.cc, pad3,
+                       constant_values=float(1.0 / EPS_0)),
             a=jnp.pad(lorentz_coeffs.a, pad4, constant_values=0.0),
             b=jnp.pad(lorentz_coeffs.b, pad4, constant_values=0.0),
             c=jnp.pad(lorentz_coeffs.c, pad4, constant_values=0.0),
