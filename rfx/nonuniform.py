@@ -137,12 +137,13 @@ def make_nonuniform_grid(
     if dx_profile is None:
         nx_interior = int(round(domain_xy[0] / dx))
         dx_prof_phys = np.full(nx_interior, float(dx))
+    elif is_tracer(dx_profile):
+        # Tracer path (mesh-as-design-variable): stay in jnp and skip the
+        # concrete boundary validation. Caller is responsible for keeping
+        # `dx_profile[0] == dx_profile[-1] == dx` (the CPML uses the
+        # boundary scalar). Mirrors the 2026-04-17 dz tracer refactor.
+        dx_prof_phys = jnp.asarray(dx_profile, dtype=jnp.float32)
     else:
-        if is_tracer(dx_profile):
-            raise NotImplementedError(
-                "Tracer-valued dx_profile is not supported on the non-uniform "
-                "grid path. See docs/agent-memory/nu_known_limits.md."
-            )
         dx_prof_phys = np.asarray(dx_profile, dtype=np.float64)
         # Guard: CPML cells must have the same size as the boundary interior
         # cells, otherwise the CPML σ/κ profile is miscalibrated.
@@ -157,7 +158,7 @@ def make_nonuniform_grid(
                 f"dx={float(dx)}."
             )
     dx_full = _pad_profile(dx_prof_phys, cpml_layers)
-    nx = len(dx_full)
+    nx = int(dx_full.shape[0])
 
     # --- y profile ---
     if dy_profile is None:
@@ -165,12 +166,13 @@ def make_nonuniform_grid(
         ny_interior = int(round(domain_xy[1] / dx))
         dy_prof_phys = np.full(ny_interior, float(dx))
         dy_boundary = float(dx)
+    elif is_tracer(dy_profile):
+        # Tracer path: stay in jnp. Use the concrete scalar `dx` as the
+        # boundary cell size — the caller must align `dy_profile[0]` and
+        # `dy_profile[-1]` with `dx` (same contract as the concrete path).
+        dy_prof_phys = jnp.asarray(dy_profile, dtype=jnp.float32)
+        dy_boundary = float(dx)
     else:
-        if is_tracer(dy_profile):
-            raise NotImplementedError(
-                "Tracer-valued dy_profile is not supported on the non-uniform "
-                "grid path. See docs/agent-memory/nu_known_limits.md."
-            )
         dy_prof_phys = np.asarray(dy_profile, dtype=np.float64)
         dy_boundary = float(dy_prof_phys[0])
         if abs(float(dy_prof_phys[-1]) - dy_boundary) > 1e-12:
@@ -179,20 +181,25 @@ def make_nonuniform_grid(
                 f"(got lo={dy_boundary}, hi={float(dy_prof_phys[-1])})."
             )
     dy_full = _pad_profile(dy_prof_phys, cpml_layers)
-    ny = len(dy_full)
+    ny = int(dy_full.shape[0])
 
     # --- z profile ---
     dz_full = _pad_profile(dz_profile, cpml_layers)
-    nz = len(dz_full)
+    nz = int(dz_full.shape[0])
 
     # --- CFL from minimum cell size on every axis ---
-    dx_min = float(np.min(dx_full))
-    dy_min = float(np.min(dy_full))
-    if is_tracer(dz_full):
-        dz_min = jnp.min(dz_full)
+    def _axis_min(d_full):
+        return jnp.min(d_full) if is_tracer(d_full) else float(np.min(d_full))
+
+    any_traced = (
+        is_tracer(dx_full) or is_tracer(dy_full) or is_tracer(dz_full)
+    )
+    dx_min = _axis_min(dx_full)
+    dy_min = _axis_min(dy_full)
+    dz_min = _axis_min(dz_full)
+    if any_traced:
         dt = 0.99 / (C0 * jnp.sqrt(1 / dx_min ** 2 + 1 / dy_min ** 2 + 1 / dz_min ** 2))
     else:
-        dz_min = float(np.min(dz_full))
         dt = float(
             0.99 / (C0 * np.sqrt(1 / dx_min ** 2 + 1 / dy_min ** 2 + 1 / dz_min ** 2))
         )

@@ -228,21 +228,14 @@ def test_sim_forward_grad_wrt_dz_profile_through_init():
     assert float(jnp.sum(jnp.abs(grad))) > 0.0, "grad must be non-zero"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason=(
-        "Tracer-valued dx_profile raises NotImplementedError — known limit. "
-        "Remove this xfail when the dx_profile tracer path is implemented. "
-        "See docs/agent-memory/nu_known_limits.md."
-    ),
-)
-def test_grad_wrt_dx_profile_blocked():
-    """jax.grad w.r.t. dx_profile raises NotImplementedError (known limit).
+def test_grad_wrt_dx_profile_flows():
+    """jax.grad w.r.t. dx_profile flows through make_nonuniform_grid.
 
-    The #45 fix covers dz_profile only.  dx_profile still host-coerces in
-    make_nonuniform_grid; the explicit NotImplementedError guard added in
-    the cleanup pass makes the failure message actionable.
+    Closes the dx_profile half of the mesh-as-design-variable story
+    (companion to `test_grad_wrt_dz_profile_flows`). The tracer-valued
+    dx_profile routes through `_pad_profile`'s is_tracer branch, the CFL
+    dt is computed in-trace, and `grid.dx_arr` carries the tracer into
+    the sum, so the gradient is well-defined.
     """
     from rfx.nonuniform import make_nonuniform_grid
 
@@ -258,21 +251,14 @@ def test_grad_wrt_dx_profile_blocked():
         )
         return jnp.sum(grid.dx_arr)
 
-    # Must raise NotImplementedError at make_nonuniform_grid — xfail expected.
-    jax.grad(_loss)(dx0)
+    grad = jax.grad(_loss)(dx0)
+    assert grad.shape == dx0.shape
+    assert bool(jnp.all(jnp.isfinite(grad))), "dx_profile grad must be finite"
+    assert float(jnp.sum(jnp.abs(grad))) > 0.0, "dx_profile grad must be non-zero"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason=(
-        "Tracer-valued dy_profile raises NotImplementedError — known limit. "
-        "Remove this xfail when the dy_profile tracer path is implemented. "
-        "See docs/agent-memory/nu_known_limits.md."
-    ),
-)
-def test_grad_wrt_dy_profile_blocked():
-    """jax.grad w.r.t. dy_profile raises NotImplementedError (known limit)."""
+def test_grad_wrt_dy_profile_flows():
+    """jax.grad w.r.t. dy_profile flows through make_nonuniform_grid."""
     from rfx.nonuniform import make_nonuniform_grid
 
     dy0 = jnp.asarray([0.5e-3] * 6, dtype=jnp.float32)
@@ -287,5 +273,91 @@ def test_grad_wrt_dy_profile_blocked():
         )
         return jnp.sum(grid.dy_arr)
 
-    # Must raise NotImplementedError at make_nonuniform_grid — xfail expected.
-    jax.grad(_loss)(dy0)
+    grad = jax.grad(_loss)(dy0)
+    assert grad.shape == dy0.shape
+    assert bool(jnp.all(jnp.isfinite(grad))), "dy_profile grad must be finite"
+    assert float(jnp.sum(jnp.abs(grad))) > 0.0, "dy_profile grad must be non-zero"
+
+
+def test_sim_forward_grad_wrt_dx_profile_through_init():
+    """jax.grad through Simulation.__init__ w.r.t. dx_profile (x-axis twin of dz test).
+
+    Exercises the full Simulation-level flow: constructor `is_tracer()`
+    gate on domain[0], `make_nonuniform_grid` tracer x-path, CFL in-trace,
+    source/probe index resolution via the uniform-nominal fallback, and
+    FDTD scan through the traced cell sizes.
+    """
+    dx = jnp.asarray([0.5e-3] * 20, dtype=jnp.float32)
+    domain_x = float(jnp.sum(dx))
+
+    def _loss(dx_profile):
+        sim = Simulation(
+            freq_max=10e9,
+            domain=(domain_x, 0.01, 0.004),
+            dx=0.5e-3,
+            dx_profile=dx_profile,
+            cpml_layers=4,
+        )
+        sim.add_source((0.005, 0.005, 0.001), "ez")
+        sim.add_probe((0.005, 0.005, 0.003), "ez")
+        fr = sim.forward(n_steps=20, skip_preflight=True)
+        return jnp.sum(fr.time_series ** 2)
+
+    grad = jax.grad(_loss)(dx)
+    assert grad.shape == dx.shape, f"grad shape {grad.shape} != {dx.shape}"
+    assert bool(jnp.all(jnp.isfinite(grad))), "dx_profile grad must be finite"
+    assert float(jnp.sum(jnp.abs(grad))) > 0.0, "dx_profile grad must be non-zero"
+
+
+def test_sim_forward_grad_wrt_dy_profile_through_init():
+    """jax.grad through Simulation.__init__ w.r.t. dy_profile (y-axis twin)."""
+    dy = jnp.asarray([0.5e-3] * 20, dtype=jnp.float32)
+    domain_y = float(jnp.sum(dy))
+
+    def _loss(dy_profile):
+        sim = Simulation(
+            freq_max=10e9,
+            domain=(0.01, domain_y, 0.004),
+            dx=0.5e-3,
+            dy_profile=dy_profile,
+            cpml_layers=4,
+        )
+        sim.add_source((0.005, 0.005, 0.001), "ez")
+        sim.add_probe((0.005, 0.005, 0.003), "ez")
+        fr = sim.forward(n_steps=20, skip_preflight=True)
+        return jnp.sum(fr.time_series ** 2)
+
+    grad = jax.grad(_loss)(dy)
+    assert grad.shape == dy.shape, f"grad shape {grad.shape} != {dy.shape}"
+    assert bool(jnp.all(jnp.isfinite(grad))), "dy_profile grad must be finite"
+    assert float(jnp.sum(jnp.abs(grad))) > 0.0, "dy_profile grad must be non-zero"
+
+
+def test_grad_wrt_joint_dxyz_profile_flows():
+    """jax.grad w.r.t. a joint (dx, dy, dz) profile flows end-to-end.
+
+    Mesh-as-design-variable on all three axes simultaneously. Exercises
+    the CFL in-trace path (all three axis minima are tracers) and the
+    composition of the three tracer profiles in `make_nonuniform_grid`.
+    """
+    from rfx.nonuniform import make_nonuniform_grid
+
+    d0 = jnp.asarray([0.5e-3] * 6, dtype=jnp.float32)
+
+    def _loss(profiles):
+        dx_p, dy_p, dz_p = profiles
+        grid = make_nonuniform_grid(
+            domain_xy=(0.003, 0.003),
+            dz_profile=dz_p,
+            dx=float(d0[0]),
+            dx_profile=dx_p,
+            dy_profile=dy_p,
+            cpml_layers=2,
+        )
+        return jnp.sum(grid.dx_arr) + jnp.sum(grid.dy_arr) + jnp.sum(grid.dz)
+
+    grads = jax.grad(_loss)((d0, d0, d0))
+    for name, g, ref in zip(("dx", "dy", "dz"), grads, (d0, d0, d0)):
+        assert g.shape == ref.shape, f"{name} grad shape mismatch"
+        assert bool(jnp.all(jnp.isfinite(g))), f"{name} grad has NaN/Inf"
+        assert float(jnp.sum(jnp.abs(g))) > 0.0, f"{name} grad identically zero"

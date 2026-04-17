@@ -63,30 +63,24 @@ def coords_from_nonuniform_grid(grid) -> GridCoords:
     cpml = grid.cpml_layers
     nx, ny, nz = grid.nx, grid.ny, grid.nz
 
-    dx_arr = np.asarray(grid.dx_arr)
-    dy_arr = np.asarray(grid.dy_arr)
+    def _axis_centers(d_arr):
+        # Mesh-as-design-variable path: any axis cell-size profile may be
+        # a JAX tracer. Route the cumsum / offset arithmetic through jnp
+        # in-trace; fall back to the numpy path on concrete inputs to keep
+        # the host-float behaviour the rest of the codebase depends on.
+        if is_tracer(d_arr):
+            d_j = jnp.asarray(d_arr)
+            cum = jnp.concatenate([jnp.zeros((1,), dtype=d_j.dtype),
+                                   jnp.cumsum(d_j)])
+            offset = cum[cpml]
+            centers = (cum[:-1] + cum[1:]) / 2.0 - offset
+            return centers.astype(jnp.float32)
+        d_np = np.asarray(d_arr)
+        return jnp.asarray(_axis_cell_centers(d_np, cpml), dtype=jnp.float32)
 
-    x = jnp.asarray(_axis_cell_centers(dx_arr, cpml), dtype=jnp.float32)
-    y = jnp.asarray(_axis_cell_centers(dy_arr, cpml), dtype=jnp.float32)
-
-    if is_tracer(grid.dz):
-        # Mesh-as-design-variable path: dz is a JAX tracer. Route the
-        # z-coordinate computation through jnp so the cumsum / offset
-        # arithmetic stays within the trace. Downstream rasterize_geometry
-        # only dereferences these when geometry_entries is non-empty.
-        dz_j = jnp.asarray(grid.dz)
-        z_cumsum = jnp.concatenate([jnp.zeros((1,), dtype=dz_j.dtype),
-                                    jnp.cumsum(dz_j)])
-        z_offset = z_cumsum[cpml]
-        z_centers = (z_cumsum[:-1] + z_cumsum[1:]) / 2.0 - z_offset
-        z = z_centers.astype(jnp.float32)
-    else:
-        dz_np = np.array(grid.dz)
-        z_cumsum = np.cumsum(dz_np)
-        z_cumsum = np.insert(z_cumsum, 0, 0.0)
-        z_offset = z_cumsum[cpml]
-        z_centers = (z_cumsum[:-1] + z_cumsum[1:]) / 2.0 - z_offset
-        z = jnp.asarray(z_centers, dtype=jnp.float32)
+    x = _axis_centers(grid.dx_arr)
+    y = _axis_centers(grid.dy_arr)
+    z = _axis_centers(grid.dz)
 
     return GridCoords(x=x, y=y, z=z, shape=(nx, ny, nz))
 
