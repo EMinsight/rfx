@@ -23,15 +23,17 @@ run: |-
   echo "========================================"
 
   mkdir -p logs/issue44
-  # Backward without segmented remat OOM'd on 24 GiB HBM (ran 369367233708:
-  # `Can't reduce memory use below -59.04GiB ... only reduced to 82.42GiB`).
-  # Production workloads use checkpoint_every anyway, so calibrate with a
-  # realistic segmented-remat setting instead of none.  V3 Job A sweep
-  # includes 50/100/500 as the target checkpoint_every range.
+  # HBM tuning for 24 GiB RTX 4090:
+  #   Run 369367233708 (no checkpoint, n_steps=200): JAX wanted 82 GiB — FAIL.
+  #   Run 369367233729 (checkpoint_every=50, n_steps=200): reduced to 18 GiB — FAIL (allocator needs headroom).
+  # Fix: halve n_steps to match the CPU sub-step 3.5.0 probe (also n_steps=100)
+  # and keep checkpoint_every=50.  Expected backward: ~9 GiB, fits with
+  # ample headroom for allocator scratch.  Calibration parity numbers match
+  # the CPU calibration JSON (committed at 7f90858).
   python scripts/benchmarks/issue44_distributed_nu.py \
     --case calibration --devices 1 --device-type gpu \
     --checkpoint-every 50 \
-    --n-steps 200 --out logs/issue44/job0_single_gpu.json
+    --n-steps 100 --out logs/issue44/job0_single_gpu.json
 
   echo ""
   echo "=== JSON output ==="
