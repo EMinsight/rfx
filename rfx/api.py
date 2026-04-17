@@ -3653,6 +3653,14 @@ class Simulation:
 
         See :meth:`forward` for the public-facing kwarg semantics.
         """
+        if self._flux_monitors:
+            raise NotImplementedError(
+                "add_flux_monitor() is not supported on the distributed "
+                "non-uniform forward path; the sharded NU scan body does "
+                "not accumulate flux DFTs. Drop flux monitors (use "
+                "add_ntff_box() for far-field observables) or use the "
+                "uniform lane."
+            )
         import warnings as _w
         from rfx.runners.distributed_nu import (
             build_sharded_nu_grid,

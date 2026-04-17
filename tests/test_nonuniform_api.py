@@ -580,3 +580,74 @@ class TestNonUniformDispersive:
         assert ts.shape == (100, 1)
         # Source should inject energy — probe should see non-zero signal
         assert np.max(np.abs(ts)) > 0
+
+
+class TestFluxMonitorOnNonUniform:
+    """``add_flux_monitor`` is uniform-path-only; the NU runner must fail
+    fast rather than silently drop the observable (T5 polish)."""
+
+    def _make_nu_sim(self):
+        dz = np.array([0.4e-3] * 4 + [0.5e-3] * 8, dtype=np.float64)
+        sim = Simulation(
+            freq_max=10e9,
+            domain=(0.01, 0.01, float(np.sum(dz))),
+            dx=0.5e-3,
+            dz_profile=dz,
+            cpml_layers=4,
+        )
+        sim.add_source((0.005, 0.005, 0.001), "ez")
+        sim.add_probe((0.005, 0.005, 0.003), "ez")
+        return sim
+
+    def test_flux_monitor_on_nu_run_raises(self):
+        sim = self._make_nu_sim()
+        sim.add_flux_monitor(axis="z", coordinate=0.002)
+        with pytest.raises(NotImplementedError, match="flux_monitor"):
+            sim.run(n_steps=20)
+
+    def test_flux_monitor_on_nu_forward_raises(self):
+        sim = self._make_nu_sim()
+        sim.add_flux_monitor(axis="z", coordinate=0.002)
+        with pytest.raises(NotImplementedError, match="flux_monitor"):
+            sim.forward(n_steps=20, skip_preflight=True)
+
+    def test_no_flux_monitor_nu_runs_fine(self):
+        """Sanity: without a flux monitor the NU path stays green."""
+        sim = self._make_nu_sim()
+        result = sim.run(n_steps=30)
+        ts = np.asarray(result.time_series)
+        assert ts.shape[0] == 30
+        assert np.all(np.isfinite(ts))
+
+
+class TestNTFFOnNonUniform:
+    """NTFF + NU single-device composition (T5 polish — distributed
+    variant deferred pending VESSL evidence)."""
+
+    @pytest.mark.filterwarnings("ignore:NTFF box extends into UPML")
+    def test_ntff_data_populated_on_nu_path(self):
+        """``sim.run(..., add_ntff_box(...))`` on a NU mesh returns a
+        non-None ``ntff_data`` with the expected box-face layout."""
+        dz = np.array([0.4e-3] * 4 + [0.5e-3] * 16, dtype=np.float64)
+        sim = Simulation(
+            freq_max=5e9, domain=(0.02, 0.02, float(np.sum(dz))),
+            dx=0.5e-3, dz_profile=dz, boundary="upml",
+        )
+        sim.add_source((0.01, 0.01, 0.004), "ez")
+        # Interior z spans ~[2mm, 7.6mm] (UPML 4 layers * 0.5mm each
+        # end). Keep NTFF box well inside to silence the advisory.
+        sim.add_ntff_box(
+            corner_lo=(0.006, 0.006, 0.003),
+            corner_hi=(0.014, 0.014, 0.006),
+            freqs=np.array([2.4e9, 3.2e9]),
+        )
+        res = sim.run(n_steps=80, compute_s_params=False)
+        assert res.ntff_data is not None
+        for face in ("x_lo", "x_hi", "y_lo", "y_hi", "z_lo", "z_hi"):
+            face_arr = np.asarray(getattr(res.ntff_data, face))
+            assert face_arr.ndim >= 2, (
+                f"NTFF face {face} expected >=2D; got shape {face_arr.shape}"
+            )
+            assert np.all(np.isfinite(face_arr)), (
+                f"NTFF face {face} has NaN/Inf after NU run"
+            )

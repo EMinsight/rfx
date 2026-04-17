@@ -214,6 +214,20 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     """
     from rfx.api import Result
 
+    # Flux monitors are accumulated in the uniform scan body only (see
+    # rfx/simulation.py::_run_sim and rfx/runners/uniform.py). The NU scan
+    # body does not plumb them, so silently dropping them would lose the
+    # user's observable without warning. Fail fast — direct the caller to
+    # the uniform lane or NTFF-box alternative.
+    if getattr(sim, "_flux_monitors", None):
+        raise NotImplementedError(
+            "add_flux_monitor() is not supported on the non-uniform mesh "
+            "path; the NU scan body does not accumulate flux DFTs. Drop "
+            "the dx/dy/dz profile to use the uniform lane for R/T "
+            "measurements, or use add_ntff_box() for far-field observables "
+            "on NU meshes."
+        )
+
     grid = build_nonuniform_grid(
         sim._freq_max, sim._domain, sim._dx, sim._cpml_layers, sim._dz_profile,
         dx_profile=sim._dx_profile, dy_profile=sim._dy_profile,
