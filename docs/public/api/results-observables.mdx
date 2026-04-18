@@ -37,20 +37,6 @@ the solver rather than as an implementation detail.
 | `add_flux_monitor(...)` | `flux_monitors` | reflection / transmission bookkeeping |
 | `add_ntff_box(...)` | `ntff_data`, `ntff_box` | far-field accumulation |
 
-### Flux monitor caveats
-
-- **Mesh path**: `add_flux_monitor` is supported on the uniform-mesh
-  path only. A non-uniform mesh (`dx_profile` / `dy_profile` /
-  `dz_profile`) raises `NotImplementedError` at `run()` / `forward()`
-  rather than silently dropping the observable. For radiation-pattern
-  observables on a graded mesh, use `add_ntff_box` instead.
-- **Finite-region `size=`**: the default full-plane integration is the
-  most stable reference. Passing a finite `size=(L1, L2)` is supported
-  and recommended when the signal of interest is localised, but the
-  result can be biased in standing-wave-heavy environments (e.g.
-  high-Q resonators with CPML reflections) where the full plane is
-  still preferred.
-
 ## Resonance extraction
 
 `Result.find_resonances()` runs Harminv-style mode extraction on a probe time
