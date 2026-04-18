@@ -3227,6 +3227,88 @@ class Simulation:
                     except (NotImplementedError, TypeError):
                         pass
 
+        # P1.9: Single-cell port in dielectric with no adjacent PEC pin
+        # (issue #71). A single-cell LumpedPort placed mid-substrate with
+        # no conducting pin or microstrip does not couple to patch-antenna
+        # TM modes — the optimiser reads a nonsense loss from the
+        # floating Ez source. Recommend extent=<substrate_height> to
+        # promote to a WirePort spanning ground → patch.
+        _PORT_COMP_AXIS = {"ex": 0, "ey": 1, "ez": 2}
+        for pe in self._ports:
+            # Filter: only true ports (impedance > 0), single-cell
+            # (extent is None), actively excited (excite is True).
+            # add_source() creates _PortEntry with impedance=0.0 and is
+            # intentionally a soft source — not a port footgun.
+            if not pe.impedance or pe.impedance <= 0.0:
+                continue
+            if pe.extent is not None:
+                continue
+            if not pe.excite:
+                continue
+            pos = pe.position
+            # Find the dielectric geometry enclosing the port cell.
+            enclosing_eps_r = None
+            enclosing_name = None
+            for entry in self._geometry:
+                if entry.material_name == "pec":
+                    continue
+                if not hasattr(entry.shape, "bounding_box"):
+                    continue
+                try:
+                    c1, c2 = entry.shape.bounding_box()
+                except (NotImplementedError, TypeError):
+                    continue
+                inside = all(c1[ax] <= pos[ax] <= c2[ax] for ax in range(3))
+                if not inside:
+                    continue
+                mspec = self._materials.get(entry.material_name)
+                if mspec is not None and float(mspec.eps_r) > 1.0 + 1e-3:
+                    enclosing_eps_r = float(mspec.eps_r)
+                    enclosing_name = entry.material_name
+                    break
+            if enclosing_eps_r is None:
+                continue
+            # Check for a PEC geometry one cell away along the port's
+            # component axis (coax-style pin or microstrip feed edge).
+            # Without such a pin, the port cell cannot drive a vertical
+            # current that couples to the patch TM mode.
+            comp_axis = _PORT_COMP_AXIS.get(pe.component)
+            if comp_axis is None:
+                continue
+            nudge = float(self._dx or 0.0) * 1.01
+            adj_positions = (
+                tuple(pos[i] + (nudge if i == comp_axis else 0.0) for i in range(3)),
+                tuple(pos[i] - (nudge if i == comp_axis else 0.0) for i in range(3)),
+            )
+            has_adjacent_pec = False
+            for apos in adj_positions:
+                for entry in self._geometry:
+                    if entry.material_name != "pec":
+                        continue
+                    if not hasattr(entry.shape, "bounding_box"):
+                        continue
+                    try:
+                        c1, c2 = entry.shape.bounding_box()
+                    except (NotImplementedError, TypeError):
+                        continue
+                    if all(c1[ax] <= apos[ax] <= c2[ax] for ax in range(3)):
+                        has_adjacent_pec = True
+                        break
+                if has_adjacent_pec:
+                    break
+            if has_adjacent_pec:
+                continue
+            _w.warn(
+                f"Single-cell port at {pos} ({pe.component}) sits inside "
+                f"dielectric '{enclosing_name}' (eps_r={enclosing_eps_r:.2f}) "
+                f"with no adjacent PEC along the {pe.component[1]}-axis. A "
+                f"floating single-cell port inside substrate does not "
+                f"couple to patch-antenna TM modes. Pass "
+                f"extent=<substrate_height> to create a WirePort spanning "
+                f"ground → patch plane (issue #71).",
+                stacklevel=3,
+            )
+
         # P0.4: PEC boundary on likely open structure
         if self._boundary == "pec" and self._ntff is not None:
             _w.warn(
