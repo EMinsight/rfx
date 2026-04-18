@@ -148,3 +148,138 @@ def test_pec_cavity_fails_pmc_ladder_negative_control():
         f"f_0={f0:.3e}, f_1={f1:.3e}, ratio={ratio:.3f}; need outside "
         f"[2.5, 3.5]."
     )
+
+
+# ---------------------------------------------------------------------------
+# V173-B — full Harminv mode ladder (multi-mode)
+# ---------------------------------------------------------------------------
+
+
+def test_pmc_full_harminv_mode_ladder():
+    """Four PEC-PMC modes at f_n = (2n+1)·c/(4L) for n=0..3.
+
+    Extracted via Harminv Matrix-Pencil decomposition on the ringdown
+    portion of the probe trace. Each mode must land within 3% of its
+    analytic frequency, and the set of modes must cover the 1:3:5:7
+    ladder (not merely 1:3 as the two-peak test pins).
+    """
+    from rfx.harminv import harminv as _harminv
+
+    spec = BoundarySpec(
+        x="periodic", y="periodic",
+        z=Boundary(lo="pmc", hi="pec"),
+    )
+    sim = Simulation(
+        freq_max=60e9,  # cover up to f_3 = 7 f_0 with headroom
+        domain=(0.002, 0.002, _L_CAVITY),
+        dx=_DX, boundary=spec, cpml_layers=0,
+    )
+    sim.add_source((0.001, 0.001, 0.3 * _L_CAVITY), "ex")
+    sim.add_probe((0.001, 0.001, 0.7 * _L_CAVITY), "ex")
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        res = sim.run(n_steps=4096)
+    ts = np.asarray(res.time_series)[:, 0]
+    dt = float(res.dt)
+
+    # Use the ringdown tail (skip the first 25% where the source is still
+    # injecting). Matrix Pencil needs a clean decay to estimate decay rates.
+    ringdown = ts[len(ts) // 4 :]
+    modes = _harminv(
+        ringdown, dt,
+        f_min=0.5 * _F0_ANALYTIC,
+        f_max=7.5 * _F0_ANALYTIC,
+        min_Q=2.0,
+    )
+    assert len(modes) >= 4, (
+        f"Harminv must resolve at least 4 PMC-PEC modes in "
+        f"[{0.5 * _F0_ANALYTIC:.2e}, {7.5 * _F0_ANALYTIC:.2e}] Hz; "
+        f"got {len(modes)}"
+    )
+
+    expected = [(2 * n + 1) * _F0_ANALYTIC for n in range(4)]
+    # Match each analytic mode to the nearest Harminv peak. A 3%
+    # tolerance accommodates numerical dispersion on a 40-cell cavity.
+    found_freqs = np.asarray([m.freq for m in modes])
+    for n, f_analytic in enumerate(expected):
+        nearest = float(found_freqs[int(np.argmin(np.abs(found_freqs - f_analytic)))])
+        rel_err = abs(nearest - f_analytic) / f_analytic
+        assert rel_err < 0.03, (
+            f"PMC-PEC mode n={n}: analytic f_{n} = "
+            f"(2·{n}+1)·c/(4L) = {f_analytic:.3e} Hz, "
+            f"nearest Harminv = {nearest:.3e} Hz (rel err {rel_err:.3%})."
+        )
+
+
+# ---------------------------------------------------------------------------
+# V173-C — energy conservation in a closed PMC box
+# ---------------------------------------------------------------------------
+
+
+_EPS_0 = 8.854187817e-12
+_MU_0 = 1.2566370614e-6
+
+
+def _field_energy(state, dx: float) -> float:
+    """Sum ½ε₀|E|² + ½μ₀|H|² over all interior cells."""
+    ex = np.asarray(state.ex)
+    ey = np.asarray(state.ey)
+    ez = np.asarray(state.ez)
+    hx = np.asarray(state.hx)
+    hy = np.asarray(state.hy)
+    hz = np.asarray(state.hz)
+    e2 = float(np.sum(ex ** 2) + np.sum(ey ** 2) + np.sum(ez ** 2))
+    h2 = float(np.sum(hx ** 2) + np.sum(hy ** 2) + np.sum(hz ** 2))
+    cell_vol = dx ** 3
+    return 0.5 * _EPS_0 * e2 * cell_vol + 0.5 * _MU_0 * h2 * cell_vol
+
+
+def test_closed_pmc_cavity_energy_drift_bounded():
+    """PEC-PMC cavity: total field energy during the ringdown phase
+    stays bounded (< 30 % drift) over 1000 steps — no radiation path
+    (PEC + PMC + periodic xy), so energy loss is limited to
+    numerical dispersion on a 40-cell axis.
+
+    The all-PMC cube variant is numerically degenerate (source has no
+    radiation resistance; deposited energy falls into machine-zero
+    regimes that look like "decay"). The PEC-PMC cavity that V172-C /
+    V173-B already rely on is the cleanest closed-box energy oracle.
+    """
+    spec = BoundarySpec(
+        x="periodic", y="periodic",
+        z=Boundary(lo="pmc", hi="pec"),
+    )
+
+    def _run_to(n_steps):
+        sim = Simulation(
+            freq_max=40e9,
+            domain=(0.002, 0.002, _L_CAVITY),
+            dx=_DX, boundary=spec, cpml_layers=0,
+        )
+        sim.add_source((0.001, 0.001, 0.3 * _L_CAVITY), "ex")
+        sim.add_probe((0.001, 0.001, 0.7 * _L_CAVITY), "ex")
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            return sim.run(n_steps=n_steps)
+
+    n_early = 1000     # well after source shut-off; cavity ringing
+    n_late = 2000      # 1000 steps later; energy drift due to dispersion only
+    res_early = _run_to(n_early)
+    res_late = _run_to(n_late)
+
+    energy_early = _field_energy(res_early.state, _DX)
+    energy_late = _field_energy(res_late.state, _DX)
+    assert energy_early > 1e-30, (
+        f"cavity early-energy must be above numerical-zero floor; "
+        f"got {energy_early:.3e} J"
+    )
+    assert np.isfinite(energy_early) and np.isfinite(energy_late)
+    drift = abs(energy_late - energy_early) / energy_early
+    assert drift < 0.30, (
+        f"PEC-PMC cavity energy drift over {n_early}→{n_late} steps "
+        f"must stay < 30% (numerical dispersion only — no radiation "
+        f"path). got energy_early={energy_early:.3e} J, "
+        f"energy_late={energy_late:.3e} J, drift={drift:.3%}"
+    )
