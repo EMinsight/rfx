@@ -1,6 +1,13 @@
-"""T7-E Phase 2 PR3 — PMC runtime physics validation.
+"""T7-E Phase 2 PR3 — PMC runtime mechanism (not a physics oracle).
 
-Pins the mechanism of ``rfx.boundaries.pmc.apply_pmc_faces``:
+Pins the mechanism of ``rfx.boundaries.pmc.apply_pmc_faces``. The
+quantitative PMC physics (λ/4 mode-ladder vs PEC-PEC λ/2 ladder) is
+asserted separately in
+``tests/test_boundary_pmc_oracle.py::test_pmc_lambda_quarter_two_peak_ladder``
+— that oracle is what makes the PMC claim load-bearing; this file
+only guarantees the mechanism wiring.
+
+Mechanism pins:
 
 1. **Tangential-H-zero at the PMC face** — direct state-field sample
    asserts ``|H_tan|`` < 1e-20 on PMC-designated face cells after the
@@ -16,10 +23,9 @@ Pins the mechanism of ``rfx.boundaries.pmc.apply_pmc_faces``:
    any PMC face raises ``NotImplementedError`` (mirrors TFSF /
    waveguide-port rejection).
 
-The quantitative oracles (quarter-wave mode ladder, closed-box energy
-conservation, analytic impedance matching) are tracked as a v1.7.2
-follow-up harness — they need a source-calibrated long run that is
-unsuitable as a fast unit test.
+Additional quantitative oracles beyond the λ/4 ladder (closed-box
+energy conservation, analytic impedance matching) are tracked as a
+v1.7.3 follow-up harness — they need a source-calibrated long run.
 """
 
 from __future__ import annotations

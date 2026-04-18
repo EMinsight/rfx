@@ -1,16 +1,20 @@
-"""T7 Phase 2 PR2 — asymmetric per-face CPML thickness absorption.
+"""T7 Phase 2 PR2 — asymmetric per-face CPML thickness (mechanism only).
 
-Validates that two otherwise-identical simulations which differ only in
-the per-face CPML thickness (z_lo = few layers vs z_hi = many layers)
-produce measurably different reflection at the thin-CPML face.
+These tests pin the PADDED-PROFILE MECHANISM shipped in
+``rfx/boundaries/cpml.py``:
 
-The padded-profile engine in ``rfx/boundaries/cpml.py`` allocates the
-full ``cpml_layers`` budget on every face but populates only the
-requested ``lo_thickness`` / ``hi_thickness`` entries with the real σ
-profile; the rest is no-op. A 4-layer CPML must reflect more than a
-16-layer CPML at the dominant source frequency, since analytic PML
-reflection scales as ``exp(-2·σ_max·d / ((m+1)·η))`` with ``d = n·dx``
-and ``σ_max`` set by the target ``R_asymptotic``.
+- ``Grid.face_layers`` is populated from ``BoundarySpec``,
+- the Simulation builds and runs without NaN on asymmetric thickness,
+- the σ array for a thin face has σ_max at index 0 descending, zeros
+  in the padded no-op region, and σ_max at the outer-boundary end for
+  the (pre-flipped) hi-face.
+
+The QUANTITATIVE physics (between-face reflection ratio R_lo/R_hi > 10
+at the source dominant frequency, control sym (16, 16) within 1.5×)
+is asserted separately in
+``tests/test_boundary_cpml_oracle.py::test_asymmetric_reflection_between_face_ratio``
+— that oracle is what makes the asymmetric-CPML claim load-bearing;
+this file only guarantees the mechanism wiring.
 """
 
 from __future__ import annotations

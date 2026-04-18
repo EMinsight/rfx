@@ -564,7 +564,13 @@ class Simulation:
             raise ValueError(
                 f"pec_faces must be subset of {_valid_faces}, "
                 f"got invalid: {self._pec_faces - _valid_faces}")
-        if boundary == "pec" and self._pec_faces:
+        # Legacy guard: pec_faces= kwarg alongside boundary="pec" is
+        # redundant in the pre-BoundarySpec API. The explicit-spec path
+        # (T7) bypasses this — a BoundarySpec with z=Boundary(lo='pmc',
+        # hi='pec') legitimately derives self._pec_faces={"z_hi"} even
+        # when the effective scalar boundary is 'pec' (no cpml/upml
+        # face anywhere).
+        if not _explicit_spec and boundary == "pec" and self._pec_faces:
             raise ValueError("pec_faces is only meaningful with boundary='cpml' or boundary='upml'")
 
         # Non-uniform xy profiles require an explicit dx (boundary cell
