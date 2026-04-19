@@ -2378,7 +2378,8 @@ class Simulation:
         return pos_to_nu_index(grid, pos)
 
     def _run_nonuniform(self, *, n_steps, compute_s_params=None,
-                        s_param_freqs=None, subpixel_smoothing: bool = False):
+                        s_param_freqs=None, subpixel_smoothing: bool = False,
+                        checkpoint: bool = False):
         """Run simulation on non-uniform grid with graded dz."""
         from rfx.runners.nonuniform import run_nonuniform_path
         return run_nonuniform_path(
@@ -2387,7 +2388,63 @@ class Simulation:
             compute_s_params=compute_s_params,
             s_param_freqs=s_param_freqs,
             subpixel_smoothing=subpixel_smoothing,
+            checkpoint=checkpoint,
         )
+
+    @staticmethod
+    def _warn_unsupported_run_kwargs(path_name: str,
+                                     unsupported_kwargs: dict) -> None:
+        """Emit ``UserWarning`` for any Simulation.run kwarg that a given
+        dispatch path drops. Only non-default values are surfaced.
+
+        Pre-v1.7.5 the distributed / non-uniform / subgridded paths
+        silently dropped most of the ``run`` kwargs; this helper makes
+        the drop explicit at the API boundary so users can tell their
+        request was not honoured. See GitHub tracking issue for the
+        feature-request backlog to actually propagate these kwargs.
+        """
+        import warnings as _w
+        defaults = {
+            "subpixel_smoothing": False,
+            "checkpoint": False,
+            "snapshot": None,
+            "until_decay": None,
+            "conformal_pec": False,
+            "compute_s_params": None,
+            "s_param_freqs": None,
+            "s_param_n_steps": None,
+        }
+        reasons = {
+            "subpixel_smoothing":
+                "per-component anisotropic eps is not wired on this path",
+            "checkpoint":
+                "reverse-mode AD will store the full tape (no "
+                "checkpoint-every support here)",
+            "snapshot":
+                "scan-body field snapshotting is not wired on this path",
+            "until_decay":
+                "scan body runs for exactly n_steps; no decay-based "
+                "termination on this path (use the uniform-mesh path)",
+            "conformal_pec":
+                "Dey-Mittra conformal weights are computed on a uniform "
+                "staircase mesh only",
+            "compute_s_params":
+                "S-matrix assembly is not plumbed through this path",
+            "s_param_freqs":
+                "S-matrix assembly is not plumbed through this path",
+            "s_param_n_steps":
+                "S-matrix assembly is not plumbed through this path",
+        }
+        for kw, val in unsupported_kwargs.items():
+            default = defaults.get(kw, None)
+            if val == default:
+                continue
+            reason = reasons.get(kw, "not propagated")
+            _w.warn(
+                f"{kw}={val!r} is silently ignored on the {path_name} run "
+                f"path ({reason}).",
+                UserWarning, stacklevel=3,
+            )
 
     def _auto_configure_mesh(self) -> None:
         """P1: Auto-detect features and set dx/dz_profile when dx=None.
@@ -3408,6 +3465,44 @@ class Simulation:
                     "Lumped RLC elements are not supported with SBP-SAT "
                     "subgridding.",
                     stacklevel=3,
+                )
+
+        # P2.7: PMC / PEC face on an axis where CPML is also allocated.
+        # Grid.pad_{axis} is symmetric per axis: if any face on axis X
+        # uses CPML/UPML the whole axis gets pad_{axis}=cpml_layers on
+        # BOTH sides. A PMC / PEC face on that same axis then ends up
+        # pad_{axis}·dx cells offset from the user domain edge because
+        # the PMC enforcement index (0 or -2) sits inside the allocated
+        # padding rather than at the user y=0 / y=L plane. Impact is
+        # largest for half-symmetric antenna reductions where this
+        # offset shifts the mirror plane and corrupts the resonance
+        # frequency. See docs/research_notes/2026-04-19_v175_t10_half_symmetric_pmc.md.
+        if self._boundary_spec is not None and self._cpml_layers > 0:
+            _bsx = self._boundary_spec.x
+            _bsy = self._boundary_spec.y
+            _bsz = self._boundary_spec.z
+            for _axis, _bnd in (("x", _bsx), ("y", _bsy), ("z", _bsz)):
+                if _axis in (self._periodic_axes or ""):
+                    continue
+                _has_reflector = (_bnd.lo in ("pmc", "pec")
+                                  or _bnd.hi in ("pmc", "pec"))
+                _has_absorber = (_bnd.lo in ("cpml", "upml")
+                                 or _bnd.hi in ("cpml", "upml"))
+                if not (_has_reflector and _has_absorber):
+                    continue
+                _offset_mm = self._cpml_layers * dx * 1e3
+                _w.warn(
+                    f"[P2.7] Boundary on {_axis}-axis mixes a reflector "
+                    f"(PMC/PEC on one face) with CPML/UPML on the other "
+                    f"face. The grid allocates pad_{_axis}={self._cpml_layers} "
+                    f"cells ({_offset_mm:.2f} mm) on BOTH sides of the axis, "
+                    f"so the reflector plane is offset from the user domain "
+                    f"edge by that much. This corrupts half-symmetric "
+                    f"reductions (tracked in research note "
+                    f"2026-04-19_v175_t10_half_symmetric_pmc.md). Workaround "
+                    f"until per-face grid padding lands: use cpml_layers=0 "
+                    f"(closed cavity) or drop the reflector face.",
+                    UserWarning, stacklevel=3,
                 )
 
     def _validate_adi_configuration(self, materials: MaterialArrays, debye_spec, lorentz_spec) -> None:
@@ -4585,6 +4680,16 @@ class Simulation:
 
         # ---- Distributed multi-device path ----
         if devices is not None and len(devices) > 1:
+            self._warn_unsupported_run_kwargs("distributed multi-device", {
+                "subpixel_smoothing": subpixel_smoothing,
+                "checkpoint": checkpoint,
+                "snapshot": snapshot,
+                "until_decay": until_decay,
+                "conformal_pec": conformal_pec,
+                "compute_s_params": compute_s_params,
+                "s_param_freqs": s_param_freqs,
+                "s_param_n_steps": s_param_n_steps,
+            })
             if n_steps is None:
                 if _nu_profile:
                     # Synthesise missing dz profile so _build_nonuniform_grid
@@ -4610,6 +4715,11 @@ class Simulation:
         if (self._dz_profile is not None
                 or self._dx_profile is not None
                 or self._dy_profile is not None):
+            self._warn_unsupported_run_kwargs("non-uniform mesh", {
+                "snapshot": snapshot,
+                "until_decay": until_decay,
+                "conformal_pec": conformal_pec,
+            })
             # Synthesize a uniform dz profile from the scalar domain_z
             # when only dx/dy are non-uniform, so the shared non-uniform
             # runner has all three axes available.
@@ -4625,6 +4735,7 @@ class Simulation:
                 compute_s_params=compute_s_params,
                 s_param_freqs=s_param_freqs,
                 subpixel_smoothing=subpixel_smoothing,
+                checkpoint=checkpoint,
             )
 
         grid = self._build_grid()
@@ -4649,6 +4760,16 @@ class Simulation:
 
         # ---- Subgridded path ----
         if self._refinement is not None:
+            self._warn_unsupported_run_kwargs("subgridded (SBP-SAT)", {
+                "subpixel_smoothing": subpixel_smoothing,
+                "checkpoint": checkpoint,
+                "snapshot": snapshot,
+                "until_decay": until_decay,
+                "conformal_pec": conformal_pec,
+                "compute_s_params": compute_s_params,
+                "s_param_freqs": s_param_freqs,
+                "s_param_n_steps": s_param_n_steps,
+            })
             return self._run_subgridded(
                 grid, base_materials, pec_mask,
                 n_steps=n_steps or grid.num_timesteps(num_periods=num_periods),
