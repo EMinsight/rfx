@@ -1870,44 +1870,41 @@ class Simulation:
         # (equivalent to UPML).  Each CPML face copies the interior-edge
         # slice outward, as if the geometry continued beyond the domain.
         if self._boundary in ("cpml", "upml") and self._cpml_layers > 0:
-            n = self._cpml_layers
-            for arr_name in ("eps_r", "sigma", "mu_r"):
-                arr = locals()[arr_name]
-                if grid.pad_x > 0:
-                    arr = arr.at[:n, :, :].set(arr[n:n+1, :, :])      # x-lo
-                    arr = arr.at[-n:, :, :].set(arr[-n-1:-n, :, :])    # x-hi
-                if grid.pad_y > 0:
-                    arr = arr.at[:, :n, :].set(arr[:, n:n+1, :])      # y-lo
-                    arr = arr.at[:, -n:, :].set(arr[:, -n-1:-n, :])    # y-hi
-                if grid.pad_z > 0:
-                    arr = arr.at[:, :, :n].set(arr[:, :, n:n+1])      # z-lo
-                    arr = arr.at[:, :, -n:].set(arr[:, :, -n-1:-n])    # z-hi
-                locals()[arr_name]  # reassign through locals won't work; use explicit
-            # Re-bind after modification (locals() trick doesn't persist)
+            # v1.7.5: per-face allocation (pad_{axis}_lo / _hi). Reflector /
+            # periodic faces have pad=0 on that side and the corresponding
+            # replicate step is skipped so the interior cells are not
+            # overwritten. The replicate depth matches the actual
+            # allocation on that face (``pad_*_lo`` or ``pad_*_hi``).
+            plx, phx = grid.pad_x_lo, grid.pad_x_hi
+            ply, phy = grid.pad_y_lo, grid.pad_y_hi
+            plz, phz = grid.pad_z_lo, grid.pad_z_hi
             eps_r_ext = eps_r
             sigma_ext = sigma
             mu_r_ext = mu_r
-            if grid.pad_x > 0:
-                eps_r_ext = eps_r_ext.at[:n,:,:].set(eps_r_ext[n:n+1,:,:])
-                eps_r_ext = eps_r_ext.at[-n:,:,:].set(eps_r_ext[-n-1:-n,:,:])
-                sigma_ext = sigma_ext.at[:n,:,:].set(sigma_ext[n:n+1,:,:])
-                sigma_ext = sigma_ext.at[-n:,:,:].set(sigma_ext[-n-1:-n,:,:])
-                mu_r_ext = mu_r_ext.at[:n,:,:].set(mu_r_ext[n:n+1,:,:])
-                mu_r_ext = mu_r_ext.at[-n:,:,:].set(mu_r_ext[-n-1:-n,:,:])
-            if grid.pad_y > 0:
-                eps_r_ext = eps_r_ext.at[:,:n,:].set(eps_r_ext[:,n:n+1,:])
-                eps_r_ext = eps_r_ext.at[:,-n:,:].set(eps_r_ext[:,-n-1:-n,:])
-                sigma_ext = sigma_ext.at[:,:n,:].set(sigma_ext[:,n:n+1,:])
-                sigma_ext = sigma_ext.at[:,-n:,:].set(sigma_ext[:,-n-1:-n,:])
-                mu_r_ext = mu_r_ext.at[:,:n,:].set(mu_r_ext[:,n:n+1,:])
-                mu_r_ext = mu_r_ext.at[:,-n:,:].set(mu_r_ext[:,-n-1:-n,:])
-            if grid.pad_z > 0:
-                eps_r_ext = eps_r_ext.at[:,:,:n].set(eps_r_ext[:,:,n:n+1])
-                eps_r_ext = eps_r_ext.at[:,:,-n:].set(eps_r_ext[:,:,-n-1:-n])
-                sigma_ext = sigma_ext.at[:,:,:n].set(sigma_ext[:,:,n:n+1])
-                sigma_ext = sigma_ext.at[:,:,-n:].set(sigma_ext[:,:,-n-1:-n])
-                mu_r_ext = mu_r_ext.at[:,:,:n].set(mu_r_ext[:,:,n:n+1])
-                mu_r_ext = mu_r_ext.at[:,:,-n:].set(mu_r_ext[:,:,-n-1:-n])
+            if plx > 0:
+                eps_r_ext = eps_r_ext.at[:plx,:,:].set(eps_r_ext[plx:plx+1,:,:])
+                sigma_ext = sigma_ext.at[:plx,:,:].set(sigma_ext[plx:plx+1,:,:])
+                mu_r_ext = mu_r_ext.at[:plx,:,:].set(mu_r_ext[plx:plx+1,:,:])
+            if phx > 0:
+                eps_r_ext = eps_r_ext.at[-phx:,:,:].set(eps_r_ext[-phx-1:-phx,:,:])
+                sigma_ext = sigma_ext.at[-phx:,:,:].set(sigma_ext[-phx-1:-phx,:,:])
+                mu_r_ext = mu_r_ext.at[-phx:,:,:].set(mu_r_ext[-phx-1:-phx,:,:])
+            if ply > 0:
+                eps_r_ext = eps_r_ext.at[:,:ply,:].set(eps_r_ext[:,ply:ply+1,:])
+                sigma_ext = sigma_ext.at[:,:ply,:].set(sigma_ext[:,ply:ply+1,:])
+                mu_r_ext = mu_r_ext.at[:,:ply,:].set(mu_r_ext[:,ply:ply+1,:])
+            if phy > 0:
+                eps_r_ext = eps_r_ext.at[:,-phy:,:].set(eps_r_ext[:,-phy-1:-phy,:])
+                sigma_ext = sigma_ext.at[:,-phy:,:].set(sigma_ext[:,-phy-1:-phy,:])
+                mu_r_ext = mu_r_ext.at[:,-phy:,:].set(mu_r_ext[:,-phy-1:-phy,:])
+            if plz > 0:
+                eps_r_ext = eps_r_ext.at[:,:,:plz].set(eps_r_ext[:,:,plz:plz+1])
+                sigma_ext = sigma_ext.at[:,:,:plz].set(sigma_ext[:,:,plz:plz+1])
+                mu_r_ext = mu_r_ext.at[:,:,:plz].set(mu_r_ext[:,:,plz:plz+1])
+            if phz > 0:
+                eps_r_ext = eps_r_ext.at[:,:,-phz:].set(eps_r_ext[:,:,-phz-1:-phz])
+                sigma_ext = sigma_ext.at[:,:,-phz:].set(sigma_ext[:,:,-phz-1:-phz])
+                mu_r_ext = mu_r_ext.at[:,:,-phz:].set(mu_r_ext[:,:,-phz-1:-phz])
             eps_r, sigma, mu_r = eps_r_ext, sigma_ext, mu_r_ext
 
         materials = MaterialArrays(eps_r=eps_r, sigma=sigma, mu_r=mu_r)
@@ -2404,15 +2401,22 @@ class Simulation:
         feature-request backlog to actually propagate these kwargs.
         """
         import warnings as _w
-        defaults = {
-            "subpixel_smoothing": False,
-            "checkpoint": False,
-            "snapshot": None,
-            "until_decay": None,
-            "conformal_pec": False,
-            "compute_s_params": None,
-            "s_param_freqs": None,
-            "s_param_n_steps": None,
+        # Per-kwarg "silent" values — the kwarg is dropped only if the
+        # user set it to a value that asks the dispatch path to do
+        # something it does not support. ``compute_s_params=False``
+        # is silent because it matches the path's actual behaviour
+        # (no S-matrix assembly), while ``compute_s_params=True``
+        # warns because the user asked for something that will not
+        # happen.
+        silent_values = {
+            "subpixel_smoothing": (False,),
+            "checkpoint": (False,),
+            "snapshot": (None,),
+            "until_decay": (None,),
+            "conformal_pec": (False,),
+            "compute_s_params": (None, False),
+            "s_param_freqs": (None,),
+            "s_param_n_steps": (None,),
         }
         reasons = {
             "subpixel_smoothing":
@@ -2436,8 +2440,8 @@ class Simulation:
                 "S-matrix assembly is not plumbed through this path",
         }
         for kw, val in unsupported_kwargs.items():
-            default = defaults.get(kw, None)
-            if val == default:
+            silent = silent_values.get(kw, (None,))
+            if val in silent:
                 continue
             reason = reasons.get(kw, "not propagated")
             _w.warn(
@@ -3467,17 +3471,19 @@ class Simulation:
                     stacklevel=3,
                 )
 
-        # P2.7: PMC / PEC face on an axis where CPML is also allocated.
-        # Grid.pad_{axis} is symmetric per axis: if any face on axis X
-        # uses CPML/UPML the whole axis gets pad_{axis}=cpml_layers on
-        # BOTH sides. A PMC / PEC face on that same axis then ends up
-        # pad_{axis}·dx cells offset from the user domain edge because
-        # the PMC enforcement index (0 or -2) sits inside the allocated
-        # padding rather than at the user y=0 / y=L plane. Impact is
-        # largest for half-symmetric antenna reductions where this
-        # offset shifts the mirror plane and corrupts the resonance
-        # frequency. See docs/research_notes/2026-04-19_v175_t10_half_symmetric_pmc.md.
-        if self._boundary_spec is not None and self._cpml_layers > 0:
+        # P2.7: PMC / PEC face on an axis where CPML is also allocated,
+        # on the NON-UNIFORM mesh path. The uniform Grid (v1.7.5) allocates
+        # per-face padding — a PMC/PEC face gets pad=0 on that side even
+        # when the other face of the same axis uses CPML/UPML, so the
+        # wall aligns with the user domain edge and there is no offset.
+        # The NonUniformGrid still allocates padding symmetrically per
+        # axis, so the architectural gap only survives on the NU path.
+        # See docs/research_notes/2026-04-19_v175_t10_half_symmetric_pmc.md.
+        _on_nu_path = (self._dx_profile is not None
+                       or self._dy_profile is not None
+                       or self._dz_profile is not None)
+        if (_on_nu_path and self._boundary_spec is not None
+                and self._cpml_layers > 0):
             _bsx = self._boundary_spec.x
             _bsy = self._boundary_spec.y
             _bsz = self._boundary_spec.z
@@ -3492,16 +3498,16 @@ class Simulation:
                     continue
                 _offset_mm = self._cpml_layers * dx * 1e3
                 _w.warn(
-                    f"[P2.7] Boundary on {_axis}-axis mixes a reflector "
-                    f"(PMC/PEC on one face) with CPML/UPML on the other "
-                    f"face. The grid allocates pad_{_axis}={self._cpml_layers} "
-                    f"cells ({_offset_mm:.2f} mm) on BOTH sides of the axis, "
-                    f"so the reflector plane is offset from the user domain "
-                    f"edge by that much. This corrupts half-symmetric "
-                    f"reductions (tracked in research note "
-                    f"2026-04-19_v175_t10_half_symmetric_pmc.md). Workaround "
-                    f"until per-face grid padding lands: use cpml_layers=0 "
-                    f"(closed cavity) or drop the reflector face.",
+                    f"[P2.7] Non-uniform mesh boundary on {_axis}-axis "
+                    f"mixes a reflector (PMC/PEC on one face) with "
+                    f"CPML/UPML on the other face. The NU grid allocates "
+                    f"pad_{_axis}={self._cpml_layers} cells "
+                    f"({_offset_mm:.2f} mm) on BOTH sides of the axis, "
+                    f"so the reflector plane is offset from the user "
+                    f"domain edge by that much. The uniform-mesh path "
+                    f"got per-face allocation in v1.7.5; the NU path is "
+                    f"still symmetric. Workaround: drop the dx/dy/dz "
+                    f"profile for this simulation, or use cpml_layers=0.",
                     UserWarning, stacklevel=3,
                 )
 

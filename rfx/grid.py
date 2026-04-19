@@ -90,36 +90,84 @@ class Grid:
         if self.is_2d:
             self.cpml_axes = self.cpml_axes.replace("z", "")
 
-        self.pad_x = cpml_layers if "x" in self.cpml_axes else 0
-        self.pad_y = cpml_layers if "y" in self.cpml_axes else 0
-        self.pad_z = 0 if self.is_2d else (cpml_layers if "z" in self.cpml_axes else 0)
-        self.axis_pads = (self.pad_x, self.pad_y, self.pad_z)
+        # Per-face CPML allocation (v1.7.5). A face whose BoundarySpec
+        # token is ``pec``/``pmc``/``periodic`` gets ``pad=0`` on that
+        # side even when the axis as a whole participates in CPML —
+        # this is the Meep / OpenEMS / Tidy3D convention and the
+        # architectural fix for PMC + CPML composition. See
+        # ``docs/research_notes/2026-04-19_v175_t10_half_symmetric_pmc.md``.
+        def _face_pad(axis: str, side: str) -> int:
+            face = f"{axis}_{side}"
+            if face in self.pec_faces or face in self.pmc_faces:
+                return 0
+            if axis not in self.cpml_axes:
+                return 0
+            return int(self.face_layers.get(face, cpml_layers))
+
+        self.pad_x_lo = _face_pad("x", "lo")
+        self.pad_x_hi = _face_pad("x", "hi")
+        self.pad_y_lo = _face_pad("y", "lo")
+        self.pad_y_hi = _face_pad("y", "hi")
+        if self.is_2d:
+            self.pad_z_lo = 0
+            self.pad_z_hi = 0
+        else:
+            self.pad_z_lo = _face_pad("z", "lo")
+            self.pad_z_hi = _face_pad("z", "hi")
+
+        # Legacy scalar ``pad_{axis}`` kept for callers that use it as
+        # "nominal CPML thickness on this axis". When lo / hi differ
+        # (asymmetric reflector + absorber composition) ``pad_{axis}``
+        # reports the max of the two — callers that need a specific
+        # side must use the per-face attributes.
+        self.pad_x = max(self.pad_x_lo, self.pad_x_hi)
+        self.pad_y = max(self.pad_y_lo, self.pad_y_hi)
+        self.pad_z = max(self.pad_z_lo, self.pad_z_hi)
+        # ``axis_pads`` carries the LEADING (``lo``) pad per axis, i.e.
+        # the same number that callers subtract from array indices to
+        # recover user-domain coordinates (``(idx - axis_pads[ax]) * dx``).
+        # In the pre-v1.7.5 symmetric layout this happened to equal
+        # ``pad_{axis}``; under per-face allocation the two are different
+        # whenever one face is PMC/PEC/periodic. Existing callers that
+        # treated ``axis_pads`` as a coordinate offset continue to work
+        # automatically for asymmetric configurations.
+        self.axis_pads = (self.pad_x_lo, self.pad_y_lo, self.pad_z_lo)
+        # Six-tuple of per-face pads; preferred over ``axis_pads`` for
+        # new code that needs both sides (shape math, exterior fill).
+        self.face_pads = (
+            self.pad_x_lo, self.pad_x_hi,
+            self.pad_y_lo, self.pad_y_hi,
+            self.pad_z_lo, self.pad_z_hi,
+        )
 
         # Grid dimensions (including CPML padding)
         # +1 fence-post correction: N cells need N+1 nodes so that
         # PEC walls at index 0 and index N span exactly N*dx.
-        self.nx = int(np.ceil(domain[0] / self.dx)) + 1 + 2 * self.pad_x
-        self.ny = int(np.ceil(domain[1] / self.dx)) + 1 + 2 * self.pad_y
+        self.nx = (int(np.ceil(domain[0] / self.dx)) + 1
+                   + self.pad_x_lo + self.pad_x_hi)
+        self.ny = (int(np.ceil(domain[1] / self.dx)) + 1
+                   + self.pad_y_lo + self.pad_y_hi)
 
         if self.is_2d:
             self.nz = 1  # single cell in z, use periodic z BC
         else:
-            self.nz = int(np.ceil(domain[2] / self.dx)) + 1 + 2 * self.pad_z
+            self.nz = (int(np.ceil(domain[2] / self.dx)) + 1
+                       + self.pad_z_lo + self.pad_z_hi)
 
         self.shape = (self.nx, self.ny, self.nz)
 
         # Interior region (excluding CPML)
         if self.is_2d:
             self.interior = (
-                slice(self.pad_x, self.nx - self.pad_x),
-                slice(self.pad_y, self.ny - self.pad_y),
+                slice(self.pad_x_lo, self.nx - self.pad_x_hi),
+                slice(self.pad_y_lo, self.ny - self.pad_y_hi),
                 slice(0, 1),
             )
         else:
             self.interior = (
-                slice(self.pad_x, self.nx - self.pad_x),
-                slice(self.pad_y, self.ny - self.pad_y),
-                slice(self.pad_z, self.nz - self.pad_z),
+                slice(self.pad_x_lo, self.nx - self.pad_x_hi),
+                slice(self.pad_y_lo, self.ny - self.pad_y_hi),
+                slice(self.pad_z_lo, self.nz - self.pad_z_hi),
             )
 
     @staticmethod
@@ -133,11 +181,12 @@ class Grid:
         return int(np.ceil(num_periods * period / self.dt))
 
     def position_to_index(self, pos: tuple[float, float, float]) -> tuple[int, int, int]:
-        """Convert physical position to grid index (accounting for CPML offset)."""
-        k = 0 if self.is_2d else int(round(pos[2] / self.dx)) + self.pad_z
+        """Convert physical position to grid index (accounting for the
+        leading per-face CPML offset ``pad_{axis}_lo``)."""
+        k = 0 if self.is_2d else int(round(pos[2] / self.dx)) + self.pad_z_lo
         return (
-            int(round(pos[0] / self.dx)) + self.pad_x,
-            int(round(pos[1] / self.dx)) + self.pad_y,
+            int(round(pos[0] / self.dx)) + self.pad_x_lo,
+            int(round(pos[1] / self.dx)) + self.pad_y_lo,
             k,
         )
 

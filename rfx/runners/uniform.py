@@ -262,7 +262,11 @@ def run_uniform(
             bounds = []
             for idx_t, (s, dom, n) in enumerate(zip(pe.size, domain_sizes, grid_ns)):
                 c = user_center[idx_t] if user_center is not None else dom / 2.0
-                pad = getattr(grid, ['pad_x', 'pad_y', 'pad_z'][tangential_axes[idx_t]], 0)
+                pad = getattr(
+                    grid,
+                    ['pad_x_lo', 'pad_y_lo', 'pad_z_lo'][tangential_axes[idx_t]],
+                    0,
+                )
                 # Convert physical coordinate to grid index (add CPML padding offset)
                 lo = max(0, int(round(c / grid.dx - s / (2.0 * grid.dx))) + pad)
                 hi = min(n, int(round(c / grid.dx + s / (2.0 * grid.dx))) + pad)

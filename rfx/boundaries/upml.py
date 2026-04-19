@@ -102,46 +102,58 @@ def _axis_sigma_E_H(grid, axis: str) -> tuple[jnp.ndarray, jnp.ndarray]:
 
     dx_x, dx_y, dz_lo, dz_hi = _get_axis_cell_sizes(grid)
     pec_faces = getattr(grid, "pec_faces", None) or set()
+    pmc_faces = getattr(grid, "pmc_faces", None) or set()
 
-    def _build(dx_cell, pad, lo_face, hi_face, set_axis):
+    def _build(dx_cell, pad_lo, pad_hi, lo_face, hi_face, set_axis):
         sig_E_1d, sig_H_1d = _sigma_profile_1d(n, grid.dt, dx_cell)
         sE = jnp.zeros(grid.shape, dtype=jnp.float32)
         sH = jnp.zeros(grid.shape, dtype=jnp.float32)
-        if pad > 0:
-            sE_lo = jnp.array(sig_E_1d, dtype=jnp.float32)
-            sH_lo = jnp.array(sig_H_1d, dtype=jnp.float32)
-            sE_hi = jnp.flip(sE_lo)
-            sH_hi = jnp.flip(sH_lo)
-            if lo_face not in pec_faces:
-                sE = set_axis(sE, slice(None, n), sE_lo)
-                sH = set_axis(sH, slice(None, n), sH_lo)
-            if hi_face not in pec_faces:
-                sE = set_axis(sE, slice(-n, None), sE_hi)
-                sH = set_axis(sH, slice(-n, None), sH_hi)
+        sE_lo = jnp.array(sig_E_1d, dtype=jnp.float32)
+        sH_lo = jnp.array(sig_H_1d, dtype=jnp.float32)
+        sE_hi = jnp.flip(sE_lo)
+        sH_hi = jnp.flip(sH_lo)
+        if (pad_lo > 0 and lo_face not in pec_faces
+                and lo_face not in pmc_faces):
+            sE = set_axis(sE, slice(None, pad_lo), sE_lo[-pad_lo:])
+            sH = set_axis(sH, slice(None, pad_lo), sH_lo[-pad_lo:])
+        if (pad_hi > 0 and hi_face not in pec_faces
+                and hi_face not in pmc_faces):
+            sE = set_axis(sE, slice(-pad_hi, None), sE_hi[:pad_hi])
+            sH = set_axis(sH, slice(-pad_hi, None), sH_hi[:pad_hi])
         return sE, sH
 
     if axis == "x":
         def set_x(arr, sl, vals):
             return arr.at[sl, :, :].set(vals[:, None, None])
-        return _build(dx_x, grid.pad_x, "x_lo", "x_hi", set_x)
+        return _build(dx_x, grid.pad_x_lo, grid.pad_x_hi,
+                      "x_lo", "x_hi", set_x)
     if axis == "y":
         def set_y(arr, sl, vals):
             return arr.at[:, sl, :].set(vals[None, :, None])
-        return _build(dx_y, grid.pad_y, "y_lo", "y_hi", set_y)
+        return _build(dx_y, grid.pad_y_lo, grid.pad_y_hi,
+                      "y_lo", "y_hi", set_y)
     if axis == "z":
-        if grid.pad_z <= 0:
+        if grid.pad_z_lo <= 0 and grid.pad_z_hi <= 0:
             z = jnp.zeros(grid.shape, dtype=jnp.float32)
             return z, z
         sig_E_lo, sig_H_lo = _sigma_profile_1d(n, grid.dt, dz_lo)
         sig_E_hi, sig_H_hi = _sigma_profile_1d(n, grid.dt, dz_hi)
         sE = jnp.zeros(grid.shape, dtype=jnp.float32)
         sH = jnp.zeros(grid.shape, dtype=jnp.float32)
-        if "z_lo" not in pec_faces:
-            sE = sE.at[:, :, :n].set(jnp.array(sig_E_lo, dtype=jnp.float32)[None, None, :])
-            sH = sH.at[:, :, :n].set(jnp.array(sig_H_lo, dtype=jnp.float32)[None, None, :])
-        if "z_hi" not in pec_faces:
-            sE = sE.at[:, :, -n:].set(jnp.flip(jnp.array(sig_E_hi, dtype=jnp.float32))[None, None, :])
-            sH = sH.at[:, :, -n:].set(jnp.flip(jnp.array(sig_H_hi, dtype=jnp.float32))[None, None, :])
+        if (grid.pad_z_lo > 0 and "z_lo" not in pec_faces
+                and "z_lo" not in pmc_faces):
+            _nlo = grid.pad_z_lo
+            sE = sE.at[:, :, :_nlo].set(
+                jnp.array(sig_E_lo, dtype=jnp.float32)[-_nlo:][None, None, :])
+            sH = sH.at[:, :, :_nlo].set(
+                jnp.array(sig_H_lo, dtype=jnp.float32)[-_nlo:][None, None, :])
+        if (grid.pad_z_hi > 0 and "z_hi" not in pec_faces
+                and "z_hi" not in pmc_faces):
+            _nhi = grid.pad_z_hi
+            sE = sE.at[:, :, -_nhi:].set(
+                jnp.flip(jnp.array(sig_E_hi, dtype=jnp.float32))[:_nhi][None, None, :])
+            sH = sH.at[:, :, -_nhi:].set(
+                jnp.flip(jnp.array(sig_H_hi, dtype=jnp.float32))[:_nhi][None, None, :])
         return sE, sH
     raise ValueError(f"Unsupported axis {axis!r}")
 
