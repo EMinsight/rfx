@@ -964,7 +964,8 @@ def _apply_pec_occupancy_nu_shmap(state: FDTDState, sharded_pec_occupancy,
 # ---------------------------------------------------------------------------
 
 def init_cpml_for_sharded_nu(sharded_grid: ShardedNUGrid, n_devices: int,
-                             *, kappa_max=None, pec_faces=None):
+                             *, kappa_max=None, pec_faces=None,
+                             pmc_faces=None):
     """Build CPMLAxisParams + a stacked per-rank CPMLState for the sharded
     NU runner.
 
@@ -1036,10 +1037,11 @@ def init_cpml_for_sharded_nu(sharded_grid: ShardedNUGrid, n_devices: int,
             self.nx = nx
             self.ny = ny
             self.nz = nz
-            # Optional kappa_max / pec_faces; init_cpml falls back to
-            # constructor kwargs when these are missing.
+            # Optional kappa_max / pec_faces / pmc_faces; init_cpml
+            # falls back to these attrs when the kwargs are missing.
             self.kappa_max = kappa_max
             self.pec_faces = pec_faces
+            self.pmc_faces = pmc_faces
 
         @property
         def shape(self):
@@ -1048,6 +1050,7 @@ def init_cpml_for_sharded_nu(sharded_grid: ShardedNUGrid, n_devices: int,
     grid_view = _SharedNUGridView()
     cpml_params, _single_state = init_cpml(
         grid_view, kappa_max=kappa_max, pec_faces=pec_faces,
+        pmc_faces=pmc_faces,
     )
 
     # Build per-rank stacked CPMLState arrays.  Shapes follow the single-

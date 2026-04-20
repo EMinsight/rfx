@@ -588,6 +588,7 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
         debye=debye,
         lorentz=lorentz,
         pec_faces=getattr(sim, '_pec_faces', None),
+        pmc_faces=sim._boundary_spec.pmc_faces() if getattr(sim, '_boundary_spec', None) is not None else None,
         dft_planes=dft_plane_probes if dft_plane_probes else None,
         rlc_metas=rlc_metas,
         rlc_states=rlc_states_init,

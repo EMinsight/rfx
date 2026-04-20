@@ -669,6 +669,7 @@ def run_nonuniform(
     debye: tuple | None = None,
     lorentz: tuple | None = None,
     pec_faces: set[str] | None = None,
+    pmc_faces: set[str] | None = None,
     dft_planes: list | None = None,
     rlc_metas: tuple = (),
     rlc_states: tuple = (),
@@ -724,8 +725,13 @@ def run_nonuniform(
     if use_cpml:
         from rfx.boundaries.cpml import init_cpml, apply_cpml_h, apply_cpml_e
 
-        # Pass NonUniformGrid directly — init_cpml duck-types dx/dy/dz
-        cpml_params, cpml_state_init = init_cpml(grid, pec_faces=pec_faces)
+        # Pass NonUniformGrid directly — init_cpml duck-types dx/dy/dz.
+        # NonUniformGrid does not carry pmc_faces / pec_faces attrs
+        # (frozen dataclass, pytree-registered), so the sets must be
+        # threaded through from the caller.
+        cpml_params, cpml_state_init = init_cpml(
+            grid, pec_faces=pec_faces, pmc_faces=pmc_faces,
+        )
         cpml_grid = grid
 
     use_pec_mask = pec_mask is not None
