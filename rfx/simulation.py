@@ -843,11 +843,7 @@ def run(
             )
 
             new_waveguide_port_accs = []
-            # _wg_aux_e_new is defined in the E-apply block above whenever
-            # use_waveguide_ports is True (same scope, same if-branch).
-            for accs, cfg_meta, aux_st_probe in zip(
-                carry["waveguide_port_accs"], waveguide_meta, _wg_aux_e_new,
-            ):
+            for accs, cfg_meta in zip(carry["waveguide_port_accs"], waveguide_meta):
                 cfg = cfg_meta._replace(
                     v_probe_dft=accs[0],
                     v_ref_dft=accs[1],
@@ -857,11 +853,7 @@ def run(
                 )
                 # TFSF-style H and E corrections are applied earlier in
                 # their respective Yee sub-steps (canonical TFSF slots).
-                # Pass aux_state so v_inc_dft uses the Yee-discrete
-                # emitted amplitude, not a hardcoded analytic waveform.
-                cfg_updated = update_waveguide_port_probe(
-                    cfg, st, dt, dx, aux_state=aux_st_probe,
-                )
+                cfg_updated = update_waveguide_port_probe(cfg, st, dt, dx)
                 new_waveguide_port_accs.append(
                     (
                         cfg_updated.v_probe_dft,
