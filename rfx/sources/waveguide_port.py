@@ -705,7 +705,33 @@ def init_waveguide_port(
                 np.sqrt(np.maximum(k_arr ** 2 - kc ** 2, 0.0)),
                 0.0,
             )
-        if port.mode_type == "TE":
+        if mode_profile == "discrete":
+            # Yee-discrete modal impedance derived from the 3D Yee Faraday
+            # update applied to a plane wave exp(j(ωt − β·x)):
+            #   H₀ · sin(ω·dt/2) = (dt/(μ·dx)) · E₀ · sin(β·dx/2)
+            # → Z_TE_disc = μ·dx·sin(ω·dt/2) / (dt·sin(β·dx/2)).
+            # In the continuous limit this collapses to ω·μ/β. Using the
+            # analytic continuous form against the discrete β leaves an
+            # O((β·dx)²) broadband impedance mismatch — the dominant
+            # backward-emission driver once the mode profile and β are
+            # already discrete-correct.
+            s_w = np.sin(omega * 0.5 * float(dt))
+            s_b = np.sin(beta_arr * 0.5 * float(dx))
+            if port.mode_type == "TE":
+                z_mode_arr = np.where(
+                    propagating,
+                    MU_0 * float(dx) * s_w
+                    / np.maximum(float(dt) * s_b, 1e-30),
+                    np.inf,
+                )
+            else:  # TM
+                z_mode_arr = np.where(
+                    propagating,
+                    float(dt) * s_b
+                    / np.maximum(EPS_0 * float(dx) * s_w, 1e-30),
+                    0.0,
+                )
+        elif port.mode_type == "TE":
             z_mode_arr = np.where(
                 propagating,
                 omega * MU_0 / np.maximum(beta_arr, 1e-30),
