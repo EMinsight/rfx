@@ -1,8 +1,21 @@
-"""Cross-validation 11: WR-90 Waveguide Port — rfx vs analytic.
+"""Cross-validation 11: WR-90 Waveguide Port — rfx vs analytic vs MEEP.
 
-P0 SKELETON — implementation is filled in by P2.1 after the Lorentz
-overlap extractor lands (P1.1). See
-``docs/research_notes/2026-04-22_waveguide_port_master_plan.md``.
+This script is a **diagnostic** reporter, not a regression-lock. It
+prints per-frequency magnitude and phase differences between rfx,
+analytic Airy, and (when present) a MEEP reference JSON produced by
+``microwave-energy/meep_simulation/wr90_sparam_reference.py``. The exit
+code reflects ANALYTIC-vs-rfx magnitude and phase gates; users should
+read the full table before drawing conclusions because:
+  - analytic Airy is referenced to the slab edges; rfx/MEEP reference
+    planes are at the port/monitor positions, so phase comparisons
+    mix a real extractor error with a convention shift.
+  - MEEP at modest resolution (r=3/4 in the VESSL script) itself shows
+    an `|S11|` null-floor of ~0.07, i.e. this crossval is *relative*
+    accuracy, not an absolute correctness gate.
+
+Authoritative rfx correctness gates live in
+``tests/test_waveguide_port_validation_battery.py`` and
+``tests/test_waveguide_twoport_contract_v1.py``.
 
 Three canonical geometries drive the rfx waveguide-port S-parameter
 pipeline against closed-form references. All three must pass

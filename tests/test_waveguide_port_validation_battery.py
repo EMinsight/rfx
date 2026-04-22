@@ -8,7 +8,11 @@ must satisfy.
 Thresholds reflect the extractor state as of 2026-04-22 after:
 - diagonal-subtraction patch in ``extract_waveguide_s_params_normalized``
   (subtracts empty-guide reference outgoing from device outgoing)
-- CPML retune (kappa_max 1->5, order 2->3).
+- CPML default retune (polynomial order 2->3). A parallel `kappa_max`
+  sweep showed that `kappa_max > 1` degrades guided-mode absorption
+  in the current CFS-CPML formulation, so `kappa_max=1` is kept (an
+  earlier handoff that claimed a `kappa_max 1->5` retune was retracted
+  on 2026-04-22 after the sweep was run).
 
 Industry anchors (handoff 2026-04-21):
 - Meep EigenModeSource: matched-load |S11| < 1 %, directionality ~0.1 %.
@@ -266,8 +270,14 @@ def test_reciprocity_converges_with_num_periods():
         errors.append(float(rel_err))
         print(f"[reciprocity-conv] num_periods={num_periods:3d}: rel_err = {rel_err:.4f}")
 
-    # Monotonic non-increase, OR both already small.
-    improved = errors[1] <= errors[0] + 1e-3 or errors[1] < 0.02
+    # Monotonic non-increase with num_periods. The previous revision of
+    # this test added an ``or errors[1] < 0.02`` escape hatch which made
+    # the assertion tautological for the current extractor state (≈1e-4
+    # error floor) — the convergence property it was supposed to guard
+    # could never fire. The gate is now strictly monotonic: any future
+    # regression that reintroduces CPML-accumulation (the symptom that
+    # motivated this test) will show non-monotonic behaviour and trip.
+    improved = errors[1] <= errors[0] + 1e-3
     assert improved, (
         f"Reciprocity error did not improve with longer run: "
         f"40->{errors[0]:.4f}, 80->{errors[1]:.4f}"
@@ -562,7 +572,10 @@ def test_source_directionality_early_time():
 # This test is pure algebra — no FDTD run — so it's cheap to leave on.
 
 def test_below_cutoff_z_mode_no_nan():
-    from rfx.sources.waveguide_port import _compute_mode_impedance
+    from rfx.sources.waveguide_port import (
+        _compute_mode_impedance,
+        _extract_global_waves,
+    )
 
     # WR-90-like f_cutoff = 13.12 GHz (TE20 cutoff); probe a frequency
     # below that to exercise the evanescent branch.
@@ -579,3 +592,27 @@ def test_below_cutoff_z_mode_no_nan():
     # TM likewise should give a finite (zero) value below cutoff.
     z_tm = np.asarray(_compute_mode_impedance(freqs, f_cutoff, "TM", dt=dt, dx=dx))
     assert not np.any(np.isnan(z_tm)), f"NaN in TM Z_mode below cutoff: {z_tm}"
+
+    # Cascade check: the original failure mode was NaN S-parameters in
+    # the V/I decomposition `(V ± Z·I) / 2` when Z was ±∞. Build a
+    # minimal cfg-like namespace and confirm `_extract_global_waves`
+    # returns finite forward/backward even with below-cutoff freqs.
+    class _MinCfg:
+        def __init__(self, freqs_hz, f_cutoff_hz, mode_type):
+            self.freqs = jnp.asarray(freqs_hz)
+            self.f_cutoff = float(f_cutoff_hz)
+            self.mode_type = str(mode_type)
+            self.dt = 1.5e-12
+            self.dx = 1.0e-3
+    cfg = _MinCfg(freqs, f_cutoff, "TE")
+    V = jnp.asarray([1.0 + 0j, 1.0 + 0j, 1.0 + 0j], dtype=jnp.complex64)
+    I = jnp.asarray([0.01 + 0j, 0.01 + 0j, 0.01 + 0j], dtype=jnp.complex64)
+    fwd, bwd = _extract_global_waves(cfg, V, I)
+    fwd_np = np.asarray(fwd)
+    bwd_np = np.asarray(bwd)
+    assert not np.any(np.isnan(fwd_np)), (
+        f"NaN in forward wave from V/I with below-cutoff freq: {fwd_np}"
+    )
+    assert not np.any(np.isnan(bwd_np)), (
+        f"NaN in backward wave from V/I with below-cutoff freq: {bwd_np}"
+    )

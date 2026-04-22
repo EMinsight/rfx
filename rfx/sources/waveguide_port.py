@@ -1236,18 +1236,26 @@ def _co_located_current_spectrum(
     cfg: WaveguidePortConfig,
     current_dft: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Rotate H-derived spectra onto the E timestamp.
+    """Correct the H-derived DFT for Yee leapfrog time staggering.
 
-    Yee H lives at half-timesteps relative to E. Our DFT accumulation uses
-    the same timestamp for V and I, so we compensate by rotating the current
-    spectrum by exp(-jωdt/2) before modal decomposition.
+    The waveguide-port probe runs at the end of a scan-body iteration,
+    after `update_h` and `update_e`. At that point `state.step = n+1`,
+    `E` is at time ``(n+1)·dt`` and `H` is at ``(n+1/2)·dt``. The
+    accumulator pairs both samples with phase ``exp(-jω·(n+1)·dt)``, so
+    the raw I DFT carries an extra factor ``exp(-jω·dt/2)`` relative to
+    the true DFT of H at its own timestamp. To recover the true DFT we
+    multiply by ``exp(+jω·dt/2)`` — applied here before any modal
+    decomposition so V and I are time-aligned at the E timestep.
+
+    Before 2026-04-22 the sign here was `-jω·dt/2`, which amplified the
+    very error it was supposed to cancel. The observable symptom was a
+    residual imaginary component of `V/I` on an empty guide (mean
+    ``∠(Z_formula / Z_actual)`` ≈ −8°). The current sign drops that to
+    ≈ −1° on the same diagnostic (`scripts/isolate_extractor_vs_engine.py`).
     """
     if cfg.dt <= 0.0:
         return current_dft
     omega = 2 * jnp.pi * cfg.freqs
-    # HYPOTHESIS TEST 2026-04-22: sign was `-jωdt/2`; derivation with
-    # state.step=n+1, E at (n+1)dt, H at (n+1/2)dt says raw I DFT carries
-    # factor exp(-jωdt/2) vs true DFT — correction should be +jωdt/2.
     return current_dft * jnp.exp(+1j * omega * (0.5 * cfg.dt))
 
 
