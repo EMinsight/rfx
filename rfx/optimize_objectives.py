@@ -434,10 +434,30 @@ def minimize_s11_at_freq(
     this objective works on the time-series output of ``forward()``, so it
     composes with ``optimize()`` / ``topology_optimize()``. Issue #50.
 
-    Method: single-frequency DFT (Goertzel-style, real trig so the JAX
-    gradient is clean). The incident power is estimated from the first
-    ``incident_fraction`` of the series — that window should contain only
-    the source pulse, before any reflection returns from the DUT.
+    Method
+    ------
+    At the target frequency ω, split the DFT of the port probe into an
+    incident component (``X_inc``) and a reflected component (``X_refl``)
+    using a time-gating heuristic:
+
+        X_inc  = DFT(ts[:q],  ω)        # source-only window (zero-padded)
+        X_tot  = DFT(ts[:N], ω)         # full window
+        X_refl = X_tot − X_inc          # by linearity of DFT
+
+    When (a) the source pulse has decayed by sample ``q`` and (b) the
+    first reflection does not arrive before sample ``q``, the split is
+    clean and ``|X_refl / X_inc|² ≈ |S11(ω)|²``. Violating either
+    assumption causes overlap contamination and biases the estimate.
+    Callers controlling strongly resonant / long-round-trip structures
+    should either enlarge the simulation window, narrow the source
+    bandwidth to compress the pulse, or prefer a wave-decomposition
+    (V/I) probe which is exact.
+
+    Prior to v1.7.6 this objective returned ``|X_tot/X_inc|² = |1+S11|²``
+    (see regression test ``tests/test_minimize_s11_at_freq_physical.py``),
+    which minimises toward ``S11 = −1`` (perfect short) rather than
+    ``S11 = 0`` (matched load). Fixed on branch
+    ``fix/lumped-port-s11-at-freq``.
 
     Parameters
     ----------
@@ -465,16 +485,22 @@ def minimize_s11_at_freq(
         omega = 2.0 * jnp.pi * float(target_freq)
         cos_t = jnp.cos(omega * t)
         sin_t = jnp.sin(omega * t)
-        # Total field at the port
-        X_re = jnp.sum(ts * cos_t)
-        X_im = jnp.sum(ts * sin_t)
-        power_total = X_re ** 2 + X_im ** 2
-        # Incident estimate from the early window
+        # X_tot: DFT over the full window (incident + reflection).
+        X_tot_re = jnp.sum(ts * cos_t)
+        X_tot_im = jnp.sum(ts * sin_t)
+        # X_inc: DFT over the leading window (source-only, zero-padded
+        # elsewhere). Because DFT is linear in the sample sequence, this
+        # equals DFT(ts_windowed, full N) and is directly subtractable
+        # from X_tot to recover the reflected-wave DFT.
         q = max(1, int(n * float(incident_fraction)))
-        Xi_re = jnp.sum(ts[:q] * cos_t[:q])
-        Xi_im = jnp.sum(ts[:q] * sin_t[:q])
-        power_inc = Xi_re ** 2 + Xi_im ** 2
-        return power_total / (power_inc + 1e-30)
+        X_inc_re = jnp.sum(ts[:q] * cos_t[:q])
+        X_inc_im = jnp.sum(ts[:q] * sin_t[:q])
+        # X_refl = X_tot − X_inc. Divide by |X_inc|² to get |S11|².
+        X_refl_re = X_tot_re - X_inc_re
+        X_refl_im = X_tot_im - X_inc_im
+        power_refl = X_refl_re ** 2 + X_refl_im ** 2
+        power_inc = X_inc_re ** 2 + X_inc_im ** 2
+        return power_refl / (power_inc + 1e-30)
 
     return objective
 

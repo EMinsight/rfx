@@ -38,15 +38,15 @@ def _cosine_series(freq, dt, n, reflection_gain=0.0, reflection_delay=0):
 
 
 def test_no_reflection_gives_small_s11():
-    """Incident-only series → |S11|² should be ~1 (total ≈ incident)."""
+    """Incident-only series → |S11|² ≈ 0 (no reflected wave)."""
     dt = 1e-12
     n = 2000
     ts = _cosine_series(10e9, dt, n)
     r = _FakeResult(ts, dt)
     val = float(minimize_s11_at_freq(10e9, port_probe_idx=0)(r))
-    # Without reflection, the windowed pulse peaks before the 25%
-    # incident window ends, so total ≈ incident → ratio ≈ 1.
-    assert 0.8 <= val <= 1.2, f"expected ~1.0, got {val}"
+    # Pulse is contained inside the 25% incident window, so X_tot ≈ X_inc
+    # → X_refl = X_tot − X_inc ≈ 0 → |S11|² ≈ 0.
+    assert val < 0.05, f"expected ~0.0, got {val}"
 
 
 def test_large_reflection_gives_large_s11():
