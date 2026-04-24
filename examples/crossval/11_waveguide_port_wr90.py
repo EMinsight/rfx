@@ -91,7 +91,17 @@ BANDWIDTH_REL = 0.5  # of f0
 DX_M = 0.001        # 1 mm, ≈ 30 cells per λ at 10 GHz
 CPML_LAYERS = 20    # 20 mm physical CPML (was 10 — guided-mode reflection ~12%;
                     # 20 gives ~4% residual per scripts/isolate_extractor_vs_engine.py)
-NUM_PERIODS = 50
+NUM_PERIODS = 50           # default scan length for non-resonant cases
+# Strong-reflector cases (PEC short, dielectric slab Fabry-Perot) need a
+# long enough scan for CPML to drain, plus an early-time DFT gate to keep
+# multi-bounce build-up out of the V/I decomposition. The window-fix in
+# commit caa11b7 makes num_periods_dft actually gate; before that the
+# Tukey window normalised over the full scan and silently ignored the
+# truncation, so PEC-short |S11| max read 0.22 at np=50/no-gate. With
+# np=200/gate=60 the same case drops to 0.16 max, and slab S21 phase
+# clears the 5° gate (5.01° → 4.76°).
+NUM_PERIODS_LONG = 200     # CPML drain horizon for strong-reflector cases
+NUM_PERIODS_DFT = 60       # early gate length (must be ≤ NUM_PERIODS_LONG)
 
 # Domain length along propagation axis.
 DOMAIN_X = 0.200    # 200 mm, enough for CPML + reference run + reflections
@@ -221,9 +231,15 @@ def _build_sim(
     return sim
 
 
-def _s_params(sim: Simulation) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _s_params(
+    sim: Simulation,
+    *,
+    num_periods: int = NUM_PERIODS,
+    num_periods_dft: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     result = sim.compute_waveguide_s_matrix(
-        num_periods=NUM_PERIODS,
+        num_periods=num_periods,
+        num_periods_dft=num_periods_dft,
         normalize=True,
     )
     s = np.asarray(result.s_params)
@@ -241,7 +257,10 @@ def run_rfx_empty() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def run_rfx_pec_short() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     sim = _build_sim(FREQS_HZ, pec_short_x=PORT_RIGHT_X - 0.005)
-    return _s_params(sim)
+    # Strong reflector: long CPML drain + early DFT gate (see header notes).
+    return _s_params(
+        sim, num_periods=NUM_PERIODS_LONG, num_periods_dft=NUM_PERIODS_DFT,
+    )
 
 
 def run_rfx_slab(eps_r: float, slab_length_m: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -249,7 +268,10 @@ def run_rfx_slab(eps_r: float, slab_length_m: float) -> tuple[np.ndarray, np.nda
     lo = (slab_center - 0.5 * slab_length_m, 0.0, 0.0)
     hi = (slab_center + 0.5 * slab_length_m, DOMAIN_Y, DOMAIN_Z)
     sim = _build_sim(FREQS_HZ, obstacles=[(lo, hi, eps_r)])
-    return _s_params(sim)
+    # F-P resonance interior multiple-bounce ⇒ also use the gated path.
+    return _s_params(
+        sim, num_periods=NUM_PERIODS_LONG, num_periods_dft=NUM_PERIODS_DFT,
+    )
 
 
 # =============================================================================
