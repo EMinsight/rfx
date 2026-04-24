@@ -2165,6 +2165,29 @@ class Simulation:
                 "compute_waveguide_s_matrix() currently supports only measured/default reference planes or explicit reference_plane overrides"
             )
 
+        # Guard against the silent-drop bug where a user-supplied
+        # dx_profile / dy_profile was dispatched to the uniform scan
+        # with the coarse boundary dx, ignoring the refinement entirely
+        # (exp 12 on crossval/11 measured identical |S21| error at
+        # dx_fine = 1.0, 0.25, and 0.1 mm — the refined cells existed
+        # in the grid but were integrated as if they were dx = 1 mm).
+        # A proper NU two-run extractor is tracked as future work; the
+        # scaffold (`_compute_waveguide_s_matrix_nu`) is retained below
+        # but is not yet wired to a WR-90-style (PEC y, PEC z) grid
+        # because the NU scan body's CPML init still allocates full-
+        # length coefficients on PEC axes.
+        if self._dx_profile is not None or self._dy_profile is not None:
+            raise NotImplementedError(
+                "compute_waveguide_s_matrix() on a non-uniform mesh "
+                "(dx_profile / dy_profile) is not yet wired to the NU "
+                "two-run normalisation; the uniform-lane dispatch was "
+                "silently ignoring the refinement (see handover v2 "
+                "experiment 12). Run without a dx/dy profile, halve "
+                "dx uniformly for Meep-class accuracy, or track the NU "
+                "S-matrix scaffold in `_compute_waveguide_s_matrix_nu` "
+                "(rfx/api.py) for future enablement."
+            )
+
         grid = self._build_grid()
         base_materials, debye_spec, lorentz_spec, pec_mask_wg, _, _ = self._assemble_materials(grid)
         # Waveguide S-matrix runner doesn't support pec_mask yet.
@@ -2380,6 +2403,246 @@ class Simulation:
             port_names=tuple(entry.name for entry in entries),
             port_directions=tuple(entry.direction for entry in entries),
             reference_planes=reference_planes,
+        )
+
+    def _compute_waveguide_s_matrix_nu(
+        self,
+        *,
+        n_steps: int | None,
+        num_periods: float,
+        num_periods_dft: float | None,
+        normalize: bool,
+    ) -> WaveguideSMatrixResult:
+        """Non-uniform-mesh two-run S-matrix extraction.
+
+        Drives each port in turn, running device + vacuum-reference
+        scans through ``run_nonuniform_path`` so ``dx_profile`` /
+        ``dy_profile`` actually flow into the Yee update. The per-port
+        drive is implemented by temporarily zeroing ``amplitude`` on
+        non-driven entries; the original port list is restored in a
+        ``finally`` block. Reference run uses ``eps_override`` /
+        ``sigma_override`` to replace the assembled materials with
+        vacuum before the scan launches.
+
+        Current scope (matches the uniform path minus a few niceties):
+          - ``normalize=True`` only.
+          - Single-mode ports (``n_modes == 1``) only.
+          - ``num_periods_dft`` is not yet plumbed through the NU scan
+            body — raise for now; uniform lane still supports it.
+
+        Extracts ``a_inc`` / ``b_out`` via the same
+        ``extract_waveguide_port_waves`` helper as the uniform path and
+        applies the same diagonal-subtraction + off-diagonal-division
+        normalisation (see ``extract_waveguide_s_params_normalized``
+        in ``rfx/sources/waveguide_port.py``).
+        """
+        from dataclasses import replace as _dc_replace
+        from rfx.runners.nonuniform import (
+            run_nonuniform_path,
+            assemble_materials_nu,
+        )
+        from rfx.sources.waveguide_port import (
+            extract_waveguide_port_waves,
+            waveguide_plane_positions,
+        )
+
+        if not normalize:
+            raise NotImplementedError(
+                "compute_waveguide_s_matrix(normalize=False) is not yet "
+                "supported on the non-uniform mesh path; use normalize=True "
+                "or drop dx/dy_profile to stay on the uniform lane."
+            )
+        if num_periods_dft is not None:
+            raise NotImplementedError(
+                "num_periods_dft is not yet plumbed through the non-uniform "
+                "scan body; either widen num_periods to cover multi-bounce or "
+                "drop dx/dy_profile to use the uniform-lane early gate."
+            )
+
+        entries = list(self._waveguide_ports)
+        if any(entry.n_modes > 1 for entry in entries):
+            raise NotImplementedError(
+                "Multi-mode waveguide ports are not yet supported on the "
+                "non-uniform mesh path."
+            )
+
+        n_ports = len(entries)
+
+        # ``_build_nonuniform_grid`` requires a concrete dz_profile.
+        # Synthesise one from the scalar dx when the user did not supply
+        # a dz_profile (same semantics as the uniform lane's implicit
+        # z-resolution). Restored in the ``finally`` below.
+        _dz_profile_saved = self._dz_profile
+        if self._dz_profile is None:
+            _nz = int(round(float(self._domain[2]) / float(self._dx)))
+            self._dz_profile = np.full(max(_nz, 1), float(self._dx))
+
+        # Build the grid directly so we can restrict ``cpml_axes`` to
+        # axes that are not fully PEC/PMC-bounded. The rasteriser (see
+        # ``rfx/geometry/rasterize.py::coords_from_nonuniform_grid``)
+        # uses a single ``grid.cpml_layers`` offset for every axis;
+        # when a fully PEC-bounded axis is shorter than
+        # ``cpml_layers + 1`` cells the offset slice hits IndexError.
+        # Dropping that axis from ``cpml_axes`` keeps the physical
+        # grid identical (PEC faces already have pad=0) but zeroes the
+        # offset so the rasteriser snaps cells to 0 cleanly.
+        from rfx.runners.nonuniform import build_nonuniform_grid
+        pec_set = (self._boundary_spec.pec_faces()
+                   if self._boundary_spec is not None else None) or set()
+        pmc_set = (self._boundary_spec.pmc_faces()
+                   if self._boundary_spec is not None else None) or set()
+
+        def _axis_fully_closed(ax: str) -> bool:
+            return {f"{ax}_lo", f"{ax}_hi"}.issubset(pec_set | pmc_set)
+
+        cpml_axes = "".join(
+            ax for ax in "xyz"
+            if ax not in (self._periodic_axes or "")
+            and not _axis_fully_closed(ax)
+        )
+        try:
+            grid = build_nonuniform_grid(
+                self._freq_max, self._domain, self._dx, self._cpml_layers,
+                self._dz_profile,
+                dx_profile=self._dx_profile,
+                dy_profile=self._dy_profile,
+                pec_faces=pec_set or None,
+                pmc_faces=pmc_set or None,
+                cpml_axes=cpml_axes,
+            )
+        except Exception:
+            self._dz_profile = _dz_profile_saved
+            raise
+        if n_steps is None:
+            # ``NonUniformGrid`` does not expose ``num_timesteps`` (known
+            # asymmetry vs. ``Grid``); inline the same formula here.
+            n_steps = int(np.ceil(num_periods / self._freq_max / float(grid.dt)))
+
+        # Assemble device materials once to learn the full array shape;
+        # vacuum reference is shape-matched onto that same array.
+        dev_materials_concrete, _, _, _ = assemble_materials_nu(self, grid)
+        vacuum_eps = jnp.ones_like(dev_materials_concrete.eps_r)
+        vacuum_sigma = jnp.zeros_like(dev_materials_concrete.sigma)
+
+        # Frequency grid must match across ports.
+        port_freqs = entries[0].freqs
+        if port_freqs is None:
+            port_freqs = jnp.linspace(
+                self._freq_max / 10, self._freq_max, entries[0].n_freqs,
+            )
+        for entry in entries[1:]:
+            other = entry.freqs if entry.freqs is not None else jnp.linspace(
+                self._freq_max / 10, self._freq_max, entry.n_freqs,
+            )
+            if other.shape != port_freqs.shape or not np.allclose(
+                np.asarray(other), np.asarray(port_freqs)
+            ):
+                raise ValueError(
+                    "waveguide S-matrix requires matching frequency grids on all ports"
+                )
+        n_freqs = int(port_freqs.shape[0])
+
+        s_matrix = np.zeros((n_ports, n_ports, n_freqs), dtype=np.complex64)
+        ref_shifts: tuple[float, ...] | None = None
+        reference_planes_out: np.ndarray | None = None
+
+        original_entries = list(entries)
+        try:
+            for drive_idx in range(n_ports):
+                self._waveguide_ports = [
+                    _dc_replace(
+                        e,
+                        amplitude=(e.amplitude if idx == drive_idx else 0.0),
+                    )
+                    for idx, e in enumerate(original_entries)
+                ]
+
+                dev_result = run_nonuniform_path(self, n_steps=n_steps)
+                ref_result = run_nonuniform_path(
+                    self,
+                    n_steps=n_steps,
+                    eps_override=vacuum_eps,
+                    sigma_override=vacuum_sigma,
+                )
+
+                dev_wg = dev_result.waveguide_ports or {}
+                ref_wg = ref_result.waveguide_ports or {}
+                if len(dev_wg) != n_ports or len(ref_wg) != n_ports:
+                    raise RuntimeError(
+                        "NU waveguide S-matrix expected one final cfg per "
+                        "port on both device and reference runs"
+                    )
+
+                # Compute ref_shifts from the first drive's configs (same
+                # measured planes for every drive / run).
+                if ref_shifts is None:
+                    shifts = []
+                    planes_out = []
+                    for entry in original_entries:
+                        cfg = dev_wg[entry.name]
+                        planes = waveguide_plane_positions(cfg)
+                        desired = (
+                            entry.reference_plane
+                            if entry.reference_plane is not None
+                            else planes["source"]
+                        )
+                        shifts.append(desired - planes["reference"])
+                        planes_out.append(desired)
+                    ref_shifts = tuple(shifts)
+                    reference_planes_out = np.asarray(planes_out, dtype=float)
+
+                drive_name = original_entries[drive_idx].name
+                a_inc_ref, _ = extract_waveguide_port_waves(
+                    ref_wg[drive_name], ref_shift=ref_shifts[drive_idx],
+                )
+                a_inc_ref_np = np.asarray(a_inc_ref)
+                safe_a_inc = np.where(
+                    np.abs(a_inc_ref_np) > 1e-30,
+                    a_inc_ref_np,
+                    np.ones_like(a_inc_ref_np),
+                )
+
+                for recv_idx in range(n_ports):
+                    recv_name = original_entries[recv_idx].name
+                    _, b_ref = extract_waveguide_port_waves(
+                        ref_wg[recv_name], ref_shift=ref_shifts[recv_idx],
+                    )
+                    _, b_dev = extract_waveguide_port_waves(
+                        dev_wg[recv_name], ref_shift=ref_shifts[recv_idx],
+                    )
+                    b_ref_np = np.asarray(b_ref)
+                    b_dev_np = np.asarray(b_dev)
+
+                    if recv_idx == drive_idx:
+                        s_matrix[recv_idx, drive_idx, :] = (
+                            b_dev_np - b_ref_np
+                        ) / safe_a_inc
+                    else:
+                        safe_b = np.where(
+                            np.abs(b_ref_np) > 1e-30,
+                            b_ref_np,
+                            np.ones_like(b_ref_np),
+                        )
+                        s_matrix[recv_idx, drive_idx, :] = b_dev_np / safe_b
+        finally:
+            self._waveguide_ports = original_entries
+            self._dz_profile = _dz_profile_saved
+
+        return WaveguideSMatrixResult(
+            s_params=np.asarray(s_matrix),
+            freqs=np.asarray(port_freqs),
+            port_names=tuple(e.name for e in original_entries),
+            port_directions=tuple(e.direction for e in original_entries),
+            reference_planes=reference_planes_out
+            if reference_planes_out is not None
+            else np.array(
+                [
+                    e.reference_plane if e.reference_plane is not None
+                    else 0.0
+                    for e in original_entries
+                ],
+                dtype=float,
+            ),
         )
 
     @staticmethod

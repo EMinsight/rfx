@@ -97,6 +97,79 @@ def test_dielectric_near_old_threshold_now_warns():
     )
 
 
+def test_compute_waveguide_s_matrix_rejects_nonuniform_mesh():
+    """User-supplied dx_profile must raise NotImplementedError, not
+    silently fall through to the uniform scan.
+
+    Prior to 2026-04-24 ``compute_waveguide_s_matrix`` built a
+    ``NonUniformGrid`` correctly but then called the uniform
+    ``rfx.simulation.run`` which reads a scalar ``grid.dx``; the
+    refined interior cells were present in the grid but integrated
+    as if they were ``grid.dx`` (experiment 12: identical |S21|
+    error at dx_fine ∈ {1.0, 0.25, 0.1} mm).  Until the NU S-matrix
+    scaffold is wired end-to-end, the API must raise rather than
+    return silently-wrong numbers.
+    """
+    import numpy as _np
+    import jax.numpy as _jnp
+    from rfx.api import Simulation
+    from rfx.boundaries.spec import BoundarySpec, Boundary
+    from rfx.geometry.csg import Box as _Box
+    from rfx.auto_config import smooth_grading
+
+    # WR-90 εr=2 slab with a refined interior band (dx=1 mm coarse,
+    # 0.25 mm inside the 10 mm slab window).
+    a_wg, b_wg = 0.02286, 0.01016
+    dom_x = 0.200
+    slab_lo, slab_hi = 0.095, 0.105
+    dx_coarse, dx_fine = 1e-3, 0.25e-3
+    n_pre = int(round(slab_lo / dx_coarse))
+    n_slab = int(round((slab_hi - slab_lo) / dx_fine))
+    n_post = int(round((dom_x - slab_hi) / dx_coarse))
+    raw = _np.concatenate([
+        _np.full(n_pre, dx_coarse),
+        _np.full(n_slab, dx_fine),
+        _np.full(n_post, dx_coarse),
+    ])
+    dx_profile = smooth_grading(raw, max_ratio=1.3)
+
+    sim = Simulation(
+        freq_max=12e9, domain=(float(_np.sum(dx_profile)), a_wg, b_wg),
+        boundary=BoundarySpec(
+            x=Boundary(lo="cpml", hi="cpml"),
+            y=Boundary(lo="pec", hi="pec"),
+            z=Boundary(lo="pec", hi="pec"),
+        ),
+        cpml_layers=20, dx=dx_coarse, dx_profile=dx_profile,
+    )
+    sim.add_material("slab", eps_r=2.0)
+    sim.add(_Box((slab_lo, 0, 0), (slab_hi, a_wg, b_wg)),
+            material="slab")
+    port_freqs = _jnp.linspace(8.2e9, 12.4e9, 5)
+    sim.add_waveguide_port(
+        0.040, direction="+x", mode=(1, 0), mode_type="TE",
+        freqs=port_freqs, f0=10.3e9, bandwidth=0.5,
+        reference_plane=0.050, name="left",
+    )
+    sim.add_waveguide_port(
+        0.160, direction="-x", mode=(1, 0), mode_type="TE",
+        freqs=port_freqs, f0=10.3e9, bandwidth=0.5,
+        reference_plane=0.150, name="right",
+    )
+    try:
+        sim.compute_waveguide_s_matrix(num_periods=2, normalize=True)
+    except NotImplementedError as exc:
+        assert "non-uniform" in str(exc).lower(), (
+            f"error message should point at the NU mesh; got: {exc!r}"
+        )
+    else:
+        raise AssertionError(
+            "compute_waveguide_s_matrix on a dx_profile grid should "
+            "raise NotImplementedError (silent uniform-lane fallthrough "
+            "previously returned refinement-ignoring results)."
+        )
+
+
 def test_dielectric_sparam_active_raises_threshold_to_20():
     """17 cells/λ_eff silent without S-param extraction; warns with one.
 

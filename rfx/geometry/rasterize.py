@@ -60,10 +60,17 @@ def coords_from_nonuniform_grid(grid) -> GridCoords:
     ``Box((0,0,0), (Lx,Ly,Lz))`` should tile the interior domain
     exactly.
     """
-    cpml = grid.cpml_layers
+    # Per-axis pad — respects PEC/PMC faces which have pad=0 even when
+    # ``grid.cpml_layers`` is nonzero. Using the scalar ``cpml_layers``
+    # here hit IndexError on axes that are PEC on both sides and shorter
+    # than ``cpml_layers + 1`` cells (e.g. WR-90's narrow b-axis at
+    # dx=1 mm: 11 cells, cpml_layers=20 → edges[20] out of bounds).
+    pad_x_lo = int(getattr(grid, "pad_x_lo", grid.cpml_layers))
+    pad_y_lo = int(getattr(grid, "pad_y_lo", grid.cpml_layers))
+    pad_z_lo = int(getattr(grid, "pad_z_lo", grid.cpml_layers))
     nx, ny, nz = grid.nx, grid.ny, grid.nz
 
-    def _axis_centers(d_arr):
+    def _axis_centers(d_arr, pad_lo):
         # Mesh-as-design-variable path: any axis cell-size profile may be
         # a JAX tracer. Route the cumsum / offset arithmetic through jnp
         # in-trace; fall back to the numpy path on concrete inputs to keep
@@ -72,15 +79,15 @@ def coords_from_nonuniform_grid(grid) -> GridCoords:
             d_j = jnp.asarray(d_arr)
             cum = jnp.concatenate([jnp.zeros((1,), dtype=d_j.dtype),
                                    jnp.cumsum(d_j)])
-            offset = cum[cpml]
+            offset = cum[pad_lo]
             centers = (cum[:-1] + cum[1:]) / 2.0 - offset
             return centers.astype(jnp.float32)
         d_np = np.asarray(d_arr)
-        return jnp.asarray(_axis_cell_centers(d_np, cpml), dtype=jnp.float32)
+        return jnp.asarray(_axis_cell_centers(d_np, pad_lo), dtype=jnp.float32)
 
-    x = _axis_centers(grid.dx_arr)
-    y = _axis_centers(grid.dy_arr)
-    z = _axis_centers(grid.dz)
+    x = _axis_centers(grid.dx_arr, pad_x_lo)
+    y = _axis_centers(grid.dy_arr, pad_y_lo)
+    z = _axis_centers(grid.dz, pad_z_lo)
 
     return GridCoords(x=x, y=y, z=z, shape=(nx, ny, nz))
 
