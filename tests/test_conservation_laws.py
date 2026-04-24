@@ -7,7 +7,6 @@ They depend only on Maxwell's equations and energy-conservation principles.
 
 import numpy as np
 import jax.numpy as jnp
-import pytest
 
 from rfx.api import Simulation
 from rfx.geometry.csg import Box
@@ -205,28 +204,12 @@ def test_reciprocity_asymmetric_structure():
 
 
 # =========================================================================
-# Test 4: Mesh convergence — S21 converges with mesh refinement
+# Test 4: Causality — no signal before wavefront arrival
 # =========================================================================
-
-@pytest.mark.skip(
-    reason=(
-        "Superseded by "
-        "test_waveguide_port_validation_battery.test_mesh_convergence_s21_scaled_cpml. "
-        "This test used cpml_layers=10 fixed across all resolutions, so the "
-        "physical CPML thickness shrank 30mm -> 20mm -> 10mm as dx shrank, "
-        "changing the effective boundary condition per level and breaking "
-        "the convergence premise by construction. The battery version "
-        "scales cpml_layers proportionally to keep physical CPML constant."
-    )
-)
-def test_mesh_convergence_s21():
-    """Historical test — see skip reason."""
-    pass
-
-
-# =========================================================================
-# Test 5: Causality — no signal before wavefront arrival
-# =========================================================================
+# (Mesh-convergence test moved to
+#  test_waveguide_port_validation_battery.test_mesh_convergence_s21_scaled_cpml,
+#  which scales cpml_layers proportionally to keep physical CPML constant
+#  across resolutions.)
 
 def test_causality_no_signal_before_source():
     """No field should appear at a distant probe before the wavefront
