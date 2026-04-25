@@ -2078,6 +2078,7 @@ class Simulation:
                 dft_total_steps=n_steps,
                 dt=float(grid.dt),
                 waveform=entry.waveform,
+                grid=grid,
             )
             return cfgs
         cfg = init_waveguide_port(
@@ -2093,6 +2094,7 @@ class Simulation:
             dt=float(grid.dt),
             waveform=entry.waveform,
             mode_profile=entry.mode_profile,
+            grid=grid,
         )
         return cfg
 
