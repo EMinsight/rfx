@@ -655,11 +655,12 @@ def run(
     if use_waveguide_ports:
         carry_init["waveguide_port_accs"] = tuple(
             (
-                cfg.v_probe_dft,
-                cfg.v_ref_dft,
-                cfg.i_probe_dft,
-                cfg.i_ref_dft,
-                cfg.v_inc_dft,
+                cfg.v_probe_t,
+                cfg.v_ref_t,
+                cfg.i_probe_t,
+                cfg.i_ref_t,
+                cfg.v_inc_t,
+                cfg.n_steps_recorded,
             )
             for cfg in waveguide_ports
         )
@@ -895,22 +896,24 @@ def run(
             new_waveguide_port_accs = []
             for accs, cfg_meta in zip(carry["waveguide_port_accs"], waveguide_meta):
                 cfg = cfg_meta._replace(
-                    v_probe_dft=accs[0],
-                    v_ref_dft=accs[1],
-                    i_probe_dft=accs[2],
-                    i_ref_dft=accs[3],
-                    v_inc_dft=accs[4],
+                    v_probe_t=accs[0],
+                    v_ref_t=accs[1],
+                    i_probe_t=accs[2],
+                    i_ref_t=accs[3],
+                    v_inc_t=accs[4],
+                    n_steps_recorded=accs[5],
                 )
                 # TFSF-style H and E corrections are applied earlier in
                 # their respective Yee sub-steps (canonical TFSF slots).
                 cfg_updated = update_waveguide_port_probe(cfg, st, dt, dx)
                 new_waveguide_port_accs.append(
                     (
-                        cfg_updated.v_probe_dft,
-                        cfg_updated.v_ref_dft,
-                        cfg_updated.i_probe_dft,
-                        cfg_updated.i_ref_dft,
-                        cfg_updated.v_inc_dft,
+                        cfg_updated.v_probe_t,
+                        cfg_updated.v_ref_t,
+                        cfg_updated.i_probe_t,
+                        cfg_updated.i_ref_t,
+                        cfg_updated.v_inc_t,
+                        cfg_updated.n_steps_recorded,
                     )
                 )
 
@@ -1052,11 +1055,12 @@ def run(
     if use_waveguide_ports:
         final_waveguide_ports = tuple(
             cfg_meta._replace(
-                v_probe_dft=accs[0],
-                v_ref_dft=accs[1],
-                i_probe_dft=accs[2],
-                i_ref_dft=accs[3],
-                v_inc_dft=accs[4],
+                v_probe_t=accs[0],
+                v_ref_t=accs[1],
+                i_probe_t=accs[2],
+                i_ref_t=accs[3],
+                v_inc_t=accs[4],
+                n_steps_recorded=accs[5],
             )
             for cfg_meta, accs in zip(waveguide_meta, final_carry["waveguide_port_accs"])
         )
@@ -1271,11 +1275,12 @@ def run_until_decay(
     if use_waveguide_ports:
         carry["waveguide_port_accs"] = tuple(
             (
-                cfg.v_probe_dft,
-                cfg.v_ref_dft,
-                cfg.i_probe_dft,
-                cfg.i_ref_dft,
-                cfg.v_inc_dft,
+                cfg.v_probe_t,
+                cfg.v_ref_t,
+                cfg.i_probe_t,
+                cfg.i_ref_t,
+                cfg.v_inc_t,
+                cfg.n_steps_recorded,
             )
             for cfg in waveguide_ports
         )
@@ -1439,17 +1444,19 @@ def run_until_decay(
             new_waveguide_port_accs = []
             for accs, cfg_meta in zip(carry_in["waveguide_port_accs"], waveguide_meta):
                 cfg = cfg_meta._replace(
-                    v_probe_dft=accs[0], v_ref_dft=accs[1],
-                    i_probe_dft=accs[2], i_ref_dft=accs[3],
-                    v_inc_dft=accs[4],
+                    v_probe_t=accs[0], v_ref_t=accs[1],
+                    i_probe_t=accs[2], i_ref_t=accs[3],
+                    v_inc_t=accs[4],
+                    n_steps_recorded=accs[5],
                 )
                 # TFSF-style H/E corrections applied earlier in canonical
                 # Yee sub-steps (see L1247-L1288 region).
                 cfg_updated = update_waveguide_port_probe(cfg, st, dt, dx)
                 new_waveguide_port_accs.append((
-                    cfg_updated.v_probe_dft, cfg_updated.v_ref_dft,
-                    cfg_updated.i_probe_dft, cfg_updated.i_ref_dft,
-                    cfg_updated.v_inc_dft,
+                    cfg_updated.v_probe_t, cfg_updated.v_ref_t,
+                    cfg_updated.i_probe_t, cfg_updated.i_ref_t,
+                    cfg_updated.v_inc_t,
+                    cfg_updated.n_steps_recorded,
                 ))
 
         # Wire port S-param DFT accumulation (JIT-integrated)
@@ -1636,9 +1643,10 @@ def run_until_decay(
     if use_waveguide_ports:
         final_waveguide_ports = tuple(
             cfg_meta._replace(
-                v_probe_dft=accs[0], v_ref_dft=accs[1],
-                i_probe_dft=accs[2], i_ref_dft=accs[3],
-                v_inc_dft=accs[4],
+                v_probe_t=accs[0], v_ref_t=accs[1],
+                i_probe_t=accs[2], i_ref_t=accs[3],
+                v_inc_t=accs[4],
+                n_steps_recorded=accs[5],
             )
             for cfg_meta, accs in zip(waveguide_meta, carry["waveguide_port_accs"])
         )

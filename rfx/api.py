@@ -2101,7 +2101,6 @@ class Simulation:
         *,
         n_steps: int | None = None,
         num_periods: float = 20.0,
-        num_periods_dft: float | None = None,
         normalize: bool = False,
         subpixel_smoothing: bool = False,
     ) -> WaveguideSMatrixResult:
@@ -2111,18 +2110,15 @@ class Simulation:
         ----------
         num_periods : float
             Length of the FDTD run (in source-period multiples) used to
-            derive ``n_steps`` when ``n_steps`` is not given.
-        num_periods_dft : float or None
-            Optional early-time DFT gate length (also in period multiples).
-            When set, DFT accumulators stop integrating at
-            ``grid.num_timesteps(num_periods_dft)``; the simulation still
-            runs the full ``n_steps`` so CPML can drain the domain, but
-            the S-parameters are computed from the pre-multi-bounce window
-            only. Required for strong-reflector geometries (PEC short,
-            resonators) where late-time standing-wave build-up
-            contaminates the V/I decomposition. Must satisfy
-            ``num_periods_dft <= num_periods``; default ``None`` retains
-            the legacy full-window behaviour.
+            derive ``n_steps`` when ``n_steps`` is not given. The
+            spectra are computed POST-SCAN from the recorded modal V/I
+            time series via a rectangular full-record DFT (matching
+            OpenEMS's ``utilities.DFT_time2freq``); ``num_periods``
+            therefore governs both the CPML drain horizon AND the DFT
+            integration window. Phase 2 cleanup (2026-04-25) removed
+            the legacy ``num_periods_dft`` early-gate knob — the rect
+            full-record DFT is finite-energy on the recorded transient
+            so no gating is needed even on strong reflectors.
         normalize : bool
             When True, run a two-run normalization that cancels Yee-grid
             numerical dispersion.  A reference simulation with vacuum (no
@@ -2170,29 +2166,25 @@ class Simulation:
         # the coarse boundary dx and silently ignored ``dx_profile`` /
         # ``dy_profile`` (handover v2 experiment 12). The dedicated NU
         # two-run extractor below is enabled when its supported scope
-        # is met (``normalize=True``, single-mode ports, no
-        # ``num_periods_dft`` gate); otherwise raise so the user is not
-        # given silently-wrong numbers.
+        # is met (``normalize=True``, single-mode ports); otherwise
+        # raise so the user is not given silently-wrong numbers.
         if self._dx_profile is not None or self._dy_profile is not None:
             unsupported = []
             if not normalize:
                 unsupported.append("normalize=True is required")
-            if num_periods_dft is not None:
-                unsupported.append("num_periods_dft is not yet plumbed")
             if any(entry.n_modes > 1 for entry in entries):
                 unsupported.append("multi-mode ports (n_modes>1) are not supported")
             if unsupported:
                 raise NotImplementedError(
                     "compute_waveguide_s_matrix() on a non-uniform mesh "
-                    "(dx_profile / dy_profile) supports normalize=True, "
-                    "single-mode ports, and no early-time DFT gate. "
+                    "(dx_profile / dy_profile) supports normalize=True "
+                    "and single-mode ports. "
                     + "; ".join(unsupported)
                     + ". Drop the dx/dy profile to use the uniform lane."
                 )
             return self._compute_waveguide_s_matrix_nu(
                 n_steps=n_steps,
                 num_periods=num_periods,
-                num_periods_dft=num_periods_dft,
                 normalize=normalize,
             )
 
@@ -2248,24 +2240,6 @@ class Simulation:
                 cfg._replace(src_t0=ref_t0, src_tau=ref_tau)
                 if not isinstance(cfg, list)
                 else [c._replace(src_t0=ref_t0, src_tau=ref_tau) for c in cfg]
-                for cfg in raw_cfgs
-            ]
-
-        # Apply early-time DFT gate to every port config when requested.
-        # This truncates DFT accumulation at n_dft_steps while the scan
-        # itself still runs the full n_steps so the CPML can drain the
-        # domain — critical for strong-reflector S-parameter extraction.
-        if num_periods_dft is not None:
-            if num_periods_dft <= 0 or num_periods_dft > num_periods:
-                raise ValueError(
-                    "num_periods_dft must satisfy 0 < num_periods_dft "
-                    f"<= num_periods (got {num_periods_dft}/{num_periods})"
-                )
-            n_dft_steps = int(grid.num_timesteps(num_periods=num_periods_dft))
-            raw_cfgs = [
-                cfg._replace(dft_end_step=n_dft_steps)
-                if not isinstance(cfg, list)
-                else [c._replace(dft_end_step=n_dft_steps) for c in cfg]
                 for cfg in raw_cfgs
             ]
 
@@ -2437,7 +2411,6 @@ class Simulation:
         *,
         n_steps: int | None,
         num_periods: float,
-        num_periods_dft: float | None,
         normalize: bool,
     ) -> WaveguideSMatrixResult:
         """Non-uniform-mesh two-run S-matrix extraction.
@@ -2454,8 +2427,6 @@ class Simulation:
         Current scope (matches the uniform path minus a few niceties):
           - ``normalize=True`` only.
           - Single-mode ports (``n_modes == 1``) only.
-          - ``num_periods_dft`` is not yet plumbed through the NU scan
-            body — raise for now; uniform lane still supports it.
 
         Extracts ``a_inc`` / ``b_out`` via the same
         ``extract_waveguide_port_waves`` helper as the uniform path and
@@ -2478,12 +2449,6 @@ class Simulation:
                 "compute_waveguide_s_matrix(normalize=False) is not yet "
                 "supported on the non-uniform mesh path; use normalize=True "
                 "or drop dx/dy_profile to stay on the uniform lane."
-            )
-        if num_periods_dft is not None:
-            raise NotImplementedError(
-                "num_periods_dft is not yet plumbed through the non-uniform "
-                "scan body; either widen num_periods to cover multi-bounce or "
-                "drop dx/dy_profile to use the uniform-lane early gate."
             )
 
         entries = list(self._waveguide_ports)

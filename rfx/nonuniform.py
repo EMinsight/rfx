@@ -836,15 +836,19 @@ def run_nonuniform(
     if use_ntff:
         carry_init["ntff"] = ntff_data
 
-    # Waveguide-port DFT accumulators (mirrors uniform path)
+    # Waveguide-port time-series carry (mirrors uniform path).
+    # Phase 2 cleanup (2026-04-25) removed in-scan DFT accumulators;
+    # spectra are computed POST-SCAN by a rect full-record DFT on the
+    # recorded modal V/I time series.
     if use_waveguide_ports:
         carry_init["waveguide_port_accs"] = tuple(
             (
-                cfg.v_probe_dft,
-                cfg.v_ref_dft,
-                cfg.i_probe_dft,
-                cfg.i_ref_dft,
-                cfg.v_inc_dft,
+                cfg.v_probe_t,
+                cfg.v_ref_t,
+                cfg.i_probe_t,
+                cfg.i_ref_t,
+                cfg.v_inc_t,
+                cfg.n_steps_recorded,
             )
             for cfg in waveguide_ports
         )
@@ -964,20 +968,22 @@ def run_nonuniform(
                 carry["waveguide_port_accs"], waveguide_meta
             ):
                 cfg = cfg_meta._replace(
-                    v_probe_dft=accs[0],
-                    v_ref_dft=accs[1],
-                    i_probe_dft=accs[2],
-                    i_ref_dft=accs[3],
-                    v_inc_dft=accs[4],
+                    v_probe_t=accs[0],
+                    v_ref_t=accs[1],
+                    i_probe_t=accs[2],
+                    i_ref_t=accs[3],
+                    v_inc_t=accs[4],
+                    n_steps_recorded=accs[5],
                 )
                 # TFSF-style corrections applied earlier at canonical slots.
                 cfg_updated = update_waveguide_port_probe(cfg, st, dt, grid.dx)
                 new_waveguide_port_accs.append((
-                    cfg_updated.v_probe_dft,
-                    cfg_updated.v_ref_dft,
-                    cfg_updated.i_probe_dft,
-                    cfg_updated.i_ref_dft,
-                    cfg_updated.v_inc_dft,
+                    cfg_updated.v_probe_t,
+                    cfg_updated.v_ref_t,
+                    cfg_updated.i_probe_t,
+                    cfg_updated.i_ref_t,
+                    cfg_updated.v_inc_t,
+                    cfg_updated.n_steps_recorded,
                 ))
 
         # Wire port V/I DFT accumulation
@@ -1187,15 +1193,17 @@ def run_nonuniform(
     if use_ntff:
         result["ntff_data"] = final["ntff"]
 
-    # Surface final waveguide-port configs (with accumulated DFTs)
+    # Surface final waveguide-port configs (with recorded modal V/I
+    # time series; spectra are extracted post-scan via rect-DFT).
     if use_waveguide_ports:
         result["waveguide_ports"] = tuple(
             cfg_meta._replace(
-                v_probe_dft=accs[0],
-                v_ref_dft=accs[1],
-                i_probe_dft=accs[2],
-                i_ref_dft=accs[3],
-                v_inc_dft=accs[4],
+                v_probe_t=accs[0],
+                v_ref_t=accs[1],
+                i_probe_t=accs[2],
+                i_ref_t=accs[3],
+                v_inc_t=accs[4],
+                n_steps_recorded=accs[5],
             )
             for cfg_meta, accs in zip(
                 waveguide_meta, final["waveguide_port_accs"]

@@ -134,10 +134,9 @@ def _build_sim(
     return sim
 
 
-def _s_matrix(sim, *, num_periods=40, num_periods_dft=None, normalize=True):
+def _s_matrix(sim, *, num_periods=40, normalize=True):
     result = sim.compute_waveguide_s_matrix(
         num_periods=num_periods,
-        num_periods_dft=num_periods_dft,
         normalize=normalize,
     )
     s = np.asarray(result.s_params)
@@ -396,10 +395,12 @@ def test_pec_short_s11_magnitude():
     )
     # Full-window DFT: the single PEC->CPML round trip fits inside
     # num_periods=40 and there is no resonator to build up late-time.
+    # Phase 2 cleanup (2026-04-25) removed the num_periods_dft early
+    # gate; the post-scan rect full-record DFT is finite-energy on the
+    # transient so no gating is needed.
     s, _, port_idx = _s_matrix(
         sim,
         num_periods=40,
-        num_periods_dft=None,
         normalize=True,
     )
 

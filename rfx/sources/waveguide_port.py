@@ -125,16 +125,6 @@ class WaveguidePortConfig(NamedTuple):
     reference_x_m: float
     probe_x_m: float
     dft_total_steps: int
-    dft_window: str
-    dft_window_alpha: float
-    # Time-gated DFT end step (exclusive upper bound on accumulation).
-    # When ``state.step >= dft_end_step`` the accumulator stops adding
-    # new energy. Use this to exclude late-time multi-bounce from
-    # strong-reflector geometries (PEC short, high-Q resonator) where
-    # the device-run standing wave would otherwise overwhelm the
-    # forward-propagating reference signal. Default is ``dft_total_steps``
-    # (no gating; full-window behaviour identical to pre-2026-04-21).
-    dft_end_step: int
 
     # Source waveform parameters. ``waveform`` selects the pulse shape:
     # ``"differentiated_gaussian"`` (legacy, src = -2·arg·exp(-arg²)) or
@@ -146,13 +136,24 @@ class WaveguidePortConfig(NamedTuple):
     src_fcen: float
     waveform: str
 
-    # DFT accumulators for S-parameter extraction
-    v_probe_dft: jnp.ndarray   # (n_freqs,) complex — modal voltage at probe
-    v_ref_dft: jnp.ndarray     # (n_freqs,) complex — modal voltage at ref
-    i_probe_dft: jnp.ndarray   # (n_freqs,) complex — modal current at probe
-    i_ref_dft: jnp.ndarray     # (n_freqs,) complex — modal current at ref
-    v_inc_dft: jnp.ndarray     # (n_freqs,) complex — source waveform DFT
     freqs: jnp.ndarray         # (n_freqs,) float
+
+    # Per-step time-series (OpenEMS-style raw record).
+    # Modal V and I are real-valued per step (real Yee fields × real mode
+    # profiles × real cell areas). Stored as float32 to halve memory
+    # vs complex; OpenEMS writes the same on disk as two floats per row.
+    # Allocated to length ``dft_total_steps``; ``n_steps_recorded`` tracks
+    # how many slots were filled by ``update_waveguide_port_probe``.
+    # The S-parameter spectra are computed POST-SCAN by
+    # ``_extract_global_waves_from_time_series`` via a rectangular
+    # full-record DFT on these arrays — no in-scan DFT accumulators
+    # are kept (deleted Phase 2 cleanup, 2026-04-25).
+    v_probe_t: jnp.ndarray     # (n_steps,) float32 — modal V at probe plane
+    v_ref_t: jnp.ndarray       # (n_steps,) float32 — modal V at ref plane
+    i_probe_t: jnp.ndarray     # (n_steps,) float32 — modal I at probe plane
+    i_ref_t: jnp.ndarray       # (n_steps,) float32 — modal I at ref plane
+    v_inc_t: jnp.ndarray       # (n_steps,) float32 — source amplitude record
+    n_steps_recorded: jnp.ndarray  # scalar int32 — fill count
 
     # Precomputed TFSF-style injection waveforms. Both are the source
     # pulse bandpass-filtered to the propagating band |ω| ≥ ω_c — the
@@ -483,9 +484,6 @@ def init_waveguide_port(
     probe_offset: int = 10,
     ref_offset: int = 3,
     dft_total_steps: int = 0,
-    dft_window: str = "tukey",
-    dft_window_alpha: float = 0.25,
-    dft_end_step: int | None = None,
     dt: float = 0.0,
     waveform: str = "modulated_gaussian",
     mode_profile: str = "discrete",
@@ -663,14 +661,16 @@ def init_waveguide_port(
         y_lo, y_hi = 0, 0
         z_lo, z_hi = 0, 0
 
-    nf = len(freqs)
-    # Canonical complex dtype: complex64 in default precision, complex128
-    # under JAX_ENABLE_X64. Hard-coding complex64 here while the scan body
-    # promotes (cfg.freqs is the user's `freqs` array — float64 under x64,
-    # so `exp(-1j * 2π * freqs * t)` is complex128) breaks the lax.scan
-    # carry-type contract on accuracy-first runs (crossval/11 invocation
-    # JAX_ENABLE_X64=1 raised "carry input complex64 vs output complex128").
-    zeros_c = jnp.zeros(nf, dtype=jnp.array(0j).dtype)
+    # Time-series carry. Shape must be static at trace time. When the
+    # caller did not supply ``dft_total_steps`` (legacy low-level path),
+    # use length 1 so the carry has a valid shape; ``update_*_probe``
+    # then writes only into slot 0 which is harmless for those callers
+    # who never use the post-scan extractor.
+    n_t = max(int(dft_total_steps), 1)
+    # Match cfg.freqs precision so the post-scan rect-DFT (which builds a
+    # complex phase from cfg.freqs) has consistent real-side dtype.
+    real_dtype = jnp.zeros((), dtype=freqs.dtype).dtype if hasattr(freqs, 'dtype') else jnp.float32
+    zeros_t = jnp.zeros((n_t,), dtype=real_dtype)
 
     # Precompute companion H waveform for TFSF-style E correction.
     # For a forward-only wave whose E-amplitude at x_src matches the source
@@ -831,22 +831,18 @@ def init_waveguide_port(
         reference_x_m=float(reference_x_m),
         probe_x_m=float(probe_x_m),
         dft_total_steps=int(dft_total_steps),
-        dft_window=dft_window,
-        dft_window_alpha=float(dft_window_alpha),
-        dft_end_step=int(
-            dft_end_step if dft_end_step is not None else dft_total_steps
-        ),
         src_amp=float(amplitude),
         src_t0=float(t0),
         src_tau=float(tau),
         src_fcen=float(f0),
         waveform=str(waveform),
-        v_probe_dft=zeros_c,
-        v_ref_dft=zeros_c,
-        i_probe_dft=zeros_c,
-        i_ref_dft=zeros_c,
-        v_inc_dft=zeros_c,
         freqs=freqs,
+        v_probe_t=zeros_t,
+        v_ref_t=zeros_t,
+        i_probe_t=zeros_t,
+        i_ref_t=zeros_t,
+        v_inc_t=zeros_t,
+        n_steps_recorded=jnp.zeros((), dtype=jnp.int32),
         e_inc_table=e_inc_table,
         h_inc_table=h_inc_table,
     )
@@ -1119,7 +1115,15 @@ def overlap_modal_amplitude(
 
 def update_waveguide_port_probe(cfg: WaveguidePortConfig, state,
                                 dt: float, dx: float) -> WaveguidePortConfig:
-    """Accumulate DFT of modal V and I at ref and probe planes."""
+    """Record per-step modal V and I at ref and probe planes.
+
+    The S-parameter spectra are computed POST-SCAN by
+    ``_extract_global_waves_from_time_series`` via a rectangular
+    full-record DFT on the recorded arrays. No in-scan windowed DFT
+    accumulators are kept (Phase 2 cleanup, 2026-04-25). The previous
+    in-scan windowed/gated path silently integrated partially-decayed
+    standing waves and produced ``|S11| → ∞`` as the gate widened.
+    """
     t = state.step * dt
 
     v_ref = modal_voltage(state, cfg, cfg.ref_x, dx)
@@ -1130,24 +1134,32 @@ def update_waveguide_port_probe(cfg: WaveguidePortConfig, state,
     arg = (t - cfg.src_t0) / cfg.src_tau
     v_inc = cfg.src_amp * (-2.0 * arg) * jnp.exp(-(arg ** 2))
 
-    phase = jnp.exp(-1j * 2.0 * jnp.pi * cfg.freqs * t)
-    # Time-gate: zero the weight once we pass the configured end step.
-    # Used to exclude late-time multi-bounce from strong-reflector S-params.
-    # Window length must match the gated horizon — using cfg.dft_total_steps
-    # while gating at cfg.dft_end_step makes the Tukey/Hann taper normalise
-    # over the full scan, so the gated portion of the window stays in its
-    # flat region instead of tapering to zero. That defeated the gate's
-    # purpose (verified empirically on PEC-short: 100/gate=60 ≡ 100/no-gate).
-    effective_total = min(cfg.dft_end_step, cfg.dft_total_steps)
-    weight = _dft_window_weight(state.step, effective_total, cfg.dft_window, cfg.dft_window_alpha)
-    weight = jnp.where(state.step < cfg.dft_end_step, weight, 0.0)
-
+    # Write per-step modal V/I into the time-series carry. The carry
+    # length is fixed at trace time (= dft_total_steps); ``state.step``
+    # is a JAX scalar — clip to avoid out-of-bounds writes if the
+    # simulation runs longer than the allocated record buffer (XLA
+    # dynamic-update-slice clamps anyway, but be explicit).
+    #
+    # Also stamp ``cfg.dt`` from the scan's authoritative ``dt`` so the
+    # post-scan rect DFT (``_extract_global_waves_from_time_series``)
+    # uses the right ``Δt`` even when the caller initialised the cfg
+    # via the low-level ``init_waveguide_port`` without passing ``dt=``
+    # (legacy path used by ``tests/test_waveguide_port.py`` Python loops).
+    n_t = cfg.v_probe_t.shape[0]
+    safe_step = jnp.clip(jnp.asarray(state.step, dtype=jnp.int32), 0, n_t - 1)
     return cfg._replace(
-        v_probe_dft=cfg.v_probe_dft + v_probe * phase * dt * weight,
-        v_ref_dft=cfg.v_ref_dft + v_ref * phase * dt * weight,
-        i_probe_dft=cfg.i_probe_dft + i_probe * phase * dt * weight,
-        i_ref_dft=cfg.i_ref_dft + i_ref * phase * dt * weight,
-        v_inc_dft=cfg.v_inc_dft + v_inc * phase * dt * weight,
+        dt=float(dt),
+        v_probe_t=cfg.v_probe_t.at[safe_step].set(
+            jnp.asarray(v_probe, cfg.v_probe_t.dtype)),
+        v_ref_t=cfg.v_ref_t.at[safe_step].set(
+            jnp.asarray(v_ref, cfg.v_ref_t.dtype)),
+        i_probe_t=cfg.i_probe_t.at[safe_step].set(
+            jnp.asarray(i_probe, cfg.i_probe_t.dtype)),
+        i_ref_t=cfg.i_ref_t.at[safe_step].set(
+            jnp.asarray(i_ref, cfg.i_ref_t.dtype)),
+        v_inc_t=cfg.v_inc_t.at[safe_step].set(
+            jnp.asarray(v_inc, cfg.v_inc_t.dtype)),
+        n_steps_recorded=jnp.maximum(cfg.n_steps_recorded, safe_step + 1),
     )
 
 
@@ -1199,8 +1211,6 @@ def _compute_beta(
         1j * jnp.sqrt(jnp.maximum(-beta_sq, 0.0)),
     )
 
-
-from rfx.core.dft_utils import dft_window_weight as _dft_window_weight
 
 def _compute_mode_impedance(
     freqs: jnp.ndarray,
@@ -1290,6 +1300,56 @@ def _extract_global_waves(
     return forward, backward
 
 
+def _rect_dft(time_series: jnp.ndarray, freqs: jnp.ndarray, dt: float,
+              n_valid: jnp.ndarray | int) -> jnp.ndarray:
+    """Rectangular full-record DFT matching OpenEMS ``utilities.DFT_time2freq``.
+
+    Computes the single-sided spectrum::
+
+        V(f) = 2 · dt · Σ_n V(t_n) · exp(-j 2π f t_n)
+
+    where ``t_n = n · dt`` and the sum runs over ``n in [0, n_valid)``.
+    No window function, no time gate beyond ``n_valid`` — the integrand
+    is the literal recorded time series. For a finite-energy waveform
+    (transient pulse + decaying ringdown) this Fourier transform is
+    finite at every frequency; for a non-decaying standing wave the
+    integral grows with N, which is the architectural failure mode the
+    in-scan windowed accumulator silently exhibits.
+
+    Reference: ``/usr/lib/python3/dist-packages/openEMS/utilities.py`` lines 21-35.
+    """
+    n = jnp.arange(time_series.shape[0])
+    t = n.astype(time_series.dtype) * jnp.asarray(dt, dtype=time_series.dtype)
+    mask = (n < n_valid).astype(time_series.dtype)
+    masked_v = time_series * mask
+    omega = 2.0 * jnp.pi * freqs.astype(time_series.dtype)
+    # Build the DFT outer product: phase shape (n_steps, n_freqs).
+    # complex dtype follows the freqs precision (complex64 by default,
+    # complex128 under JAX_ENABLE_X64).
+    phase = jnp.exp(-1j * omega[None, :] * t[:, None])
+    return 2.0 * jnp.asarray(dt, dtype=phase.dtype) * jnp.einsum(
+        "n,nf->f", masked_v.astype(phase.dtype), phase
+    )
+
+
+def _extract_global_waves_from_time_series(
+    cfg: WaveguidePortConfig,
+    voltage_t: jnp.ndarray,
+    current_t: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Post-scan: rect-DFT the time series, then run the standard wave decomp.
+
+    Mirrors ``_extract_global_waves`` but takes raw time-series inputs
+    and computes the DFT in post-processing — eliminating the in-scan
+    windowed/gated accumulator path that integrates partially-decayed
+    standing waves and produces ``|S11| → ∞`` as the gate widens.
+    """
+    n_valid = cfg.n_steps_recorded
+    voltage_dft = _rect_dft(voltage_t, cfg.freqs, cfg.dt, n_valid)
+    current_dft = _rect_dft(current_t, cfg.freqs, cfg.dt, n_valid)
+    return _extract_global_waves(cfg, voltage_dft, current_dft)
+
+
 def _extract_port_waves(
     cfg: WaveguidePortConfig,
     voltage_dft: jnp.ndarray,
@@ -1302,6 +1362,20 @@ def _extract_port_waves(
     direction port, the mapping is reversed.
     """
     forward, backward = _extract_global_waves(cfg, voltage_dft, current_dft)
+    if cfg.direction.startswith("+"):
+        return forward, backward
+    return backward, forward
+
+
+def _extract_port_waves_from_time_series(
+    cfg: WaveguidePortConfig,
+    voltage_t: jnp.ndarray,
+    current_t: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Time-series variant of ``_extract_port_waves`` (post-scan rect DFT)."""
+    forward, backward = _extract_global_waves_from_time_series(
+        cfg, voltage_t, current_t
+    )
     if cfg.direction.startswith("+"):
         return forward, backward
     return backward, forward
@@ -1358,8 +1432,26 @@ def extract_waveguide_sparams(
     *,
     ref_shift: float = 0.0,
     probe_shift: float = 0.0,
+    v_ref_dft: jnp.ndarray | None = None,
+    i_ref_dft: jnp.ndarray | None = None,
+    v_probe_dft: jnp.ndarray | None = None,
+    i_probe_dft: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Extract (S11, S21) with optional reference-plane shifts.
+
+    The Phase 2 cleanup (2026-04-25) removed the in-scan DFT accumulators
+    (``cfg.v_ref_dft`` etc.) from ``WaveguidePortConfig``. Callers that
+    used to read those fields off the config now must either:
+
+    1. Pass V/I DFT spectra explicitly via the ``*_dft`` keyword args
+       (used by direct unit-test mock paths and by callers that have
+       precomputed the spectra outside the FDTD scan); OR
+    2. Use ``extract_waveguide_port_waves`` /
+       ``extract_waveguide_s_matrix`` which run the canonical post-scan
+       rectangular full-record DFT on ``cfg.v_ref_t`` / ``cfg.i_ref_t``.
+
+    When the explicit DFTs are not provided this function falls back to
+    the post-scan rect-DFT path on the recorded time series.
 
     Parameters
     ----------
@@ -1369,11 +1461,28 @@ def extract_waveguide_sparams(
     probe_shift : float
         Metres to shift the probe-plane reporting location relative to the
         stored probe plane. Positive is downstream (+x), negative upstream.
+    v_ref_dft, i_ref_dft, v_probe_dft, i_probe_dft : array or None
+        Optional precomputed V/I spectra at the reference and probe
+        planes. When all are given the wave decomposition runs against
+        them directly; otherwise the recorded time-series on ``cfg`` is
+        used.
     """
     beta = _compute_beta(cfg.freqs, cfg.f_cutoff, dt=cfg.dt, dx=cfg.dx)
     step_sign = 1 if cfg.direction.startswith("+") else -1
-    a_ref, b_ref = _extract_port_waves(cfg, cfg.v_ref_dft, cfg.i_ref_dft)
-    a_probe, b_probe = _extract_port_waves(cfg, cfg.v_probe_dft, cfg.i_probe_dft)
+    explicit = (
+        v_ref_dft is not None and i_ref_dft is not None
+        and v_probe_dft is not None and i_probe_dft is not None
+    )
+    if explicit:
+        a_ref, b_ref = _extract_port_waves(cfg, v_ref_dft, i_ref_dft)
+        a_probe, b_probe = _extract_port_waves(cfg, v_probe_dft, i_probe_dft)
+    else:
+        a_ref, b_ref = _extract_port_waves_from_time_series(
+            cfg, cfg.v_ref_t, cfg.i_ref_t,
+        )
+        a_probe, b_probe = _extract_port_waves_from_time_series(
+            cfg, cfg.v_probe_t, cfg.i_probe_t,
+        )
     a_ref, b_ref = _shift_modal_waves(a_ref, b_ref, beta, ref_shift, step_sign)
     a_probe, b_probe = _shift_modal_waves(a_probe, b_probe, beta, probe_shift, step_sign)
     safe_ref = jnp.where(jnp.abs(a_ref) > 0, a_ref, jnp.ones_like(a_ref))
@@ -1409,10 +1518,20 @@ def extract_waveguide_port_waves(
     *,
     ref_shift: float = 0.0,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Return port-local (incident, outgoing) waves at a shifted reference plane."""
+    """Return port-local (incident, outgoing) waves at a shifted reference plane.
+
+    The spectra are recomputed POST-SCAN from the per-step modal V/I
+    time series via a rectangular full-record DFT (matching OpenEMS's
+    ``utilities.DFT_time2freq``). The legacy in-scan windowed/gated
+    DFT accumulators were removed in the Phase 2 cleanup
+    (2026-04-25): they integrated partially-decayed standing waves
+    and produced ``|S11|`` that grew without bound as the gate widened.
+    """
     beta = _compute_beta(cfg.freqs, cfg.f_cutoff, dt=cfg.dt, dx=cfg.dx)
     step_sign = 1 if cfg.direction.startswith("+") else -1
-    a_ref, b_ref = _extract_port_waves(cfg, cfg.v_ref_dft, cfg.i_ref_dft)
+    a_ref, b_ref = _extract_port_waves_from_time_series(
+        cfg, cfg.v_ref_t, cfg.i_ref_t,
+    )
     return _shift_modal_waves(a_ref, b_ref, beta, ref_shift, step_sign)
 
 
@@ -1449,14 +1568,15 @@ def extract_waveguide_s_matrix(
     s_matrix = np.zeros((n_ports, n_ports, n_freqs), dtype=np.complex64)
 
     def _reset_cfg(cfg: WaveguidePortConfig, drive_enabled: bool) -> WaveguidePortConfig:
-        zeros = jnp.zeros_like(cfg.v_probe_dft)
+        zeros_t = jnp.zeros_like(cfg.v_probe_t)
         return cfg._replace(
             src_amp=cfg.src_amp if drive_enabled else 0.0,
-            v_probe_dft=zeros,
-            v_ref_dft=zeros,
-            i_probe_dft=zeros,
-            i_ref_dft=zeros,
-            v_inc_dft=zeros,
+            v_probe_t=zeros_t,
+            v_ref_t=zeros_t,
+            i_probe_t=zeros_t,
+            i_ref_t=zeros_t,
+            v_inc_t=zeros_t,
+            n_steps_recorded=jnp.zeros((), dtype=jnp.int32),
         )
 
     for drive_idx in range(n_ports):
@@ -1532,8 +1652,11 @@ def extract_waveguide_s_params_normalized(
            S_jj = (b_out_device[j] - b_out_reference[j]) / a_inc_reference[j]
          The subtraction removes the empty-guide CPML/discretization
          contribution at the driven port so S_jj measures only the
-         device-induced reflection. Strong-reflector cases may still
-         require time-gated DFT (`dft_end_step`) to limit late multi-bounce.
+         device-induced reflection. Spectra are computed POST-SCAN by
+         a rectangular full-record DFT on the recorded modal V/I
+         time series (Phase 2 cleanup, 2026-04-25); strong-reflector
+         cases no longer suffer the |S11| → ∞ growth that the legacy
+         in-scan windowed accumulator produced as the gate widened.
 
     This avoids the small/small blow-up of element-wise S_dev/S_ref for
     reflection terms while still cancelling dispersion for transmission.
@@ -1581,14 +1704,15 @@ def extract_waveguide_s_params_normalized(
     s_matrix = np.zeros((n_ports, n_ports, n_freqs), dtype=np.complex64)
 
     def _reset_cfg(cfg: WaveguidePortConfig, drive_enabled: bool) -> WaveguidePortConfig:
-        zeros = jnp.zeros_like(cfg.v_probe_dft)
+        zeros_t = jnp.zeros_like(cfg.v_probe_t)
         return cfg._replace(
             src_amp=cfg.src_amp if drive_enabled else 0.0,
-            v_probe_dft=zeros,
-            v_ref_dft=zeros,
-            i_probe_dft=zeros,
-            i_ref_dft=zeros,
-            v_inc_dft=zeros,
+            v_probe_t=zeros_t,
+            v_ref_t=zeros_t,
+            i_probe_t=zeros_t,
+            i_ref_t=zeros_t,
+            v_inc_t=zeros_t,
+            n_steps_recorded=jnp.zeros((), dtype=jnp.int32),
         )
 
     common_run_kw = dict(
@@ -1637,7 +1761,7 @@ def extract_waveguide_s_params_normalized(
             _, b_ref_i = extract_waveguide_port_waves(
                 ref_final_cfgs[recv_idx],
                 ref_shift=ref_shifts[recv_idx],
-            )
+                )
             b_out_ref.append(np.array(b_ref_i))
 
         # --- Device run: extract outgoing waves at every port ---
@@ -1661,7 +1785,7 @@ def extract_waveguide_s_params_normalized(
             _, b_recv_dev = extract_waveguide_port_waves(
                 cfg,
                 ref_shift=ref_shifts[recv_idx],
-            )
+                )
             b_recv_dev_np = np.array(b_recv_dev)
 
             if recv_idx == drive_idx:
@@ -1689,8 +1813,8 @@ def extract_waveguide_s_params_normalized(
 # Time-domain overlap helpers ``mode_self_overlap`` and
 # ``overlap_modal_amplitude`` live above (near ``modal_voltage``).
 #
-# For DFT-based extraction the overlap integral reuses the existing V/I
-# DFT accumulators (``v_ref_dft``, ``i_ref_dft``, etc.) because the two
+# For DFT-based extraction the overlap integral computes its own
+# cross-product DFTs (``OverlapDFTAccumulators``) because the two
 # cross-product terms in the overlap decompose into modal voltage and
 # modal current when the stored mode profiles satisfy h_mode = n̂ × e_mode:
 #
@@ -1712,9 +1836,10 @@ class OverlapDFTAccumulators(NamedTuple):
     """DFT accumulators for overlap-based modal extraction.
 
     Stores the two raw cross-product DFTs (P1 = modal voltage, P2 = modal
-    current) at the reference and probe planes.  These reuse the same
-    time-domain quantities as the V/I accumulators but are combined
-    differently at extraction time.
+    current) at the reference and probe planes. ``update_overlap_dft``
+    accumulates a rect-window streaming DFT every step (Phase 2 cleanup
+    removed the windowed/gated path that previously lived on
+    ``WaveguidePortConfig``).
     """
     p1_ref_dft: jnp.ndarray     # (n_freqs,) complex — ∫(E_sim × h_mode)·n̂ dA at ref
     p2_ref_dft: jnp.ndarray     # (n_freqs,) complex — ∫(e_mode × H_sim)·n̂ dA at ref
@@ -1804,8 +1929,6 @@ def init_multimode_waveguide_port(
     probe_offset: int = 10,
     ref_offset: int = 3,
     dft_total_steps: int = 0,
-    dft_window: str = "tukey",
-    dft_window_alpha: float = 0.25,
     dt: float = 0.0,
     waveform: str = "modulated_gaussian",
     mode_profile: str = "discrete",
@@ -1836,11 +1959,8 @@ def init_multimode_waveguide_port(
     f0, bandwidth, amplitude, probe_offset, ref_offset : ...
         Passed to ``init_waveguide_port`` for each mode config.
     dft_total_steps : int
-        Total simulation steps (for DFT windowing).
-    dft_window : str
-        DFT window type.
-    dft_window_alpha : float
-        DFT window parameter.
+        Total simulation steps; sets the time-series record length used
+        by the post-scan rectangular full-record DFT.
 
     Returns
     -------
@@ -1853,7 +1973,6 @@ def init_multimode_waveguide_port(
             port, dx, freqs, f0=f0, bandwidth=bandwidth,
             amplitude=amplitude, probe_offset=probe_offset,
             ref_offset=ref_offset, dft_total_steps=dft_total_steps,
-            dft_window=dft_window, dft_window_alpha=dft_window_alpha,
             dt=dt, waveform=waveform, mode_profile=mode_profile,
         )
         return [cfg]
@@ -1885,7 +2004,6 @@ def init_multimode_waveguide_port(
             mode_port, dx, freqs, f0=f0, bandwidth=bandwidth,
             amplitude=mode_amplitude, probe_offset=probe_offset,
             ref_offset=ref_offset, dft_total_steps=dft_total_steps,
-            dft_window=dft_window, dft_window_alpha=dft_window_alpha,
             dt=dt, waveform=waveform, mode_profile=mode_profile,
         )
         cfgs.append(cfg)
@@ -1966,14 +2084,15 @@ def extract_multimode_s_matrix(
             flat_ref_shifts.append(ref_shifts[port_idx])
 
     def _reset_cfg(cfg: WaveguidePortConfig, drive_enabled: bool) -> WaveguidePortConfig:
-        zeros = jnp.zeros_like(cfg.v_probe_dft)
+        zeros_t = jnp.zeros_like(cfg.v_probe_t)
         return cfg._replace(
             src_amp=cfg.src_amp if drive_enabled else 0.0,
-            v_probe_dft=zeros,
-            v_ref_dft=zeros,
-            i_probe_dft=zeros,
-            i_ref_dft=zeros,
-            v_inc_dft=zeros,
+            v_probe_t=zeros_t,
+            v_ref_t=zeros_t,
+            i_probe_t=zeros_t,
+            i_ref_t=zeros_t,
+            v_inc_t=zeros_t,
+            n_steps_recorded=jnp.zeros((), dtype=jnp.int32),
         )
 
     # Drive each mode one at a time
@@ -2088,20 +2207,19 @@ def update_overlap_dft(
     p1_ref, p2_ref = _overlap_cross_products(state, cfg, cfg.ref_x, dx)
     p1_probe, p2_probe = _overlap_cross_products(state, cfg, cfg.probe_x, dx)
 
+    # Rect-window streaming DFT (constant unit weight). The Phase 2
+    # cleanup (2026-04-25) deleted the windowed/gated path on the V/I
+    # extractor; the overlap path historically shared the same gating
+    # knobs but those fields were also removed from
+    # ``WaveguidePortConfig``. The S-param result is unchanged for runs
+    # that previously used ``dft_window='rect'`` and no early gate.
     phase = jnp.exp(-1j * 2.0 * jnp.pi * cfg.freqs * t)
-    # Same time-gate as update_waveguide_port_probe — see that function
-    # for the rationale on `effective_total`.
-    effective_total = min(cfg.dft_end_step, cfg.dft_total_steps)
-    weight = _dft_window_weight(
-        state.step, effective_total, cfg.dft_window, cfg.dft_window_alpha
-    )
-    weight = jnp.where(state.step < cfg.dft_end_step, weight, 0.0)
 
     return OverlapDFTAccumulators(
-        p1_ref_dft=acc.p1_ref_dft + p1_ref * phase * dt * weight,
-        p2_ref_dft=acc.p2_ref_dft + p2_ref * phase * dt * weight,
-        p1_probe_dft=acc.p1_probe_dft + p1_probe * phase * dt * weight,
-        p2_probe_dft=acc.p2_probe_dft + p2_probe * phase * dt * weight,
+        p1_ref_dft=acc.p1_ref_dft + p1_ref * phase * dt,
+        p2_ref_dft=acc.p2_ref_dft + p2_ref * phase * dt,
+        p1_probe_dft=acc.p1_probe_dft + p1_probe * phase * dt,
+        p2_probe_dft=acc.p2_probe_dft + p2_probe * phase * dt,
     )
 
 

@@ -91,17 +91,14 @@ BANDWIDTH_REL = 0.5  # of f0
 DX_M = 0.001        # 1 mm, ≈ 30 cells per λ at 10 GHz
 CPML_LAYERS = 20    # 20 mm physical CPML (was 10 — guided-mode reflection ~12%;
                     # 20 gives ~4% residual per scripts/isolate_extractor_vs_engine.py)
-NUM_PERIODS = 50           # default scan length for non-resonant cases
-# Strong-reflector cases (PEC short, dielectric slab Fabry-Perot) need a
-# long enough scan for CPML to drain, plus an early-time DFT gate to keep
-# multi-bounce build-up out of the V/I decomposition. The window-fix in
-# commit caa11b7 makes num_periods_dft actually gate; before that the
-# Tukey window normalised over the full scan and silently ignored the
-# truncation, so PEC-short |S11| max read 0.22 at np=50/no-gate. With
-# np=200/gate=60 the same case drops to 0.16 max, and slab S21 phase
-# clears the 5° gate (5.01° → 4.76°).
-NUM_PERIODS_LONG = 200     # CPML drain horizon for strong-reflector cases
-NUM_PERIODS_DFT = 60       # early gate length (must be ≤ NUM_PERIODS_LONG)
+# Post-scan rect-DFT architecture (2026-04-25 refactor): all geometries
+# share one scan length. The DFT integral is bounded by truncation at
+# `num_periods` and is independent of scan length once the source pulse
+# has played out — verified byte-identical at np=200/500/1000/2000 for
+# PEC-short. The legacy `dft_window`/`dft_end_step`/`num_periods_dft`
+# magic-number knobs were removed; see
+# docs/research_notes/2026-04-25_port_extractor_principled_refactor_design.md.
+NUM_PERIODS_LONG = 200     # uniform scan length, all geometries
 
 # Domain length along propagation axis.
 DOMAIN_X = 0.200    # 200 mm, enough for CPML + reference run + reflections
@@ -234,12 +231,10 @@ def _build_sim(
 def _s_params(
     sim: Simulation,
     *,
-    num_periods: int = NUM_PERIODS,
-    num_periods_dft: int | None = None,
+    num_periods: int = NUM_PERIODS_LONG,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     result = sim.compute_waveguide_s_matrix(
         num_periods=num_periods,
-        num_periods_dft=num_periods_dft,
         normalize=True,
     )
     s = np.asarray(result.s_params)
@@ -257,10 +252,7 @@ def run_rfx_empty() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def run_rfx_pec_short() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     sim = _build_sim(FREQS_HZ, pec_short_x=PORT_RIGHT_X - 0.005)
-    # Strong reflector: long CPML drain + early DFT gate (see header notes).
-    return _s_params(
-        sim, num_periods=NUM_PERIODS_LONG, num_periods_dft=NUM_PERIODS_DFT,
-    )
+    return _s_params(sim)
 
 
 def run_rfx_slab(eps_r: float, slab_length_m: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -268,10 +260,7 @@ def run_rfx_slab(eps_r: float, slab_length_m: float) -> tuple[np.ndarray, np.nda
     lo = (slab_center - 0.5 * slab_length_m, 0.0, 0.0)
     hi = (slab_center + 0.5 * slab_length_m, DOMAIN_Y, DOMAIN_Z)
     sim = _build_sim(FREQS_HZ, obstacles=[(lo, hi, eps_r)])
-    # F-P resonance interior multiple-bounce ⇒ also use the gated path.
-    return _s_params(
-        sim, num_periods=NUM_PERIODS_LONG, num_periods_dft=NUM_PERIODS_DFT,
-    )
+    return _s_params(sim)
 
 
 # =============================================================================
@@ -317,6 +306,144 @@ def _meep_complex(block) -> np.ndarray:
     return np.array([complex(r, i) for r, i in block], dtype=np.complex128)
 
 
+# ---------------------------------------------------------------------------
+# Multi-solver reference loading (OpenEMS + Palace)
+# ---------------------------------------------------------------------------
+# All three reference JSONs share the same per-geometry structure
+# ``block[geom]['s11' | 's21'] = list of [real, imag] pairs (length 21)`` and
+# the same 21-frequency grid (linspace(8.2, 12.4, 21) GHz).  They differ in
+# the **refinement key** at the top level: MEEP/OpenEMS use ``r3``/``r4``,
+# Palace uses ``r_h3``/``r_h2`` (h_max-style).  ``_load_reference`` takes a
+# ``finest_key`` and returns ``(meta, finest_block)`` so the per-geometry
+# loops below stay solver-agnostic.
+#
+# **Reference plane caveat (Palace):** Palace S-parameters are referenced to
+# the WavePort BC face at x = +/-100 mm, while MEEP/OpenEMS use the monitor
+# planes at x = +/-50 mm.  For ``|S|`` magnitudes this is invariant (matched
+# / fully-reflective cases), so direct magnitude comparison is fair.  For
+# **phase**, Palace S11 carries an extra ``2 * beta_v * 50 mm`` round-trip
+# vs MEEP/OpenEMS, and Palace S21 carries an extra ``beta_v * 100 mm`` of
+# one-way path through the longer downstream section.  This script does NOT
+# auto-correct that offset; it simply prints both numbers and labels the
+# Palace columns so the reader can apply the offset mentally.
+OPENEMS_REF_PATH = os.path.join(
+    "/root/workspace/byungkwan-workspace/research/microwave-energy",
+    "results/rfx_crossval_wr90_openems/wr90_openems_reference.json",
+)
+PALACE_REF_PATH = os.path.join(
+    "/root/workspace/byungkwan-workspace/research/microwave-energy",
+    "results/rfx_crossval_wr90_palace/wr90_palace_reference.json",
+)
+
+
+def _load_reference(path: str, finest_key: str, label: str) -> dict | None:
+    """Load a reference JSON and return ``{meta, block, finest_key}``.
+
+    ``finest_key`` selects the canonical refinement to compare against
+    (``r4`` for MEEP/OpenEMS, ``r_h2`` for Palace).  Returns ``None`` if
+    the file is missing or unparseable; never raises.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception as e:  # pragma: no cover
+        print(f"[{label}-ref] load failed: {e}", file=sys.stderr)
+        return None
+    if finest_key not in data:
+        print(f"[{label}-ref] missing finest key '{finest_key}'; "
+              f"available: {[k for k in data if k != 'meta']}", file=sys.stderr)
+        return None
+    return {"meta": data.get("meta", {}), "block": data[finest_key],
+            "finest_key": finest_key, "label": label}
+
+
+def _ref_complex(block, key: str) -> np.ndarray | None:
+    """Pull ``block[key]`` (a list of [re, im] pairs) as complex ndarray."""
+    if block is None or key not in block:
+        return None
+    return np.array([complex(r, i) for r, i in block[key]], dtype=np.complex128)
+
+
+def _wrap_deg(rad: np.ndarray) -> np.ndarray:
+    """Wrap a phase difference (in radians) to (-180, 180] degrees."""
+    deg = (rad * 180.0 / np.pi + 180.0) % 360.0 - 180.0
+    return deg
+
+
+def _print_4way_table(geom: str, comp: str, f_hz: np.ndarray,
+                      s_rfx: np.ndarray,
+                      s_meep: np.ndarray | None,
+                      s_openems: np.ndarray | None,
+                      s_palace: np.ndarray | None,
+                      *,
+                      pec_short: bool = False) -> None:
+    """Per-frequency 4-way comparison: rfx | MEEP r4 | OpenEMS r4 | Palace r_h2.
+
+    The "truth" column is Palace at finest refinement.  Diff metrics:
+      - ``|S|_diff`` = ``|s_rfx| - |s_palace|`` (signed for PEC-short
+        |S11|=1 deviation)
+      - ``phase_diff`` = ``arg(s_rfx) - arg(s_palace)`` wrapped to
+        (-180, 180] degrees.  NB: Palace phase carries the WavePort
+        reference-plane offset documented above; do not read the absolute
+        number as an extractor error.
+    """
+    header = (f"\n[4way {geom} {comp}] "
+              f"f_GHz |    rfx     |   MEEP_r4  | OpenEMS_r4 | Palace_r_h2 | "
+              f"|S|_diff(rfx-Palace) | phase_diff_deg(rfx-Palace)")
+    print(header)
+    print("-" * len(header))
+    for i, f in enumerate(f_hz):
+        f_ghz = f / 1e9
+
+        def _fmt(x):
+            if x is None:
+                return "    n/a    "
+            v = x[i]
+            return f"{abs(v):.4f}@{np.angle(v) * 180 / np.pi:+7.2f}d"
+
+        s_rfx_i = s_rfx[i]
+        if s_palace is not None:
+            mag_d = abs(s_rfx_i) - abs(s_palace[i])
+            ph_d = float(_wrap_deg(np.angle(s_rfx_i) - np.angle(s_palace[i])))
+            mag_str = f"{mag_d:+.4f}"
+            ph_str = f"{ph_d:+7.2f}"
+        else:
+            mag_str = "   n/a "
+            ph_str = "   n/a "
+
+        if pec_short and comp == "S11":
+            # also print signed |S11| - 1 deviation against absolute truth
+            extra = f"  rfx||S11|-1|={abs(s_rfx_i) - 1.0:+.4f}"
+        else:
+            extra = ""
+
+        print(f"  {f_ghz:5.2f} | {_fmt(s_rfx)} | {_fmt(s_meep)} | "
+              f"{_fmt(s_openems)} | {_fmt(s_palace)} |       {mag_str}        |   {ph_str}{extra}")
+
+
+def _summarize_vs_truth(geom: str, comp: str, s_rfx: np.ndarray,
+                        s_palace: np.ndarray | None,
+                        *, pec_short: bool = False) -> None:
+    """One-line summary of rfx-vs-Palace diffs for a geometry/component."""
+    if s_palace is None:
+        print(f"[summary {geom} {comp}] Palace ref unavailable; skip.")
+        return
+    mag_diff = np.abs(s_rfx) - np.abs(s_palace)
+    ph_diff_deg = _wrap_deg(np.angle(s_rfx) - np.angle(s_palace))
+    print(f"[summary {geom} {comp} vs Palace_r_h2] "
+          f"|S|_diff: max={np.max(np.abs(mag_diff)):.4f} "
+          f"mean={np.mean(np.abs(mag_diff)):.4f} | "
+          f"phase: max|d|={np.max(np.abs(ph_diff_deg)):.2f}d "
+          f"mean|d|={np.mean(np.abs(ph_diff_deg)):.2f}d")
+    if pec_short and comp == "S11":
+        dev = np.abs(s_rfx) - 1.0
+        print(f"[summary {geom} {comp} |S11|=1 truth] "
+              f"max signed dev={np.max(np.abs(dev)):.4f} "
+              f"mean signed dev={np.mean(dev):+.4f}")
+
+
 def main() -> int:
     all_pass = True
     skipped_any = False
@@ -328,6 +455,21 @@ def main() -> int:
         print("[meep-ref] not available (run microwave-energy VESSL job "
               "wr90_sparam_for_rfx.yaml first); skipping MEEP comparisons.")
 
+    # Multi-solver references for the 4-way diagnostic table.  Both are
+    # optional; missing files just suppress the relevant column.  MEEP
+    # ``r4`` is the canonical fine refinement; OpenEMS uses the same key;
+    # Palace uses ``r_h2`` (FEM h_max-style refinement label).
+    openems_ref = _load_reference(OPENEMS_REF_PATH, finest_key="r4", label="openems")
+    palace_ref = _load_reference(PALACE_REF_PATH, finest_key="r_h2", label="palace")
+    for tag, ref in (("openems", openems_ref), ("palace", palace_ref)):
+        if ref is not None:
+            geoms = [k for k in ref["block"] if k not in ("h_max_mm",)]
+            print(f"[{tag}-ref] loaded ({ref['finest_key']}) with geometries: {geoms}")
+        else:
+            print(f"[{tag}-ref] not available; skipping {tag} columns.")
+    # MEEP block at the same finest refinement (r4) for the 4-way table.
+    meep_block = meep_ref.get("r4") if (meep_ref is not None and "r4" in meep_ref) else None
+
     # 1. Empty guide — |S11|=0, |S21|=1
     try:
         f_hz, s11, s21 = run_rfx_empty()
@@ -337,6 +479,17 @@ def main() -> int:
         ok2 = report("empty |S21|", f_hz, np.abs(s21).astype(complex),
                      np.abs(ref_s21).astype(complex), gate_mag=0.03, gate_phase_deg=180.0)
         all_pass = all_pass and ok1 and ok2
+        # 4-way diagnostic table (rfx | MEEP_r4 | OpenEMS_r4 | Palace_r_h2)
+        s11_meep = _ref_complex(meep_block.get("empty") if meep_block else None, "s11")
+        s11_openems = _ref_complex(openems_ref["block"].get("empty") if openems_ref else None, "s11")
+        s11_palace = _ref_complex(palace_ref["block"].get("empty") if palace_ref else None, "s11")
+        s21_meep = _ref_complex(meep_block.get("empty") if meep_block else None, "s21")
+        s21_openems = _ref_complex(openems_ref["block"].get("empty") if openems_ref else None, "s21")
+        s21_palace = _ref_complex(palace_ref["block"].get("empty") if palace_ref else None, "s21")
+        _print_4way_table("empty", "S11", f_hz, s11, s11_meep, s11_openems, s11_palace)
+        _summarize_vs_truth("empty", "S11", s11, s11_palace)
+        _print_4way_table("empty", "S21", f_hz, s21, s21_meep, s21_openems, s21_palace)
+        _summarize_vs_truth("empty", "S21", s21, s21_palace)
     except NotImplementedError as e:
         print(f"[empty] SKIP (P0 skeleton): {e}")
         skipped_any = True
@@ -348,6 +501,17 @@ def main() -> int:
         ok = report("pec-short |S11|", f_hz, np.abs(s11).astype(complex),
                     np.abs(ref).astype(complex), gate_mag=0.05, gate_phase_deg=180.0)
         all_pass = all_pass and ok
+        # 4-way table.  Palace gives |S11|=1.0000 here (absolute truth);
+        # OpenEMS r4 lands in [0.996, 1.004]; MEEP r4 in [0.93, 1.20];
+        # rfx in [0.84, 1.04].  This disproves the prior "Yee+staircase
+        # common limit" hypothesis — OpenEMS (also Yee) nails it, so the
+        # PEC-short |S11| error is an extractor bug specific to MEEP & rfx.
+        s11_meep = _ref_complex(meep_block.get("pec_short") if meep_block else None, "s11")
+        s11_openems = _ref_complex(openems_ref["block"].get("pec_short") if openems_ref else None, "s11")
+        s11_palace = _ref_complex(palace_ref["block"].get("pec_short") if palace_ref else None, "s11")
+        _print_4way_table("pec_short", "S11", f_hz, s11, s11_meep, s11_openems, s11_palace,
+                          pec_short=True)
+        _summarize_vs_truth("pec_short", "S11", s11, s11_palace, pec_short=True)
     except NotImplementedError as e:
         print(f"[pec-short] SKIP (P0 skeleton): {e}")
         skipped_any = True
@@ -394,6 +558,17 @@ def main() -> int:
             s21_meep = _meep_complex(meep_ref["slab"]["s21"])
             report("slab S11 (rfx vs MEEP)", f_hz, s11_rfx, s11_meep, gate_mag=0.05, gate_phase_deg=10.0)
             report("slab S21 (rfx vs MEEP)", f_hz, s21_rfx, s21_meep, gate_mag=0.05, gate_phase_deg=10.0)
+        # 4-way table for slab (uses finest refinement of each solver).
+        s11_meep4 = _ref_complex(meep_block.get("slab") if meep_block else None, "s11")
+        s11_openems = _ref_complex(openems_ref["block"].get("slab") if openems_ref else None, "s11")
+        s11_palace = _ref_complex(palace_ref["block"].get("slab") if palace_ref else None, "s11")
+        s21_meep4 = _ref_complex(meep_block.get("slab") if meep_block else None, "s21")
+        s21_openems = _ref_complex(openems_ref["block"].get("slab") if openems_ref else None, "s21")
+        s21_palace = _ref_complex(palace_ref["block"].get("slab") if palace_ref else None, "s21")
+        _print_4way_table("slab", "S11", f_hz, s11_rfx, s11_meep4, s11_openems, s11_palace)
+        _summarize_vs_truth("slab", "S11", s11_rfx, s11_palace)
+        _print_4way_table("slab", "S21", f_hz, s21_rfx, s21_meep4, s21_openems, s21_palace)
+        _summarize_vs_truth("slab", "S21", s21_rfx, s21_palace)
     except NotImplementedError as e:
         print(f"[slab] SKIP (P0 skeleton): {e}")
         skipped_any = True
