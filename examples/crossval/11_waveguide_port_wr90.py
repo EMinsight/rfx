@@ -232,10 +232,11 @@ def _s_params(
     sim: Simulation,
     *,
     num_periods: int = NUM_PERIODS_LONG,
+    normalize: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     result = sim.compute_waveguide_s_matrix(
         num_periods=num_periods,
-        normalize=True,
+        normalize=normalize,
     )
     s = np.asarray(result.s_params)
     port_idx = {name: i for i, name in enumerate(result.port_names)}
@@ -251,8 +252,15 @@ def run_rfx_empty() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def run_rfx_pec_short() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """PEC-short reflection. Uses ``normalize=False`` (single-run wave
+    decomposition) — the legacy ``normalize=True`` two-run subtraction
+    has standing-wave node artifacts on strong reflectors that put it
+    above the 0.05 |S|_diff gate vs Palace. With the 2026-04-27 DROP-
+    weight fix on the aperture +face PEC ghost cell, single-run V/I
+    extraction reaches Meep-class min |S11| ≥ 0.99.
+    """
     sim = _build_sim(FREQS_HZ, pec_short_x=PORT_RIGHT_X - 0.005)
-    return _s_params(sim)
+    return _s_params(sim, normalize=False)
 
 
 def run_rfx_slab(eps_r: float, slab_length_m: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
