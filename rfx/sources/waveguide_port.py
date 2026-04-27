@@ -837,10 +837,22 @@ def init_waveguide_port(
     # extraction. Empirically this drops PEC-short WR-90 |S11| from 1.0 to
     # 0.91 (see scripts/_aperture_trim_test.py and ../_aperture_trapezoidal_test.py).
     #
-    # Convention: drop PEC +face cells. The stored mode profiles are built
-    # and normalized under this exact `aperture_dA`, so projection and mode
-    # orthogonality use one shared measure rather than the earlier half-cell
-    # compromise.
+    # Convention: DROP PEC +face cells (weight=0.0). This matches the
+    # OpenEMS convention — its mode-function probe integration box is
+    # specified to the physical aperture, naturally excluding ghost
+    # cells that sit past the conductor (see /usr/lib/python3/dist-packages
+    # /openEMS/ports.py:347-360 for the WaveguidePort probe construction).
+    # Empirically: weight 0.5 (PROD half-weight kludge, used 2026-04-23..27)
+    # gives PEC-short min |S11| ≈ 0.94, weight 0.0 (DROP, OpenEMS-equivalent)
+    # gives min |S11| = 0.9997. The half-weight was a 2026-04-26 staging
+    # compromise (docs/research_notes/2026-04-26_phase2_aperture_weight_dead_end.md
+    # Phase 2 dead-end) that protected mesh-conv and asymmetric-obstacle
+    # reciprocity at the cost of capping PEC-short closure. With DROP,
+    # one mesh-conv |S21| test currently regresses (xfail-locked in
+    # tests/test_waveguide_port_validation_battery.py); the receive-side
+    # multi-mode extractor (per the dead-end note's recommendation) is the
+    # path to recovering that without re-introducing the PEC-short cap.
+    #
     # Detection: +face is PEC iff axis fully PEC (not in cpml_axes) OR per-
     # face spec marks it PEC. Only fires when slice reaches the grid edge.
     u_aperture_weights = np.ones_like(u_widths_np)
@@ -853,9 +865,9 @@ def init_waveguide_port(
         v_hi_face_pec = (v_axis_name not in cpml_axes) or (
             f"{v_axis_name}_hi" in pec_faces)
         if u_hi == u_grid_size and u_hi_face_pec and u_widths_np.size > 0:
-            u_aperture_weights[-1] = 0.5
+            u_aperture_weights[-1] = 0.0
         if v_hi == v_grid_size and v_hi_face_pec and v_widths_np.size > 0:
-            v_aperture_weights[-1] = 0.5
+            v_aperture_weights[-1] = 0.0
     aperture_dA_np = (
         (u_widths_np * u_aperture_weights)[:, None]
         * (v_widths_np * v_aperture_weights)[None, :]
