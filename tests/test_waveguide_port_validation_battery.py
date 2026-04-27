@@ -366,7 +366,20 @@ def test_reciprocity_asymmetric_obstacle_known_gap():
         "weight that converges to a well-defined dx -> 0 limit (e.g. the "
         "OpenEMS user-pinned integration box) or a probe-style integration "
         "that doesn't go through aperture_dA-based template normalisation. "
-        "Out of scope for the DROP-weight closure; tracking as follow-up."
+        "Out of scope for the DROP-weight closure; tracking as follow-up. "
+        "2026-04-27 falsification round (scripts/spikes/2026-04-27/): "
+        "(a) 11-point v_hi weight sweep shows sharp discontinuity at w=0; "
+        "no single weight satisfies both PEC-short and mesh-conv. "
+        "(b) Asymmetric template-norm vs sim-extract weights cap PEC-short "
+        "|S11| at 0.96 because waveguide_port.py:623-628 zeros templates "
+        "where dA<=0, propagating norm-side DROP into runtime extraction. "
+        "(c) Analytic vs discrete templates differ by 0.0004 in |S11| -- "
+        "template form is not the bug. (d) PEC closed-cavity resonance "
+        "test recovers TM modes within 1.5%% of analytic at Q ~ 1e7-1e9, "
+        "confirming FDTD-core PEC handling is sound. The remaining limit "
+        "is the V/I extractor algorithm at standing-wave anti-nodes, not "
+        "the FDTD core. True recovery would require port-extractor "
+        "redesign (flux-based, far-field, or full-Yee modal projection)."
     ),
 )
 def test_mesh_convergence_s21_scaled_cpml():
