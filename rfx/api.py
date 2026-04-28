@@ -454,7 +454,7 @@ class Simulation:
         solver: str = "yee",
         adi_cfl_factor: float = 5.0,
     ):
-        from rfx.boundaries.spec import BoundarySpec, normalize_boundary
+        from rfx.boundaries.spec import BoundarySpec, Boundary, normalize_boundary
 
         # T7-B: accept BoundarySpec directly or normalise a legacy scalar
         # boundary=<str>. A BoundarySpec provided here is authoritative;
@@ -3084,6 +3084,7 @@ class Simulation:
         inv_sq = sum(1.0 / di ** 2 for di in d)
         dt_cfl = 0.99 / (C0 * math.sqrt(inv_sq))
         omega = 2.0 * math.pi * self._freq_max
+        k0 = omega / C0
 
         errors = {}
         sin_wdt2 = math.sin(omega * dt_cfl / 2.0)
@@ -3587,6 +3588,13 @@ class Simulation:
 
         cpml_thick_lo = [_face_thickness(ax, "lo") for ax in range(3)]
         cpml_thick_hi = [_face_thickness(ax, "hi") for ax in range(3)]
+        # Legacy symmetric scalar kept for readers that treat it as
+        # "nominal CPML thickness on this axis"; per-side checks below
+        # use cpml_thick_lo / cpml_thick_hi.
+        cpml_thick_xyz = [
+            max(cpml_thick_lo[i], cpml_thick_hi[i]) for i in range(3)
+        ]
+
         # P1.1: Floquet + non-uniform mesh — no silent fallback allowed
         if self._floquet_ports and self._dz_profile is not None:
             raise ValueError(
@@ -3768,9 +3776,9 @@ class Simulation:
         # CPML modifies field-update equations with absorbing coefficients;
         # any structure placed there is effectively eaten by the absorber
         # and produces physically meaningless results (issue #61).
-        # Periodic axes have no CPML (see _build_grid — issue #68), so the
-        # per-side thickness arrays above carry zero on those axes and the
-        # check naturally skips.
+        # Periodic axes have no CPML (see _build_grid — issue #68), so
+        # the per-axis thresholds above already carry `cpml_thick_xyz[ax]
+        # == 0` on those axes and the check naturally skips.
         if cpml_thickness > 0 and self._boundary == "cpml":
             for entry in self._geometry:
                 if hasattr(entry.shape, "bounding_box"):
@@ -4266,6 +4274,7 @@ class Simulation:
         *,
         n_steps: int,
         checkpoint: bool = True,
+        checkpoint_segments: int | None = None,
         pec_mask: jnp.ndarray | None = None,
         pec_occupancy: jnp.ndarray | None = None,
         port_s11_freqs: object | None = None,
@@ -4284,6 +4293,7 @@ class Simulation:
 
         from rfx.simulation import (
             run as _run,
+            make_source,
             make_probe,
             make_port_source,
             make_wire_port_sources,
@@ -4447,6 +4457,7 @@ class Simulation:
             waveguide_ports=waveguide_ports if waveguide_ports else None,
             ntff=ntff_box,
             checkpoint=checkpoint,
+            checkpoint_segments=checkpoint_segments,
             pec_mask=pec_mask_local,
             pec_occupancy=pec_occupancy_local,
             lumped_port_sparams=lumped_port_sparam_specs or None,
@@ -4915,6 +4926,7 @@ class Simulation:
         n_steps: int | None = None,
         num_periods: float = 20.0,
         checkpoint: bool = True,
+        checkpoint_segments: int | None = None,
         emit_time_series: bool = True,
         checkpoint_every: int | None = None,
         n_warmup: int = 0,
@@ -5017,16 +5029,26 @@ class Simulation:
         # Issue #72: forward(port_s11_freqs=...) is currently wired only on
         # the uniform single-device path. Reject loudly elsewhere so users
         # don't get a silent s_params=None.
-        if port_s11_freqs is not None and (distributed or (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        )):
+        if port_s11_freqs is not None and (distributed or is_nonuniform):
             raise NotImplementedError(
                 "forward(port_s11_freqs=...) is currently wired only on the "
                 "uniform single-device forward path (issue #72). Drop "
                 "port_s11_freqs or run on a uniform mesh without "
                 "distributed=True."
+            )
+
+        # Issue #73: forward(checkpoint_segments=...) is currently wired only
+        # on the uniform single-device path. Reject loudly elsewhere — both
+        # for distributed=True and for non-uniform meshes — so users don't
+        # get a silent fall-back to the linear-memory scan that this kwarg
+        # was meant to fix. NU follow-up will mirror the pattern in
+        # run_nonuniform; track on issue #73.
+        if checkpoint_segments is not None and (distributed or is_nonuniform):
+            raise NotImplementedError(
+                "forward(checkpoint_segments=...) is currently wired only "
+                "on the uniform single-device forward path (issue #73). "
+                "Drop checkpoint_segments or run on a uniform mesh without "
+                "distributed=True. NU support is tracked as a follow-up."
             )
 
         # Phase 3: distributed dispatch (V3 lines 842-847).
@@ -5118,7 +5140,8 @@ class Simulation:
         if checkpoint_every is not None:
             raise NotImplementedError(
                 "checkpoint_every (segmented remat) is currently only "
-                "supported on the non-uniform forward path."
+                "supported on the non-uniform forward path. For the "
+                "uniform path, use checkpoint_segments instead (issue #73)."
             )
         if design_mask is not None:
             raise NotImplementedError(
@@ -5149,6 +5172,7 @@ class Simulation:
             lorentz_spec,
             n_steps=n_steps,
             checkpoint=checkpoint,
+            checkpoint_segments=checkpoint_segments,
             pec_mask=pec_mask,
             pec_occupancy=pec_occupancy_override,
             port_s11_freqs=port_s11_freqs,
