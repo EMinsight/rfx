@@ -401,7 +401,21 @@ def test_reciprocity_asymmetric_obstacle_known_gap():
         "through _co_located_current_spectrum and was always Meep-class "
         "on this geometry. The mesh-convergence regression below is a "
         "SEPARATE issue from the resolved per-frequency oscillation; "
-        "it is the only remaining waveguide-port-side residual."
+        "it is the only remaining waveguide-port-side residual. "
+        "(h) 2026-04-29 evening — the handover-doc fractional cell-"
+        "overlap weight (path 1 of "
+        "docs/research_notes/2026-04-29_item_c_handover.md) was "
+        "implemented and tested. ∑aperture_dA converges exactly to "
+        "port.a·port.b at every dx (structural goal works). But on the "
+        "staircase Yee grid the PEC sits at Nu·dx, not port.a — at "
+        "WR-90 dx=1 mm the boundary cell carries weight ~0.86 and "
+        "admits non-physical normal-E (apply_pec_faces only zeros "
+        "tangential E). Net regressions: cv11 PEC-short |S11| diff vs "
+        "OpenEMS 0.025 → 0.094 (gate 0.050), "
+        "test_reciprocity_asymmetric_structure 0.041 → 0.078 (gate "
+        "0.05). Reverted. DROP stays in place; the fix is subpixel PEC "
+        "handling in rfx/core/yee.py, not a port-extractor knob. See "
+        "handover §'Why path 1 fails' for the trade-off table."
     ),
 )
 def test_mesh_convergence_s21_scaled_cpml():
