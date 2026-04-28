@@ -110,6 +110,20 @@ PORT_LEFT_X = 0.040     # aligned with Meep reference's SOURCE_X (=-60mm in Meep
 PORT_RIGHT_X = 0.160    # symmetric about cell centre; reference_plane override below
                         # moves reporting planes to Meep's mon positions (±50mm → 50,150mm)
 
+# Mon planes (Meep+OpenEMS canonical, in rfx absolute frame). Both reference
+# scripts measure S-params at these planes; rfx achieves the same via
+# reference_plane=0.050 de-embedding on the port primitives.
+MON_LEFT_X = 0.050      # = -50 mm OpenEMS frame = Meep mon_left_x
+MON_RIGHT_X = 0.150     # = +50 mm OpenEMS frame = Meep mon_right_x
+# Canonical PEC short location: 5 mm BEFORE mon_right (matches Meep
+# `pec_short_mm = mon_right_x - 5.0` and OpenEMS `PEC_SHORT_X = +45 mm`).
+# Pre-2026-04-28 rfx anchored this to PORT_RIGHT_X (= source/extraction
+# plane, +60 OE) instead of MON_RIGHT_X (= reporting plane, +50 OE),
+# placing the PEC short 10 mm farther downstream than the references.
+# That convention drift is corrected here so rfx vs Meep vs OpenEMS share
+# byte-identical PEC-short geometry.
+PEC_SHORT_X = MON_RIGHT_X - 0.005  # 0.145 m = +45 mm OE = Meep/OpenEMS canonical
+
 
 # =============================================================================
 # Analytic reference — single dielectric slab inside a waveguide
@@ -259,7 +273,7 @@ def run_rfx_pec_short() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     weight fix on the aperture +face PEC ghost cell, single-run V/I
     extraction reaches Meep-class min |S11| ≥ 0.99.
     """
-    sim = _build_sim(FREQS_HZ, pec_short_x=PORT_RIGHT_X - 0.005)
+    sim = _build_sim(FREQS_HZ, pec_short_x=PEC_SHORT_X)
     return _s_params(sim, normalize=False)
 
 
