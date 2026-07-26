@@ -1289,6 +1289,31 @@ class MSLSMatrixResult:
         Per-port wave-split reliability. False marks standing-wave-null bins
         where both voltage and current collapse below 10% of their band
         medians. S values at those bins are retained unchanged.
+    settling_db : (n_ports,) float, optional
+        Ring-down settling witness per driven-port run: the WORST (largest)
+        over ALL port probe planes of ``10*log10(mean Ez^2 over the last 10%
+        of the record / peak Ez^2)``. Multiple planes per port are sampled
+        because a single plane is standing-wave-node sensitive — measured
+        18.1 dB spread across planes on the same under-settled record, i.e.
+        a one-point witness can PASS at a node while the record is hot. Values above −40 dB mean the
+        fixed-length record was truncated before the structure rang down, and
+        the DFT-derived S-parameters of that run are suspect (measured on the
+        Sheen-1990 LPF: num_periods=20 left the stopband ring unsettled and
+        produced |S| column-power poles up to ~1.8e3 that shrank monotonically
+        with record length). Compare against the project's −40 dB ring-down
+        settling rule (docs/guides/simulation_methodology.md) before quoting
+        any S value from this result.
+    S_raw : (n_ports, n_ports, n_freqs) complex, optional
+        The S-matrix exactly as extracted, BEFORE passivity projection.
+        Stored whenever the projection changed anything, so no information
+        is discarded by enforcing the bound.
+    passivity_correction : (n_freqs,) float, optional
+        Per-frequency amount clipped by the passivity projection:
+        ``max(sigma_max(S_raw(f)) - 1, 0)``. Zero where the extraction was
+        already passive. This is the honesty metric — a bin with a large
+        correction is a measurement artifact (check ``reliable`` and
+        ``settling_db`` for the cause), and its projected value inherits
+        that uncertainty.
     port_names : tuple[str, ...]
     """
     S: np.ndarray
@@ -1297,6 +1322,9 @@ class MSLSMatrixResult:
     beta: np.ndarray
     port_names: tuple[str, ...] = ()
     reliable: np.ndarray | None = None
+    settling_db: np.ndarray | None = None
+    S_raw: np.ndarray | None = None
+    passivity_correction: np.ndarray | None = None
 
 
 __all__ = [

@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from rfx.core.jax_utils import is_tracer
 from rfx.sources.sources import GaussianPulse
 from rfx.sources.coaxial_port import CoaxialPort
 from rfx.sources.waveguide_port import (
@@ -127,6 +128,117 @@ def _warn_msl_wave_split_unreliable(
         "S-parameters are unreliable there (blind spot of single-run "
         "reflection measurements of strong reflectors); see "
         "rfx-known-issues standing-wave-null entry",
+        stacklevel=2,
+    )
+
+
+_SETTLING_WITNESS_DB = -40.0
+
+
+def _warn_if_ringdown_truncated(
+    settling_db: np.ndarray, port_names: tuple, *, num_periods: float
+) -> None:
+    """Emit one aggregate warning when a driven run's record is truncated.
+
+    The witness makes the project's ring-down settling rule mechanical
+    (docs/guides/simulation_methodology.md): end/peak
+    Ez^2 at the port probe planes, per driven run. Above −40 dB the fixed
+    ``num_periods`` record ended while the structure was still ringing, so
+    the single-bin DFTs underlying V/I — and every S value of that run —
+    integrate a truncated transient. Measured consequence on the Sheen-1990
+    LPF (dx=200 µm, resonant stopband): num_periods=20 left the witness hot
+    and produced |S| column-power poles up to ~1.8e3 that shrank
+    monotonically as the record grew (20→60 periods: worst pole 62→8.8),
+    while absorber depth (8→24 CPML layers) did not move them.
+    """
+    finite = np.isfinite(settling_db)
+    hot = finite & (settling_db > _SETTLING_WITNESS_DB)
+    if not bool(np.any(hot)):
+        return
+
+    import warnings
+
+    per_run = ", ".join(
+        f"port {port_names[i] if i < len(port_names) else i} driven: "
+        f"{settling_db[i]:+.1f} dB"
+        for i in np.flatnonzero(hot)
+    )
+    warnings.warn(
+        "ring-down settling witness FAILED (end/peak energy above "
+        f"{_SETTLING_WITNESS_DB:.0f} dB): {per_run}. The num_periods="
+        f"{num_periods:g} record ended while the structure was still "
+        "ringing, so the DFT-based S-parameters of the affected run(s) are "
+        "truncation artifacts wherever the structure is resonant — expect "
+        "spurious |S| poles and passivity violations. Increase num_periods "
+        "until the witness is below −40 dB before quoting any S value "
+        "(see MSLSMatrixResult.settling_db).",
+        stacklevel=2,
+    )
+
+
+def _project_passive(S):
+    """Project S(f) onto the passive set by singular-value clipping.
+
+    Per frequency, ``S_pass = U · min(Σ, 1) · Vᴴ`` — the nearest matrix in
+    spectral norm with ‖S‖₂ ≤ 1 (standard passivity enforcement, as used in
+    macromodeling). Returns ``(S_pass, correction)`` where ``correction[k] =
+    max(σ_max(S(f_k)) − 1, 0)`` is the amount clipped at each frequency —
+    the honesty metric: 0 where the extraction was already passive, and
+    exactly how non-physical the raw value was elsewhere.
+
+    jnp-native and batched. NOTE: the AD (eps_override) path never calls
+    this — see the wiring comment at the call site.
+    """
+    s_t = jnp.transpose(S, (2, 0, 1))            # (n_freqs, n_ports, n_ports)
+    u, sig, vh = jnp.linalg.svd(s_t, full_matrices=False)
+    correction = jnp.maximum(sig[:, 0] - 1.0, 0.0)
+    # Clip a few ULPs below 1 so the bound still holds after the f32/f64
+    # reconstruction round-trip (a bare min(sig, 1) reconstructs to
+    # sigma_max = 1 + O(eps), which violates the strict bound this exists
+    # to guarantee).
+    eps = jnp.finfo(sig.dtype).eps
+    # 64*eps, not 8*eps: the reconstruction error grows with n_ports and a
+    # measured f32 sweep showed 8*eps failing the strict bound from n=8
+    # (1.0000000255) through n=32 (1.0000006584); 64*eps holds through n=32.
+    sig_c = jnp.minimum(sig, 1.0 - 64.0 * eps)
+    s_pass = jnp.einsum("fij,fj,fjk->fik", u, sig_c.astype(u.dtype), vh)
+    return jnp.transpose(s_pass, (1, 2, 0)), correction
+
+
+def _warn_if_passivity_projected(
+    correction, freqs, *, envelope: float = 0.05
+) -> None:
+    """One aggregate warning stating exactly what the projection removed."""
+    corr = np.asarray(correction)
+    finite = np.isfinite(corr)
+    if not np.any(corr[finite] > 0.0):
+        return
+
+    import warnings
+
+    f = np.asarray(freqs)
+    n_touched = int((corr[finite] > 0.0).sum())
+    n_big = int((corr[finite] > envelope).sum())
+    # nanargmax: a NaN raw bin would otherwise be selected and the message
+    # would read "worst sigma_max = nan". NaN bins stay NaN in S (the
+    # finiteness self-check flags them); the bound claim applies to finite bins.
+    k = int(np.nanargmax(np.where(finite, corr, -np.inf)))
+    warnings.warn(
+        f"S-matrix projected onto the passive set (singular values clipped "
+        f"to 1): {n_touched} of {corr.size} frequency bins were non-passive "
+        f"as extracted, worst sigma_max = {1.0 + corr[k]:.3f} at "
+        f"{f[k] / 1e9:.3f} GHz. "
+        + (
+            f"{n_big} bins exceeded the {1.0 + envelope:.2f} extraction "
+            f"envelope — at those bins the RAW value is a measurement "
+            f"artifact (see reliable / settling_db for the cause) and the "
+            f"projected value inherits that uncertainty; do not quote them "
+            f"as physics. "
+            if n_big
+            else ""
+        )
+        + "Raw values are preserved in S_raw; corrections per bin in "
+        "passivity_correction.",
         stacklevel=2,
     )
 
@@ -1183,8 +1295,32 @@ class _SparamMixin:
         eps_override: "jnp.ndarray | None" = None,
         checkpoint_every: int | None = None,
         checkpoint_segments: int | None = None,
+        enforce_passivity: bool = True,
     ) -> "MSLSMatrixResult":
         """Compute the MSL S-matrix using N-probe numerical de-embedding.
+
+        ``enforce_passivity=True`` (default) projects the assembled S(f) onto
+        the passive set per frequency (singular values clipped to 1 — the
+        nearest matrix in spectral norm with ``||S||_2 <= 1``), so the
+        returned ``S`` satisfies the passive bound at every frequency on the
+        plain measurement path. This is constraint enforcement, not a physics
+        fix: the unprojected matrix is kept in ``S_raw``, the per-bin clip
+        amount in ``passivity_correction``, and a warning names the touched
+        bins. Bins with a large correction are measurement artifacts (see
+        ``reliable`` / ``settling_db`` for the cause) — the projection bounds
+        them, it does not make them trustworthy, and it is NOT small where
+        the raw extraction is bad: on a thru fixture whose raw sigma_max ran
+        1.19-1.91, projecting moved |S21| 1.000 -> 0.61-0.72 and rotated its
+        phase by up to 17 degrees, while ``Z0`` and ``beta`` stay raw. Never
+        quote projected values as physics where ``passivity_correction`` is
+        large. Set ``False`` to get the raw extraction in ``S`` unchanged.
+
+        EXEMPTION: no projection is applied on the ``eps_override`` channel
+        (traced or concrete) so that finite-difference and ``jax.grad``
+        objectives see the same raw function; ``S`` is then the raw
+        extraction with ``S_raw``/``passivity_correction`` absent, no
+        projection warning fires, and ``S`` may exceed the bound (measured
+        sigma_max 1.18 on a coarse thru).
 
         For each registered MSL port, runs one FDTD simulation with that
         port driven and the others passive (matched termination). At
@@ -1481,6 +1617,7 @@ class _SparamMixin:
         saved_dft = list(self._dft_planes)
         saved_msl = list(self._msl_ports)
         saved_ports = list(self._ports)
+        saved_probes = list(self._probes)
         try:
             # Mutate self._dz_profile to the (possibly synthesised) grid dz only
             # now — inside the try — so the finally always restores it and the
@@ -1501,6 +1638,32 @@ class _SparamMixin:
             raw_i1 = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
             raw_z0 = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
             raw_q = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
+
+            # Ring-down settling witness (project rule: fixed-length
+            # open-domain records must quote end/peak energy before any
+            # claims-bearing number). Point Ez time-series probes at EVERY
+            # port probe plane, mid-substrate under the trace — a single
+            # plane is standing-wave-node sensitive (measured on the thru
+            # fixture at num_periods=6: 18.1 dB spread across planes, i.e.
+            # PASS at one plane and FAIL at another for the same record), so
+            # the witness takes the WORST plane. For the PASSIVE ports of a
+            # run the whole record is response, so end/peak there is the
+            # textbook ring-down witness.
+            _witness_base = len(self._probes)
+            _witness_counts: list[int] = []
+            for pe_w, pxs_w in zip(entries, probe_xs):
+                for _x_w in pxs_w:
+                    self.add_probe(
+                        position=(
+                            float(_x_w),
+                            float(pe_w.position[1]),
+                            float(pe_w.position[2]) + 0.5 * float(pe_w.height),
+                        ),
+                        component="ez",
+                    )
+                _witness_counts.append(len(pxs_w))
+            _witness_total = sum(_witness_counts)
+            settling_db_runs = np.full(n_ports, np.nan)
 
             for driven in range(n_ports):
                 # Re-instantiate a clean simulation by mutating in place:
@@ -1572,6 +1735,7 @@ class _SparamMixin:
                         checkpoint_segments=checkpoint_segments,
                     )
                     planes = fwd_result.dft_planes or {}
+                    _ts_result = fwd_result
                 else:
                     result = self.run(
                         n_steps=n_steps,
@@ -1579,6 +1743,29 @@ class _SparamMixin:
                         compute_s_params=False,
                     )
                     planes = result.dft_planes or {}
+                    _ts_result = result
+
+                # Settling witness for this driven run: worst end/peak
+                # Ez^2 ratio across the per-port witness probes. Host-side
+                # numpy on concrete values only — on the eps_override AD
+                # path time_series may be a tracer, in which case the
+                # witness is skipped (NaN) rather than concretised.
+                _ts = getattr(_ts_result, "time_series", None)
+                if _ts is not None and not is_tracer(_ts):
+                    _ts_np = np.asarray(
+                        _ts[:, _witness_base:_witness_base + _witness_total],
+                        dtype=float,
+                    )
+                    if _ts_np.shape[0] >= 10 and _ts_np.shape[1] == _witness_total:
+                        _p = _ts_np ** 2
+                        _tail = max(1, _p.shape[0] // 10)
+                        _end = _p[-_tail:, :].mean(axis=0)
+                        _peak = _p.max(axis=0)
+                        _tiny = np.finfo(float).tiny
+                        _ratio_db = 10.0 * np.log10(
+                            (_end + _tiny) / (_peak + _tiny)
+                        )
+                        settling_db_runs[driven] = float(np.max(_ratio_db))
 
                 # Helper: integrate V and I per port from the recorded planes.
                 v_per_port: list[list[np.ndarray]] = []
@@ -1858,6 +2045,23 @@ class _SparamMixin:
                     driven_port_indices=np.arange(n_ports, dtype=np.int64),
                 )
 
+            s_raw = None
+            passivity_correction = None
+            # Projection runs on the CONCRETE MEASUREMENT channel only:
+            # never under tracing (min(sigma,1) zeroes/deforms the objective
+            # gradient wherever the clip is active — measured, it flipped the
+            # committed d|S|^2/d-eps sign gate), and never on the
+            # eps_override channel even when concrete — otherwise a finite-
+            # difference objective sees the projected function while
+            # jax.grad sees the raw one, and the committed AD==FD gates
+            # compare two different functions (review finding, PR #468).
+            if enforce_passivity and eps_override is None and not is_tracer(S):
+                s_projected, correction = _project_passive(S)
+                if bool(np.any(np.asarray(correction) > 0.0)):
+                    s_raw = S
+                    passivity_correction = correction
+                    S = s_projected
+
             result = MSLSMatrixResult(
                 S=S,
                 freqs=np.asarray(freqs_arr),
@@ -1865,9 +2069,27 @@ class _SparamMixin:
                 beta=beta_first,
                 port_names=tuple(pe.name for pe in entries),
                 reliable=reliable,
+                settling_db=settling_db_runs,
+                S_raw=s_raw,
+                passivity_correction=passivity_correction,
+            )
+            _warn_if_ringdown_truncated(
+                settling_db_runs,
+                tuple(pe.name for pe in entries),
+                num_periods=num_periods,
+            )
+            if passivity_correction is not None and not is_tracer(passivity_correction):
+                _warn_if_passivity_projected(passivity_correction, freqs_arr)
+            # The raw-extraction self-check still audits what was MEASURED:
+            # run it on the unprojected matrix so the projection can never
+            # silence the artifact diagnosis.
+            import dataclasses as _dc
+
+            audit_result = (
+                result if s_raw is None else _dc.replace(result, S=s_raw)
             )
             _warn_if_nonpassive_smatrix(
-                result,
+                audit_result,
                 extractor="compute_msl_s_matrix",
                 strict=strict_extractor,
                 passivity_tol=0.10,
@@ -1877,6 +2099,7 @@ class _SparamMixin:
             self._dft_planes = saved_dft
             self._msl_ports = saved_msl
             self._ports = saved_ports
+            self._probes = saved_probes
             self._dz_profile = _dz_profile_saved
 
     def compute_coaxial_s_matrix(
