@@ -192,9 +192,23 @@ def compute_rcs(
     bandwidth : float
         Fractional bandwidth of the pulse.
     theta_inc : float
-        Incident angle in degrees (0 = +x propagation). Only normal incidence
-        (0) is supported; a non-zero value raises ``NotImplementedError`` (the
-        oblique TFSF reflection path is unvalidated — issue #404).
+        Incident angle in degrees (0 = +x propagation). Non-zero values tilt the
+        illumination in the x-y plane and route through the open-domain oblique
+        Method-B TFSF (2.5-D: open transverse y, thin-periodic z). Only the
+        far-field PATTERN / specular direction is validated at oblique incidence
+        (specular peak phi = 180 - theta_inc at theta_obs = 90 deg). Measured
+        envelope on the committed gate configuration (2.2-lambda plate, 700
+        steps, public path, corner-inclusive kernels): peak error 0 deg at
+        theta_inc=20 and 3 deg at theta_inc=40 (4 deg on the pre-fix exclusive
+        kernels), gated at +/-6 deg, with a 3-7 deg peak-azimuth
+        sensitivity to domain size at fixed dx/plate/CPML (PR #461 audit,
+        measured on the PRE-fix exclusive kernels; not re-measured in-tree
+        on the inclusive kernels) —
+        i.e. the argmax azimuth of the broad specular lobe is NOT converged to
+        ~1 deg. See ``tests/test_oblique_rcs_specular.py``. The absolute
+        oblique sigma is NOT validated. Requires ``polarization='ez'`` and a
+        uniform grid; other combos raise ``NotImplementedError`` (issue #404
+        arc).
     phi_inc : float
         Incident azimuth in degrees (reserved for future oblique support).
     polarization : str
@@ -293,31 +307,68 @@ def compute_rcs(
     dx = grid.dx
     dt = grid.dt
 
-    # Fail-loud guard: oblique RCS is unimplemented + unvalidated. The original
-    # #404 rationale (2D-aux injection under-tilt) is now STALE — #414 fixed the
-    # oblique 3D-Bloch injection and #422/#428 validated oblique SLAB reflection.
-    # But oblique RCS remains blocked for deeper reasons (investigation 2026-07-23):
-    #   1. the NTFF accumulator is NOT envelope/Bloch-aware, so run() itself
-    #      fail-louds on oblique+NTFF (it would DFT the complex Bloch envelope, not
-    #      the physical field) — deleting this guard only relocates that failure;
-    #   2. the periodic-Bloch path #414 dispatches to is the wrong tool for an
-    #      OPEN-DOMAIN compact scatterer (it assumes lateral periodicity), which
-    #      needs a proper 3D open-domain oblique TFSF that does not yet exist;
-    #   3. the oblique two-run incident-leakage subtraction (#280/#299) is
-    #      validated only at normal incidence, and no angle-sensitive far-field
-    #      oracle (PO plate / MoM at oblique — the PEC sphere is rotation-blind)
-    #      is wired to certify an oblique pattern.
-    # compute_rcs_jax (the differentiable post-processor) and the NTFF transform
-    # are incidence-agnostic and ready; the gap is producing a validated oblique
-    # scattered field on the box. Refuse rather than return an unvalidated number.
-    if abs(float(theta_inc)) > 1e-6:
-        raise NotImplementedError(
-            f"compute_rcs(theta_inc={theta_inc}) — oblique incidence is not "
-            "supported: no envelope-aware NTFF / open-domain oblique TFSF / "
-            "angle-sensitive oracle yet (issue #404 arc). Use theta_inc=0.0."
-        )
+    # ---- Oblique incidence routing (issue #404 arc — fork (a) S4/S5) ----
+    # theta_inc != 0 routes the illumination through the OPEN-DOMAIN oblique
+    # Method-B TFSF (real float32, dispersion-matched 1D-aux-along-k̂ + a 4-edge
+    # box; rfx/sources/tfsf_oblique_open.py), NOT the periodic complex-Bloch 2D-aux
+    # path (#414) which assumes lateral periodicity and is the wrong tool for a
+    # compact scatterer. Method B is a 2.5-D path: k̂ lies in the x-y plane, the
+    # transverse y-axis is OPEN (CPML) and z is thin/periodic (z-invariant far
+    # field), so the fields stay real and the NTFF/DFT read physical fields.
+    #
+    # VALIDATED by the specular-peak gate (tests/test_oblique_rcs_specular.py):
+    # the bistatic far-field of a finite PEC plate (normal +x) peaks at the
+    # reflection-law specular direction phi = pi - theta_inc (theta_obs = pi/2)
+    # across {0, 20, 40} deg, within the measured envelope in the theta_inc
+    # parameter docstring above (peak error <= 4 deg, gated +/-6 deg, 3-7 deg
+    # domain-size sensitivity — NOT ~1 deg); the theta->0 limit reduces to
+    # backscatter (= specular at normal). The +/-6 deg tolerance is ~0.2 of the
+    # 2.2-lambda plate's ~30 deg physical-optics 3 dB specular lobe at
+    # theta_inc=40 (0.886*lambda/(W*cos(theta))) — argmax on a 1 deg grid
+    # inside a broad lobe, an envelope pin, not a loose bound.
+    # SCOPE LIMIT: only the far-field PATTERN / specular DIRECTION is validated.
+    # The ABSOLUTE oblique sigma is NOT validated — the 2.5-D strip's 3-D RCS
+    # scales with the (arbitrary) NTFF z-box height because the two z-faces cancel
+    # for x-y-plane observation, and the incident-spectrum normalization below
+    # assumes the normal-path waveform. Kept fenced for combos Method B does not
+    # support: non-ez polarization and non-uniform / distributed grids.
+    _oblique = abs(float(theta_inc)) > 1e-6
+    if _oblique:
+        if polarization != "ez":
+            raise NotImplementedError(
+                f"compute_rcs(theta_inc={theta_inc}, polarization={polarization!r}) "
+                "— oblique RCS is supported for polarization='ez' only (the "
+                "open-domain Method-B TFSF is ez / transverse-y); 'ey' is future work."
+            )
+        if getattr(grid, "dz", None) is not None:
+            raise NotImplementedError(
+                "compute_rcs oblique incidence is not supported on non-uniform "
+                "grids (Method B requires a uniform single-device grid). "
+                "Use a uniform Grid or theta_inc=0.0."
+            )
+        # Method B is 2.5-D: z is thin + PERIODIC and the NTFF z-box is a
+        # 2-cell midplane span, so the returned sigma is for an infinite
+        # z-periodic replication of the target sampled at the midplane. Refuse
+        # a z-varying (genuinely 3-D) target rather than return that number
+        # silently (review F4 — "refuse rather than return an unvalidated
+        # number").
+        for _mname in ("eps_r", "sigma", "mu_r"):
+            _marr = np.asarray(getattr(materials, _mname))
+            if _marr.ndim == 3 and _marr.shape[2] > 1 and not np.array_equal(
+                _marr, np.broadcast_to(_marr[:, :, :1], _marr.shape)
+            ):
+                raise NotImplementedError(
+                    f"compute_rcs(theta_inc={theta_inc}): materials.{_mname} varies "
+                    "along z, but oblique incidence uses the 2.5-D Method-B path "
+                    "(thin-periodic z, midplane NTFF) which is only meaningful for "
+                    "z-invariant targets. Make the target z-invariant or use "
+                    "theta_inc=0.0."
+                )
 
     # --- 1. Set up TFSF source ---
+    # angle_deg=0 ignores `method` (normal 1D-aux path, byte-identical); the
+    # oblique branch selects Method B explicitly. ny/nz are only consumed by the
+    # oblique path and ignored at normal incidence.
     tfsf_cfg, tfsf_st = init_tfsf(
         nx=grid.nx,
         dx=dx,
@@ -330,6 +381,9 @@ def compute_rcs(
         polarization=polarization,
         direction="+x",
         angle_deg=theta_inc,
+        ny=grid.ny,
+        nz=grid.nz,
+        method="methodB" if _oblique else "bloch",
     )
 
     # --- 2. Set up NTFF box just outside TFSF box ---
@@ -345,8 +399,18 @@ def compute_rcs(
     ntff_i_hi = tfsf_cfg.x_hi + ntff_offset + 1
     ntff_j_lo = fl["y_lo"] + ntff_offset
     ntff_j_hi = grid.ny - fl["y_hi"] - ntff_offset
-    ntff_k_lo = fl["z_lo"] + ntff_offset
-    ntff_k_hi = grid.nz - fl["z_hi"] - ntff_offset
+    if _oblique:
+        # Method B is 2.5-D: z is THIN + PERIODIC (no real z-CPML), so the box
+        # z-faces sit symmetric about the mid-plane with a 2-cell span rather than
+        # inset from a (nonexistent) z-CPML. The two z-faces carry identical
+        # z-invariant tangential fields with opposite outward normals, so they
+        # cancel for x-y-plane (theta_obs=pi/2) observation — the validated cut.
+        _kz = grid.nz // 2
+        ntff_k_lo = _kz - 1
+        ntff_k_hi = _kz + 1
+    else:
+        ntff_k_lo = fl["z_lo"] + ntff_offset
+        ntff_k_hi = grid.nz - fl["z_hi"] - ntff_offset
 
     # Clamp to valid range
     ntff_i_lo = max(ntff_i_lo, 1)
@@ -368,14 +432,13 @@ def compute_rcs(
     )
 
     # --- 3. Run simulation with TFSF + NTFF ---
-    result = run(
-        grid,
-        materials,
-        n_steps,
-        boundary=boundary,
-        tfsf=(tfsf_cfg, tfsf_st),
-        ntff=ntff_box,
-    )
+    # Open-domain Method B forces the transverse y-axis OPEN (CPML) with
+    # thin-periodic z; normal incidence keeps the historical full-open defaults
+    # (byte-identical: `_run_kw` collapses to the pre-relaxation call).
+    _run_kw = dict(boundary=boundary, tfsf=(tfsf_cfg, tfsf_st), ntff=ntff_box)
+    if _oblique:
+        _run_kw.update(cpml_axes="xy", periodic=(False, False, True), pec_axes="")
+    result = run(grid, materials, n_steps, **_run_kw)
 
     # --- 4. Compute far-field from NTFF data ---
     ff = compute_far_field(
@@ -408,10 +471,7 @@ def compute_rcs(
             sigma=jnp.zeros(grid.shape, dtype=jnp.float32),
             mu_r=jnp.ones(grid.shape, dtype=jnp.float32),
         )
-        ref_result = run(
-            grid, vacuum, n_steps, boundary=boundary,
-            tfsf=(tfsf_cfg, tfsf_st), ntff=ntff_box,
-        )
+        ref_result = run(grid, vacuum, n_steps, **_run_kw)
         ff_ref = compute_far_field(
             ref_result.ntff_data, ntff_box, grid, theta_obs, phi_obs,
         )
