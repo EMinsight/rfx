@@ -620,37 +620,47 @@ class Simulation(
                 "topology must be one of 'overlap_z_slab' or "
                 "'stage2_disjoint_3d'"
             )
-        # Warn if subgrid overlaps PML region.
+        # Warn if subgrid overlaps the PML region.
         # PML operates on the coarse grid only; the fine grid has no PML.
         # Overlapping causes late-time energy growth (SAT coupling feeds
         # energy into the PML boundary faster than it can absorb).
+        #
+        # Coordinate frame (issue #466): the grid builder places the absorber
+        # OUTSIDE the user domain — ``domain`` is entirely physical, the CPML
+        # cells are extra padding beyond it, and ``(idx - axis_pads)*dx``
+        # recovers user coordinates (rfx/grid.py). The pre-#466 check used the
+        # opposite frame (absorber inside the first/last N domain cells) and
+        # so fired on geometry that was clear of the absorber. In the
+        # builder's frame a z_range meets the absorber only when it reaches
+        # the physical-domain edge of an ABSORBING face: z_lo <= 0 (touching
+        # or entering the z_lo padding) or z_hi >= domain_z. Touching counts —
+        # the SAT interface then sits directly against the CPML interface,
+        # and the authoritative static validator flags the same geometry as
+        # ``subgrid_overlaps_absorber`` (see
+        # test_production_boundary_terminated_rejects_refined_face_touching_cpml,
+        # which pins this warning for the touching case). What the frame fix
+        # REMOVES is the interior false positive: a z_range strictly inside
+        # (0, domain_z) is clear of the absorber no matter how close to the
+        # edge, because the absorber cells are padding outside. The subgrid
+        # lane stays EXPERIMENTAL (PR #90).
         if self._boundary in ("cpml", "upml") and self._cpml_layers > 0:
             import warnings
-            dx = self._dx or (2.998e8 / self._freq_max / 10)
-            face_layers = self._resolve_face_layers()
             z_lo_kind = self._boundary_spec.z.lo if self._boundary_spec else self._boundary
             z_hi_kind = self._boundary_spec.z.hi if self._boundary_spec else self._boundary
-            pml_zlo_thickness = (
-                face_layers.get("z_lo", self._cpml_layers) * dx
-                if z_lo_kind in ("cpml", "upml")
-                else 0.0
-            )
-            pml_zhi_thickness = (
-                face_layers.get("z_hi", self._cpml_layers) * dx
-                if z_hi_kind in ("cpml", "upml")
-                else 0.0
-            )
+            zlo_absorbing = z_lo_kind in ("cpml", "upml")
+            zhi_absorbing = z_hi_kind in ("cpml", "upml")
             domain_z = self._domain[2] if len(self._domain) > 2 else 0
             z_lo, z_hi = z_range
-            if z_lo < pml_zlo_thickness or (
-                domain_z > 0 and z_hi > domain_z - pml_zhi_thickness
+            if (zlo_absorbing and z_lo <= 0.0) or (
+                zhi_absorbing and domain_z > 0 and z_hi >= domain_z
             ):
                 warnings.warn(
-                    f"Subgrid z_range=({z_lo*1e3:.1f}, {z_hi*1e3:.1f})mm overlaps "
-                    f"PML region (zlo={pml_zlo_thickness*1e3:.1f}mm, "
-                    f"zhi={pml_zhi_thickness*1e3:.1f}mm). "
-                    f"This causes late-time energy growth. "
-                    f"Move z_range inside the PML boundary for stable results.",
+                    f"Subgrid z_range=({z_lo*1e3:.1f}, {z_hi*1e3:.1f})mm overlaps PML "
+                    f"absorber padding: it reaches the edge of the physical domain "
+                    f"(0.0, {domain_z*1e3:.1f})mm on an absorbing z face (the "
+                    f"absorber lies OUTSIDE the domain — rfx/grid.py convention). "
+                    f"This causes late-time energy growth. Keep z_range strictly "
+                    f"inside the physical domain or use PEC z faces.",
                     stacklevel=2,
                 )
 
