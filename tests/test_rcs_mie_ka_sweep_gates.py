@@ -100,6 +100,37 @@ def test_fixture_and_artifact_are_the_same_record(fixture):
     assert artifact == fixture
 
 
+def test_script_claim_scope_literal_matches_fixture(fixture):
+    """Binds the script-source claim_scope to the committed fixture copy
+    (AST-extracted): the PR #476 F1 retraction was applied to this MERGED
+    fixture by hand-patching, so without this binding a later
+    --write-fixture would silently revert the corrected wording (and any
+    script prose edit would leave the fixture stale) while the suite stays
+    green — the prose analogue of the D2 constant binding."""
+    import ast
+    mod = ast.parse((_REPO_ROOT / "validation/crossval/16_pec_sphere_mie_ka_sweep.py"
+                     ).read_text(encoding="utf-8"))
+    lits = {k.value: ast.literal_eval(v)
+            for node in ast.walk(mod) if isinstance(node, ast.Dict)
+            for k, v in zip(node.keys, node.values)
+            if isinstance(k, ast.Constant)
+            and k.value in ("claim_scope", "offline_probes_2026_07_27")}
+    assert set(lits) == {"claim_scope", "offline_probes_2026_07_27"}
+    assert " ".join(lits["claim_scope"].split()) == " ".join(fixture["claim_scope"].split())
+    assert (" ".join(lits["offline_probes_2026_07_27"].split())
+            == " ".join(fixture["provenance"]["offline_probes_2026_07_27"].split()))
+
+
+def test_f1_retraction_is_content_pinned(fixture):
+    """PR #476 R2: the leakage-probe retraction (applied retroactively to
+    this merged item) must be CONTENT-pinned so a coherent script+fixture
+    edit cannot silently undo it."""
+    scope = " ".join(fixture["claim_scope"].split()).lower()
+    assert "retracted as a same-array tautology" in scope
+    prov = " ".join(fixture["provenance"]["offline_probes_2026_07_27"].split()).lower()
+    assert "retracted" in prov
+
+
 def test_gate_equals_recomputed_envelope_times_1p5(fixture):
     """Anti-drift for the AUDIT TRAIL itself (review F6): the recorded
     envelope must equal the envelope recomputed from the committed data, and
