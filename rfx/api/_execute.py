@@ -1145,6 +1145,14 @@ class _ExecuteMixin:
                 make_msl_port_sources,
                 setup_msl_port,
             )
+            # Issue #483: static eps for the launch fixture, assembled ONCE
+            # for all ports (hoisted per PR #486 review — the per-port
+            # re-assembly was wasteful eager-mode compute) and only when
+            # some port needs the auto branch.
+            _static_eps_483 = None
+            if any(pe.eps_r_sub is None and getattr(pe, "mode", "uniform") == "laplace"
+                   for pe in self._msl_ports):
+                _static_eps_483 = self._assemble_materials(grid)[0].eps_r
             for pe in self._msl_ports:
                 x_feed, y_centre, z_lo = pe.position
                 mp = MSLPort(
@@ -1177,19 +1185,25 @@ class _ExecuteMixin:
                     if pe.eps_r_sub is not None:
                         eps_r_sub = float(pe.eps_r_sub)
                     else:
-                        # G-AD-WIRE: materials.eps_r may be a JAX tracer
-                        # when forward(eps_override=...) is active.
-                        # The mode profile is a STATIC geometry quantity;
-                        # use stop_gradient so np.asarray() never sees a
-                        # tracer.  This does NOT break the AD tape for
-                        # the DFT accumulators — the source distribution
-                        # shape is fixed; only the FDTD field values
-                        # (and hence the DFT plane accumulators) carry
-                        # the gradient w.r.t. eps_override.
+                        # Issue #483: the launch fixture (mode profile,
+                        # sigma loading, source amplitude) is a STATIC
+                        # quantity and must derive from the REGISTERED
+                        # materials — never from `materials`, which may
+                        # carry a (traced or concrete) override. The old
+                        # code sampled the override through stop_gradient:
+                        # finite differences then re-derived the fixture at
+                        # alpha±h while the AD tape saw it frozen at the
+                        # linearization point, so FD and jax.grad
+                        # differentiated DIFFERENT functions (measured:
+                        # 61.7% raw / 13.7% converged gradient deficit;
+                        # with the fixture constant on both sides the same
+                        # f64 referee reads 0.01-0.09%). The registered materials are
+                        # re-assembled host-side once per forward build
+                        # (hoisted above the port loop) — correct
+                        # for every caller (forward, topology,
+                        # sparam_driver) without threading a handle.
                         eps_r_sub = float(np.asarray(
-                            jax.lax.stop_gradient(
-                                materials.eps_r[i_feed, j_centre, k_mid]
-                            )
+                            _static_eps_483[i_feed, j_centre, k_mid]
                         ))
                     mode_profile = compute_msl_mode_profile(grid, mp, eps_r_sub)
                 elif port_mode == "eigenmode":
