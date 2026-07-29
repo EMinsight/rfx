@@ -1250,6 +1250,23 @@ class _ExecuteMixin:
             corner_lo, corner_hi, freqs = self._ntff
             ntff_box = make_ntff_box(grid, corner_lo, corner_hi, freqs)
 
+        # Flux monitors — same configs the run() lane builds, so the
+        # issue-#488 mixed-family magnitude channel can read Poynting
+        # flux through this low-level lane too.
+        #
+        # GATED to the raw-hook path on purpose. This lane's
+        # ``ForwardResult`` has never carried flux monitors, so an
+        # existing ``forward()``/``optimize()`` caller with
+        # ``add_flux_monitor()`` registered would pay for flux DFT
+        # accumulation inside the differentiable scan (memory on the AD
+        # tape included) and never see the result — a silent cost
+        # regression, not a feature. Only ``_return_raw_port_sparams``
+        # consumers read these back.
+        flux_monitor_cfgs = []
+        if _return_raw_port_sparams and self._flux_monitors:
+            from rfx.runners.uniform import build_flux_monitor_cfgs
+            flux_monitor_cfgs = build_flux_monitor_cfgs(self, grid, n_steps)
+
         # DFT plane probes — mirror runners/uniform.py:340-359 so the
         # JIT scan body actually accumulates plane-resolved DFT, then
         # carry the result back through ForwardResult.dft_planes for
@@ -1467,6 +1484,7 @@ class _ExecuteMixin:
             lumped_rlc=rlc_metas,
             kerr_chi3=kerr_chi3,
             dft_planes=dft_planes if dft_planes else None,
+            flux_monitors=flux_monitor_cfgs if flux_monitor_cfgs else None,
             return_state=False,
             stencil_order=self._stencil_order,
         )
@@ -1485,6 +1503,36 @@ class _ExecuteMixin:
                 "wire": result.wire_port_sparams,
                 "wire_refplane": result.wire_refplane_sparams,
                 "freqs": _raw_freqs,
+                # Mixed-family S-matrix hook (issue #488): the DFT plane
+                # probes and probe time series recorded in the SAME run, so
+                # compute_mixed_s_matrix can read MSL port planes + settling
+                # witnesses alongside the lumped/wire accumulators without a
+                # second pass. The name-keyed dict mirrors the run()/forward()
+                # ``ForwardResult.dft_planes`` contract below. PURE ADD — the
+                # lumped/wire scan driver reads only the keys above.
+                "dft_planes": (
+                    {
+                        entry.name: probe
+                        for entry, probe in zip(
+                            self._dft_planes,
+                            getattr(result, "dft_planes", None) or (),
+                        )
+                    }
+                    if self._dft_planes else None
+                ),
+                "time_series": getattr(result, "time_series", None),
+                # Flux monitors for the issue-#488 arch-A magnitude channel
+                # (same name-keyed contract the runner uses for run()).
+                "flux_monitors": (
+                    {
+                        entry.name: fmv
+                        for entry, fmv in zip(
+                            self._flux_monitors,
+                            getattr(result, "flux_monitors", None) or (),
+                        )
+                    }
+                    if self._flux_monitors else None
+                ),
             }
 
         s_params_out = getattr(result, "s_params", None)
