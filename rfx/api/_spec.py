@@ -1291,14 +1291,42 @@ class MSLSMatrixResult:
         where both voltage and current collapse below 10% of their band
         medians. S values at those bins are retained unchanged.
 
-        Blast radius under the multi-drive solve (issue #507): S is
-        ``B·A⁻¹`` over ALL drives, so a collapsed wave pair at port ``p``
-        contaminates the ENTIRE frequency slice ``S[:, :, k]`` — not just
-        the column ``S[:, p, k]`` that the pre-#507 single-ratio assembly
-        confined it to. ``reliable[p, k]`` still tells you WHICH port's
-        plane collapsed; the only safe per-bin filter is
-        ``np.all(reliable, axis=0)``. A True entry is not an accuracy
-        guarantee.
+        ``reliable[p, k]`` is False when PORT ``p``'s probe plane collapsed
+        at bin ``k`` in AT LEAST ONE drive.  Every ``(driven, port)`` record
+        the solve consumes is covered, not only the own-drive diagonal
+        (issue #522) — a collapse at a *passive* port's plane during
+        someone else's drive used to be invisible here while still
+        corrupting the result.
+
+        *What a False entry condemns*: the ENTIRE frequency slice
+        ``S[:, :, k]``, not just the column ``S[:, p, k]`` the pre-#507
+        single-ratio assembly confined it to.  ``S`` is ``B·A⁻¹`` over all
+        drives, so one collapsed wave pair contaminates the whole slice.
+        Drop the bin; the index tells you which plane to investigate.
+
+        *What a True entry does not certify*: accuracy.  It means the
+        low-signal threshold did not fire, nothing more.
+
+        *Cost of the widened coverage, measured*: the threshold is relative
+        to each record's OWN band median, so a port sitting in a deep
+        stopband is not flagged wholesale — but individual deep bins ARE
+        flagged.  Live extractor runs on the two filter geometries flagged 2
+        bins of 100 on the ``msl_notch_e4`` fixture and 12 of 120 on the
+        Sheen LPF leg (``validation/crossval/07_sheen_lpf.py`` at its
+        ``--n-freqs`` default), and the notch fixture's two ARE the notch
+        centre — 3.6273 GHz, which the committed fixture meta records at
+        −30.66 dB.  The two COUNTS are not recomputable from the committed
+        JSON: those fixtures store S magnitudes only, with no V/I dump, so
+        checking them means re-running the extractor and reading
+        ``reliable``.  That is not a false alarm
+        — at a −30 dB notch the passive port's wave split really is
+        low-signal and the extractor cannot certify the depth — but a filter
+        user loses exactly the bin they care about and should read the depth
+        from ``S_raw`` or the flux channel with that caveat.
+
+        ``np.all(reliable, axis=0)`` is therefore the right per-bin screen:
+        it keeps exactly the bins where no plane the solve reads had
+        collapsed.
     settling_db : (n_ports,) float, optional
         Ring-down settling witness per driven-port run: the WORST (largest)
         over ALL port probe planes of ``10*log10(mean Ez^2 over the last 10%
@@ -1325,6 +1353,34 @@ class MSLSMatrixResult:
         ``settling_db`` for the cause), and its projected value inherits
         that uncertainty.
     port_names : tuple[str, ...]
+    assembly : str, optional
+        Which rule produced ``S`` — ``"multi_drive_solve"`` (normal:
+        ``S = B·A⁻¹`` over all drives, issue #507) or
+        ``"single_ratio_fallback"``. The fallback is taken when the solve
+        returns non-finite entries on a degenerate drive system; it is the
+        SUPERSEDED per-column rule ``S[j, d] = b_j / a_d``, which reports a
+        passive port's echo as the driven port's own reflection whenever
+        that port is not matched.
+
+        **Read this before trusting a fallback result.** The fallback's
+        characteristic symptom is column power above 1, and with the default
+        ``enforce_passivity=True`` that symptom is clipped out of ``S`` — but
+        it is not erased from the result: ``passivity_correction`` records
+        how much was clipped and ``S_raw`` keeps the unprojected matrix, and
+        the run also emits both a fallback warning and a passivity-guard
+        warning. So a fallback is not silent; this field is simply the
+        *specific* signal. Column power above 1 has several causes (an
+        under-settled record, a standing-wave null, a mis-scaled current) and
+        only one of them is the fallback — that is what this field
+        disambiguates. ``None`` while tracing (the finiteness test cannot run
+        on a tracer, so the solve result is taken as-is — see ``cond_a``).
+    cond_a : (n_freqs,) float, optional
+        Per-frequency condition number of the drive matrix ``A``. Bounds
+        DEGENERACY of the drive system only — it is **not** a reliability
+        or accuracy score, and a low value does not certify the result
+        (same contract as the coax lane's
+        :func:`rfx.sources.coaxial_port.solve_two_port_from_wave_amplitudes`).
+        ``None`` while tracing.
     """
     S: np.ndarray
     freqs: np.ndarray
@@ -1335,6 +1391,8 @@ class MSLSMatrixResult:
     settling_db: np.ndarray | None = None
     S_raw: np.ndarray | None = None
     passivity_correction: np.ndarray | None = None
+    assembly: str | None = None
+    cond_a: np.ndarray | None = None
 
 
 @dataclass

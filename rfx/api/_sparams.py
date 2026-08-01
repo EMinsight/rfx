@@ -216,7 +216,9 @@ def _msl_wave_split_reliability(
     freqs_arr = np.asarray(freqs)
     if v_abs.shape != i_abs.shape or v_abs.ndim != 2:
         raise ValueError(
-            "MSL reliability phasors must have matching (n_ports, n_freqs) shapes"
+            "MSL reliability phasors must have matching (n_records, n_freqs) "
+            "shapes; the production caller passes n_records = n_ports**2, one "
+            "row per (driven, port) pair"
         )
     if v_abs.shape[1:] != freqs_arr.shape:
         raise ValueError("MSL reliability phasors and frequency grid do not align")
@@ -2550,6 +2552,8 @@ class _SparamMixin:
             # solve_two_port_from_wave_amplitudes (#489), generalised to n
             # ports. cond(A) bounds DEGENERACY only; it is not a
             # reliability score.
+            msl_assembly: str | None = None
+            msl_cond_a = None
             if all(wave_a[d][j] is not None
                    for d in range(n_ports) for j in range(n_ports)):
                 import warnings as _w507
@@ -2585,6 +2589,19 @@ class _SparamMixin:
                         )
                 if not _bad:
                     S = S_solved.astype(_complex_dtype)
+                # Persist WHICH rule produced S (issue #523). A transient
+                # warning is not enough: with the default
+                # enforce_passivity=True the projection clips away the
+                # fallback's own symptom (column power > 1), so a fallback
+                # result can look healthy in every number a caller reads.
+                # None while tracing — _bad cannot be evaluated on a tracer,
+                # so the solve result is taken as-is and no claim is made.
+                msl_assembly = (
+                    None if cond_a is None
+                    else ("single_ratio_fallback" if _bad
+                          else "multi_drive_solve")
+                )
+                msl_cond_a = cond_a
 
             # A deep standing-wave node can collapse both phasors at the
             # driven port plane.  The V·I ratio is then numerically ill
@@ -2593,16 +2610,47 @@ class _SparamMixin:
             # per-port metadata (issue #337 follow-up).
             reliable = None
             try:
-                v_port = np.stack([
-                    np.asarray(jax.lax.stop_gradient(raw_v[p, p, 0, :]))
-                    for p in range(n_ports)
+                # Cover EVERY (driven, port) record, not just the own-drive
+                # diagonal (issue #522). The solve consumes the wave pair at
+                # all n_drives x n_ports probe planes, so a collapse at a
+                # PASSIVE port's plane during someone else's drive corrupts
+                # the whole slice S[:, :, k] — and the diagonal-only mask
+                # never saw it. Measured on a synthetic witness: poisoning
+                # only the (drive 0, port 1) record moved |S21| by 0.92 at
+                # that bin with the mask all-True, cond(A) = 1.28, S finite
+                # and the honesty guard silent.
+                #
+                # Shape is unchanged, (n_ports, n_freqs), and so is the
+                # meaning of the index: reliable[p, k] is False when PORT
+                # p's plane collapsed at bin k in AT LEAST ONE drive. That
+                # makes np.all(reliable, axis=0) genuinely sufficient for
+                # "no plane the solve reads collapsed at this bin".
+                #
+                # The criterion is relative to each record's OWN band
+                # median (see _msl_wave_split_reliability), so a uniformly
+                # small passive record is not flagged wholesale — but deep
+                # individual bins ARE. Live extractor runs on the two filter
+                # geometries: 2/100 bins on msl_notch_e4 (and they are the
+                # notch centre, 3.6273 GHz, recorded at -30.66 dB in the
+                # committed fixture meta) and 12/120 on the Sheen LPF leg.
+                # The counts need a re-run to check — the committed fixtures
+                # store S magnitudes only, no V/I dump.
+                # Correct behaviour — the split really is low-signal at a
+                # -30 dB notch — but it costs a filter user their most
+                # interesting bin; see the reliable docstring.
+                v_all = np.stack([
+                    np.asarray(jax.lax.stop_gradient(raw_v[d, p, 0, :]))
+                    for d in range(n_ports) for p in range(n_ports)
                 ])
-                i_port = np.stack([
-                    np.asarray(jax.lax.stop_gradient(raw_i1[p, p, :]))
-                    for p in range(n_ports)
+                i_all = np.stack([
+                    np.asarray(jax.lax.stop_gradient(raw_i1[d, p, :]))
+                    for d in range(n_ports) for p in range(n_ports)
                 ])
-                reliable = _msl_wave_split_reliability(
-                    v_port, i_port, freqs_arr
+                reliable = np.all(
+                    _msl_wave_split_reliability(
+                        v_all, i_all, freqs_arr
+                    ).reshape(n_ports, n_ports, -1),
+                    axis=0,
                 )
                 _warn_msl_wave_split_unreliable(reliable, freqs_arr)
             except (jax.errors.ConcretizationTypeError, TypeError):
@@ -2688,8 +2736,26 @@ class _SparamMixin:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 metadata = {
                     "schema": "rfx.msl_nprobe_dump",
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "production_smatrix_schema": "S[receiver_port, driven_port, frequency_index]",
+                    "production_smatrix_stage": (
+                        "PRE-passivity-projection raw extraction; "
+                        "MSLSMatrixResult.S is the post-projection value "
+                        "when enforce_passivity=True (default)"
+                    ),
+                    # v3 (issue #523): production_smatrix is no longer always
+                    # the N-probe-fit-derived S. Record WHICH assembly made
+                    # it, so a replayed dump cannot be misattributed.
+                    #
+                    # NB production_smatrix is written PRE-projection, so a
+                    # fallback dump does still carry the >1 column power
+                    # (MSLSMatrixResult.S is post-projection and does not).
+                    # The marker is not a substitute for that symptom — it is
+                    # more specific: >1 column power has several causes, only
+                    # one of which is the fallback.
+                    "production_smatrix_assembly": (
+                        "unknown" if msl_assembly is None else msl_assembly
+                    ),
                     "raw_v_shape": "(n_driven, n_ports, n_probes_max, n_freqs)",
                     "raw_i1_shape": "(n_driven, n_ports, n_freqs)",
                     "n_probes_per_port": [int(n) for n in n_probes_per_port],
@@ -2701,10 +2767,16 @@ class _SparamMixin:
                     ),
                     "deembedding": (
                         "N equally spaced voltage probes plus current at "
-                        "probe 0; the N-probe least-squares wave-decomposition "
-                        "extractor (issue #80 Fix C) fits V_n = alpha*exp(-j "
-                        "beta x_n) + gamma*exp(+j beta x_n) by SVD lstsq, "
-                        "recovering q, alpha, gamma, S11, Sij from raw phasors"
+                        "probe 0. The reported Z0/beta come from the N-probe "
+                        "least-squares wave-decomposition extractor (issue #80 "
+                        "Fix C), which fits V_n = alpha*exp(-j beta x_n) + "
+                        "gamma*exp(+j beta x_n) by SVD lstsq. The production "
+                        "S-matrix does NOT come from that fit: it is solved "
+                        "from the probe-0 wave amplitudes over all drives, "
+                        "S = B @ inv(A) (issue #507), with the modal voltage "
+                        "spanning ground to the rasterized trace node (#511) "
+                        "-- see production_smatrix_assembly for which rule "
+                        "actually produced this dump's S"
                     ),
                     "grid": {
                         "dx_m": float(grid.dx),
@@ -2776,6 +2848,8 @@ class _SparamMixin:
                 settling_db=settling_db_runs,
                 S_raw=s_raw,
                 passivity_correction=passivity_correction,
+                assembly=msl_assembly,
+                cond_a=msl_cond_a,
             )
             _warn_if_ringdown_truncated(
                 settling_db_runs,
