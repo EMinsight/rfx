@@ -158,8 +158,27 @@ A `True` entry is not an accuracy guarantee.
 - `mode="eigenmode"` is unsupported and raises `NotImplementedError`.
 - SBP-SAT subgridding, ADI, TFSF, and mixed port families are unsupported for
   this calculation.
-- Strong-reflector `|S11|` has a roughly 0.16--0.22 staircase-Z0 floor in the
-  characterized regime; do not generalize the matched/thru/notch evidence.
+- Strong-reflector `|S11|`'s roughly 0.16--0.22 "staircase-Z0 floor" this
+  document used to cite is **RETIRED** (issue #487) — it was substantially
+  the #511 modal-voltage span and #507 far-port-echo single-ratio assembly
+  extractor defects, fixed in PR #516 (`f95240f`), not a mesh property. A
+  smaller floor survives whose mechanism is the mismatch between the
+  rasterized line's own Z0 and the analytic Hammerstad-Jensen anchor `S` is
+  normalized against, tracking `|Gamma_implied| = |(Z0-Z0_HJ)/(Z0+Z0_HJ)|`
+  within ~1.3x over 5 of 6 points of the #487 re-sweep
+  (`scripts/diagnostics/msl_z0_bias_floor_sweep.py`, committed JSON). No
+  single envelope number is published, for two reasons: (1) below
+  `|Gamma_implied| ~ 0.006` (the finest aligned sweep point) the sweep
+  cannot resolve whether the mechanism still holds — it compares one
+  band-mean Z0 against a band-mean `|S11|(f)`, with no per-bin trace to
+  exclude a Jensen's-inequality artifact, against a fitted-Z0 estimator
+  the library's own honesty guard calls healthy only to +/-10% — so this
+  is reported as a resolution limit of the sweep, not a confirmed second
+  mechanism (see the script for the full breakdown); (2) even where the
+  mechanism does hold, the measured floors are specific to that one thru
+  fixture, and generalizing them to a dB promise for arbitrary MSL ports
+  would itself be the overclaim the next sentence forbids. Do not
+  generalize the matched/thru/notch evidence.
 - The auto `n_probe_offset` solves the upstream/downstream clearance interval
   at driver time (midpoint with a reflector, unchanged without one) and warns
   loudly when a short feed cannot satisfy both clearances (#469). Library
