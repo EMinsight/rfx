@@ -1248,6 +1248,103 @@ class CoaxialLineReflectionResult(NamedTuple):
     status: str
 
 
+@dataclass
+class CoaxialTwoPortResult:
+    """Two-drive coaxial 2-port S-parameters on a through line (issue #489 stage 2).
+
+    STATUS: **EXPERIMENTAL — not in the validated set**
+    (``docs/guides/sparameter_support_matrix.md``, the S-parameter-family
+    companion where this row lives — see also
+    ``docs/guides/sparameter_support_matrix.json``, its machine-readable
+    twin). This extends the validated 1-port
+    coax-line method (:meth:`compute_coaxial_line_reflection`) to two ports by
+    building a single through line with a matched annular-resistor feed near
+    EACH z end, driving each end's own TEM TFSF source in turn (two separate
+    FDTD runs), and recovering each port's own forward/back wave amplitudes
+    (not assuming the non-driven port sees zero incident wave — see
+    :func:`rfx.sources.coaxial_port.solve_two_port_from_wave_amplitudes` for
+    why the naive ``S[j,i]=b_j/a_i`` ratio has a hard terminator-reflection
+    floor that this two-drive solve removes).
+
+    **Scope limitation that must not be silently dropped**: every DUT this
+    method can currently gate against (none / a matched feed / a coaxial
+    dielectric plug) is azimuthally symmetric and excites only TM0n modes.
+    Issue #489 exists for TRANSITION designers whose discontinuities excite
+    TE11 (cutoff 25.17 GHz on the validated SMA line — inside the 4-12 GHz
+    band's evanescent tail, surviving to the first probe plane at roughly
+    0.10 of its launch amplitude). A battery built only on symmetric DUTs
+    certifies a class that EXCLUDES the target class. No external referee has
+    run against this method, and no phase claim is made.
+
+    ``s_params[j, i, :]`` is the response measured at port ``j`` while port
+    ``i`` is driven (standard S-matrix convention), referenced to each port's
+    OWN reference plane (its feed resistor's axial plane — see
+    ``reference_planes``). ``cond_a`` is the per-frequency condition number of
+    the incident-wave matrix inverted by the two-drive solve: it bounds
+    DEGENERACY of the two drives only, and is blind to a systematic
+    incident/outgoing mislabel at one port (see the cited function's
+    docstring) — passivity (checked downstream by
+    ``_warn_if_nonpassive_smatrix`` via ``_finalize_sparam_result``, NOT
+    bypassed here) is the only handle on that defect family.
+    ``recurrence_residual`` / ``fit_residual`` / ``gamma`` are per (port
+    array, drive, frequency) — recurrence_residual 0 means a clean
+    single-TEM-mode field at that array during that drive; ``gamma`` is that
+    array's own matrix-pencil-fitted complex propagation constant (Z0-free,
+    from local probes only). **Measured 2026-08-02: a given array's
+    ``Re(gamma)`` is NOT independent of which drive produced it** — "own
+    drive" (that array's own source active) and "other drive" (that array
+    receiving the transmitted signal) give substantially different, but each
+    internally self-consistent (agreeing between the two mirror-symmetric
+    arrays to 2-5%), estimates; see
+    :func:`_assemble_coaxial_two_port_from_voltages` for the full finding and
+    ``tests/test_coax_two_port_fdtd.py::
+    test_matched_through_line_transmits_reciprocally`` for the mechanism
+    check this motivated. Do not read a single array's ``gamma`` as *the*
+    line attenuation without averaging across all 4 (2 arrays x 2 drives)
+    measurements. ``annulus_cells`` is the shared resolution metric (same
+    convention as the 1-port method, below ~3.5 cells is under-resolved).
+    ``settling_db`` is a per-drive ring-down witness (worst end/peak E^2 ratio,
+    dB, over one point probe per array — same convention as the MSL/mixed
+    lanes; above -40 dB suggests the fixed-length record may have been
+    truncated before the structure rang down).
+
+    **Numerical line attenuation, not just a reflection artifact**: on the
+    validated 60 mm / 40 GHz fixture, the discrete (3.79-cell annulus)
+    through line itself attenuates the transmitted wave — measured
+    ``|S21|`` 0.96 (4 GHz) down to 0.74 (12 GHz) even with ``|S11|`` <= 0.05
+    throughout. A post-hoc consistency check (run after this measurement,
+    not predeclared) compares ``|S21|`` against the independently
+    matrix-pencil-fitted ``exp(-Re(gamma) * L12)`` (see ``gamma`` above): the
+    ``|S21|`` deficit equals what the local decay-rate fits predict over the
+    reported port separation. **What this check catches and what it does
+    not**: it is sensitive to SCALE-type deficits (amplitude
+    mis-normalization, mode conversion, a bad wave split — ``gamma`` is
+    fit from the field's shape along z, not its absolute scale, so a scale
+    bug in ``|S21|`` would not be echoed by a matching shift in the fitted
+    ``gamma``). It is structurally BLIND to reference-plane referral errors:
+    a referral error ``delta`` at either plane scales the wave amplitude by
+    ``exp(+/-gamma*delta)`` while ``L12`` grows by the same ``delta``, so the
+    compensation factor absorbs a referral error exactly (verified to five
+    decimal places even at +30 cells of injected error) — a wrong reference
+    plane passes this check unchanged. The under-resolved-annulus recipe
+    (>=4 cells) that this repo already documents for reflection accuracy
+    (``compute_coaxial_line_reflection``) applies to TRANSMISSION magnitude
+    here too, even when ``status`` reports ``"passed"``.
+    """
+
+    s_params: np.ndarray
+    freqs: np.ndarray
+    port_names: tuple[str, ...]
+    reference_planes: np.ndarray
+    cond_a: np.ndarray
+    recurrence_residual: np.ndarray
+    fit_residual: np.ndarray
+    gamma: np.ndarray
+    annulus_cells: float
+    settling_db: np.ndarray
+    status: str
+
+
 @dataclass(frozen=True)
 class _MSLPortEntry:
     """Internal bookkeeping for a microstrip line port.
@@ -1484,6 +1581,7 @@ __all__ = [
     "WaveguideSMatrixResult",
     "CoaxialSMatrixResult",
     "CoaxialLineReflectionResult",
+    "CoaxialTwoPortResult",
     "_MSLPortEntry",
     "MSLSMatrixResult",
     "MixedSMatrixResult",
