@@ -207,7 +207,65 @@ ports are required. `run()` provides only per-port diagnostics.
 
 This supports broad magnitude use inside the documented uniform, single-mode
 rectangular-guide limits. Phase evidence covers fewer configurations; do not
-infer equally broad phase accuracy from the magnitude status.
+infer equally broad phase accuracy from the magnitude status for anything
+outside the single-dielectric-slab configuration described next.
+
+**Phase and group-delay evidence (issue #490, Lanes 1 and 3):**
+
+- Lane 1 adds an analytic-Airy **phase** envelope over the SAME five WR bands
+  and 20 mesh/geometry cases as the magnitude envelope above, re-analyzing the
+  npz/manifest pair that produced the committed magnitude envelope (restored
+  locally for this analysis -- `.omx` is gitignored and not present in the
+  tree; no new FDTD run for that 5-band/20-case sweep -- phase and magnitude
+  are two projections of the same measurement). Reference-plane phase is
+  corrected per a written convention
+  (`e^{+jwt}` time convention; S11 reflection is a round trip through the
+  vacuum gap between the reference plane and the slab, `exp(-2j*beta*d)`; S21
+  transmission is a single forward pass through the gap on BOTH sides of the
+  slab, `exp(-1j*beta*(d_left+d_right))`) documented in
+  `scripts/diagnostics/build_waveguide_band_broad_e5_phase_envelope.py`.
+  Maximum phase difference across all 20 cases is `11.99 degrees` against a
+  measured-envelope gate of `15.0 degrees`. A planted-defect falsifier (the
+  wrong S21 reference-plane formula that was sitting, unexercised, in the
+  magnitude-only envelope builder before this session -- invisible to a
+  magnitude gate because `|exp(i*anything)| == 1`) reds at `179.87 degrees`.
+  A fresh domain-size invariance run (WR-340, domain grown `+100 mm`) holds
+  the pass verdict (`8.92 -> 7.73 degrees`). See
+  `tests/test_waveguide_broad_e5_phase_gates.py` and
+  `tests/fixtures/waveguide_broad_e5/phase_falsifier_and_domain_invariance.json`.
+  Caveat: `d_left == d_right` in all five slab fixtures (the slab sits
+  centered between symmetric reference planes), so this evidence cannot
+  distinguish the S21 formula's `d_left` and `d_right` terms separately --
+  only their sum (`d_left + d_right`) is exercised.
+- Lane 3 adds a **group-delay** gate on a purpose-built, empty WR-340 fixture
+  near cutoff (`f/fc` in `[1.152, 1.498]`, chosen far enough from cutoff to
+  keep the CPU run affordable and honest -- true near-cutoff divergence is
+  out of scope). `tau_g = -d(unwrap(angle(S21)))/d(omega)` (central
+  difference, 9 interior points; 2 band-edge points use a lower-order
+  one-sided difference and are reported but not gated) is compared against
+  the analytic `L_eff / v_g(f)` oracle (`L_eff = 0.320 m`) run through the
+  SAME finite-difference stencil, so the comparator is like-for-like (the
+  stencil's own truncation error, 0.0072 ns at the worst point, has the
+  opposite sign from the true residual and would otherwise flatter it by
+  29%): max interior diff `0.0320 ns` against a pinned-constant gate of
+  `0.042 ns` (the raw diff against the exact closed-form derivative,
+  `0.0248 ns`, is recorded for context but is not the gated number). A
+  record-length settling witness (`num_periods` 60 vs 120 --
+  `compute_waveguide_s_matrix` has no built-in energy-based `settling_db`
+  for the waveguide port family, unlike the MSL calculator) agrees to
+  `0.000 ns`. A domain-size invariance run (`+100 mm` growth) holds the pass
+  verdict (`0.0266 ns`, still under the gate). Three genuinely independent
+  falsifiers (skipping the phase-unwrap step, dropping the leading minus
+  sign, and using the wrong `L_eff` -- domain length instead of
+  reference-plane separation -- in the analytic comparator) all red at
+  `>= 1.5 ns`. See `tests/test_waveguide_group_delay_near_cutoff.py`,
+  `tests/test_waveguide_group_delay_tolerance_envelope.py`, and
+  `tests/fixtures/waveguide_group_delay/wr340_near_cutoff_group_delay_envelope.json`.
+- Neither lane covers PEC-short, T-junction, nonuniform, or multimode
+  configurations for phase or group delay -- those remain uncharacterized.
+- MSL de-embedded phase vs an external (openEMS) referee with the convention
+  mismatch resolved (issue #490 Lane 2) is explicitly OUT of scope for both
+  lanes above; the microstrip-line section below is unchanged.
 
 **Nonuniform transverse mesh:** single-mode `normalize=True` and
 `normalize="flux"` run. Analytic Airy fixtures cover grading ratios 1--3,
