@@ -997,6 +997,13 @@ def _mixed_flux_magnitude_override(
             )
     return S_out, ill_cond, neg_power
 
+# Far-port discipline: minimum absorber depth as a fraction of the guide
+# wavelength at the LOWEST measured frequency. The message quotes this value,
+# so it MUST NOT be duplicated as a literal there — a mismatch would report one
+# threshold while enforcing another (PR #495 review, finding 5).
+_FAR_PORT_LAMBDA_G_FRACTION = 0.5
+
+
 def _warn_thin_absorber_vs_guide_wavelength(
     grid, cfgs, freqs, cpml_layers, boundary_spec,
 ):
@@ -1073,7 +1080,7 @@ def _warn_thin_absorber_vs_guide_wavelength(
             continue
 
         lambda_g = (_C0_SPARAMS / f_lo) / np.sqrt(1.0 - (fc / f_lo) ** 2)
-        required_m = 0.5 * lambda_g
+        required_m = _FAR_PORT_LAMBDA_G_FRACTION * lambda_g
         thin = [(side, n) for side, n in faces if n * dx < required_m]
         if not thin:
             continue
@@ -1084,7 +1091,8 @@ def _warn_thin_absorber_vs_guide_wavelength(
         )
         warnings.warn(
             f"compute_waveguide_s_matrix: absorber on the {axis} propagation "
-            f"axis is thinner than the documented 0.5 guide-wavelength "
+            f"axis is thinner than the documented "
+            f"{_FAR_PORT_LAMBDA_G_FRACTION:g} guide-wavelength "
             f"far-port discipline at the lowest measured frequency "
             f"{f_lo / 1e9:.3f} GHz (mode cutoff {fc / 1e9:.3f} GHz, "
             f"lambda_g = {lambda_g * 1e3:.1f} mm): {detail}, against a "
@@ -1092,7 +1100,8 @@ def _warn_thin_absorber_vs_guide_wavelength(
             f"guided energy and can set the accuracy envelope instead of "
             f"discretization: in the WR-90 iris lane (issue #494) residual "
             f"|S11| ripple was 0.0706 at 0.30 lambda_g, 0.0366 at 0.50, and "
-            f"0.0093 at 0.75, so 0.5 lambda_g is a floor and not a target. "
+            f"0.0093 at 0.75, so {_FAR_PORT_LAMBDA_G_FRACTION:g} lambda_g "
+            f"is a floor and not a target. "
             f"Raise cpml_layers to at least "
             f"{int(np.ceil(required_m / dx))} (0.75 lambda_g needs "
             f"{int(np.ceil(0.75 * lambda_g / dx))}).",
