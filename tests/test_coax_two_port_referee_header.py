@@ -497,32 +497,97 @@ def test_check_excitation_and_trace_uses_drive_correct_channel():
     uf_inc_self)"). Checking ``uf_inc`` unconditionally, as before,
     would silently verify the WRONG channel for the reverse drive --
     this test builds a fake port where uf_inc is healthy but uf_ref is
-    near-zero (the launched channel for a reverse drive) and checks the
-    function catches it when told to look at uf_ref, and does NOT catch
-    it (wrongly reports healthy) when defaulted to uf_inc -- proving the
-    ``channel`` parameter actually changes behavior, not just exists."""
+    dropped (exactly zero, the openEMS "port never coupled" signature)
+    and checks the function catches it when told to look at uf_ref, and
+    does NOT catch it (wrongly reports healthy) when defaulted to
+    uf_inc -- proving the ``channel`` parameter actually changes
+    behavior, not just exists.
+
+    Run-3 rescope (PR #547 review): the guard is SCALE-FREE (see
+    ``_check_excitation_and_trace``'s own docstring -- the ``[D5]``
+    pattern, ``rfx/interop/emitters/openems.py``, and issue #465/PR #473
+    already fixed this exact false-fire class in this repo once).
+    Fake values are still at openEMS's own real scale (a healthy real
+    run reads ~1.79e-13 to 1.93e-12, per
+    ``docs/design_notes/geometry_setup_interop.md``) to keep the test
+    honest about scale, but the "broken" channel is now an EXACT zero,
+    not merely small -- a nonzero-but-small value like the previously
+    used 6e-14 is not a failure signature at all once there is no floor,
+    and asserting it would raise re-introduces the refuted invariant
+    this round removes.
+    """
     module = _load_referee_module()
 
     class _FakePort:
         U_filenames: list = []
-        uf_inc = np.array([1.0 + 0j])       # healthy
-        uf_ref = np.array([1e-14 + 0j])     # near-zero -- the launched
+        uf_inc = np.array([5.0e-13 + 0j])   # healthy, real openEMS scale
+        uf_ref = np.array([0.0 + 0j])       # dropped -- the launched
                                              # channel for a reverse drive
 
     port = _FakePort()
 
-    # Default (uf_inc) must NOT raise -- uf_inc is healthy.
+    # Default (uf_inc) must NOT raise -- uf_inc is healthy at real scale.
     inc_peak, _ = module._check_excitation_and_trace(port, "/tmp/_unused", "test")
-    assert inc_peak == 1.0
+    assert inc_peak == 5.0e-13
 
     # channel="uf_ref" (the reverse-drive's own launched channel) MUST
-    # raise -- this is the near-zero one, mirroring the do-not-repeat
-    # file's own recorded "uf_inc~6e-14" failure signature.
+    # raise -- this one is exactly zero (the openEMS dropped-port
+    # signature), not merely small.
     try:
         module._check_excitation_and_trace(port, "/tmp/_unused", "test", channel="uf_ref")
-        assert False, "expected near-zero uf_ref to raise when channel='uf_ref'"
+        assert False, "expected zero uf_ref to raise when channel='uf_ref'"
     except RuntimeError as exc:
         assert "uf_ref" in str(exc)
+
+
+def test_excitation_check_is_scale_free_not_an_absolute_floor():
+    """Run-3 fix (2026-08-03, PR #547 review): TWO successive rounds of
+    this module tuned an ABSOLUTE floor on ``inc_peak`` (1e-6, then a
+    "corrected" 1e-13) -- both refuted by the SAME repo's own proven
+    guard: ``[D5]`` in ``rfx/interop/emitters/openems.py`` (~line 1676)
+    records "a verified-good small run on this install peaked at
+    |uf_inc| ~ 3e-14" -- BELOW both tried floors AND below the
+    do-not-repeat file's own recorded "failure" value (6e-14): the
+    healthy and broken populations OVERLAP in openEMS's raw units, so no
+    absolute floor separates them. This exact false-fire was already
+    diagnosed and fixed once in this repo (issue #465, PR #473,
+    ``8578fcd``) -- the fix that shipped is scale-free (exact-zero/
+    non-finite only), which is what this test pins: a value SMALLER than
+    every floor this module has ever tried (1e-14, well below the
+    verified-good 3e-14 the D5 guard itself cites) must still PASS,
+    because it is finite and nonzero -- only an exact zero (or NaN) is a
+    defect signature.
+    """
+    module = _load_referee_module()
+
+    class _FakePort:
+        U_filenames: list = []
+
+        def __init__(self, uf_inc):
+            self.uf_inc = np.array([uf_inc + 0j])
+
+    # Smaller than every floor this module has tried (1e-6, then 1e-13)
+    # AND smaller than the D5 guard's own verified-good value (3e-14) --
+    # must still PASS. This is the discriminating case: an absolute-floor
+    # regression (reintroducing any positive threshold) fails here.
+    tiny_but_real = _FakePort(1e-14)
+    inc_peak, _ = module._check_excitation_and_trace(tiny_but_real, "/tmp/_unused", "tiny")
+    assert inc_peak == 1e-14
+
+    # Exact zero (the openEMS dropped-port signature) and NaN must still
+    # raise -- scale-free does not mean "anything goes".
+    for broken_value in (0.0, float("nan")):
+        broken = _FakePort(broken_value)
+        try:
+            module._check_excitation_and_trace(broken, "/tmp/_unused", "broken")
+            assert False, f"expected {broken_value!r} to raise"
+        except RuntimeError:
+            pass
+
+    assert not hasattr(module, "_EXCITATION_ENERGY_FLOOR"), (
+        "an absolute floor constant must not exist -- PR #547 review "
+        "refuted it via the repo's own D5 guard and issue #465/PR #473"
+    )
 
 
 def test_main_writes_valid_json_on_stage_b_physics_gate_failure(monkeypatch, tmp_path):

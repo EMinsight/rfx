@@ -877,19 +877,49 @@ def _run_openems_capturing_stdout(fdtd, sim_path: str, *, threads: int) -> str:
         return logf.read()
 
 
-_EXCITATION_ENERGY_FLOOR = 1e-6
-"""M1 fix (PR #546 review): a FLOOR, not an exact-zero check -- the
-do-not-repeat file's own recorded failure mode for a different port
-class reads "weak/zero coupling with uf_inc~6e-14"; a floor of 1e-6 sits
-many orders of magnitude above that recorded noise floor while staying
-far below any genuinely-coupled signal for excite_amp=1.0. Documented,
-not measured from a real run (no local openEMS to calibrate against --
-external scripts get no rfx preflight, external_solver_comparator.md)."""
-
-
 def _check_excitation_and_trace(port, sim_path: str, label: str, *,
                                 channel: str = "uf_inc") -> tuple[float, int]:
     """Hand-ported sanity checks (a) + (b): nonzero energy + nonzero trace.
+
+    SCALE-FREE by design (run-2 fix, 2026-08-03, PR #547 review): no
+    absolute floor on ``inc_peak``, only exact-zero/non-finite, plus the
+    independent time-domain trace witness below. This is NOT a new
+    invention -- it mirrors the proven ``[D5]`` guard in
+    ``rfx/interop/emitters/openems.py`` (lines ~1673-1678) verbatim:
+    "No absolute floor is used on purpose: a verified-good small run on
+    this install peaked at |uf_inc| ~ 3e-14, so the 1e-9 floor some
+    hand-written comparators use would false-fire here." That 3e-14
+    verified-GOOD value sits BELOW both this script's own two
+    successively-tried floors (1e-6, then 1e-13) -- the healthy and
+    broken populations OVERLAP in openEMS's raw units, so no absolute
+    scale separates them.
+
+    This exact problem was already found and fixed ONCE in this repo:
+    issue #465 (closed via PR #473, ``8578fcd``) diagnosed precisely
+    this false-fire (a `uf_inc <= 1e-9` guard rejecting a normal run
+    measured at 1.9e-12) and the fix that shipped is this same
+    scale-free pattern -- ``docs/design_notes/geometry_setup_interop.md``
+    records both the healthy measurements (1.93e-12 PEC-cavity, 1.79e-13
+    MSL-thru) AND its own conclusion: "That threshold is live in
+    scripts/diagnostics/build_coaxial_line_openems_broad_comparison.py
+    ... and is worth auditing before it is reused. The emitter instead
+    tests for zero/non-finite plus an independent port time-trace
+    witness." ``build_coaxial_line_openems_broad_comparison.py`` (the
+    SAME do-not-repeat file this module's own header cites) was itself
+    updated by that fix and now carries the identical scale-free guard
+    with a comment naming issue #465 directly. Two rounds of this
+    module's own floor-tuning (1e-6, then a "corrected" 1e-13) took the
+    healthy/failure NUMBERS from these records without their own
+    concluding sentence -- this round removes the floor entirely rather
+    than re-tuning it a third time.
+
+    Weak/marginal coupling that is NOT exact-zero is NOT this function's
+    job to catch -- it is caught downstream, where it has to show up in
+    the actual physics: Stage A's ZL gate (port1.Z_ref vs the analytic
+    closed form) and matched-through witness (|S21|, phase, group
+    delay), and Stage B's passivity/reciprocity witnesses. Those fail
+    loud and specifically; an absolute floor here cannot, because it has
+    no scale to be specific about.
 
     ``channel`` selects WHICH of the port's own two wave components is
     the one THIS DRIVE actually launched (M1 fix, PR #546 review): for
@@ -906,11 +936,10 @@ def _check_excitation_and_trace(port, sim_path: str, label: str, *,
     """
     launched = np.asarray(getattr(port, channel), dtype=np.complex128)
     inc_peak = float(np.max(np.abs(launched))) if launched.size else 0.0
-    if not np.isfinite(inc_peak) or inc_peak < _EXCITATION_ENERGY_FLOOR:
+    if not np.isfinite(inc_peak) or inc_peak == 0.0:
         raise RuntimeError(
-            f"[{label}] openEMS port injected/received NO (or near-zero) "
-            f"wave energy on its own launched channel ({channel}="
-            f"{inc_peak!r} < floor {_EXCITATION_ENERGY_FLOOR!r}): "
+            f"[{label}] openEMS port injected/received NO wave energy on "
+            f"its own launched channel ({channel}={inc_peak!r}): "
             f"excitation did not couple or the port never saw the wave."
         )
     n_samples = 0
