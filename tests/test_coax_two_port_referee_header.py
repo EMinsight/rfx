@@ -3,20 +3,25 @@
 ``validation/research/coax_two_port/openems_coax_two_port_referee.py`` is a
 COMPARATOR-leg-only, VESSL-only harness for rfx issue #489 stage 3 (see its
 module docstring for the full scope fence): openEMS is not installed in
-this environment, so it has never actually run. This test does NOT require
-openEMS -- it checks that the script's reproduce-gate record is committed
-in an honest, fail-loud state, that its Stage B layout arithmetic is
-self-consistent (testable without openEMS -- see ``_stage_b_layout()``),
-and that the exit-code split between a physics/self-check failure and an
-internal config bug is real (not just documented).
+THIS test environment (this test does not need it -- it only loads the
+module and inspects Python-level data). The referee itself HAS since run
+on VESSL, three times (run-1 VESSL 369367251366, run-2 369367251627,
+run-3 369367251629) -- ``REPRODUCE_GATE_RECORD`` reflects that (``status:
+"RUN"``, run-3's own numbers and log path). This test checks that its
+Stage B layout arithmetic is self-consistent (testable without openEMS --
+see ``_stage_b_layout()``), and that the exit-code split between a
+physics/self-check failure and an internal config bug is real (not just
+documented).
 
 Design (per the task's fail-loud-honest requirement, M1/M3 review fixes):
-this test PASSES on the current, never-run placeholder state. It checks
-the record's FIELDS' semantics (UNRUN <=> no numbers, no log path; a
-filled record needs a log path under .omx/ or
-docs/research_notes/vessl_logs/) rather than pinning a specific finding
-as fact -- the record's own content (which tutorial, which geometry) is
-free to evolve without this test needing to be rewritten each time.
+this test PASSES on EITHER the never-run placeholder state OR a
+legitimately-filled one (run-3 fix, PR #548 review: a test must check the
+record's CONTRACT shape, not cement one particular state -- UNRUN <=> no
+numbers, no log path; RUN <=> numbers present AND a log path under
+.omx/ or docs/research_notes/vessl_logs/ that actually exists on disk)
+rather than pinning a specific finding as fact -- the record's own
+content (which tutorial, which geometry, which run's numbers) is free to
+evolve without this test needing to be rewritten each time.
 """
 
 from __future__ import annotations
@@ -107,9 +112,27 @@ def test_reproduce_gate_record_is_committed_unrun_and_self_consistent():
 
     This is the test that must go RED if someone later claims reproduced
     numbers without a log path pointing at the run that produced them --
-    not a pinned number that rots after the first real VESSL run. M3 fix:
-    a filled-in log_path must live under .omx/ or
-    docs/research_notes/vessl_logs/ AND actually exist on disk.
+    not a pinned number that rots after the first real VESSL run.
+
+    TRACKED-PATH fix (PR #548 review, correcting PR #548's OWN first
+    fill): a filled-in (``status != "UNRUN"``) record's ``log_path`` must
+    live under a GIT-TRACKED prefix --
+    ``validation/research/coax_two_port/logs/`` -- not merely "exists on
+    disk on the machine that ran the job". The original M3 fix's allowed
+    prefixes, ``.omx/`` and ``docs/research_notes/vessl_logs/``, are
+    BOTH gitignored in this repo -- accepting either one here let the
+    VERY FIRST real fill (``status="RUN"``, ``log_path`` under ``.omx/``)
+    go red in every clone/CI checkout except the one machine that
+    happened to still have that VESSL job's local artifact
+    (reviewer-reproduced: 23/24 in a fresh worktree). Gitignored
+    prefixes are recognized below only as historical/documentation
+    record of the pre-#548 design's intent -- REJECTED for an actually
+    filled record, whose whole point is that "a reviewer outside this
+    machine can open the log a claimed number came from". There is no
+    parallel leniency for UNRUN: that branch requires ``log_path is
+    None`` regardless, so "which prefix is OK" never arises for an
+    unfilled placeholder -- the distinction that matters is FILLED (must
+    be tracked) vs UNFILLED (no path at all, any prefix moot).
     """
     module = _load_referee_module()
     record = module.REPRODUCE_GATE_RECORD
@@ -123,11 +146,19 @@ def test_reproduce_gate_record_is_committed_unrun_and_self_consistent():
         assert record["reproduced_zl_max_dev_ohm"] is not None
         log_path_str = record["log_path"]
         assert log_path_str, "a filled-in reproduce_gate_record needs a log_path"
-        assert log_path_str.startswith(".omx/") or log_path_str.startswith(
-            "docs/research_notes/vessl_logs/"
-        ), (
-            f"log_path {log_path_str!r} must live under .omx/ or "
-            f"docs/research_notes/vessl_logs/ (M3 fix)"
+
+        gitignored_prefixes = (".omx/", "docs/research_notes/vessl_logs/")
+        tracked_prefixes = ("validation/research/coax_two_port/logs/",)
+        assert not log_path_str.startswith(gitignored_prefixes), (
+            f"log_path {log_path_str!r} lives under a GITIGNORED prefix -- "
+            f"fine for the pre-#548 design's own history, but a FILLED "
+            f"(status != 'UNRUN') record needs a log a reviewer OUTSIDE "
+            f"this machine can open; use a tracked prefix instead: "
+            f"{tracked_prefixes!r} (PR #548 review)"
+        )
+        assert log_path_str.startswith(tracked_prefixes), (
+            f"log_path {log_path_str!r} must live under a TRACKED prefix "
+            f"{tracked_prefixes!r} once status is RUN (PR #548 review)"
         )
         log_path = REPO_ROOT / log_path_str
         assert log_path.exists(), (
@@ -646,6 +677,202 @@ def test_stage_b_matched_through_band_and_group_delay():
 
     expected_gd_s = module.B_L12_MM * 1e-3 * (module.B_PTFE_EPS_R ** 0.5) / module._C0
     assert abs(expected_gd_s * 1e12 - 282.0) < 5.0
+
+
+# Run-3 (VESSL 369367251629) committed forensics: freqs 4-12 GHz (9 pts),
+# .omx/coax-two-port-referee/20260803T182559Z/openems_coax_two_port.json's
+# stage_b_partial. Recorded here VERBATIM (not re-derived) as a permanent
+# fixture -- this is the exact data that showed the analytic-beta
+# assumption in _matched_through_witness fails (111.38 deg) while the
+# port's own measured beta passes (<1 deg). Pins the diagnosis itself,
+# not just "some fix exists".
+_RUN3_FREQS_GHZ = [4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+_RUN3_S21 = [
+    [-0.10178395789276987, -0.9947813873544716], [-0.866908124484904, 0.49853137662871505],
+    [0.8093312852813679, 0.5874003767160384], [0.2039989433192543, -0.9789700021218559],
+    [-0.9762025698046496, 0.21687781552564456], [0.6007351793240925, 0.7994437767482262],
+    [0.4778275403413366, -0.8784484875365575], [-0.9977106504427633, -0.06775523370850421],
+    [0.3569821660144234, 0.9341058676426305],
+]
+_RUN3_S12 = [
+    [-0.10179691287104925, -0.9947924466056416], [-0.8668989701758875, 0.4985510803902553],
+    [0.8093328993935945, 0.5873968466839313], [0.20397830945821815, -0.9789743050808357],
+    [-0.9762034811684641, 0.21687144517256018], [0.6007391786857395, 0.7994415047250955],
+    [0.4778280770003993, -0.8784497561822715], [-0.9977158509219143, -0.06773546248046698],
+    [0.35699440259104104, 0.9341057748131218],
+]
+_RUN3_S11 = [
+    [6.631303519201963e-05, -0.00011686804566331664], [-0.00012853357758483953, -0.00028856861831318066],
+    [-0.00011674886873790862, -0.00032795537021504536], [-0.0005204981350035947, -1.0296241135269366e-05],
+    [-0.0007915640876916811, -0.00016518731233492254], [-0.00034776276114460985, 0.0004830473362504877],
+    [-0.0008939681254331274, 0.001165546278465178], [-0.00016507074822102292, 0.0005841232511762107],
+    [0.0011058815814476504, 0.0018492473344146887],
+]
+_RUN3_S22 = [
+    [5.898248024424526e-05, -0.00011777007616695023], [-0.00014034312784866302, -0.0002820860010893682],
+    [-0.00011478998866623993, -0.00032805085647930147], [-0.0005210861014952454, -1.0788268666929396e-05],
+    [-0.0007918717723981598, -0.0001647009475082112], [-0.0003488296360283009, 0.000487621749493795],
+    [-0.0008956613465229802, 0.0011684382089198755], [-0.0001691399526852089, 0.0005825048113253377],
+    [0.0011029870579533432, 0.001850566854975996],
+]
+_RUN3_BETA_PORT1_D1 = [
+    [136.09101931196903, -0.01649078820414983], [170.13617981172283, -0.029272331708947892],
+    [204.1918068030309, -0.030520265869223965], [238.26054521306463, -0.022009345540307406],
+    [272.3573016004093, -0.020949968138124917], [306.475449749617, -0.02334136211816488],
+    [340.6194897444045, -0.03815060788334049], [374.7888778145982, -0.05597846036549409],
+    [408.99096252465364, -0.07097161612786418],
+]
+_RUN3_BETA_PORT2_D1 = [
+    [136.0832834854087, 0.003682243954273083], [170.12782075071675, 0.012158515739560831],
+    [204.18324294995574, 0.0027347741393589082], [238.25629260895758, 0.021911184077467078],
+    [272.34648514048325, 0.007143288633369828], [306.44607486105457, 0.044185757537405945],
+    [340.6142917311148, 0.05043285347080633], [374.7890595209023, 0.04710847900989794],
+    [408.97181481282405, 0.07762984179484164],
+]
+_RUN3_BETA_PORT1_D2 = [
+    [136.08384097183855, 0.000997997837746734], [170.12830603521184, 0.010401602868161566],
+    [204.18352430176137, 0.004887881536652085], [238.257866163468, 0.021157897001576415],
+    [272.34820939710164, 0.00840646357503059], [306.4468305265026, 0.04821469809538255],
+    [340.6150052015737, 0.05006892983189138], [374.79382327086233, 0.051748372453706115],
+    [408.97232688220157, 0.07866617148707125],
+]
+_RUN3_BETA_PORT2_D2 = [
+    [136.0901663783743, -0.015448057441132108], [170.13771844640192, -0.025506094423440318],
+    [204.19145635065618, -0.03086373789552074], [238.26167607086484, -0.02401851530670198],
+    [272.35502171803535, -0.01904883706935545], [306.47555613016044, -0.022886628175141727],
+    [340.618842528779, -0.03986300862429704], [374.78802568468524, -0.056164338000943434],
+    [408.9928976396013, -0.07074324827722468],
+]
+
+
+def _run3_complex(pairs):
+    return np.array([complex(re, im) for re, im in pairs])
+
+
+def test_matched_through_witness_run3_regression_measured_vs_analytic_beta():
+    """Run-3 fix (2026-08-03, PR #548 review): diagnosed OFFLINE from the
+    committed run-3 forensics (VESSL 369367251629,
+    .omx/coax-two-port-referee/20260803T182559Z/openems_coax_two_port.json's
+    stage_b_partial -- the exact data below, recorded verbatim). Stage A
+    passed, Stage B completed both drives with |S21|~=1.000, no blow-up
+    (H2/M1 topology exonerated) -- but the matched-through witness's
+    phase leg failed: max_phase_dev 111.38 deg vs the 30 deg tolerance,
+    while magnitude and (loosely) group delay passed.
+
+    Root cause: the witness's ``expected_phase = -beta*L`` used an
+    IDEALIZED analytic beta (2*pi*f*sqrt(2.1)/c), but CalcPort's own
+    MEASURED beta (already computed from the same field data, all 4
+    available readings -- port1/port2, both drives -- agreeing to
+    ~0.01%) is consistently ~1.12x larger: a real, reproducible ~12%
+    Yee-staircasing bias from this coax's own coarse a-to-b PTFE annulus
+    (~3.8 cells across (2.055-0.635mm)/0.375mm), not a solver or
+    referral defect -- the SAME class of effect this repo's own MSL
+    preflight documents for a comparably coarse dielectric gap.
+
+    This test pins BOTH halves of that finding directly against the
+    real run-3 numbers: the OLD (analytic-beta) path must still fail
+    with (very close to) the EXACT reported deviation -- proving this
+    fix targets the real defect, not a coincidentally-similar one -- and
+    the NEW (measured-beta) path must pass with sub-degree phase
+    deviation on the SAME data.
+    """
+    module = _load_referee_module()
+    freqs_hz = np.array(_RUN3_FREQS_GHZ) * 1e9
+    s21 = _run3_complex(_RUN3_S21)
+    s12 = _run3_complex(_RUN3_S12)
+
+    beta_measured = 0.25 * (
+        _run3_complex(_RUN3_BETA_PORT1_D1) + _run3_complex(_RUN3_BETA_PORT2_D1)
+        + _run3_complex(_RUN3_BETA_PORT1_D2) + _run3_complex(_RUN3_BETA_PORT2_D2)
+    )
+
+    # OLD path (beta=None, analytic): must reproduce the EXACT reported
+    # failure -- this is the regression lock on the DIAGNOSIS, not just
+    # on "some number is large".
+    try:
+        module._matched_through_witness(
+            freqs_hz, s21, L_m=module.B_L12_MM * 1e-3, eps_r=module.B_PTFE_EPS_R,
+            mag_band=module.B_S21_THRU_BAND, label="run3_s21_analytic")
+        assert False, "expected the analytic-beta path to still fail on run-3's own data"
+    except RuntimeError as exc:
+        assert "111.38" in str(exc), f"expected ~111.38 deg deviation, got: {exc}"
+
+    # NEW path (measured beta): must PASS, on BOTH S21 and S12, with
+    # sub-degree phase deviation.
+    result_s21 = module._matched_through_witness(
+        freqs_hz, s21, L_m=module.B_L12_MM * 1e-3, eps_r=module.B_PTFE_EPS_R,
+        mag_band=module.B_S21_THRU_BAND, label="run3_s21_measured", beta=beta_measured)
+    result_s12 = module._matched_through_witness(
+        freqs_hz, s12, L_m=module.B_L12_MM * 1e-3, eps_r=module.B_PTFE_EPS_R,
+        mag_band=module.B_S21_THRU_BAND, label="run3_s12_measured", beta=beta_measured)
+
+    assert result_s21["passed"] is True
+    assert result_s12["passed"] is True
+    assert result_s21["max_phase_dev_deg"] < 1.0
+    assert result_s12["max_phase_dev_deg"] < 1.0
+    assert result_s21["beta_source"] == "measured"
+
+    # Non-blocking review fix (PR #548): the ratio must be VISIBLE per-bin
+    # (not just implied by a passing phase check) and must land in the
+    # ~12% band this diagnosis measured -- a future ~2x drift in the same
+    # direction should trip this directly, without raw-array archaeology.
+    ratio = result_s21["beta_ratio_measured_over_analytic"]
+    assert ratio is not None and len(ratio) == 4  # the gated central band
+    assert all(1.10 < r < 1.14 for r in ratio), f"beta ratio out of the recorded ~12% band: {ratio}"
+
+    # The analytic path (beta=None) must not report a measured ratio at
+    # all -- there is nothing "measured" to ratio against. Use a
+    # synthetic, perfectly-matched-to-the-analytic-model S21 (zero
+    # deviation by construction) so this passes cleanly and isolates the
+    # field check from any real data's own imperfections.
+    beta_analytic = 2.0 * np.pi * freqs_hz * np.sqrt(module.B_PTFE_EPS_R) / module._C0
+    s21_synthetic = np.exp(-1j * beta_analytic * module.B_L12_MM * 1e-3)
+    result_analytic = module._matched_through_witness(
+        freqs_hz, s21_synthetic, L_m=module.B_L12_MM * 1e-3, eps_r=module.B_PTFE_EPS_R,
+        mag_band=module.B_S21_THRU_BAND, label="ratio_none_check")
+    assert result_analytic["passed"] is True
+    assert result_analytic["beta_ratio_measured_over_analytic"] is None
+
+
+def test_run_stage_b_passes_end_to_end_on_run3_data_with_the_fix(monkeypatch):
+    """Run-3 fix, end-to-end: replays run-3's own recorded per-drive data
+    through the REAL ``_run_stage_b`` (via a fake ``_run_one_drive``, the
+    same pattern the earlier partial-data tests use) and confirms the
+    fixed pipeline now reports ``sanity_passed=True`` on the EXACT data
+    that failed on VESSL -- not just that the witness function alone
+    passes in isolation, but that the wiring inside ``_run_stage_b``
+    (computing and threading ``beta_measured`` through to both witness
+    calls) is what actually gets exercised.
+    """
+    module = _load_referee_module()
+
+    def fake_run_one_drive(_CSX, _openems, _port_cls, *, drive, sim_root, threads, nrts, end_criteria):
+        if drive == "port1":
+            extracted = {"s_self": _run3_complex(_RUN3_S11), "s_thru": _run3_complex(_RUN3_S21),
+                        "s_thru_alternate_channel": _run3_complex(_RUN3_S21)}
+            beta_port1, beta_port2 = _run3_complex(_RUN3_BETA_PORT1_D1), _run3_complex(_RUN3_BETA_PORT2_D1)
+        else:
+            extracted = {"s_self": _run3_complex(_RUN3_S22), "s_thru": _run3_complex(_RUN3_S12),
+                        "s_thru_alternate_channel": _run3_complex(_RUN3_S12)}
+            beta_port1, beta_port2 = _run3_complex(_RUN3_BETA_PORT1_D2), _run3_complex(_RUN3_BETA_PORT2_D2)
+        return {
+            "extracted": extracted,
+            "z0_port1": np.zeros(9, dtype=np.complex128), "z0_port2": np.zeros(9, dtype=np.complex128),
+            "beta_port1": beta_port1, "beta_port2": beta_port2,
+            "max_uf_inc": 1.0, "n_trace_samples": 100, "nrts_cap": nrts,
+            "truncated_suspected": False, "elapsed_s": 1.0,
+            "end_criteria_not_reached": False,
+        }
+
+    monkeypatch.setattr(module, "_import_openems", lambda: (object, object, object))
+    monkeypatch.setattr(module, "_run_one_drive", fake_run_one_drive)
+    monkeypatch.setattr(module, "B_FREQS_HZ", np.array(_RUN3_FREQS_GHZ) * 1e9)
+    monkeypatch.setattr(module, "B_FREQS_GHZ", np.array(_RUN3_FREQS_GHZ))
+
+    result = module._run_stage_b(sim_root="/tmp/_unused_run3_e2e", threads=1, nrts=200000, end_criteria=1e-4)
+    assert result["sanity_passed"] is True
+    assert result["matched_through_witness"]["max_phase_dev_deg"] < 1.0
+    assert result["matched_through_witness_s12"]["max_phase_dev_deg"] < 1.0
 
 
 def test_stage_a_wires_its_own_num_ts_and_end_criteria_into_openems(monkeypatch):
