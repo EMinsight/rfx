@@ -2874,6 +2874,63 @@ class _PreflightMixin:
         # normalization consequence), and the dead-extent live-cell count
         # includes every dead cell — midpoint included — because the live
         # split does not care which cell holds the probe.
+        #
+        # Issue #544: the dead/live classification below is derived from
+        # the SAME primitive the assembler uses to compute ``n_live_lw``
+        # (``_wire_port_live_cells`` against the actual assembled
+        # ``pec_mask``) — not a standalone bounding-box-vs-cell-center
+        # approximation, which is what this advisory used before and which
+        # had DRIFTED from the assembler. The approximation compared a
+        # CENTER coordinate (node position + 0.5*dx along the component
+        # axis) against a closed-interval ``[lo, hi]`` PEC bounding box;
+        # the real rasterization (``Box.mask``, ``rfx/geometry/csg.py``)
+        # evaluates occupancy at NODE coordinates with a half-open
+        # interval ``[lo, hi)`` (or the thin-sheet nearest-node rule for a
+        # sub-cell-thick box) — a different reference point that can, and
+        # on the #488 mixed lumped/wire<->MSL fixture did, put the "dead"
+        # node one cell away from what the approximation assumed: the
+        # advisory reported n_live/n=3/4 while the assembler's
+        # ground-truth count (and the measured passive-port Z_in = Z0/4 =
+        # 12.5 ohm, PR #543) was 4/4 — every cell live. Sharing the
+        # primitive makes the two paths unable to drift again by
+        # construction ON THE UNIFORM-MESH PATH — see the NU disclosure
+        # immediately below; the shared primitive itself never runs on a
+        # non-uniform mesh, so the invariant does not (and is not claimed
+        # to) extend there.
+        #
+        # Known limitation (issue #544 adversarial review; same
+        # non-regression disclosure pattern as the #510 review nit A —
+        # grep this file for "issue #510 review nit A" to find that
+        # comment; citing it by line number/direction rots as the file
+        # grows, which is exactly what happened to an earlier draft of
+        # this comment): ``self._build_grid()`` /
+        # ``self._assemble_materials(grid)`` are unconditionally UNIFORM.
+        # A ``dz_profile``/``dx_profile``/``dy_profile`` (NU) sim's REAL
+        # run instead uses ``_build_nonuniform_grid()`` +
+        # ``_assemble_materials_nu()`` — a different ``Grid`` class with
+        # different shape/padding (measured: uniform PEC node k=[4] vs NU
+        # PEC node(s) k=[4,5] on the same nominal geometry), and
+        # ``_wire_port_live_cells`` cannot even run against a
+        # ``NonUniformGrid`` (no ``position_to_index``). Building a
+        # uniform substitute for an NU sim would therefore MISCLASSIFY
+        # cells rather than reflect the real run, so this advisory does
+        # NOT attempt that — it emits a "classification unavailable" note
+        # (issue #544 review item 6: a silent skip here is the #303
+        # silently-skipped-check-family class) instead of either guessing
+        # or going fully silent. This is the SAME pre-existing scope limit
+        # the OLD (pre-#544) advisory had (it was equally NU-blind:
+        # ``_wire_port_cell_centers`` also calls ``self._build_grid()``)
+        # — not a new limitation, just now disclosed instead of silent.
+        grid = None
+        pec_mask = None
+        pec_entry_masks: list[tuple[str, np.ndarray]] | None = None
+        materials_attempted = False
+        classification_unavailable_reason: str | None = None
+        is_nonuniform = (
+            self._dz_profile is not None
+            or self._dx_profile is not None
+            or self._dy_profile is not None
+        )
         for pe in self._ports:
             if not getattr(pe, "extent", None):
                 continue
@@ -2883,36 +2940,150 @@ class _PreflightMixin:
             centers, mid_idx = rasterized
             mid_center = centers[mid_idx]
 
-            pec_bboxes = []
-            for entry in self._geometry:
-                if entry.material_name != "pec":
-                    continue
-                if not hasattr(entry.shape, "bounding_box"):
-                    continue
-                try:
-                    c1, c2 = entry.shape.bounding_box()
-                except (NotImplementedError, TypeError):
-                    continue
-                pec_bboxes.append((entry.material_name, c1, c2))
+            if not materials_attempted:
+                materials_attempted = True
+                if is_nonuniform:
+                    classification_unavailable_reason = (
+                        "non-uniform mesh (dz_profile/dx_profile/"
+                        "dy_profile set) -- the shared ground-truth "
+                        "primitive only covers the uniform-grid path "
+                        "(issue #544)"
+                    )
+                else:
+                    try:
+                        grid = self._build_grid()
+                        _, _, _, pec_mask, _, _, _ = \
+                            self._assemble_materials(grid)
+                    except (ValueError, TypeError, NotImplementedError,
+                            KeyError, AttributeError, IndexError) as exc:
+                        # Defensive (matches ``_wire_port_cell_centers``):
+                        # preflight must never crash a run over a
+                        # diagnostics helper -- but this tuple is
+                        # DELIBERATELY NOT ``except Exception`` (CI
+                        # incident on PR #555's own head: a broad
+                        # ``except Exception`` here caught
+                        # ``rfx.experiments.worker.RunTimedOut``, a
+                        # ``TimeoutError`` subclass a SIGALRM handler
+                        # raises asynchronously while this exact call is
+                        # in flight -- ``execute_run`` arms the alarm
+                        # BEFORE calling ``compiled.preflight()``, so a
+                        # slow ``_assemble_materials`` here is squarely
+                        # inside the timeout window. Swallowing it here
+                        # meant the worker's top-level
+                        # ``except RunTimedOut`` handler never ran, so a
+                        # 1-second-timeout experiment kept simulating for
+                        # its full 500k-step run instead of exiting —
+                        # the worker process hung rather than dying,
+                        # timing out the parent's ``subprocess.wait``
+                        # (tests/test_durable_worker_lifecycle.py
+                        # ::test_worker_timeout_is_durable_failed_outcome,
+                        # 60s). ``rfx/api`` must not import
+                        # ``rfx.experiments`` to name that exception type
+                        # directly (wrong dependency direction), so the
+                        # general fix is this narrow, purpose-scoped
+                        # tuple: only the errors ``_build_grid``/
+                        # ``_assemble_materials`` are actually documented
+                        # to raise for a malformed config (bad domain,
+                        # unresolved material -- ``_resolve_material``
+                        # raises ``KeyError`` -- unsupported shape
+                        # method). Any signal-driven exception
+                        # (``TimeoutError``, ``RuntimeError``-based
+                        # cancellation, ``KeyboardInterrupt``,
+                        # ``MemoryError``, ...) now propagates through
+                        # this advisory untouched, exactly like it did
+                        # before this advisory existed.
+                        grid = None
+                        pec_mask = None
+                        classification_unavailable_reason = str(exc)
 
             dead_indices: list[int] = []
             dead_names: list[str] = []
-            for idx, center in enumerate(centers):
-                for name, c1, c2 in pec_bboxes:
-                    if all(c1[ax] <= center[ax] <= c2[ax] for ax in range(3)):
-                        dead_indices.append(idx)
-                        if name not in dead_names:
-                            dead_names.append(name)
-                        break
+            if grid is not None and pec_mask is not None:
+                from rfx.sources.sources import (
+                    WirePort, _wire_port_cells, _wire_port_live_cells,
+                )
+                axis = {"ex": 0, "ey": 1, "ez": 2}[pe.component]
+                end = list(pe.position)
+                end[axis] += pe.extent
+                wp = WirePort(
+                    start=tuple(pe.position), end=tuple(end),
+                    component=pe.component, impedance=pe.impedance,
+                )
+                try:
+                    cells, live_flags, _ = _wire_port_live_cells(
+                        grid, wp, pec_mask)
+                except ValueError:
+                    # Every extent cell is dead: _wire_port_live_cells
+                    # raises there (issue #318 — such a port has no live
+                    # cell to terminate or drive) instead of returning a
+                    # degenerate split. Report all cells dead.
+                    cells = _wire_port_cells(grid, wp)
+                    live_flags = [False] * len(cells)
+                dead_indices = [
+                    idx for idx, live in enumerate(live_flags) if not live
+                ]
+                if dead_indices:
+                    if pec_entry_masks is None:
+                        # Lazy (issue #544 review item 8): only rasterize
+                        # per-entry masks the first time any port actually
+                        # has a dead cell to name — the common clean case
+                        # (no dead cells anywhere) never pays for it.
+                        # Covers BOTH ``self._geometry`` PEC entries AND
+                        # ``self._thin_conductors`` PEC sheets (issue #544
+                        # review item 3: thin conductors also feed the
+                        # assembled ``pec_mask`` --
+                        # ``rfx/api/_compile.py``:232-238 -- and were
+                        # missing here, which produced an empty
+                        # ``dead_names`` and a false ``'pec'`` fallback
+                        # label for a thin-conductor-only dead cell).
+                        pec_entry_masks = []
+                        for entry in self._geometry:
+                            mat = self._resolve_material(entry.material_name)
+                            if mat.sigma < self._PEC_SIGMA_THRESHOLD:
+                                continue
+                            pec_entry_masks.append(
+                                (entry.material_name,
+                                 np.asarray(entry.shape.mask(grid)))
+                            )
+                        for _tc_i, tc in enumerate(self._thin_conductors):
+                            if not tc.is_pec:
+                                continue
+                            pec_entry_masks.append(
+                                (f"thin_conductor[{_tc_i}]",
+                                 np.asarray(tc.shape.mask(grid)))
+                            )
+                    for idx in dead_indices:
+                        ci, cj, ck = cells[idx]
+                        for name, mask_arr in pec_entry_masks:
+                            if (bool(mask_arr[ci, cj, ck])
+                                    and name not in dead_names):
+                                dead_names.append(name)
+                    if not dead_names:
+                        # Defensive net only: pec_mask is exactly the OR
+                        # of the per-entry masks above, so this should be
+                        # unreachable -- kept honest (an explicit
+                        # "unknown" label) rather than silently inventing
+                        # a specific, possibly wrong material name.
+                        dead_names = ["unknown"]
+            elif classification_unavailable_reason is not None:
+                _w.warn(
+                    PreflightWarning(
+                        f"Wire port at {pe.position} (extent {pe.extent}): "
+                        f"dead-cell classification unavailable "
+                        f"({classification_unavailable_reason}). The "
+                        f"#314/#319 PEC-overlap advisories are skipped "
+                        f"for this port -- verify manually that its "
+                        f"rasterized extent does not land on PEC.",
+                        code="wire_port_dead_cell_classification_unavailable",
+                        source="_validate_cfg_port_inside_pec",
+                    ),
+                    stacklevel=3,
+                )
 
             if mid_idx in dead_indices:
                 # Kept verbatim from the #314 fix (PR #317): probe-cell
                 # corruption is the stronger, measured failure mode.
-                name = next(
-                    name for name, c1, c2 in pec_bboxes
-                    if all(c1[ax] <= mid_center[ax] <= c2[ax]
-                           for ax in range(3))
-                )
+                name = dead_names[0] if dead_names else "an assembled PEC region"
                 _w.warn(
                     PreflightWarning(
                         f"Wire port at {pe.position} (extent "
@@ -2954,8 +3125,11 @@ class _PreflightMixin:
                         f"Verify the extent was MEANT to end on/inside "
                         f"the conductor, and keep the midpoint V/I probe "
                         f"cell live; to silence, shorten the extent or "
-                        f"move the port so every cell center sits "
-                        f"outside PEC.",
+                        f"move the port so none of its rasterized cells "
+                        f"land on PEC (per the assembled geometry -- not "
+                        f"a cell-center guess; a thin PEC sheet snaps to "
+                        f"its nearest grid NODE, which can be a full cell "
+                        f"away from the sheet's midpoint).",
                         code="wire_port_dead_extent_cells",
                         source="_validate_cfg_port_inside_pec",
                     ),
