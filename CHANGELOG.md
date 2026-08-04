@@ -6,6 +6,45 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased]
 
+### Changed — MSL AD gate objective replaced: band-mean |S21|^2, not sum_ij|S_ij|^2 (issues #530, #515)
+
+- `test_msl_ad_fd_converged_tight`'s differentiated objective was
+  `sum_ij|S_ij|^2` summed over the gate's frequency bins. For a passive
+  network `S^dagger S <= I`, so that sum is bounded by `2` per frequency —
+  `16` over the gate's 8 bins — and the measured loss, `16.00599`, was
+  99.96% that passivity-pinned structural constant: the gradient
+  differentiated only the remaining 0.037% residue, which is why the gate
+  went blind (issue #527) the first time an extractor fix (PR #516) moved
+  `|S|` closer to unitary, and would have gone blind again the next time.
+  Replaced with band-mean `|S21|^2` (`tests/_msl_ad_objective.py`, shared
+  with the AD smoke below so the two tests cannot drift apart), a
+  transmission-power quantity with real dynamic range that is not
+  passivity-pinned. New envelope measured on the owner platform
+  (gpu-rtx4090, VESSL): rel_err `0.0026` at the gate's `h=1e-3` (worst point
+  over a 5-point h-sweep: `0.0146`), new gate threshold `0.03` (derived via
+  `tests._gate_policy.gate_from_envelope`, down from the prior objective's
+  `0.10`). A planted defect (an issue-#483-class bug: `eps_override` frozen
+  before tracing) reds this gate at rel_err `1.0000`, 33x over the new
+  threshold, confirming it still discriminates a real defect.
+- `test_compute_msl_s_matrix_ad_smoke_has_finite_gradient` (issue #515)
+  asserted only `isfinite`/`not isnan`, which passed on a gradient of
+  exactly `0.0`. ONE root cause: the synthetic Hy/Hz test fixture was
+  degenerate — a spatially uniform H-field makes the Ampere-loop current
+  identity cancel exactly, collapsing the multi-drive `S = B*A^-1` solve to
+  `~Identity` regardless of the differentiated parameter OR which objective
+  read S21. (An earlier draft of this entry claimed a second, independent
+  defect — the old `Re(S21)` objective being "structurally flat" — that is
+  FALSIFIED: measured with the fixture fixed and `Re(S21)` unchanged,
+  `grad = -2.973442e-02`, nonzero and 6.4x LARGER than the new objective's
+  `-4.681417e-03`. `Re(S21)`'s `grad = 0.0` on main was a consequence of the
+  one fixture defect, not evidence of a second one.) Fixed by giving the
+  Hy/Hz planes a non-uniform (linear-ramp) shape. The objective was
+  ADDITIONALLY switched from `Re(S21)` to the gate's shared
+  `msl_band_mean_s21_sq` — not required to fix the zero gradient, done so
+  the smoke and the #530 tight gate cannot drift onto two hand-written
+  reductions — and the test now asserts a measured, non-zero gradient floor
+  instead of finiteness alone.
+
 ### Fixed — wire-port dead-cell preflight advisory now shares the assembler's ground-truth PEC mask (issue #544)
 
 - The `wire_port_dead_extent_cells`/`wire_port_midpoint_in_pec` preflight

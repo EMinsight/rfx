@@ -1,0 +1,99 @@
+name: rfx-msl-ad-band-mean-owner
+description: "#530/#515: owner-platform (gpu-rtx4090) measurement of the band-mean |S21|^2 AD gate objective replacement -- clones the PR branch fresh (the mounted primary checkout still points at main, not this branch) and runs scripts/diagnostics/msl_ad_band_mean_s21_owner_measurement.py"
+tags: [rfx, issue-530, issue-515, ad-fd, comparator]
+resources:
+  cluster: remilab-c0
+  preset: gpu-rtx4090
+image: nvcr.io/nvidia/jax:24.10-py3
+env:
+  PYTHONUNBUFFERED: "1"
+  XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+  HDF5_USE_FILE_LOCKING: "FALSE"
+  LANG: "C.UTF-8"
+  RFX_BRANCH: "msl-ad-band-mean-s21-objective"
+  RFX_EXPECT_SHA: "526831b30d674880d723990b4521b2f438648199"
+  # Opt-in: "1" restores the old hard-abort-on-mismatch behavior (exit 3
+  # instead of falling back to RFX_BRANCH). Default "0" keeps the
+  # loud-warning fallback below -- see the comment at the fetch/checkout
+  # block for why that is the default.
+  RFX_STRICT_SHA: "0"
+mount:
+  /root/workspace/: volume://remilab-fs/personal-workspaces/
+run: |-
+  set -euo pipefail
+  echo "=== rfx #530/#515 MSL AD band-mean|S21|^2 owner-platform measurement ==="
+  echo "=== this job clones RFX_BRANCH fresh -- it does NOT use the mounted"
+  echo "=== primary checkout, which stays on main (see script docstring) ==="
+  command -v git >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq git; }
+  CLONE_DIR=/tmp/rfx-clone
+  rm -rf "$CLONE_DIR"
+  mkdir -p "$CLONE_DIR"
+  cd "$CLONE_DIR"
+  git init -q
+  git remote add origin https://github.com/bk-squared/rfx.git
+  git config --global --add safe.directory "$CLONE_DIR" || true
+  # Fetch the PINNED SHA directly (GitHub allows fetching a reachable commit
+  # by SHA for a public repo, verified locally before this YAML was written)
+  # rather than `git clone --branch` + an abort-on-mismatch check. That older
+  # form made this harness a one-shot: once the branch tip moves past the
+  # pinned commit, or the branch is deleted after merge, the clone either
+  # fetches the WRONG code silently or the whole job hard-fails at line
+  # "exit 3" before any measurement runs. Fetching by SHA makes the pin the
+  # reproduction mechanism, not a post-hoc check on top of a branch clone --
+  # this keeps working after merge/branch-deletion for as long as GitHub
+  # retains the commit object (typically indefinitely for a merged PR's
+  # commits, reachable via the merge commit on the base branch).
+  if git fetch --depth 1 origin "$RFX_EXPECT_SHA" 2>&1; then
+    git checkout -q FETCH_HEAD
+  elif [ "$RFX_STRICT_SHA" = "1" ]; then
+    echo "FATAL: could not fetch RFX_EXPECT_SHA=$RFX_EXPECT_SHA directly and" \
+         "RFX_STRICT_SHA=1 -- aborting instead of falling back to RFX_BRANCH" \
+         "(the old one-shot behavior, restored by request)."
+    exit 3
+  else
+    echo "WARNING: could not fetch RFX_EXPECT_SHA=$RFX_EXPECT_SHA directly" \
+         "(commit may be unreachable/GC'd) -- falling back to RFX_BRANCH tip." \
+         "The measurement below is then NOT guaranteed to be the pinned commit;" \
+         "check the SHA printed below against RFX_EXPECT_SHA before trusting it." \
+         "Set RFX_STRICT_SHA=1 to abort here instead."
+    git fetch --depth 1 origin "$RFX_BRANCH"
+    git checkout -q FETCH_HEAD
+  fi
+  echo "=== provenance ==="
+  ACTUAL_SHA="$(git rev-parse HEAD)"
+  echo "expected SHA  : $RFX_EXPECT_SHA"
+  echo "checked-out SHA: $ACTUAL_SHA"
+  if [ "$ACTUAL_SHA" != "$RFX_EXPECT_SHA" ]; then
+    echo "NOTE: checked-out SHA does not match RFX_EXPECT_SHA -- this run used" \
+         "the RFX_BRANCH fallback above; the measurement below describes THAT" \
+         "commit, not necessarily the one this YAML's numbers were derived from."
+  fi
+  echo "=== install runtime dependencies (repo path, no editable install) ==="
+  python -m pip install -q "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7" pytest
+  export RFX_REPO_ROOT="$CLONE_DIR"
+  export PYTHONPATH="$RFX_REPO_ROOT:${PYTHONPATH:-}"
+  python -c "import jax, rfx; print('probe ok | jax', jax.__version__, '| devices', jax.devices(), '| rfx', getattr(rfx, '__version__', '?'))"
+  echo "=== owner-platform measurement: baseline + #483-class falsifier ==="
+  OUT_DIR="/root/workspace/byungkwan-workspace/research/rfx/.omx/msl-ad-band-mean-owner/$(date -u +%Y%m%dT%H%M%SZ)-${ACTUAL_SHA}"
+  mkdir -p "$OUT_DIR"
+  set +e
+  timeout 5400 python -u scripts/diagnostics/msl_ad_band_mean_s21_owner_measurement.py > "$OUT_DIR/measurement.log" 2>&1
+  rc=$?
+  set -e
+  cat "$OUT_DIR/measurement.log"
+  echo "$rc" > "$OUT_DIR/measurement.rc"
+  echo "artifacts persisted to (mounted, survives job teardown): $OUT_DIR"
+  echo "(the /tmp clone itself is ephemeral and is NOT the artifact store)"
+  echo "=== pytest: the actual rebuilt gate + its comparator-floor / dtype-lock tests ==="
+  set +e
+  timeout 5400 python -u -m pytest tests/test_msl_ad_fd_converged.py -m "" -q -ra -s > "$OUT_DIR/gate_pytest.log" 2>&1
+  gate_rc=$?
+  set -e
+  cat "$OUT_DIR/gate_pytest.log"
+  echo "$gate_rc" > "$OUT_DIR/gate_pytest.rc"
+  echo "gate pytest artifacts persisted to: $OUT_DIR/gate_pytest.log"
+  if [ "$rc" -ne 0 ] || [ "$gate_rc" -ne 0 ]; then
+    echo "FAIL: measurement.rc=$rc gate_pytest.rc=$gate_rc"
+    exit 1
+  fi
+  exit 0
