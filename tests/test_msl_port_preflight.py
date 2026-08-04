@@ -325,3 +325,353 @@ def test_reflector_clearance_silent_without_reflector():
     assert len(refl) == 0, (
         f"expected no reflector warning on thru-only short line, got: {refl}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #510: checks 1/3 above measure clearance at x_feed only, so a probe
+# SPAN could leave x_feed clear while the deepest probe (x_deep) lands
+# inside/near the absorber (4a, new below) or past a second port's own feed
+# plane (4b, new below) — check 4's reflector scan only sees PEC Box
+# geometry, not the absorber or a source discontinuity. Reproduction
+# geometry is the committed #488 diagnostic dump the issue cites: dx=80um,
+# domain_x=11.36mm (= 142 cells), CPML 8 layers, msl_0 at x=2.40mm '+x',
+# msl_1 at x=6.40mm '-x', n_probe_offset=31, n_probe_spacing=12, n_probes=5.
+# On that geometry msl_0's probes land at 4.88/5.84/6.80/7.76/8.72mm and
+# msl_1's at 3.92/2.96/2.00/1.04/0.08mm (issue body) -- msl_1's deepest
+# probe (0.08mm) is within the 2-cell/0.16mm proximity margin of the x=0
+# domain edge (NOT literally "inside the CPML" under the #500/#542
+# exterior-padding frame this fix routes through -- the issue's own
+# "x < 0.64mm" framing used the pre-#500 interior intuition), and both
+# ports' probe spans cross the OTHER port's feed plane (msl_0's span
+# [2.40, 8.72]mm contains msl_1's 6.40mm feed; msl_1's span [0.08, 6.40]mm
+# contains msl_0's 2.40mm feed).
+# ---------------------------------------------------------------------------
+def _two_port_sim(*, lx: float, msl1_x: float,
+                  msl0_offset: int = 31, msl1_offset: int = 31,
+                  n_probe_spacing: int = 12, n_probes: int = 5) -> Simulation:
+    dx = 80e-6
+    ly = W_TRACE + 8 * H_SUB
+    sim = Simulation(
+        freq_max=10e9, domain=(lx, ly, H_SUB + 1.5e-3), dx=dx,
+        cpml_layers=8,
+        boundary=BoundarySpec(
+            x="cpml", y="cpml", z=Boundary(lo="pec", hi="cpml"),
+        ),
+    )
+    sim.add_material("ro4350b", eps_r=EPS_R)
+    sim.add(Box((0, 0, 0), (lx, ly, H_SUB)), material="ro4350b")
+    y_c = ly / 2.0
+    sim.add(
+        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB + dx)),
+        material="pec",
+    )
+    sim.add_msl_port(position=(2.40e-3, y_c, 0), width=W_TRACE, height=H_SUB,
+                     direction="+x", impedance=50.0, n_probe_offset=msl0_offset,
+                     n_probe_spacing=n_probe_spacing, n_probes=n_probes,
+                     name="msl_0")
+    sim.add_msl_port(position=(msl1_x, y_c, 0), width=W_TRACE, height=H_SUB,
+                     direction="-x", impedance=50.0, n_probe_offset=msl1_offset,
+                     n_probe_spacing=n_probe_spacing, n_probes=n_probes,
+                     name="msl_1")
+    return sim
+
+
+def _absorber_span_msgs(msgs: list[str]) -> list[str]:
+    return [
+        m for m in msgs
+        if "CPML absorbing region" in m or "CPML absorber is active" in m
+    ]
+
+
+def _crossing_msgs(msgs: list[str]) -> list[str]:
+    return [m for m in msgs if "feed plane" in m]
+
+
+def test_issue510_reproduction_fires_both_new_warnings():
+    """The exact #488-dump geometry from the issue body: both new checks
+    must fire, naming the specific ports/probes involved."""
+    sim = _two_port_sim(lx=11.36e-3, msl1_x=6.40e-3)
+    msgs = _msl_warnings(sim)
+
+    absorber = _absorber_span_msgs(msgs)
+    assert absorber, f"expected an absorber-span advisory; got: {msgs}"
+    # Only msl_1's deepest probe (x=0.08mm) is within the proximity
+    # margin of the x=0 edge; msl_0's (x=8.72mm) is 2.64mm from the x-hi
+    # edge, far outside the 0.16mm margin.
+    assert any("msl_1" in m for m in absorber), absorber
+    assert not any("msl_0" in m for m in absorber), absorber
+    assert any("probe 4" in m and "0.08mm" in m for m in absorber), absorber
+
+    crossing = _crossing_msgs(msgs)
+    assert len(crossing) == 2, (
+        f"expected a feed-crossing advisory on BOTH ports, got: {crossing}"
+    )
+    assert any("msl_0" in m and "msl_1" in m and "6.40mm" in m for m in crossing), crossing
+    assert any("msl_1" in m and "msl_0" in m and "2.40mm" in m for m in crossing), crossing
+
+
+def test_issue510_clean_geometry_neither_new_warning_fires():
+    """Same probe-array parameters, but ports far enough apart that
+    neither the absorber-span nor the feed-crossing check has anything to
+    catch -- the half of the coverage that a warning-only test cannot
+    prove (a check that always fires is not a check)."""
+    sim = _two_port_sim(lx=20e-3, msl1_x=16.00e-3)
+    msgs = _msl_warnings(sim)
+    assert not _absorber_span_msgs(msgs), (
+        f"expected no absorber-span advisory on clean geometry; got: {msgs}"
+    )
+    assert not _crossing_msgs(msgs), (
+        f"expected no feed-crossing advisory on clean geometry; got: {msgs}"
+    )
+
+
+def test_issue510_absorber_span_falsifier_compliant_offset_silences_it():
+    """Falsifier for check 4a: the reproduction warning itself reports a
+    compliant n_probe_offset interval ([16, 30] cells on this fixture);
+    moving msl_1 inside it (offset=20) must silence the advisory."""
+    sim = _two_port_sim(lx=11.36e-3, msl1_x=6.40e-3, msl1_offset=20)
+    msgs = _msl_warnings(sim)
+    assert not _absorber_span_msgs(msgs), (
+        f"expected no absorber-span advisory at compliant offset=20; got: {msgs}"
+    )
+
+
+def test_issue510_feed_crossing_falsifier_separated_ports_silences_it():
+    """Falsifier for check 4b: moving msl_1 far enough from msl_0 (same
+    probe-array parameters) that neither probe span reaches the other
+    port's feed must silence the crossing advisory."""
+    sim = _two_port_sim(lx=11.36e-3, msl1_x=9.60e-3)
+    msgs = _msl_warnings(sim)
+    assert not _crossing_msgs(msgs), (
+        f"expected no feed-crossing advisory once ports are separated; got: {msgs}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #510 review round (PR #551 adversarial review, 3 BLOCKING findings):
+#
+# BLOCKING 1: the advertised compliant n_probe_offset interval's upper
+# endpoint was computed by ALGEBRAIC INVERSION of the two absorber
+# predicates (float division then int() truncation). Float64 arithmetic put
+# the endpoint on the wrong side of an FP knife edge whenever the true
+# boundary landed within about one ULP of an exact dx multiple -- reviewer's
+# brute-force sweep found ~12k (dx, spacing, feed, domain) combinations
+# where the ADVERTISED endpoint itself still tripped the very warning it
+# claimed to clear. Fixed by msl_absorber_compliant_offset_max: walk
+# candidate offsets DOWN from a deliberately generous starting guess and
+# test the REAL predicate (via the extractor's own msl_probe_x_coords_n) at
+# each one, so the result is verified compliant by construction.
+#
+# BLOCKING 2: x_deep was a continuous-coordinate extrapolation
+# (x_feed + offset*dx), but the extractor places probes by GRID INDEX with
+# rounding and clamping (rfx.sources.msl_port._msl_x_for_index /
+# msl_probe_x_coords_n). Consequences: (a) up to dx/2 model error for a
+# feed that is not itself grid-aligned -- the same order as the 2-cell
+# absorber-proximity decision margin; (b) when the offset+spacing ladder
+# runs past the grid, several probes CLAMP onto the same cell, and the
+# pre-fix overlap message named a coordinate the real extractor never
+# visits. Fixed by routing x_deep through the same msl_probe_x_coords_n
+# call the extractor uses, and adding a distinct degenerate-ladder
+# advisory when probes collapse.
+#
+# BLOCKING 3: the 4b lumped/wire else-branch label was untested and, when
+# exercised, read "...port at x=6.40mm (component='ez')'s feed plane at
+# x=6.40mm" -- the coordinate stated twice, and a possessive glued onto a
+# parenthetical. Reworded to state the crossing coordinate exactly once
+# with no possessive.
+# ---------------------------------------------------------------------------
+def _degenerate_ladder_msgs(msgs: list[str]) -> list[str]:
+    return [m for m in msgs if "runs past the grid and CLAMPS" in m]
+
+
+def test_issue510_absorber_offset_interval_endpoint_does_not_warn():
+    """BLOCKING 1: in THIS repo's own reproduction fixture the buggy
+    algebra (before the fix) evaluated ``(6.40e-3 - 0.16e-3) / 80e-6`` to
+    ``77.99999999999999`` in float64 -- one below the mathematically exact
+    78 -- and advertised ``[16, 29]`` where the walk-down-verified boundary
+    is actually 30 (x_deep=0.16mm sits EXACTLY at the proximity margin,
+    which the strict-less-than predicate treats as compliant). This
+    fixture's bug happened to under-report (safe direction); extract
+    whatever the CURRENTLY-advertised endpoint is from the live warning
+    (not a hardcoded expectation) and confirm it, used as n_probe_offset,
+    draws no absorber-span advisory -- the general property BLOCKING 1
+    asked for, on real Simulation-level output."""
+    import re
+
+    sim = _two_port_sim(lx=11.36e-3, msl1_x=6.40e-3)
+    msgs = _absorber_span_msgs(_msl_warnings(sim))
+    assert msgs, "expected the absorber-span advisory to fire"
+    m = re.search(r"interval ≈ \[(\d+), (\d+)\] cells", msgs[0])
+    assert m, f"expected a compliant-interval clause in: {msgs[0]}"
+    off_lo, off_hi = int(m.group(1)), int(m.group(2))
+    assert off_lo == 16, f"expected the unchanged lower bound 16; got {off_lo}"
+    assert off_hi == 30, (
+        f"expected the walk-down-verified endpoint 30 (pre-fix buggy "
+        f"algebra advertised 29 on this fixture); got {off_hi} in "
+        f"{msgs[0]!r}"
+    )
+
+    sim2 = _two_port_sim(lx=11.36e-3, msl1_x=6.40e-3, msl1_offset=off_hi)
+    msgs2 = _absorber_span_msgs(_msl_warnings(sim2))
+    assert not msgs2, (
+        f"advertised endpoint n_probe_offset={off_hi} must NOT itself "
+        f"trip the absorber-span advisory; got: {msgs2}"
+    )
+
+
+def test_issue510_absorber_offset_max_endpoint_verified_across_geometries():
+    """BLOCKING 1 continued: the reviewer's sweep found the FP-knife-edge
+    failure in BOTH directions -- this repo's own fixture happened to
+    under-report (safe), but other geometries over-reported (advertised an
+    offset that still trips). Sweep a grid of small integer-cell
+    geometries directly against msl_absorber_compliant_offset_max and
+    verify the returned endpoint, plugged into the SAME
+    msl_probe_x_coords_n arithmetic the real extractor uses, never trips
+    either absorber predicate. The walk-down cannot fail this by
+    construction -- this is a construction check, not a search for a
+    counterexample."""
+    import math
+
+    from rfx.api._preflight import (
+        _coord_in_absorber,
+        _coord_near_absorber,
+        msl_absorber_compliant_offset_max,
+    )
+    from rfx.grid import Grid
+    from rfx.sources.msl_port import MSLPort, msl_probe_x_coords_n
+
+    dx = 80e-6
+    n_pr = 5
+    ct = 2 * dx
+    n_checked = 0
+    n_found_endpoint = 0
+    for n_sp in (2, 3, 12):
+        for feed_cells in range(4, 16):
+            for domain_cells in range(feed_cells + 40, feed_cells + 70, 3):
+                domain_x = domain_cells * dx
+                feed_x = feed_cells * dx
+                headroom = domain_x - feed_x
+                guess_hi = int(math.ceil(headroom / dx)) - (n_pr - 1) * n_sp + 4
+                grid = Grid(freq_max=10e9, domain=(domain_x, 4e-3, 2e-3),
+                           dx=dx, cpml_layers=2)
+                port = MSLPort(feed_x=feed_x, y_lo=1e-3, y_hi=2e-3,
+                               z_lo=0.0, z_hi=1e-3, direction="+x",
+                               impedance=50.0)
+                off_max = msl_absorber_compliant_offset_max(
+                    grid, port, n_probes=n_pr, n_spacing=n_sp, off_lo=3,
+                    domain_x=domain_x, ct_lo=ct, ct_hi=ct, dx=dx,
+                    guess_hi=guess_hi,
+                )
+                n_checked += 1
+                if off_max is None:
+                    continue
+                n_found_endpoint += 1
+                ladder = msl_probe_x_coords_n(
+                    grid, port, n_probes=n_pr,
+                    n_offset_cells=off_max, n_spacing_cells=n_sp,
+                )
+                x_deep = ladder[-1]
+                assert not _coord_in_absorber(x_deep, domain_x, ct, ct), (
+                    n_sp, feed_cells, domain_cells, off_max, x_deep,
+                )
+                assert not _coord_near_absorber(x_deep, domain_x, ct, ct, dx), (
+                    n_sp, feed_cells, domain_cells, off_max, x_deep,
+                )
+    assert n_checked >= 300, n_checked
+    assert n_found_endpoint > 0, "sweep never found a compliant endpoint to verify"
+
+
+def test_issue510_absorber_span_names_real_snapped_coordinate_off_grid_feed():
+    """BLOCKING 2(a): offset msl_1's feed by half a cell off-grid. The
+    extractor's own probe placement (msl_probe_x_coords_n) rounds the feed
+    to the nearest grid node BEFORE walking the offset ladder, so the real
+    deepest-probe coordinate can differ from the naive continuous formula
+    ``x_feed + offset*dx`` (which never snaps the feed at all). Confirm the
+    emitted message names the coordinate msl_probe_x_coords_n actually
+    returns, not the continuous extrapolation."""
+    from rfx.sources.msl_port import MSLPort, msl_probe_x_coords_n
+
+    off_grid_x = 6.40e-3 + 40e-6  # half a cell off-grid at dx=80um
+    sim = _two_port_sim(lx=11.36e-3, msl1_x=off_grid_x)
+    msgs = _absorber_span_msgs(_msl_warnings(sim))
+    assert msgs, f"expected the advisory to still fire; got: {_msl_warnings(sim)}"
+
+    # Ground truth: the SAME production call the check itself makes.
+    grid = sim._build_grid()
+    y_c = (W_TRACE + 8 * H_SUB) / 2.0
+    port = MSLPort(feed_x=off_grid_x, y_lo=y_c - W_TRACE / 2, y_hi=y_c + W_TRACE / 2,
+                    z_lo=0.0, z_hi=H_SUB, direction="-x", impedance=50.0)
+    ladder = msl_probe_x_coords_n(grid, port, n_probes=5,
+                                  n_offset_cells=31, n_spacing_cells=12)
+    x_deep_real = ladder[-1]
+    x_deep_continuous = off_grid_x - (31 + 4 * 12) * 80e-6
+    assert abs(x_deep_real - x_deep_continuous) > 1e-9, (
+        "fixture did not actually exercise an off-grid feed discrepancy"
+    )
+
+    hit = msgs[0]
+    assert f"x={x_deep_real * 1e3:.2f}mm" in hit, (
+        f"expected the real grid-snapped coordinate "
+        f"{x_deep_real * 1e3:.2f}mm in the message; got: {hit}"
+    )
+    assert f"x={x_deep_continuous * 1e3:.2f}mm" not in hit, (
+        f"message must not name the continuous-extrapolation coordinate "
+        f"{x_deep_continuous * 1e3:.2f}mm; got: {hit}"
+    )
+
+
+def test_issue510_degenerate_ladder_warns_on_clamped_probes():
+    """BLOCKING 2(b): a probe-array ladder that runs past the grid edge
+    CLAMPS -- several probes land on the SAME cell instead of spreading
+    out, making the N-probe least-squares fit rank-deficient. This must
+    draw its own distinct advisory (not just the absorber-overlap message,
+    which fires separately on the same honest, clamped x_deep)."""
+    sim = _two_port_sim(lx=11.36e-3, msl1_x=1.00e-3,
+                        msl0_offset=31, msl1_offset=18, n_probe_spacing=12)
+    msgs = _msl_warnings(sim)
+    degenerate = _degenerate_ladder_msgs(msgs)
+    assert degenerate, f"expected a degenerate-ladder advisory; got: {msgs}"
+    hit = degenerate[0]
+    assert "msl_1" in hit, hit
+    assert "3 duplicate probe position" in hit, hit
+    assert "2 of 5 probes land on distinct grid cells" in hit, hit
+
+
+def test_issue510_feed_crossing_names_lumped_port_cleanly():
+    """BLOCKING 3: drives an MSL probe span across a LUMPED port's feed
+    (the 4b else-branch, previously untested) and asserts the cleaned-up
+    wording -- the crossing coordinate stated exactly once, and no
+    possessive glued onto the parenthetical component tag."""
+    dx = 80e-6
+    lx = 11.36e-3
+    ly = W_TRACE + 8 * H_SUB
+    sim = Simulation(
+        freq_max=10e9, domain=(lx, ly, H_SUB + 1.5e-3), dx=dx,
+        cpml_layers=8,
+        boundary=BoundarySpec(
+            x="cpml", y="cpml", z=Boundary(lo="pec", hi="cpml"),
+        ),
+    )
+    sim.add_material("ro4350b", eps_r=EPS_R)
+    sim.add(Box((0, 0, 0), (lx, ly, H_SUB)), material="ro4350b")
+    y_c = ly / 2.0
+    sim.add(
+        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB + dx)),
+        material="pec",
+    )
+    sim.add_msl_port(position=(2.40e-3, y_c, 0), width=W_TRACE, height=H_SUB,
+                     direction="+x", impedance=50.0, n_probe_offset=31,
+                     n_probe_spacing=12, n_probes=5, name="msl_0")
+    sim.add_port(position=(6.40e-3, y_c, H_SUB), component="ez", excite=False)
+
+    msgs = _crossing_msgs(_msl_warnings(sim))
+    assert msgs, f"expected a feed-crossing advisory naming the lumped port; got: {_msl_warnings(sim)}"
+    hit = msgs[0]
+    assert "lumped/wire port" in hit, hit
+    assert "component='ez'" in hit, hit
+    assert hit.count("6.40mm") == 1, (
+        f"expected the crossing coordinate stated exactly once; got: {hit}"
+    )
+    assert "')'s" not in hit and ")'s" not in hit, (
+        f"expected no possessive glued onto the parenthetical; got: {hit}"
+    )
