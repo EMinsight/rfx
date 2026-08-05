@@ -61,6 +61,12 @@ class NonUniformGrid(NamedTuple):
                            # Readers must not apply float() / .item() without
                            # an is_tracer(dt) guard or a host-boundary context.
     cpml_layers: int
+    # Cell-size arrays are padded AND carry one trailing duplicate cell so N
+    # cells are bounded by N+1 E-nodes (#562, see _append_bounding_node). The
+    # duplicate is a node-provider, not physical extent: its H term is the one
+    # the stencil zeroes. Read extents from node positions
+    # (coords_from_nonuniform_grid, or cumsum edges up to index nx-1) — NEVER
+    # from sum(dx_arr), which overshoots by that trailing cell.
     # Pre-computed inverse spacing arrays (length N, padded).
     # CORE-C2: inv_d* feed the E update (mean spacing), inv_d*_h feed
     # the H update (local cell width). See _profile_to_inv_arrays.
@@ -119,6 +125,47 @@ def _pad_profile(profile, pad_lo: int, pad_hi: int | None = None):
     lo_pad = np.full(pad_lo, float(profile[0]))
     hi_pad = np.full(pad_hi, float(profile[-1]))
     return np.concatenate([lo_pad, np.asarray(profile, dtype=np.float64), hi_pad])
+
+
+def _append_bounding_node(profile_full):
+    """Append one duplicate boundary cell so an N-cell profile yields N+1
+    E-nodes — the node count the uniform ``Grid`` allocates for N cells.
+
+    N cells are bounded by N+1 nodes, and the E-nodes this grid steps sit on
+    cell EDGES (``inv_d_e[i] = 2/(d[i-1]+d[i])`` is the dual spacing of an
+    edge-centred node). Without this the array carried only N nodes, the
+    stencil zeroed the last cell's H term (``inv_d_h[N-1] = 0``), and the
+    realized wall-to-wall extent came out ``sum(d) - d[-1]`` — one cell
+    short of what the caller asked for (#562: +2.47 % of TM110 on a
+    45 x 39-cell PEC box, +37 MHz of WR-90 TE101 centre frequency from the
+    guide-width axis alone).
+
+    Duplicating the boundary cell is what makes the far node's coefficient
+    the mirror of the near one's: ``inv_d_e[N] = 2/(d[N-1]+d[N])``, which is
+    ``1/d[N-1]`` exactly when ``d[N] == d[N-1]``, matching the existing
+    ``inv_d_e[0] = 1/d[0]`` boundary treatment. The appended cell's own H
+    term is the one the stencil zeroes, so it adds a node without adding a
+    cell of physical extent.
+    """
+    if is_tracer(profile_full):
+        return jnp.concatenate([profile_full, profile_full[-1:]])
+    return np.concatenate([profile_full, profile_full[-1:]])
+
+
+def interior_cells(d_full, pad_lo: int, pad_hi: int):
+    """The physical interior cells of a padded NU cell-size array.
+
+    The array is ``[lo pad | interior | hi pad | bounding-node duplicate]``
+    (#562, see ``_append_bounding_node``), so the interior ends one entry
+    before ``len - pad_hi``. Slicing without that ``-1`` pulls in a pad cell
+    — or the duplicate itself on a face with no pad — and overstates the
+    extent by one cell, which is the same class of error #562 was.
+
+    Returns the CELLS; ``np.insert(np.cumsum(cells), 0, 0.0)`` then gives the
+    ``N+1`` interior NODE positions, the last of which lands exactly on the
+    requested domain face.
+    """
+    return d_full[pad_lo : len(d_full) - pad_hi - 1]
 
 
 def _profile_to_inv_arrays(profile_full: np.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -243,7 +290,7 @@ def make_nonuniform_grid(
                 f"dx_profile[-1]={float(dx_prof_phys[-1])} must equal boundary "
                 f"dx={float(dx)}."
             )
-    dx_full = _pad_profile(dx_prof_phys, pad_x_lo, pad_x_hi)
+    dx_full = _append_bounding_node(_pad_profile(dx_prof_phys, pad_x_lo, pad_x_hi))
     nx = int(dx_full.shape[0])
 
     # --- y profile ---
@@ -266,11 +313,11 @@ def make_nonuniform_grid(
                 f"dy_profile boundary cells must match each other "
                 f"(got lo={dy_boundary}, hi={float(dy_prof_phys[-1])})."
             )
-    dy_full = _pad_profile(dy_prof_phys, pad_y_lo, pad_y_hi)
+    dy_full = _append_bounding_node(_pad_profile(dy_prof_phys, pad_y_lo, pad_y_hi))
     ny = int(dy_full.shape[0])
 
     # --- z profile ---
-    dz_full = _pad_profile(dz_profile, pad_z_lo, pad_z_hi)
+    dz_full = _append_bounding_node(_pad_profile(dz_profile, pad_z_lo, pad_z_hi))
     nz = int(dz_full.shape[0])
 
     # --- CFL from minimum cell size on every axis ---
@@ -323,7 +370,7 @@ def _interior_line_positions(
     """
     if pad_hi is None:
         pad_hi = pad_lo
-    interior = d_arr_np[pad_lo : len(d_arr_np) - pad_hi]
+    interior = interior_cells(d_arr_np, pad_lo, pad_hi)
     edges = np.insert(np.cumsum(interior), 0, 0.0)
     return edges
 
