@@ -35,16 +35,43 @@ composition change, not a claim about which physical channel (beta,
 reference-plane mismatch, or something else) drives d(loss)/d(alpha), is
 the #530 cure. (An earlier draft of this docstring claimed the objective
 "moves directly with... guided wavelength via beta" -- that mechanism is
-UNMEASURED; a sign witness in the gate's own fixture points elsewhere, at
+UNMEASURED; a sign witness in the gate's own fixture pointed elsewhere, at
 the wave-split's FROZEN Hammerstad-Jensen Z0 reference rather than a
 beta-driven standing-wave shift, which would have no particular sign
-preference. Whether the gradient is dominantly a reference-plane artifact
-or genuine beta/reflection physics is an OPEN question, tracked in
-**issue #560** (not run there either -- #560 is the tracker, not the
-answer) -- see ``tests/test_msl_ad_fd_converged.py``'s docstring,
-"GATE REBUILT", for the decisive z0_fit-vs-z0_hj probe that would settle
-it.) It is computed from the SAME ``compute_msl_s_matrix``
-call the old objective used; only the post-call reduction changes.
+preference. **RESOLVED, issue #560, 2026-08-06**: the decisive probe
+(``scripts/diagnostics/msl_ad_z0_anchor_probe.py``, full run log
+``scripts/diagnostics/msl_ad_z0_anchor_probe_run_20260806.md``) re-ran
+``jax.grad`` of this exact objective on the gate's own fixture with the
+wave split's frozen analytic ``z0_hj`` anchor swapped for a FROZEN
+per-port FITTED z0 (measured at alpha=1, held constant): ``|g_ad|``
+collapsed from ``1.602236e-03`` (the headline value; from an UN-repeated
+run -- the bit-exact 2/2-deterministic value is ``6.884444e-05`` under a
+CLI-rounded anchor, ratio 23.273 vs the headline's 23.271, agreeing to 4
+significant figures) to ``6.885110e-05``. This satisfies issue #560's own
+QUALITATIVE criterion ("drops toward the FD-unresolvable floor") directly:
+the estimated FD signal for ``g_b`` at the gate's h is only ~1.16 ULP of a
+float32 loss, below the 4.449 ULP issue #527 measured for the RETIRED
+objective's comparator and declared untrustworthy -- g_b is noise-floor by
+this repo's own established standard. (The "~23.3x, past a 5x threshold"
+framing is this PR's OWN pre-declared secondary check, not a quote from
+#560 -- an earlier draft of this note wrongly attributed "5x" to the issue
+body, which contains no such number; see the probe script's docstring for
+the correction and the full derivation.) The reference-plane mismatch
+(mechanism 2) is therefore the DOMINANT channel, not genuine
+beta/standing-wave physics (mechanism 1). Read a gradient on this
+objective as "how far the frozen wave-split reference sits from the
+line's true impedance", not as "the line's electrical response to
+substrate permittivity". This does NOT affect
+``test_msl_ad_fd_converged_tight``'s validity as an AD-vs-FD comparator --
+see that test's docstring for why. Separately, anchor B's own loss
+exceeded 1 (band-mean ``|S21|**2`` > 1, expected for the raw unprojected
+``eps_override`` channel -- see ``compute_msl_s_matrix``'s docstring), which
+is itself evidence the fitted anchor is not self-evidently "more correct";
+whether ``compute_msl_s_matrix``'s PRODUCTION wave split should anchor on
+the fitted z0 is therefore a SEPARATE, undecided design question this PR
+does not settle.) It is computed from the SAME
+``compute_msl_s_matrix`` call the old objective used; only the post-call
+reduction changes.
 
 USAGE
 -----
