@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "updated": "2026-08-04",
+  "version": 4,
+  "updated": "2026-08-06",
   "result_convention": {
     "full_s_matrix_shape": "(n_ports, n_ports, n_freqs)",
     "frequency_shape": "(n_freqs,)",
@@ -516,6 +516,62 @@
       ],
       "ad_traceable": "no",
       "ad_evidence": "not wired to the differentiable forward lane (imperative only)"
+    },
+    {
+      "primitive": "add_coaxial_port(...) + add_msl_port(...) driven by compute_coax_msl_transition(...)",
+      "family": "coax_msl_transition",
+      "is_port": false,
+      "support_status": "experimental_diagnostic_not_in_validated_set",
+      "calculation_api": [
+        "Simulation.compute_coax_msl_transition(...)"
+      ],
+      "result_type": "CoaxMSLTransitionResult",
+      "supported_configurations": [
+        "uniform second-order Yee mesh only, float32, boundary='cpml' on all six faces (cpml_axes='xyz')",
+        "exactly one add_coaxial_port(face='bottom') plus exactly one add_msl_port(...)",
+        "the coax stub (source, matched annular-resistor feed, probe array) is built internally, mirroring compute_coaxial_two_port's own single-ended stub",
+        "the junction geometry (ground plane, clearance hole, pin-to-trace post, substrate, trace) is the caller's own registered Box/Cylinder geometry, mirroring compute_mixed_s_matrix's own MSL-DUT delegation",
+        "imperative forward path only (no AD channel for this leg)"
+      ],
+      "validation_status": "EXPERIMENTAL, DIAGNOSTIC-ONLY. The power-wave cross-family normalization (per-port sqrt(Z0) division before the two-drive solve) is validated by planted-voltage unit tests under UNEQUAL port impedances, independent of any FDTD run. The one committed FDTD fixture is internally self-consistent (finite, deterministic, settles below -40 dB) but trips its own pre-declared reciprocity falsifier: |S12| vs |S21| disagree by 94-100% across the three measured frequencies, with the two-drive solve's raw cond_a in the 1e3-1e7 range at every bin. ATTRIBUTION (corrected after adversarial PR #581 review, findings B2/B3 -- the original attribution, 'near-degenerate two-drive amplification from junction reflection', did NOT survive its own data): cond_a_equilibrated (column-equilibrated, invariant to per-drive amplitude scale) is near 1 (1.0004/1.0001/1.0040) with near-ORTHOGONAL incident-wave columns, refuting near-parallelism; |S22| is 0.000/0.000/0.500 (not uniformly near 1), refuting 'both ports strongly reflecting'; the actual signature is a 5-9-order-of-magnitude drive-amplitude mismatch between the two unrelated source constructions (coax TEM plane source vs MSL Ez injection). The PREDECLARED alternative -- an MSL wave-extraction instrument-scoping limit, not junction physics -- is positively supported instead: the MSL probe ladder spans only 0.34%-3.37% of the guided wavelength, and the fitted propagation constant on the MSL array does not track analytic Hammerstad-Jensen beta at all (off by 4-32x, non-monotonic with frequency, and the two drives' own independent fits of the SAME array disagree by 1-2 orders of magnitude). Whether junction reflection ALSO contributes is genuinely UNRESOLVED by this one fixture -- preflight names a third, also-unruled-out candidate (the MSL port sits 200um from its own x-CPML face; 'source-side CPML reflection may inflate |S11|') -- but the extraction-class explanation is the better-supported one and NAMES the implementation defect (probe ladder length) that would justify a future, separately pre-declared retry. Do not cite this family as a validated transition, and do not cite the reciprocity/degeneracy numbers as evidence about coax-to-MSL launch physics in general -- they are dominated by this fixture's own MSL-side instrument scoping.",
+      "known_limits": [
+        "reciprocity falsifier TRIPPED on the one committed fixture (94-100% deviation) -- locked as a regression/reproducibility witness in tests/test_coax_msl_transition.py, not as a passing accuracy gate",
+        "root cause (corrected after review, PR #581 B2/B3): the MSL probe ladder spans only 0.34%-3.37% of the guided wavelength on this fixture, too short for the matrix-pencil forward/backward split to resolve -- an instrument-scoping limit of the probe geometry, NOT confirmed junction physics and NOT an assembler defect (the power-wave normalization is independently verified correct by the planted-voltage tests) and NOT a missing-PEC defect (independently verified by tests/test_coax_msl_transition.py::test_pin_axis_pec_connectivity_is_continuous)",
+        "raw cond_a (1e3-1e7) is dominated by a 5-9-order-of-magnitude per-drive amplitude-scale mismatch between the coax and MSL source constructions, not geometric near-degeneracy -- see cond_a_equilibrated (near 1) on CoaxMSLTransitionResult",
+        "a third, unruled-out candidate mechanism: preflight flags the MSL port as only 200um from its own x-CPML face (recommended 600um), which could independently contaminate the MSL-side near-field measurement",
+        "off-diagonal magnitude on the one fixture is near-zero and unreliable given the above",
+        "the MSL side is extracted via the coax matrix-pencil fit (coaxial_line_reflection_from_plane_voltages) rather than the mixed lane's own N-probe fit, a deliberate deviation made because the coax fit deterministically pins the propagation-constant branch while the N-probe fit's sign is documented as unstable",
+        "preflight on the committed fixture also flags: pin-post diameter under the 5-cell PEC-volume floor, 3-cell substrate flagged for >5% Z0 staircase bias",
+        "no external-solver referee has been run",
+        "AD is out of scope for this leg (no eps_scale-style channel)",
+        "waveguide, Floquet, TFSF, lumped RLC, and any second coaxial or MSL port are all rejected loudly"
+      ],
+      "evidence_level": "experimental/diagnostic-single-fixture",
+      "validation_gaps": [
+        "no external-solver cross-check",
+        "no mesh-convergence study",
+        "single fixture class (vertical coax landing on a grounded substrate edge, thin unmatched pin-to-trace post, no matching structure, MSL probe ladder far shorter than a usable fraction of a guided wavelength)",
+        "the one fixture's own reciprocity falsifier is tripped, not passing, and the dominant cause is believed to be the probe-ladder instrument scoping rather than the junction -- a longer-ladder retry has not been run"
+      ],
+      "evidence_artifacts": [
+        "tests/test_coax_msl_transition.py"
+      ],
+      "numeric_metrics": [
+        "reciprocity deviation 94-100% across 3 frequencies (0.6/3.3/6.0 GHz), one committed fixture, dx=100um",
+        "cond_a (raw) 7.0e4 / 4.6e3 / 4.3e7; cond_a_equilibrated 1.0004 / 1.0001 / 1.0040 at the same 3 frequencies -- the equilibrated value is the geometric-degeneracy discriminant, near 1 (not degenerate)",
+        "a_inc magnitude (own drive): coax 5.8e-9/5.8e-8/3.0e-9, msl 8.2e-14/1.3e-11/7.1e-17 -- 5-9 orders of magnitude apart",
+        "MSL array fitted Im(gamma) (coax-driven) 673.0/853.6/885.0 rad/m vs analytic Hammerstad-Jensen beta 21.2/116.4/211.7 rad/m (4-32x off, non-monotonic with frequency)",
+        "MSL probe ladder span 1.000 mm = 0.34%-3.37% of the guided wavelength at the 3 measured frequencies",
+        "settling_db -43.9 dB (coax drive) / -63.6 dB (msl drive) at N_STEPS=8000"
+      ],
+      "validated_scope": "NONE -- this is a diagnostic CALCULATION over the already-registered coaxial_port and microstrip_line port families, not a new port primitive and not a validated result. Listed so the matrix does not read as 'a coax<->MSL transition is impossible in rfx'.",
+      "caveats": [
+        "quote the preflight output and settling_db with any number from this lane",
+        "the reciprocity falsifier is TRIPPED on the one committed fixture -- read the finding (probe-ladder instrument scoping, not confirmed junction physics), do not treat a future silent pass as evidence of a fix without a new falsifier re-run",
+        "do not read cond_a alone as a degeneracy witness on this lane -- use cond_a_equilibrated (per-drive amplitude scale dominates raw cond_a on a mixed-family lane)"
+      ],
+      "ad_traceable": "no",
+      "ad_evidence": "not wired to the differentiable forward lane (imperative only); no eps_scale-style channel exists for this leg"
     }
   ],
   "physics_evidence_rule": "docs/guides/physics_validation_evidence_rule.md",

@@ -48,6 +48,7 @@ guard. An absent warning therefore cannot be compared across port families.
 | `add_coaxial_port(...)` | `compute_coaxial_line_reflection(...)` | `CoaxialLineReflectionResult` | **limited** — exactly one `face="top"` port; broad-E5 analytic and broad-E4 MEEP evidence for the documented TEM-line result |
 | `add_coaxial_port(...)` | `compute_coaxial_s_matrix(...)` | `CoaxialSMatrixResult` | **experimental and deprecated** — older single-plane V/I path; can produce non-physical `\|S11\| > 1` for a lossless short |
 | `add_coaxial_port(...)` | `compute_coaxial_two_port(...)` | `CoaxialTwoPortResult` | **experimental** (issue #489 stage 2) — two-drive through-line 2-port solve; every DUT it can currently gate against is azimuthally symmetric (TM0n only); an external openEMS referee is now REGISTERED (`validation/crossval/21_coax_two_port_referee.py`, promoted 2026-08-04) bracketing the through-line class — it builds and runs its own independent openEMS model offline and does not execute rfx in-process; EXPERIMENTAL status stands until the transition/AD legs close; no phase claim |
+| `add_coaxial_port(...)` + `add_msl_port(...)` | `compute_coax_msl_transition(...)` | `CoaxMSLTransitionResult` | **experimental, diagnostic-only** (issue #489 leg 4) — coax-to-microstrip transition, two-drive; one committed fixture, and it trips its own reciprocity falsifier (see the section below) — do not treat as a validated transition |
 | `add_floquet_port(...)` | no documented high-level S-parameter API | none | **experimental** — broadside diagnostic helpers only; no calibrated Floquet-port result |
 | Sources, TFSF, probes, DFT planes, flux monitors | none | field, resonance, or flux results | **not a port** — no impedance or S-matrix reference plane |
 
@@ -644,3 +645,108 @@ Two further cautions on this lane, both measured rather than anticipated:
   any entry is non-passive it rewrites others as a side effect. On the committed test
   fixture the shipped MSL diagonal came out ~4× its unprojected value. Read `S_raw` and
   `passivity_correction` for what was actually measured.
+
+## Coax<->MSL transition — EXPERIMENTAL, diagnostic-only (issue #489 leg 4)
+
+```python
+res = sim.compute_coax_msl_transition(junction_x=..., eps_r_sub=...)
+```
+
+Generalizes the mixed-family idea above to a coax<->microstrip launch instead
+of lumped/wire<->MSL, but by a DIFFERENT route: rather than extending
+`compute_mixed_s_matrix`'s own machinery (which is deeply specific to the
+lumped/wire family — flux-box geometry, port-cell V·I, the analytic
+Hammerstad-Jensen anchor baked into its guards), this method combines the
+LESS-INVASIVE half of each existing family's own validated machinery
+unchanged: the coax side is built exactly like `compute_coaxial_two_port`'s
+own single-ended stub (TEM source, matched annular-resistor feed, probe
+array — reused verbatim, just one end instead of two); the MSL side is
+consumed exactly like `compute_mixed_s_matrix` consumes its own MSL ports
+(arbitrary caller-registered substrate/trace/ground-plane/pin-post geometry
+via ordinary `sim.add(Box(...)/Cylinder(...), material=...)`). Both ports'
+forward/backward wave amplitudes come from the SAME extractor,
+`coaxial_line_reflection_from_plane_voltages` (a Z0-free matrix-pencil fit) —
+applied to the coax probe ladder AND, deliberately, to the MSL probe ladder
+too, in place of the mixed lane's own N-probe SVD fit (`extract_msl_nprobe`),
+which that lane's own docstring documents as diagnostic-only with an
+unresolved branch-sign instability. Each port's raw modal-voltage wave is
+converted to a POWER wave via `a = V+ / sqrt(Z0)` (Z0 is already a real
+analytic value on both sides, so no `Re()` is taken anywhere; coax: analytic TEM
+Z0; MSL: analytic Hammerstad-Jensen Zc) before the same two-drive solve
+`compute_coaxial_two_port` uses (`solve_two_port_from_wave_amplitudes`) —
+this per-port `sqrt(Z0)` step is the fix for the "impedance-convention
+mismatch" failure mode anticipated for this leg: solving directly on raw
+(un-normalized) volt-wave amplitudes leaves the diagonal correct but scales
+each off-diagonal entry by `sqrt(Z0_i/Z0_j)`, invisible on a coax-coax
+through line (equal Z0 cancels) but not invisible here. This normalization is
+independently unit-tested against a PLANTED, analytically known S-matrix
+under UNEQUAL port impedances (`tests/test_coax_msl_transition.py`), including
+a dedicated regression test that reproduces the exact defect the fix
+prevents.
+
+**One fixture has been run, and it is diagnostic, not validated.** The
+committed fixture (a vertical coax landing on a grounded substrate edge via a
+thin, unmatched pin-to-trace post — "no intermediate matching structure", per
+the leg's own scoping) is internally self-consistent (finite, deterministic,
+settles below −40 dB) but trips its own pre-declared reciprocity falsifier
+badly: `|S12|` vs `|S21|` disagree by 94-100% across the three measured
+frequencies, with the two-drive solve's raw condition number `cond_a` in the
+1e3-1e7 range at every bin.
+
+**Attribution (corrected after adversarial PR review; see PR #581 review
+findings B2/B3).** The first attribution written for this finding —
+"near-degenerate two-drive amplification from strong junction reflection" —
+did not survive its own data and was retracted. Three checks on this
+fixture's own numbers refute it: (i) `cond_a` is almost entirely a per-drive
+amplitude SCALE artifact — after per-column equilibration,
+`cond_a_equilibrated` is 1.0004/1.0001/1.0040 (near 1) and the two drives'
+incident-wave columns are near-ORTHOGONAL (normalized overlap ~1e-4 to
+~4e-3), the opposite of "nearly parallel"; (ii) the "both ports strongly
+reflecting" premise fails on this fixture's own measured `|S22|`
+(0.000/0.000/0.500 — not uniformly near 1); (iii) the signature that DOES
+match is a drive-amplitude mismatch between the two unrelated source
+constructions (the MSL drive's own incident amplitude is 5-9 orders of
+magnitude smaller than the coax drive's), exactly the second branch of the
+two-drive solve's own warning ("one drive that failed to excite"), not the
+first ("nearly linearly dependent" in the geometric sense). The PREDECLARED
+alternative explanation — an MSL wave-extraction instrument-scoping limit,
+not junction physics — is positively supported instead: the MSL probe
+ladder on this fixture spans only 0.34%-3.37% of the guided wavelength
+across the three measured frequencies, and the fitted propagation constant
+on the MSL array does not track the analytic Hammerstad-Jensen beta
+(21.2/116.4/211.7 rad/m) at all — the coax-driven fit gives
+673.0/853.6/885.0 rad/m (4-32x too high and nearly frequency-flat, where
+the true beta is not), and the MSL's own-drive fit gives 4.5/36.2/2881.3
+rad/m with an implied decay length near one grid cell (not a real
+propagating/decaying wave). Both discriminants are locked as test
+assertions, not just prose (`tests/test_coax_msl_transition.py`). Whether
+the junction's own physical reflection also contributes is genuinely
+UNRESOLVED by this one fixture — `sim.preflight()` on the same fixture
+independently names a THIRD, also-unruled-out candidate mechanism (the MSL
+port sits only 200um from its own x-CPML face, "recommended 600um... source-
+side CPML reflection may inflate |S11|") — but the extraction-class
+explanation is the better-supported one, and it NAMES the implementation
+defect (probe ladder far shorter than any reasonable fraction of a guided
+wavelength) that would justify a future, separately pre-declared retry (a
+longer MSL probe ladder, e.g. >= 0.25 lambda_g) — not attempted in this PR.
+`sim.preflight()` on this fixture also independently flags the same general
+resolution class from a different angle: the pin post's 4-cell diameter is
+under the ≥5-cell PEC-volume floor, and the 3-cell substrate is flagged for
+>5% Z0 staircase bias.
+
+| aspect | status |
+|---|---|
+| reciprocity | **FALSIFIER TRIPPED** — 94-100% deviation on the one committed fixture; root-caused to the MSL probe ladder being far too short for the matrix-pencil wave split (instrument scoping), not the assembler, not a missing-PEC defect, and not confirmed junction physics |
+| off-diagonal magnitude | not validated — the one fixture measured near-zero, unreliable transmission |
+| power-wave normalization (`sqrt(Z0)` step) | validated by planted-voltage unit tests, independent of any FDTD run |
+| AD | out of scope for this leg (no `eps_scale`-style channel) |
+
+Do not extend this lane's gates to "pass" without a NEW pre-declared falsifier
+or an identified implementation defect in this fixture (repo R2 rule). This
+finding DOES name such a defect (the MSL probe ladder's length, per the
+attribution above), which is R2's own written escape clause for a second
+attempt: a future retry should lengthen the MSL probe ladder (e.g. to
+>= 0.25 lambda_g at the lowest measured frequency) BEFORE touching the
+junction geometry itself — the junction's own physical dimensions (matching
+structure, via width/length) remain a separate, still-open question this
+fixture cannot yet speak to.
