@@ -48,7 +48,6 @@ C0 = 299_792_458.0
 A_WG = 0.02286
 B_WG = 0.01016
 DX = 1.0e-3
-CPML = 20
 DOMAIN_X = 0.200
 PORT_LEFT_X = 0.040
 PORT_RIGHT_X = 0.160
@@ -58,6 +57,41 @@ PEC_SHORT_X = 0.145
 SLAB_EPS = 2.0
 SLAB_L = 0.010
 FREQS = np.linspace(8.2e9, 12.4e9, 21)
+
+# Absorber depth is DERIVED from the guided wavelength at the LOWEST band
+# frequency, not a fixed cell count (the case-19 recipe, CPML_FRACTION 0.75).
+# It was a hard-coded 20, which is 0.33*lambda_g at 8.2 GHz — below the repo's
+# >=0.5*lambda_g far-port discipline (#496). That under-provisioning is ONE OF
+# TWO necessary conditions behind the PEC-short over-unity |S11|; the other is
+# the fixed 60-period record, and either one alone removes ~99.7% of the excess:
+#
+#     CPML  num_periods   max|S11|
+#       20       60        1.019948
+#       20      120        1.000063     <- window alone
+#       46       60        1.000091     <- absorber alone
+#       46      120        1.000061
+#
+# So the accurate cause is absorber-limited ring-down not drained inside a fixed
+# window, and the table below (all at np=60) prices only the absorber lever. An
+# earlier revision of this comment named under-provisioning as THE cause and
+# located the excess at the low band edge; the producer's own spectrum peaks at
+# the HIGH edge, and both claims are withdrawn (#576 review F1/F2).
+#
+# Measured on this exact geometry at np=60 (lossless PEC short, |S11| must be 1):
+#
+#     CPML  cells   lambda_g(low)   max|S11|    column power
+#       20            0.33          1.01995       1.0403     <- was committed
+#       24            0.39          1.00439       1.0088
+#       31            0.51          1.00397       1.0080
+#       46            0.76          1.00009       1.0002     <- derived value
+#
+# 46 cells puts the excess at 9e-5, i.e. float32 noise. rfx pads CPML
+# OUTSIDE the requested domain, so raising this moves no port and no geometry —
+# it only grows the array.
+CPML_FRACTION = 0.75
+_LAM_G_LOW = (C0 / float(FREQS[0])) / np.sqrt(
+    1.0 - (C0 / (2.0 * A_WG) / float(FREQS[0])) ** 2)
+CPML = int(np.ceil(CPML_FRACTION * _LAM_G_LOW / DX))
 FC_TE10 = C0 / (2 * A_WG)
 NUM_PERIODS = 60
 GRADING_RATIO = 2.0
@@ -67,8 +101,50 @@ GRADING_RATIO = 2.0
 # broad-E5 envelope, so the residual here is dominated by the reference's own
 # resolution, not rfx — gating tighter than the reference accuracy is
 # unprincipled.
-MAX_MAG_ABS_TOL = 0.10
-MEAN_MAG_ABS_TOL = 0.07
+# Tolerances DERIVED from the measured envelope via the repo-wide envelope
+# multiplier (tests/_gate_policy.py, #528/#539), quantized to 1/1000 because the
+# residual is now milli-scale. They were flat 0.10 / 0.07 with no derivation,
+# which the absorber fix above leaves 12x and 23x loose on the PER-PAIR basis
+# the gate actually applies (99x is the summary-mean basis, which is exactly the
+# confusion the paragraph below this table warns against — it is what an earlier
+# revision derived the mean tolerance from, and the resulting gate failed 1 of 5
+# pairs on the first run):
+#
+#                          committed   post-#562   + absorber fix
+#     summary max           0.07009     0.05322      0.008529
+#     summary mean          0.010425    0.004007     0.000709
+#     worst PER-PAIR mean   0.0359      0.0143       0.0030   (slab S11)
+#
+# The tolerances are applied PER PAIR, not to the summary, so the mean envelope
+# is the worst per-pair mean (0.0030) and not the summary mean (0.000709). A
+# first pass derived it from the summary and the gate immediately failed 1 of 5
+# pairs — the tightened gate catching its own author, which is the point of
+# tightening it.
+#
+# Safe to tighten without CI-flakiness risk: the gate test REPLAYS this frozen
+# artifact rather than re-running FDTD, so these bounds constrain the next
+# REGENERATION rather than a per-run measurement.
+def _git_commit() -> str:
+    """Short HEAD of the producing tree, or "unknown" outside a checkout."""
+    import subprocess
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              cwd=str(REPO), capture_output=True, text=True,
+                              timeout=10).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+# Derived through the shared helper, not restated as literals (#576 review F5:
+# "derived via the repo-wide envelope multiplier" was prose — nothing imported
+# _gate_policy, so the arithmetic was right and unenforced). quantum=1000
+# because the residual is milli-scale.
+from tests._gate_policy import gate_from_envelope  # noqa: E402
+
+_ENVELOPE_MAX_PER_PAIR = 0.008529
+_ENVELOPE_MEAN_PER_PAIR = 0.002998
+MAX_MAG_ABS_TOL = gate_from_envelope(_ENVELOPE_MAX_PER_PAIR, quantum=1000)
+MEAN_MAG_ABS_TOL = gate_from_envelope(_ENVELOPE_MEAN_PER_PAIR, quantum=1000)
 
 # cv11 emits S11 and S21 for these (geometry, components) pairs.
 GEOMETRY_COMPONENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -81,10 +157,34 @@ GEOMETRY_COMPONENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # lab dataset, same source cv11 loads). Values are embedded in the committed
 # artifact, so the fixture stays clean-checkout-replayable; only the PRODUCER
 # needs this file present at build time (like the uniform producer's cv11 stdout).
-PALACE_REF = (
-    REPO.parent
-    / "microwave-energy/results/rfx_crossval_wr90_palace/wr90_palace_reference.json"
-)
+#
+# Resolved rather than hard-coded: the old `REPO.parent / "microwave-energy/..."`
+# assumed the primary checkout's sibling layout and raised a bare
+# FileNotFoundError in every worktree and clone, where the dataset sits under a
+# different ancestor. Walk up from the repo, then take an explicit override, and
+# say what was searched if neither works. No absolute local path belongs in a
+# public file, which is why the override is an env var and not a default.
+_PALACE_REL = Path(
+    "microwave-energy/results/rfx_crossval_wr90_palace/wr90_palace_reference.json")
+_PALACE_ENV = "RFX_PALACE_WR90_REFERENCE"
+
+
+def _resolve_palace_ref() -> Path:
+    override = os.environ.get(_PALACE_ENV)
+    if override:
+        p = Path(override).expanduser()
+        if not p.is_file():
+            raise SystemExit(f"{_PALACE_ENV}={override} is not a readable file")
+        return p
+    for ancestor in (REPO, *REPO.parents):
+        cand = ancestor / _PALACE_REL
+        if cand.is_file():
+            return cand
+    raise SystemExit(
+        "WR-90 Palace reference not found. It is a gitignored lab dataset, not "
+        "part of this repo.\n"
+        f"  searched <ancestor>/{_PALACE_REL} for every ancestor of {REPO}\n"
+        f"  override with {_PALACE_ENV}=/path/to/wr90_palace_reference.json")
 
 
 def _graded_dy(total: float, base_dx: float, ratio: float) -> np.ndarray:
@@ -134,8 +234,16 @@ def _run_geometry(geom: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]
     return np.asarray(r.freqs), s11, s21, float(dy.max() / dy.min())
 
 
+def _palace_digest() -> str:
+    """Digest of the reference actually used — it identifies WHICH reference
+    produced these numbers without embedding anyone's local filesystem in a
+    public artifact."""
+    import hashlib
+    return hashlib.sha256(_resolve_palace_ref().read_bytes()).hexdigest()[:16]
+
+
 def _load_palace(geom: str, comp: str) -> np.ndarray:
-    d = json.loads(PALACE_REF.read_text())
+    d = json.loads(_resolve_palace_ref().read_text())
     block = d["r_h2"][geom]
     key = comp.lower()
     return np.array([complex(a, b) for a, b in block[key]], dtype=np.complex128)
@@ -172,6 +280,19 @@ def build(output_dir: Path) -> dict[str, Any]:
                 "ref_mag_range": [float(np.abs(ref).min()), float(np.abs(ref).max())],
                 "max_mag_abs_diff": pmax,
                 "mean_mag_abs_diff": pmean,
+                # PER-BIN arrays (#576 review F4). Without these, every scalar
+                # above is a frozen number that can only be pinned, never
+                # re-derived, and any claim about WHERE in the band a residual
+                # or an over-unity bin sits is unfalsifiable from the artifact.
+                # That is not hypothetical: this PR's review caught me asserting
+                # the excess was band-edge localized when the producer's own
+                # spectrum peaks at the other end. The gate test now recomputes
+                # max/mean/range from these and cross-checks the passivity
+                # bound per bin, so the scalars are derived, not trusted.
+                "freqs_ghz": [round(float(f) / 1e9, 6)
+                              for f in rfx_s[geom]["freqs"]],
+                "rfx_mag": [round(float(v), 9) for v in np.abs(rfx)],
+                "ref_mag": [round(float(v), 9) for v in np.abs(ref)],
                 "status": (
                     "passed"
                     if pmax <= MAX_MAG_ABS_TOL and pmean <= MEAN_MAG_ABS_TOL
@@ -184,7 +305,11 @@ def build(output_dir: Path) -> dict[str, Any]:
     status = "passed" if not failed else "failed"
     payload: dict[str, Any] = {
         "schema": "rfx.waveguide_wr90_nu_flux_broad_e4_comparison",
-        "schema_version": 1,
+        # 2: added the per-bin freqs_ghz / rfx_mag / ref_mag arrays
+        # (#576 review F4). Additive only — every v1 key is still present
+        # and every v1 consumer keeps working; the bump is so a reader can
+        # tell whether a given artifact predates the per-bin evidence.
+        "schema_version": 2,
         "status": status,
         "evidence_level": (
             "E4-broad-external-palace-fem-nonuniform-graded-dy-wr90-multigeometry-te10"
@@ -224,6 +349,24 @@ def build(output_dir: Path) -> dict[str, Any]:
         "num_periods": NUM_PERIODS,
         "max_mag_abs_tol": MAX_MAG_ABS_TOL,
         "mean_mag_abs_tol": MEAN_MAG_ABS_TOL,
+        # Setup provenance (#576 review F4): the sibling E5 fixture and case 19
+        # both record what produced them, and this one recorded neither the
+        # absorber depth nor the commit — so a reader could not tell which
+        # absorber a number came from, which is exactly the confusion that made
+        # the 0.33-lambda_g run look like a solver result.
+        "setup": {
+            "external_reference_sha256": _palace_digest(),
+            "cpml_layers": int(CPML),
+            # Analytic lambda_g at the lowest measured frequency. The runtime
+            # advisory reports a slightly different fraction (0.36 where this
+            # says 0.33 pre-fix) because it uses the DISCRETE cutoff; neither
+            # is wrong, they are two conventions for the same depth (#576 N3).
+            "cpml_fraction_of_lambda_g_low": round(CPML * DX / _LAM_G_LOW, 4),
+            "num_periods": float(NUM_PERIODS),
+            "dx_m": float(DX),
+            "grading_ratio": float(GRADING_RATIO),
+            "commit": _git_commit(),
+        },
         "summary": {
             "geometry_count": len(geometries),
             "geometries": geometries,
