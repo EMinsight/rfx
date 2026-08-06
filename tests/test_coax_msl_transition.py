@@ -17,6 +17,17 @@ precedents):
 3. The FDTD fixture itself (``@pytest.mark.slow_physics``), asserting the
    predeclared witnesses at DIAGNOSTIC honesty level — this gate pins the
    MEASURED envelope of THIS fixture only, no claim beyond it.
+4. ATTEMPT 2 (PI-directed, R2's own escape clause): attempt 1's own
+   discriminant named a concrete implementation defect (the MSL probe
+   ladder spans too small a fraction of a guided wavelength for the
+   matrix-pencil wave split to resolve) — R2 permits exactly one retry
+   when a prior attempt names such a defect. This section lengthens the
+   MSL probe ladder and widens the MSL port's x-CPML clearance
+   (INSTRUMENT changes only) while keeping the junction geometry
+   byte-identical to attempt 1's committed fixture (asserted, not just
+   claimed). Attempt 1's own predeclaration, fixture, and regression locks
+   above are UNCHANGED and UNDELETED — they remain a valid, reproducible
+   historical record of a deliberately short ladder.
 """
 
 from __future__ import annotations
@@ -840,3 +851,665 @@ def test_coax_msl_transition_first_fixture_diagnostic():
         "assembler changed (re-run Part 1's planted-voltage tests, which "
         "independently pin the correct answer)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Part 4 -- ATTEMPT 2: resolve attempt 1's own named instrument-scoping
+# defect (PI-directed, R2's written escape clause). See PREDECLARATION_
+# ATTEMPT2 below for the full form. Attempt 1's own PREDECLARATION, fixture,
+# and regression locks above are UNCHANGED -- this section is purely
+# additive.
+# ---------------------------------------------------------------------------
+
+PREDECLARATION_ATTEMPT2 = {
+    "leg": "issue #489 leg 4, attempt 2 -- resolve attempt 1's MSL-ladder instrument-scoping limit",
+    "authorization": (
+        "R2's written escape clause: 'a second [attempt] needs a named new "
+        "falsifier or an identified implementation defect in attempt 1, in "
+        "writing'. Attempt 1 (PR #581, post-review) named exactly such a "
+        "defect: the MSL probe ladder spanned only 0.34%-3.37% of the "
+        "guided wavelength at the measured frequencies, too short for the "
+        "matrix-pencil forward/backward split to resolve -- an instrument-"
+        "scoping limit of the probe geometry, not a claim about attempt "
+        "1's junction physics. PI-directed. This is the ONE attempt that "
+        "defect authorizes; attempt 1's own two construction-debugging "
+        "fixes (missing PEC layer, rasterization knife-edge) do not count "
+        "against this budget (plumbing, not a mechanism-hypothesis loop, "
+        "per the repo's own R2 distinction)."
+    ),
+    "instrument_changes": {
+        "msl_probe_ladder": (
+            "Lengthened from 1.000 mm (attempt 1: probe_spacing_cells=2, "
+            "probe_count=6) to 8.000 mm (attempt 2: msl_probe_spacing_cells"
+            "=10, msl_probe_count=9, msl_probe_start_cells=4 unchanged) -- "
+            "the two families' probe-ladder parameters were coupled "
+            "through ONE shared set of Simulation.compute_coax_msl_"
+            "transition(...) kwargs through attempt 1, which silently "
+            "forced the coax side's (necessarily short) ladder length onto "
+            "the MSL side too. Fixed by adding independent "
+            "msl_probe_count/msl_probe_start_cells/msl_probe_spacing_cells "
+            "parameters (default None -> falls back to the coax-side "
+            "value, so attempt 1's own committed call is byte-identical in "
+            "behavior). This is new PUBLIC API surface -- "
+            "docs/guides/api_symbol_inventory.json is regenerated in this "
+            "PR (attempt 1's own CI-red lesson, review finding B1's "
+            "sibling)."
+        ),
+        "frequency_band": (
+            "Shifted from {0.6, 3.3, 6.0} GHz to {6.0, 8.0, 10.0} GHz. "
+            "Forced by the ladder-length requirement itself: "
+            "0.25*lambda_g at the OLD lowest bin (0.6 GHz) is 74.3 mm -- "
+            "infeasible for a compact fixture. At 3.3/6.0/10.0 GHz it is "
+            "13.5/7.4/4.5 mm respectively (eps_eff=2.8327, Hammerstad-"
+            "Jensen, unchanged trace/substrate). Chose {6.0, 8.0, 10.0} "
+            "GHz (not {3.3, 6.0, 10.0}) to keep the domain/runtime "
+            "smaller (0.25*lambda_g at the new lowest bin, 6.0 GHz, is "
+            "7.42 mm vs 13.5 mm at 3.3 GHz -- roughly half the ladder "
+            "length and, since compute cost scales with cells*steps, "
+            "considerably less than half the runtime) while still "
+            "sharing ONE frequency (6.0 GHz) with attempt 1's own band "
+            "for a direct cross-attempt comparison point. The default "
+            "excitation (GaussianPulse, bandwidth=0.8, f0=freq_max/2) is "
+            "re-centered by setting freq_max=16 GHz -> f0=8 GHz, "
+            "spanning roughly 4.8-11.2 GHz and covering the new band "
+            "with margin; this is an INSTRUMENT (excitation spectrum) "
+            "change, not a junction change."
+        ),
+        "x_cpml_clearance": (
+            "MSL port distance to its own nearest x-CPML face raised from "
+            "attempt 1's ~200um (preflight-flagged, 'source-side CPML "
+            "reflection may inflate |S11|' -- attempt 1's named third "
+            "candidate mechanism, review finding B4) to 1500um (feed_x=11."
+            "0mm, domain LX=12.5mm), well above the preflight-recommended "
+            "600um (=2*h_sub). Verified BEFORE running any FDTD (preflight "
+            "is pure NumPy, no FDTD): the x-CPML clearance line no longer "
+            "appears in attempt 2's preflight output at all (was line 8/9 "
+            "of attempt 1's nine; attempt 2 emits seven lines, all "
+            "junction-resolution advisories that are EXPECTED to persist "
+            "since the junction is unchanged -- see the byte-identical "
+            "assertion below)."
+        ),
+        "coax_side": (
+            "Unchanged: probe_count=6, probe_start_cells=4, "
+            "probe_spacing_cells=2 (attempt 1's own values, now passed "
+            "explicitly since these are the coax-only kwargs after the "
+            "API split above). The coax stub's own z-extent is short by "
+            "construction (between the near-source feed and the junction) "
+            "and was never the limiting factor -- attempt 1's own "
+            "recurrence_residual/fit_residual on the COAX array were "
+            "small throughout (<0.008), unlike the MSL array."
+        ),
+    },
+    "junction_byte_identical_fields": [
+        "DX", "PIN_R", "OUTER_R", "EPS_COAX", "H_SUB", "EPS_SUB", "W_TRACE",
+        "JUNCTION_X", "N_GND", "N_SUB_LO", "N_SUB_HI", "N_TRACE",
+        "JUNCTION_Z", "CLEAR_R",
+    ],
+    "expected_if_extraction_class_confirmed": {
+        "gamma_vs_beta": (
+            "Fitted Im(gamma) on the MSL array (coax-driven fit, the more "
+            "reliable of the two per attempt 1) tracks analytic "
+            "Hammerstad-Jensen beta within a ratio band of [0.8, 1.3]. "
+            "Justification for the band width: quasi-TEM microstrip "
+            "dispersion (frequency-dependent eps_eff) is not captured by "
+            "the static Hammerstad-Jensen formula used here, and typical "
+            "quasi-static-vs-dispersive deviations for this W/H, eps_r "
+            "class are documented elsewhere in this repo (compute_msl_s_"
+            "matrix's own known limits) at up to ~10-20% -- [0.8, 1.3] "
+            "gives headroom above that without being so wide it would "
+            "also accept attempt 1's own 4-32x deviation."
+        ),
+        "reciprocity": (
+            "Deviation collapses from attempt 1's 94-100% toward or below "
+            "an acceptance of <=30% -- the #488 mixed lane's OWN measured "
+            "envelope on its comparable (different-family, similar "
+            "maturity) fixture was 9-30% (wave channel up to 55%); 30% "
+            "sets this fixture's acceptance at the LOOSE end of that "
+            "precedent, appropriate for a first resolved measurement on a "
+            "brand-new lane rather than demanding #488's own best case."
+        ),
+        "s22": (
+            "|S22| (MSL reflecting while MSL drives) becomes resolvable "
+            "-- i.e. clearly above the float32 relative-precision noise "
+            "floor (attempt 1 measured 1e-8 to 1e-11 at two of three "
+            "bins, itself evidence of a degenerate split rather than a "
+            "measured near-zero reflection). No specific target value is "
+            "predeclared (the junction's true reflection is exactly the "
+            "open physics question this whole leg exists to measure) -- "
+            "only that it stop reading as numerical noise."
+        ),
+        "a_inc_amplitude_gap": (
+            "No per-drive amplitude NORMALIZATION was added in this "
+            "attempt (that would touch the assembler, not the "
+            "extraction instrument, and attempt 1's own planted-voltage "
+            "tests already prove the assembler's power-wave "
+            "normalization does not need one). The gap should NARROW "
+            "somewhat on physical grounds (a longer, better-resolved MSL "
+            "ladder should recover a less-attenuated, more physically "
+            "representative wave amplitude at the reference plane than a "
+            "sub-wavelength-scale, poorly-resolved short ladder did), "
+            "but is not required to close for the extraction-class "
+            "verdict -- cond_a_equilibrated (not raw cond_a, per attempt "
+            "1's own B2 finding) is the right degeneracy read either way, "
+            "and is expected to remain near 1 (both attempts' drives are "
+            "geometrically distinct regardless of amplitude)."
+        ),
+    },
+    "falsifier": (
+        "With a proper ladder (>=0.25 lambda_g at the lowest measured "
+        "frequency) AND proper x-CPML clearance (>=600um), if reciprocity "
+        "deviation STAYS above the declared 30% acceptance, OR fitted "
+        "gamma still fails to track beta within the declared [0.8, 1.3] "
+        "band -- the extraction-class explanation is REFUTED for the "
+        "REMAINING excess, and the candidates return to (i) junction "
+        "physics (a genuinely bad, high-reflection launch at this "
+        "specific unmatched pin-to-trace geometry -- a legitimate, "
+        "reportable physics finding) or (ii) the power-wave normalization "
+        "failing IN SITU despite passing on planted voltages (attempt 1 "
+        "verified it only against synthetic, noise-free voltages, not a "
+        "real FDTD record). STOP on falsifier per R2: one attempt, "
+        "report, no further iteration in this PR."
+    ),
+    "runtime_feasibility": (
+        "Grid grows from (67, 51, 56) = 191,352 cells (attempt 1) to "
+        "(142, 51, 56) = 405,552 cells (attempt 2, LX 5.0mm -> 12.5mm, "
+        "dx unchanged) -- a 2.12x cell-count ratio (y, z unchanged). "
+        "N_STEPS scaled from attempt 1's 8000 by roughly the LX ratio "
+        "(12.5/5.0 = 2.5x) to 20000, on the reasoning that the dominant "
+        "settling-time driver is round-trip transit time across the "
+        "domain's largest dimension, which grew by that factor while dt "
+        "is unchanged (dx unchanged). Estimated compute: attempt 1 spent "
+        "110s (two drives, 8000 steps, 191,352 cells) => ~2.78e7 "
+        "cell-steps/sec measured throughput. Attempt 2: 405,552 cells * "
+        "20000 steps * 2 drives = 1.622e10 cell-steps => ~584s (~9.7 "
+        "min) estimated, run locally (no VESSL needed for this scale). "
+        "A 2000-step smoke run (construction-debugging only, not a "
+        "physics attempt) measured 55.5s for two drives at 2000 steps "
+        "each (0.01388s/step/drive), independently confirming the "
+        "throughput estimate (0.01388 * 20000 * 2 = 555s, ~9.25 min) "
+        "before the declared run below. CALIBRATION NOTE (same class as "
+        "attempt 1's own 1500->8000 step calibration, not a new R2 "
+        "attempt -- settling_db governs, not a guess): the first N_STEPS_2"
+        "=20000 run (516.8s measured, matching the ~584s estimate) "
+        "measured only -12.3/-10.7 dB settling, short of the -40 dB rule, "
+        "so N_STEPS_2 was raised to 45000 (~1163s / ~19.4min estimated "
+        "at the same measured throughput) for the run actually reported "
+        "below."
+    ),
+    "status": "RUN",
+    # RETRACTED (issue #585 adversarial review, finding B1) -- preserved
+    # here as the historical record of what was first written, exactly
+    # like PREDECLARATION["post_review_correction"] above preserves
+    # attempt 1's own retracted attribution. Do not repeat this pattern:
+    # this is the THIRD retracted attribution on this lane (near-
+    # degenerate-drives in attempt 1; junction-reflection/amplitude-gap
+    # here).
+    "retracted_amplitude_gap_attribution": (
+        "The reciprocity/|S22| miss was originally attributed here to the "
+        "coax/MSL own-drive amplitude gap ('~1.8e7-3.3e7x apart... the "
+        "signature that DOES match is a drive-amplitude mismatch'), with "
+        "a locked `amplitude_ratio > 1.0e6` assertion. This is WRONG in a "
+        "way that is mathematically provable, not just under-evidenced: "
+        "per-drive (per-column) rescaling of the two-drive solve's "
+        "incident-wave matrix A and outgoing-wave matrix B (A'=A@D, "
+        "B'=B@D for any invertible diagonal D) leaves S=B@inv(A) EXACTLY "
+        "invariant -- (AD)^-1 = D^-1 A^-1, so B'@inv(A') = B@D@D^-1@A^-1 "
+        "= B@A^-1 = S identically (reviewer-verified numerically at this "
+        "attempt's own measured gap, D=[1, 1.8e7]: |S'-S| ~ 3e-16, "
+        "float64 noise floor). A per-drive amplitude difference CANNOT "
+        "cause a reciprocity or magnitude defect in S by construction --"
+        "the two-drive solve is exactly the machinery that removes that "
+        "dependence. Separately, `amplitude_ratio` (a_inc[0,0,:]/"
+        "a_inc[1,1,:], the own-drive incident amplitudes) turns out to "
+        "equal raw `cond_a` to 8 significant figures on all 3 bins (both "
+        "are dominated by the same column-norm ratio for a near-"
+        "orthogonal 2x2 A) -- i.e. this was raw cond_a under a new name, "
+        "the EXACT quantity this attempt's own docstring says NOT to "
+        "read as a degeneracy witness on this lane ('per attempt 1's own "
+        "B2 finding'). See `measured` below for the corrected read: "
+        "column power (issue #585 review finding B5), which IS "
+        "scaling-invariant and is the productive open question."
+    ),
+    "measured": {
+        # Filled once, from BOTH calibration checkpoints (issue #585
+        # review finding M2: disclose the refuting numbers too, not only
+        # the confirming ones). Kept as a static literal (fill-contract
+        # pattern, matches REPRODUCE_GATE_RECORD elsewhere in this repo)
+        # rather than a runtime side-effect written by the test --
+        # reviewable without running anything, and not order-dependent on
+        # which test runs first. test_coax_msl_transition_attempt2_
+        # lengthened_ladder independently RE-DERIVES and asserts against
+        # these same numbers from a fresh FDTD run; it does not read this
+        # dict.
+        #
+        # Run-length invariance test (issue #585 review finding B2/B4 --
+        # the repo's own discriminator for "is this a settled physical
+        # quantity or still an evolving transient", applied to the two
+        # checkpoints 20000 -> 45000 steps):
+        "n_steps_checkpoints": [20000, 45000],
+        "gamma_ratio_coax_driven_by_checkpoint": [
+            [1.085, 0.826, 0.976],   # 20000 steps
+            [1.128, 0.854, 1.071],   # 45000 steps
+        ],  # INVARIANT across checkpoints (both fully in [0.8, 1.3]) -- physical, CONFIRMED-provisional.
+        "reciprocity_worst_dev_by_checkpoint": [0.824, 0.938],   # NOT invariant -- moved AWAY from the 0.30 acceptance.
+        "s22_abs_by_checkpoint": [
+            [0.043, 0.141, 0.451],   # 20000 steps
+            [0.102, 0.109, 1.104],   # 45000 steps -- top bin grew 2.4x (0.451 -> 1.104)
+        ],  # NOT invariant.
+        "max_abs_s_by_checkpoint": [0.9933, 1.1038],   # crosses the 1.10 passivity-guard hard limit between checkpoints.
+        "column_power_msl_driven_by_checkpoint": [
+            [0.0018, 0.0199, 0.204],   # 20000 steps
+            [0.0104, 0.0119, 1.218],   # 45000 steps
+        ],  # Sum|S_ij|^2 over the MSL-driven column -- scaling-INVARIANT (unlike the retracted amplitude-gap read), NOT invariant across checkpoints either: mostly << 1 (power missing from a nominally-lossless structure) with one bin > 1 at the less-settled checkpoint (impossible for a passive structure -- an extraction artifact). THE open question this leg has not yet answered: where does the MSL column's power go (or come from)?
+        "cond_a_equilibrated": [1.00238, 1.00244, 1.00549],   # 45000 steps; near 1 at both checkpoints -- invariant, confirms NOT geometric near-degeneracy.
+        "settling_db_by_checkpoint": [[-12.3, -10.7], [-19.69, -17.94]],   # improving DIRECTION only; neither checkpoint clears -40 dB.
+        "verdict": (
+            "gamma-vs-beta: CONFIRMED, PROVISIONAL pending a settled run "
+            "-- the one discriminant that PASSES the run-length "
+            "invariance test (stable across both checkpoints, fully "
+            "in-band both times). reciprocity, |S22|, max|S|: UNMEASURED "
+            "AT THIS SETTLING, not 'refuted with cause identified' -- all "
+            "three FAIL the run-length invariance test (still moving "
+            "between checkpoints, in the WRONG direction for reciprocity "
+            "and |S22|). The productive open question is the column-"
+            "power witness (B5): the MSL-driven column loses the large "
+            "majority of its power at both checkpoints, on a nominally "
+            "lossless structure -- scaling-invariant, unlike the "
+            "RETRACTED amplitude-gap attribution above. A fully settled "
+            "run (predeclared UNRUN, see SETTLED_RUN_RECORD) is needed "
+            "before any claim on reciprocity/|S22| can be made."
+        ),
+    },
+}
+
+
+SETTLED_RUN_RECORD = {
+    # Fill-contract pattern (mirrors REPRODUCE_GATE_RECORD in
+    # tests/test_coax_two_port_referee_header.py): UNRUN <=> no numbers,
+    # no log path. This is the settled-run predeclaration issue #585
+    # review requires (finding B2/B4 + restructure item (c)): the local
+    # runtime available to this session cannot reach the -40 dB rule at
+    # attempt 2's domain size (extrapolated ~60 min locally from the two
+    # measured checkpoints, 20000 -> -12.3/-10.7 dB and 45000 -> -19.7/
+    # -17.9 dB) -- a VESSL run is the named next step, NOT attempted in
+    # this PR.
+    "leg": "issue #489 leg 4, attempt 2 -- the settled-run follow-up",
+    "purpose": (
+        "Resolve reciprocity/|S22|/max|S| from UNMEASURED-at-this-"
+        "settling to an actual pass/fail read, by running long enough to "
+        "clear the -40 dB ring-down rule on attempt 2's junction-"
+        "identical, longer-ladder fixture (same geometry as "
+        "_build_coax_msl_transition_sim_attempt2 in this file)."
+    ),
+    "target_n_steps": 135000,
+    "target_n_steps_derivation": (
+        "Extrapolated from the two measured local checkpoints (20000 "
+        "steps -> -12.3/-10.7 dB, 45000 steps -> -19.69/-17.94 dB, see "
+        "settling_db_by_checkpoint in PREDECLARATION_ATTEMPT2): 7.39 dB "
+        "gained on port 0 and 7.24 dB gained on port 1 per +25000 steps "
+        "in this range (an earlier revision of this text rounded these "
+        "same two numbers to a looser '7.4-7.9 dB' band -- corrected "
+        "here to the precise per-port deltas). Reaching -40 dB from the "
+        "WORSE (less-negative) of the two checkpoints, -17.94 dB, needs "
+        "another ~22.1 dB, i.e. roughly 3x the 25000-step increment "
+        "already spent (25000 -> 45000): the formula 45000 + 3*25000 "
+        "gives exactly 120000 steps, not a '120000-135000' range (an "
+        "earlier revision of this text conflated the formula's output "
+        "with the chosen target and stated it as a range). "
+        "target_n_steps is set to 135000, not 120000 -- the extra "
+        "15000 steps above the formula's 120000 are deliberate margin, "
+        "not part of the linear extrapolation itself. This is a linear "
+        "extrapolation of a process that may not actually be linear "
+        "(ring-down decay is often closer to exponential in TIME, i.e. "
+        "linear in STEPS on a dB scale, which is the assumption here) "
+        "-- treat the target as a starting estimate to calibrate "
+        "against, not a guarantee, exactly as attempt 2's own local "
+        "calibration (20000 -> 45000) needed one correction already."
+    ),
+    "vessl_pattern": (
+        "The branch-clone pattern from #561/#559 (VESSL job clones this "
+        "PR's branch, runs the same _build_coax_msl_transition_sim_"
+        "attempt2 fixture at target_n_steps, uploads the result). Not "
+        "written in this PR -- the target script does not yet exist; "
+        "the next session should add it under scripts/vessl_*.yaml "
+        "following that precedent."
+    ),
+    "status": "UNRUN",
+    "measured": None,
+    "log_path": None,
+    "vessl_run_id": None,
+}
+
+
+def test_settled_run_record_is_committed_unrun_and_self_consistent():
+    """Fail-loud-honest invariant (mirrors test_coax_two_port_referee_
+    header.py's own REPRODUCE_GATE_RECORD test): UNRUN <=> no numbers, no
+    log path, no run id.
+    """
+    r = SETTLED_RUN_RECORD
+    required = {
+        "leg", "purpose", "target_n_steps", "target_n_steps_derivation",
+        "vessl_pattern", "status", "measured", "log_path", "vessl_run_id",
+    }
+    missing = required - set(r.keys())
+    assert not missing, f"SETTLED_RUN_RECORD missing fields: {missing}"
+    if r["status"] == "UNRUN":
+        assert r["measured"] is None
+        assert r["log_path"] is None
+        assert r["vessl_run_id"] is None
+    else:
+        assert r["measured"] is not None
+        assert r["log_path"] is not None
+
+
+def test_attempt2_predeclaration_has_required_fields():
+    required = {
+        "leg", "authorization", "instrument_changes",
+        "junction_byte_identical_fields",
+        "expected_if_extraction_class_confirmed", "falsifier",
+        "runtime_feasibility", "status", "measured",
+        "retracted_amplitude_gap_attribution",
+    }
+    missing = required - set(PREDECLARATION_ATTEMPT2.keys())
+    assert not missing, f"PREDECLARATION_ATTEMPT2 missing fields: {missing}"
+    assert set(PREDECLARATION_ATTEMPT2["instrument_changes"].keys()) == {
+        "msl_probe_ladder", "frequency_band", "x_cpml_clearance", "coax_side",
+    }
+    # The retraction must actually retract -- not merely exist.
+    assert "cond_a" in PREDECLARATION_ATTEMPT2["retracted_amplitude_gap_attribution"]
+    assert "invariant" in PREDECLARATION_ATTEMPT2["retracted_amplitude_gap_attribution"]
+
+
+# ---- attempt 2 geometry: INSTRUMENT constants only. Every junction
+# constant below is the attempt-1 module-level name itself (DX, PIN_R,
+# OUTER_R, EPS_COAX, H_SUB, EPS_SUB, W_TRACE, JUNCTION_X, N_GND, N_SUB_LO,
+# N_SUB_HI, N_TRACE, JUNCTION_Z, CLEAR_R, Y_C, LY) -- reused directly, not
+# redefined, so byte-identity is guaranteed by construction rather than by
+# a separately-typed copy that could silently drift. Only the probe
+# ladder, domain x-extent, and frequency band are new.
+FEED_X_2 = 11.0e-3
+LX_2 = 12.5e-3
+LZ_2 = JUNCTION_Z + H_SUB + DX + 1.0e-3  # same formula as attempt 1 -- z-stack unchanged
+FREQS_2 = np.array([6.0e9, 8.0e9, 10.0e9])
+FREQ_MAX_2 = 16.0e9  # re-centers the default excitation (f0=freq_max/2=8GHz) on the new band
+PROBE_START_2 = 4
+PROBE_SPACING_2 = 10
+PROBE_COUNT_2 = 9
+# N_STEPS_2 was calibrated, same as attempt 1's own 1500->8000 step
+# calibration (construction/instrument calibration, not a new R2 physics
+# attempt -- the settling_db witness is what governs, not a guess): the
+# predeclared estimate of 20000 (2.5x attempt 1's 8000, scaled by the LX
+# ratio) measured only -12.3/-10.7 dB settling, well short of the -40 dB
+# rule, even though the gamma-vs-beta discriminant it produced already
+# landed inside the predeclared [0.8, 1.3] band at all 3 bins (ratios
+# 1.085/0.826/0.976) -- encouraging, but not reportable without adequate
+# settling per R5. Raised to 45000 (~2.25x more).
+N_STEPS_2 = 45000
+
+
+def _build_coax_msl_transition_sim_attempt2():
+    """Attempt 2: same junction (reuses attempt 1's own module constants
+    unchanged), longer MSL ladder, wider x-CPML clearance, higher band.
+    """
+    from rfx.api import Simulation
+    from rfx.boundaries.spec import BoundarySpec
+    from rfx.geometry.csg import Box, Cylinder
+
+    sim = Simulation(
+        freq_max=FREQ_MAX_2, domain=(LX_2, LY, LZ_2), dx=DX, cpml_layers=8,
+        boundary=BoundarySpec(x="cpml", y="cpml", z="cpml"),
+    )
+    sim.add_material("sub", eps_r=EPS_SUB)
+    sim.add_material("ptfe", eps_r=EPS_COAX)
+
+    gnd_lo, gnd_hi = _half_cell_box_z(N_GND, N_GND)
+    sim.add(Box((0.0, 0.0, gnd_lo), (LX_2, LY, gnd_hi)), material="pec")
+    clr_c, clr_h = _margin_cylinder_z(N_GND, N_SUB_LO)
+    sim.add(
+        Cylinder(center=(JUNCTION_X, Y_C, clr_c), radius=CLEAR_R, height=clr_h, axis="z"),
+        material="ptfe",
+    )
+    sub_lo, sub_hi = _half_cell_box_z(N_SUB_LO, N_SUB_HI)
+    sim.add(Box((0.0, 0.0, sub_lo), (LX_2, LY, sub_hi)), material="sub")
+    trc_lo, trc_hi = _half_cell_box_z(N_TRACE, N_TRACE)
+    sim.add(
+        Box((JUNCTION_X, Y_C - W_TRACE / 2, trc_lo), (LX_2, Y_C + W_TRACE / 2, trc_hi)),
+        material="pec",
+    )
+    pin_c, pin_h = _margin_cylinder_z(N_GND, N_TRACE)
+    sim.add(
+        Cylinder(center=(JUNCTION_X, Y_C, pin_c), radius=PIN_R, height=pin_h, axis="z"),
+        material="pec",
+    )
+
+    sim.add_coaxial_port(
+        position=(JUNCTION_X, Y_C, N_GND * DX), face="bottom",
+        pin_radius=PIN_R, outer_radius=OUTER_R, impedance=50.0,
+    )
+    sim.add_msl_port(
+        position=(FEED_X_2, Y_C, N_SUB_LO * DX), width=W_TRACE, height=H_SUB,
+        direction="-x", impedance=50.0, eps_r_sub=EPS_SUB,
+    )
+    return sim
+
+
+def test_attempt2_junction_geometry_is_byte_identical_to_attempt1():
+    """Asserts (not just claims) the "instrument changes only" predeclaration:
+    compares attempt 2's registered coax/MSL junction parameters against
+    attempt 1's own module constants, field by field.
+    """
+    sim1 = _build_coax_msl_transition_sim()
+    sim2 = _build_coax_msl_transition_sim_attempt2()
+
+    port1, port2 = sim1._coaxial_ports[0], sim2._coaxial_ports[0]
+    assert port1.pin_radius == port2.pin_radius == PIN_R
+    assert port1.outer_radius == port2.outer_radius == OUTER_R
+    assert port1.position[0] == port2.position[0] == JUNCTION_X
+    assert port1.position[1] == port2.position[1] == Y_C
+    assert port1.position[2] == port2.position[2] == N_GND * DX
+    assert port1.face == port2.face == "bottom"
+
+    msl1, msl2 = sim1._msl_ports[0], sim2._msl_ports[0]
+    assert msl1.width == msl2.width == W_TRACE
+    assert msl1.height == msl2.height == H_SUB
+    assert msl1.eps_r_sub == msl2.eps_r_sub == EPS_SUB
+    assert msl1.position[2] == msl2.position[2] == N_SUB_LO * DX
+    # feed_x (position[0]) and direction are the ONE MSL field allowed to
+    # differ -- the probe ladder's own anchor, an instrument parameter.
+    assert msl1.direction == msl2.direction == "-x"
+
+    # Materials: same eps_r for both registered materials, same names.
+    assert sim1._materials.keys() == sim2._materials.keys() == {"sub", "ptfe"}
+    assert sim1._materials["sub"].eps_r == sim2._materials["sub"].eps_r == EPS_SUB
+    assert sim1._materials["ptfe"].eps_r == sim2._materials["ptfe"].eps_r == EPS_COAX
+
+
+@pytest.mark.slow_physics
+def test_coax_msl_transition_attempt2_instrument_verification():
+    """Attempt 2: INSTRUMENT test, not a claims test (issue #585 review
+    restructure). Same junction, longer MSL ladder + wider x-CPML
+    clearance. Formerly named test_coax_msl_transition_attempt2_
+    lengthened_ladder -- renamed because that name and its old body
+    asserted claims-bearing physics numbers (reciprocity, |S22|) that a
+    second review round showed were UNMEASURED at this settling, not
+    passing. See ``PREDECLARATION_ATTEMPT2`` above for the full
+    predeclaration and ``SETTLED_RUN_RECORD`` for the still-open,
+    predeclared-UNRUN settled-run follow-up.
+
+    Runtime ~20 min (two FDTD drives on a (142, 51, 56)-cell grid, 45000
+    steps each).
+
+    WHAT THIS TEST ASSERTS, AND WHY (issue #585 review restructure item
+    (b)): only quantities that PASS the run-length invariance test
+    (stable between the 20000- and 45000-step checkpoints) are asserted
+    as pass/fail claims. Quantities that FAIL it are recorded (both
+    checkpoints disclosed, issue #585 review finding M2) but NOT gated --
+    asserting a tight bound on a value known to still be moving would
+    itself be the "surface-metric gate binding an artifact" class this
+    repo's own R5 rule exists to prevent.
+
+    CONFIRMED, PROVISIONAL pending a settled run:
+    * gamma-vs-beta ratio (coax-driven fit): stable at both checkpoints
+      (20000: 1.085/0.826/0.976; 45000: 1.128/0.854/1.071), fully inside
+      the predeclared [0.8, 1.3] band both times -- asserted as a real
+      pass below.
+    * cond_a_equilibrated: stable near 1 at both checkpoints -- confirms
+      the two drives are NOT geometrically near-degenerate (this reading
+      survives; see the RETRACTED amplitude-gap note below for what does
+      NOT survive).
+
+    UNMEASURED AT THIS SETTLING -- recorded, not gated (both checkpoints
+    disclosed per review finding M2):
+    * reciprocity worst deviation: 20000 steps 0.824 -> 45000 steps
+      0.938 -- moved AWAY from any acceptance, not toward one.
+    * |S22|: 20000 steps 0.451 -> 45000 steps 1.104 (2.4x) -- still
+      growing, not settled.
+    * max|S|: 20000 steps 0.9933 -> 45000 steps 1.1038 -- crosses the
+      passivity-guard hard limit (1.10) BETWEEN checkpoints. The guard
+      fires on the 45000-step run (verified below): "column power 1.218
+      exceeds limit 1.1... UNRELIABLE... do not interpret as physics."
+      strict_passivity semantics are exercised via that same shared
+      guard function directly on this run's own result (equivalent to
+      passing strict_passivity=True to the call itself, without a second
+      ~20-minute FDTD run for a check that needs no FDTD).
+
+    THE OPEN QUESTION (issue #585 review finding B5, replaces the
+    RETRACTED amplitude-gap story below): column power on the MSL-driven
+    column, Sum|S_ij|^2 over i for driven port msl. Scaling-INVARIANT
+    (unlike drive amplitude -- see below), so this is real evidence, not
+    a normalization artifact: 20000 steps [0.0018, 0.0199, 0.204], 45000
+    steps [0.0104, 0.0119, 1.218] -- mostly far below 1 (power missing
+    from a nominally lossless structure) with one bin above 1 at the
+    less-settled checkpoint (impossible for a passive structure --
+    itself evidence of non-convergence). Where does the MSL column's
+    power go? Not answered by this attempt; recorded as the productive
+    question a settled run should target.
+
+    RETRACTED (issue #585 review finding B1 -- do not repeat, third
+    retracted attribution on this lane): a prior revision of this test
+    attributed the reciprocity miss to a ~1.8e7-3.3e7x coax/MSL drive-
+    amplitude gap, with a locked ``amplitude_ratio > 1.0e6`` assertion.
+    This is mathematically impossible: per-drive (column) rescaling of
+    the two-drive solve leaves S EXACTLY invariant (A'=A@D, B'=B@D =>
+    B'@inv(A')=B@A^-1=S for any invertible diagonal D -- verified at
+    this attempt's own gap value, |S'-S| ~ 3e-16). The "amplitude_ratio"
+    quantity is also, separately, raw ``cond_a`` under a new name
+    (matches to 8 significant figures) -- the exact quantity this file's
+    own docstrings already say not to read as a degeneracy witness on
+    this lane. See ``PREDECLARATION_ATTEMPT2["retracted_amplitude_gap_
+    attribution"]`` for the full record. The assertion is DELETED, not
+    just unused.
+    """
+    assert PREDECLARATION_ATTEMPT2["status"] == "RUN"
+
+    sim = _build_coax_msl_transition_sim_attempt2()
+    result = sim.compute_coax_msl_transition(
+        junction_x=JUNCTION_X, eps_r_sub=EPS_SUB, n_steps=N_STEPS_2,
+        freqs=FREQS_2,
+        probe_count=6, probe_start_cells=4, probe_spacing_cells=2,
+        msl_probe_count=PROBE_COUNT_2, msl_probe_start_cells=PROBE_START_2,
+        msl_probe_spacing_cells=PROBE_SPACING_2,
+        skip_preflight=True, strict_passivity=False,
+    )
+
+    assert result.s_params.shape == (2, 2, 3)
+    assert np.all(np.isfinite(result.s_params))
+    assert result.port_names == ("coax", "msl")
+
+    # --- CONFIRMED-provisional (invariant-verified) ------------------------
+
+    # Settling DIRECTION only -- more negative than the 20000-step
+    # checkpoint's own -12.3/-10.7 dB, not a claim of adequate settling
+    # (neither checkpoint clears the -40 dB rule; see SETTLED_RUN_RECORD).
+    assert np.all(np.asarray(result.settling_db) < -15.0), (
+        f"settling_db {result.settling_db} did not improve past the "
+        "-15 dB floor (between the 20000-step checkpoint's -12.3/-10.7 "
+        "dB and this run's own measured -19.7/-17.9 dB) -- a settling "
+        "regression (unrelated code change) or a construction change; "
+        "this is a monotonic-improvement floor, not a claim of adequate "
+        "settling (neither checkpoint clears the -40 dB rule)."
+    )
+
+    # cond_a_equilibrated: stable near 1 at both checkpoints -- confirms
+    # NOT geometric near-degeneracy (issue #581 review finding B2's own
+    # correction, still holding).
+    assert np.all(np.asarray(result.cond_a_equilibrated) < 1.5), (
+        f"cond_a_equilibrated {result.cond_a_equilibrated} rose above the "
+        "near-unity floor stable at both checkpoints -- the two drives "
+        "may have become genuinely geometrically near-degenerate; "
+        "re-derive the attribution."
+    )
+
+    # gamma-vs-beta (predeclared band [0.8, 1.3]): the ONE discriminant
+    # that passes the run-length invariance test -- asserted as a real,
+    # confirmed-provisional pass.
+    from rfx.sources.msl_eigenmode import hammerstad_jensen_z0_eps_eff
+    from rfx.core.yee import EPS_0, MU_0
+    c0 = 1.0 / np.sqrt(MU_0 * EPS_0)
+    _, eps_eff_hj = hammerstad_jensen_z0_eps_eff(W_TRACE, H_SUB, EPS_SUB)
+    beta_analytic = 2.0 * np.pi * np.asarray(result.freqs) * np.sqrt(eps_eff_hj) / c0
+    im_gamma_coax_driven = np.abs(result.gamma[1, 0, :].imag)
+    gamma_ratio = im_gamma_coax_driven / beta_analytic
+    gamma_ok = bool(np.all((gamma_ratio >= 0.8) & (gamma_ratio <= 1.3)))
+    assert gamma_ok, (
+        f"gamma_ratio {gamma_ratio} left the predeclared [0.8, 1.3] "
+        "confirmation band, stable at both checkpoints until now -- the "
+        "ladder-length fix's own headline result (the MSL matrix-pencil "
+        "fit tracking the guided-wave beta) may no longer hold; "
+        "re-derive the extraction-class verdict."
+    )
+    np.testing.assert_allclose(
+        gamma_ratio,
+        PREDECLARATION_ATTEMPT2["measured"]["gamma_ratio_coax_driven_by_checkpoint"][1],
+        atol=0.05,
+    )
+
+    # --- The open question (B5): column power, scaling-invariant --------
+
+    S = result.s_params  # local alias -- NOT result.a_inc, a different field
+    col_msl_driven_power = np.abs(S[0, 1, :]) ** 2 + np.abs(S[1, 1, :]) ** 2
+    _m_col = np.asarray(
+        PREDECLARATION_ATTEMPT2["measured"]["column_power_msl_driven_by_checkpoint"][1]
+    )
+    np.testing.assert_allclose(col_msl_driven_power, _m_col, atol=0.01)
+    # Pinned as the measured OPEN observation, not a pass/fail physics
+    # claim: regression-lock that the finding itself (power missing from
+    # the MSL-driven column) persists, so a future change that quietly
+    # "fixes" this without investigation gets flagged for review.
+    assert col_msl_driven_power[0] < 0.5 and col_msl_driven_power[1] < 0.5, (
+        f"MSL-driven column power at the two lower bins {col_msl_driven_power[:2]} "
+        "rose above the 0.5 floor measured on this attempt -- the "
+        "'power going missing' open question may have resolved (or the "
+        "extraction changed); re-derive the finding before assuming a fix."
+    )
+
+    # --- UNMEASURED at this settling: recorded, NOT gated -----------------
+    # (issue #585 review findings B2/B4/M2: both checkpoints disclosed;
+    # no pass/fail bound asserted on a value known to still be moving.)
+    pair, worst_dev = _mixed_reciprocity_deviation(result.s_params)
+    s22_abs = np.abs(result.s_params[1, 1, :])
+    max_abs_s = float(np.max(np.abs(result.s_params)))
+    # Sanity only (finite, not NaN/inf) -- explicitly NOT a physics gate.
+    assert np.isfinite(worst_dev) and np.all(np.isfinite(s22_abs)) and np.isfinite(max_abs_s)
+
+    # --- Passivity guard: proves the honest gate still fires (issue #585
+    # review finding B3 -- no silent gate removal). Exercises the SAME
+    # shared guard function compute_coax_msl_transition's own
+    # strict_passivity=True would invoke, directly on this run's already-
+    # obtained result -- equivalent verification without a second ~20-
+    # minute FDTD run (the guard itself is a pure post-processing check,
+    # no FDTD involved). On the real strict_passivity=True path,
+    # compute_coax_msl_transition does not call _warn_if_nonpassive_smatrix
+    # directly either -- it returns through the shared
+    # rfx.api._sparams._finalize_sparam_result(result_obj,
+    # extractor="compute_coax_msl_transition", strict=strict_passivity)
+    # epilogue (also used by compute_waveguide_s_matrix and
+    # compute_coaxial_s_matrix), which is the one call site that actually
+    # invokes this guard function in production; calling it directly here
+    # is a faithful stand-in, not a different code path (issue #585
+    # final-verify, nit n2).
+    from rfx.api._sparams import _warn_if_nonpassive_smatrix
+    with pytest.raises(ValueError, match="UNRELIABLE"):
+        _warn_if_nonpassive_smatrix(
+            result, extractor="compute_coax_msl_transition", strict=True,
+        )

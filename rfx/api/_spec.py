@@ -1666,6 +1666,59 @@ class CoaxMSLTransitionResult:
     Do not read the reciprocity/degeneracy numbers on this result as
     evidence about coax<->MSL launch physics in general.
 
+    ATTEMPT 2 (PI-directed, R2's escape clause — attempt 1's own named
+    defect authorized exactly one retry): lengthened the MSL probe ladder
+    1.000mm -> 8.000mm and widened the MSL port's x-CPML clearance
+    200um -> 1500um, keeping the junction geometry byte-identical to
+    attempt 1 (asserted, see
+    ``tests/test_coax_msl_transition.py::
+    test_attempt2_junction_geometry_is_byte_identical_to_attempt1``).
+
+    Verdict, per the RUN-LENGTH INVARIANCE TEST across two settling
+    checkpoints (20000 -> 45000 steps; issue #585 adversarial review):
+    the fitted ``gamma`` is the ONE quantity that is stable across both
+    checkpoints and lands inside the predeclared [0.8, 1.3] band both
+    times — CONFIRMED, but PROVISIONAL pending a fully settled run
+    (neither checkpoint clears the -40 dB ring-down rule; see
+    ``tests/test_coax_msl_transition.py``'s ``SETTLED_RUN_RECORD``, a
+    predeclared-UNRUN follow-up targeting VESSL). Reciprocity (0.824 ->
+    0.938), ``|S22|`` (0.451 -> 1.104), and max ``|S|`` (0.993 -> 1.104,
+    crossing the passivity-guard hard limit) all FAIL that same
+    invariance test — still evolving between checkpoints, in the WRONG
+    direction — so these are **UNMEASURED at this settling**, not
+    "refuted with cause identified" (an earlier revision of this
+    docstring made exactly that overclaim; see below).
+
+    RETRACTED (do not repeat — the third retracted attribution on this
+    lane, after attempt 1's own "near-degenerate two-drive amplification"):
+    a prior revision attributed the reciprocity miss to a coax/MSL
+    drive-amplitude gap (~1.8e7-3.3e7x). This is mathematically
+    impossible — per-drive (column) rescaling of the two-drive solve
+    leaves ``s_params`` EXACTLY invariant by construction (verified
+    numerically at this attempt's own gap value: deviation ~3e-16) — and
+    the "amplitude ratio" invoked turned out to equal raw ``cond_a`` to 8
+    significant figures, the exact quantity this docstring's own
+    ``cond_a`` / ``cond_a_equilibrated`` split already says not to read
+    as a degeneracy witness on this lane. The productive, SCALING-
+    INVARIANT open question in its place: the MSL-driven column's power
+    (``sum_j |s_params[j, 1, :]|**2``) is mostly far below 1 at both
+    checkpoints (0.0018-0.204, rising to 0.0104-1.218) on a nominally
+    lossless structure — where does that power go? Not answered by
+    attempt 2; the next step is the settled VESSL run, not a third
+    ladder/clearance change.
+
+    DISCLOSURE (issue #585 final-verify, finding G1): the shared passivity
+    guard both attempts rely on (``rfx/validation.py``'s ``check_passivity``
+    block, ``strict_passivity=True`` path — see
+    :func:`rfx.api._sparams._finalize_sparam_result`) checks only whether
+    ``max column power`` EXCEEDS its upper limit; it has no lower-bound
+    check at all, so a column power far BELOW 1 on a lossless structure —
+    exactly the open question above — passes it silently. That one-sided
+    guard is part of why the col_power finding went undetected across both
+    attempts: nothing in the pipeline flags "too little" power, only "too
+    much." This is a disclosure, not a fix — the guard is unchanged by
+    this attempt.
+
     Attributes
     ----------
     s_params : (2, 2, n_freqs) complex

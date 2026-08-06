@@ -48,7 +48,7 @@ guard. An absent warning therefore cannot be compared across port families.
 | `add_coaxial_port(...)` | `compute_coaxial_line_reflection(...)` | `CoaxialLineReflectionResult` | **limited** — exactly one `face="top"` port; broad-E5 analytic and broad-E4 MEEP evidence for the documented TEM-line result |
 | `add_coaxial_port(...)` | `compute_coaxial_s_matrix(...)` | `CoaxialSMatrixResult` | **experimental and deprecated** — older single-plane V/I path; can produce non-physical `\|S11\| > 1` for a lossless short |
 | `add_coaxial_port(...)` | `compute_coaxial_two_port(...)` | `CoaxialTwoPortResult` | **experimental** (issue #489 stage 2) — two-drive through-line 2-port solve; every DUT it can currently gate against is azimuthally symmetric (TM0n only); an external openEMS referee is now REGISTERED (`validation/crossval/21_coax_two_port_referee.py`, promoted 2026-08-04) bracketing the through-line class — it builds and runs its own independent openEMS model offline and does not execute rfx in-process; EXPERIMENTAL status stands until the transition/AD legs close; no phase claim |
-| `add_coaxial_port(...)` + `add_msl_port(...)` | `compute_coax_msl_transition(...)` | `CoaxMSLTransitionResult` | **experimental, diagnostic-only** (issue #489 leg 4) — coax-to-microstrip transition, two-drive; one committed fixture, and it trips its own reciprocity falsifier (see the section below) — do not treat as a validated transition |
+| `add_coaxial_port(...)` + `add_msl_port(...)` | `compute_coax_msl_transition(...)` | `CoaxMSLTransitionResult` | **experimental, diagnostic-only** (issue #489 leg 4) — coax-to-microstrip transition, two-drive; two committed fixtures (attempt 1 + a longer-ladder attempt 2). Attempt 2's gamma-vs-beta discriminant is CONFIRMED, PROVISIONAL (passes a run-length invariance test); reciprocity/`\|S22\|`/max`\|S\|` are UNMEASURED at this settling (fail that same test — a settled VESSL run is predeclared, not yet run); a scaling-invariant column-power witness is the OPEN question — see the section below — do not treat as a validated transition |
 | `add_floquet_port(...)` | no documented high-level S-parameter API | none | **experimental** — broadside diagnostic helpers only; no calibrated Floquet-port result |
 | Sources, TFSF, probes, DFT planes, flux monitors | none | field, resonance, or flux results | **not a port** — no impedance or S-matrix reference plane |
 
@@ -766,3 +766,84 @@ attempt: a future retry should lengthen the MSL probe ladder (e.g. to
 junction geometry itself — the junction's own physical dimensions (matching
 structure, via width/length) remain a separate, still-open question this
 fixture cannot yet speak to.
+
+### Attempt 2 (PI-directed, R2's escape clause) — ladder fix CONFIRMED-provisional; reciprocity UNMEASURED at this settling
+
+Attempt 1's own named defect (MSL probe ladder spanning only 0.34%-3.37% of
+the guided wavelength) authorized exactly one retry. Attempt 2 lengthens the
+MSL probe ladder 1.000mm → 8.000mm and widens the MSL port's x-CPML clearance
+200um → 1500um, shifts the measured band {0.6,3.3,6.0}GHz → {6.0,8.0,10.0}GHz
+(forced by the ladder-length requirement — 0.25·lambda_g at the old lowest bin
+is 74.3mm, infeasible), and keeps the junction geometry (coax pin/outer
+radius, PTFE fill, ground node, substrate, trace, pin-to-trace post) **byte-
+identical** to attempt 1 (asserted by
+`test_attempt2_junction_geometry_is_byte_identical_to_attempt1`, not just
+claimed). This required a genuine, small API extension — the two families'
+probe ladders were coupled through one shared set of
+`compute_coax_msl_transition(...)` kwargs in attempt 1, which cannot host a
+short coax ladder and a long MSL ladder at once; new `msl_probe_count` /
+`msl_probe_start_cells` / `msl_probe_spacing_cells` parameters (default
+`None` → falls back to the coax value, preserving attempt 1's exact
+behavior — its own slow_physics test still reproduces its exact numbers
+unchanged) decouple them.
+
+**A second adversarial review (issue #585) found the FIRST write-up of
+attempt 2's own result overclaimed.** That write-up attributed a still-broken
+reciprocity finding to a coax/MSL drive-amplitude gap and locked an assertion
+on it. This is **mathematically impossible** — per-drive (column) rescaling
+of the two-drive solve leaves the S-matrix EXACTLY invariant by construction
+(`A'=A·D, B'=B·D ⇒ B'·inv(A')=B·inv(A)=S` for any invertible diagonal `D`;
+verified numerically at this attempt's own measured gap, deviation ~3e-16),
+and the "amplitude ratio" invoked turned out to equal raw `cond_a` to 8
+significant figures — the exact quantity this lane's own `cond_a_equilibrated`
+split (issue #581 review finding B2) already says not to read as a
+degeneracy witness. **Retracted; this is the THIRD retracted attribution on
+this lane** (after attempt 1's own "near-degenerate two-drive amplification").
+The corrected read below applies a **run-length invariance test** (the
+repo's own discriminator for "settled physical quantity" vs "still-evolving
+transient") across the two measured checkpoints (20000 → 45000 steps) and
+reports a **column-power witness** (scaling-invariant, unlike the retracted
+amplitude-gap story) in its place.
+
+**Verdict, run-length invariance test applied — the two predeclared
+discriminants SPLIT, but not the way the first write-up said:**
+
+| discriminant | attempt 1 | attempt 2, 20000 steps | attempt 2, 45000 steps | invariance verdict |
+|---|---|---|---|---|
+| gamma-vs-beta ratio (coax-driven fit) | 4-32x off, non-monotonic | 1.085 / 0.826 / 0.976 | 1.128 / 0.854 / 1.071 | **STABLE, in [0.8,1.3] both times → CONFIRMED, provisional** |
+| `cond_a_equilibrated` | 1.0004 / 1.0001 / 1.0040 | (not separately logged) | 1.00238 / 1.00244 / 1.00549 | near 1, consistent with attempt 1 |
+| reciprocity worst deviation | 94-100% | 82.4% (0.824) | 93.8% (0.938) | **moved AWAY from any acceptance → UNMEASURED at this settling** |
+| `\|S22\|` | 1e-8 to 1e-11 at 2/3 bins | 0.043 / 0.141 / 0.451 | 0.102 / 0.109 / 1.104 (×2.4 at top bin) | **still growing → UNMEASURED at this settling** |
+| max`\|S\|` | 0.99 (well under limit) | 0.9933 | 1.1038 (crosses the 1.10 passivity-guard hard limit) | **crosses unity between checkpoints → UNMEASURED at this settling** |
+| MSL-driven column power `Σ\|S_ij\|²` (NEW, issue #585 finding B5) | not computed | 0.0018 / 0.0199 / 0.204 | 0.0104 / 0.0119 / 1.218 | **THE open question — mostly ≪1 on a lossless structure, one bin >1 at the less-settled checkpoint** |
+| `settling_db` | -43.9 / -63.6 dB (past -40) | -12.3 / -10.7 dB | -19.7 / -17.9 dB | improving direction only; neither checkpoint clears -40 dB |
+
+**Verdict: gamma-vs-beta ratio is CONFIRMED, PROVISIONAL pending a settled
+run** — the one discriminant that passes the run-length invariance test,
+stable and in-band at both checkpoints. **Reciprocity, `|S22|`, and max`|S|`
+are UNMEASURED AT THIS SETTLING**, not "refuted with cause identified" — all
+three fail the same invariance test, moving in the wrong direction between
+checkpoints. The passivity guard fires on the 45000-step run itself
+("column power 1.218 exceeds limit 1.1... UNRELIABLE... do not interpret as
+physics") — exercised directly in the committed test via the same shared
+guard function `strict_passivity=True` would invoke, so the guard is not
+silently bypassed even though the top-level `strict_passivity` flag on this
+particular call is `False` (issue #585 review finding B3: no silent gate
+removal). **The productive open question is the column-power witness**: on a
+nominally lossless structure, the MSL-driven column's measured power is far
+below 1 at most bins (power going somewhere unaccounted-for) with one bin
+above 1 at the less-settled checkpoint (itself evidence of non-convergence,
+since sum-power > 1 is impossible for a genuinely passive structure).
+
+| aspect | status |
+|---|---|
+| gamma-vs-beta (MSL wave extraction) | **CONFIRMED, PROVISIONAL** — passes the run-length invariance test; locked as a real test assertion |
+| reciprocity / `\|S22\|` / max`\|S\|` | **UNMEASURED at this settling** — recorded (both checkpoints) but NOT gated; do not cite either checkpoint's number as physics |
+| MSL-driven column power | **OPEN QUESTION** — scaling-invariant, regression-locked as a measured observation, not yet explained |
+| drive-amplitude gap "explanation" | **RETRACTED** (issue #585 B1) — mathematically cannot affect S; do not repeat |
+| settled run | **PREDECLARED, UNRUN** — `SETTLED_RUN_RECORD` in the test file targets VESSL (~135000 steps, extrapolated); not attempted in this PR |
+
+Per R2, this stops here: no third ladder/clearance attempt in this PR. The
+named next step is the settled VESSL run (predeclared UNRUN, fill-contract
+pattern) — reciprocity, `|S22|`, and the column-power question all need that
+settled data before any further attribution, not a new instrument change.
