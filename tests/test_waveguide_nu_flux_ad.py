@@ -97,26 +97,41 @@ def _wr90_nu_sim():
     return sim, domain_x
 
 
-def _eps_override_for(sim, domain_x, deps):
-    """NU-grid eps override 1.0 + deps inside the slab region (traced).
+def _eps_override_for(sim, deps):
+    """NU-grid eps override: production-assembled eps + deps inside the slab.
 
-    Sized to the NU grid the flux extractor builds (``_build_nonuniform_grid``
-    synthesises the same scalar-dx dz_profile and the same x-cpml pad the
-    NU S-matrix path uses, so the shape matches the device materials array).
+    #590: this used to reconstruct the slab index range by hand via
+    ``pos_to_nu_index`` (nearest-E-NODE argmin) — a comparator that agreed
+    with the assembled eps only under the pre-#562 cell-CENTRE coordinate
+    convention. #562/#564 moved ``coords_from_nonuniform_grid`` to E-node
+    coordinates and audited two consumers (the subpixel smoother, the #325
+    rasterization advisory); this helper was a third, unaudited one, and
+    went stale silently (16/16 elements, up to 19.8% rel diff against the
+    production no-override run).
+
+    Fixed the #564-review way: derive the baseline from
+    ``assemble_materials_nu`` (the SAME NU materials-assembly path
+    ``compute_waveguide_s_matrix`` calls internally) and the slab region
+    from the Box's own ``mask_on_coords`` on the production node
+    coordinates — never a hand-rolled index reconstruction.
     """
-    from rfx.runners.nonuniform import pos_to_nu_index
+    from rfx.runners.nonuniform import assemble_materials_nu
+    from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid
+
     grid = sim._build_nonuniform_grid()
-    eps = jnp.ones(grid.shape, dtype=jnp.float32)
-    i_lo = pos_to_nu_index(grid, (_SLAB_X_LO, _A_WG / 2, _B_WG / 2))[0]
-    i_hi = pos_to_nu_index(grid, (_SLAB_X_HI, _A_WG / 2, _B_WG / 2))[0]
-    # Perturb the slab region: base slab eps (=4) + deps so deps=0 is a
-    # no-op vs the assembled materials (gate 3) and deps>0 changes S21.
-    return eps.at[i_lo:i_hi, :, :].set(_SLAB_EPS_R + deps)
+    materials, _debye_spec, _lorentz_spec, _pec_mask = assemble_materials_nu(sim, grid)
+    coords = coords_from_nonuniform_grid(grid)
+    slab_entry = next(e for e in sim._geometry if e.material_name == "diel_slab")
+    slab_mask = slab_entry.shape.mask_on_coords(coords.x, coords.y, coords.z)
+    # Perturb the slab region: base slab eps (=4, from the production
+    # assembly) + deps so deps=0 is a no-op vs the assembled materials
+    # (gate 3) and deps>0 changes S21 (FD gate).
+    return jnp.where(slab_mask, materials.eps_r + deps, materials.eps_r)
 
 
 def _s21_mag2(deps):
-    sim, domain_x = _wr90_nu_sim()
-    eps = _eps_override_for(sim, domain_x, deps)
+    sim, _ = _wr90_nu_sim()
+    eps = _eps_override_for(sim, deps)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = sim.compute_waveguide_s_matrix(
@@ -155,8 +170,8 @@ def test_nu_flux_smatrix_forward_matches_untraced():
         warnings.simplefilter("ignore")
         res_a = sim_a.compute_waveguide_s_matrix(
             num_periods=NUM_PERIODS, normalize="flux")
-    sim_b, domain_x_b = _wr90_nu_sim()
-    eps = _eps_override_for(sim_b, domain_x_b, jnp.asarray(0.0, dtype=jnp.float32))
+    sim_b, _ = _wr90_nu_sim()
+    eps = _eps_override_for(sim_b, jnp.asarray(0.0, dtype=jnp.float32))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res_b = sim_b.compute_waveguide_s_matrix(
@@ -165,6 +180,39 @@ def test_nu_flux_smatrix_forward_matches_untraced():
     sb = np.asarray(res_b.s_params)
     assert np.all(np.isfinite(sa)) and np.all(np.isfinite(sb))
     np.testing.assert_allclose(sb, sa, rtol=1e-5, atol=1e-7)
+
+
+def test_eps_override_helper_matches_production_assembly():
+    """#590/PR #591-review regression: lock ``_eps_override_for``'s
+    PERTURBATION MASK to the production slab indicator.
+
+    The first version of this lock asserted elementwise equality at
+    ``deps=0``. That was a TAUTOLOGY in the mask dimension:
+    ``jnp.where(mask, eps_r + 0, eps_r) == eps_r`` for ANY mask, so it
+    could not tell the correct mask apart from a shifted, all-True, or
+    all-False one — the PR review demonstrated a 1-node ``jnp.roll`` of the
+    slab mask passes this assertion (and every other test in this file and
+    the sibling checkpoint file) while moving the measured AD gradient 11%
+    (-1.190e-3 -> -1.059e-3), invisible to the AD/FD gate because both
+    sides of that comparison move together under the same shifted mask.
+
+    Fixed by perturbing at ``deps != 0`` and checking WHERE the increase
+    landed, not just that deps=0 is a no-op: a cell is increased iff it is
+    genuinely slab material (``eps_r == _SLAB_EPS_R``) in the production
+    assembly. A shifted or otherwise wrong mask reds this immediately,
+    because the perturbed set and the true slab-material set diverge.
+    """
+    from rfx.runners.nonuniform import assemble_materials_nu
+
+    sim, _ = _wr90_nu_sim()
+    grid = sim._build_nonuniform_grid()
+    materials, _, _, _ = assemble_materials_nu(sim, grid)
+    deps = jnp.asarray(0.5, dtype=jnp.float32)
+    perturbed = _eps_override_for(sim, deps)
+    np.testing.assert_array_equal(
+        np.asarray(perturbed) - np.asarray(materials.eps_r) > 0,
+        np.asarray(materials.eps_r) == _SLAB_EPS_R,
+    )
 
 
 def _s11_mag2_at_vacuum(deps):
