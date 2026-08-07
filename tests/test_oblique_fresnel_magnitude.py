@@ -91,7 +91,13 @@ def test_oblique_fresnel_magnitude_vs_analytic(theta, tol):
     assert abs(g - ga) / ga < tol, f"|Γ|={g:.3f} vs R_TE={ga:.3f} (θ={theta}, {abs(g-ga)/ga*100:.1f}%)"
 
 
+# highmem (issue #545): this test's own footprint is UNMEASURED in CI -- it
+# was the test killed in shard 2 (weekly run 31103127491), so its own
+# post-test [rss] hook line never fired (the process died first). The
+# process was already at 12,187 MB *entering* this test -- that number
+# belongs to the PRECEDING msl-referee highmem test, not this one.
 @pytest.mark.slow
+@pytest.mark.highmem
 def test_oblique_reflection_magnitude_differentiable():
     """d|Γ|/dε flows through the checkpointed oblique forward and matches finite difference."""
     sim, shape, xi, xe, _idx, dt, ns = _build_lean(30.0)  # lean config: AD tape fits GPU memory
