@@ -41,8 +41,8 @@ after the missing bounding node was restored, **TM111 error 2.66% -> 0.025%**
 (same geometry, same 4:1 grading, same harminv extraction) — the remainder is
 coarse-mesh dispersion, which is what the gate was meant to bound in the first
 place. The 4% gate below is therefore now ~160x looser than the measured
-residual; tightening it is a separate, evidence-first decision (it must be
-re-measured across resolutions before being pinned, not simply divided down).
+residual; this PR makes that tightening, re-measured across resolutions and
+grading ratios first rather than divided down (see the gate block in the body).
 """
 
 from __future__ import annotations
@@ -56,16 +56,19 @@ def test_nonuniform_z_graded_cavity_tm111_accuracy():
     """A genuinely z-graded NU mesh reproduces the closed-form TM111 cavity
     resonance to within a measured tolerance.
 
-    Gate: |f_sim - f_analytic(actual d)| / f_analytic < 4% (measured 2.66% on a
+    Gate: |f_sim - f_analytic(actual d)| / f_analytic < 0.04%, DERIVED from the
+    measured envelope via the shared envelope multiplier (see the gate block in
+    the body for the scan and the reasoning). It was < 4% while the #562 extent
+    defect dominated the residual (measured 2.66% on a
     0.25mm fine band / dx=1mm air cavity, 2026-06-18; ~1.5x margin for cross-
     machine float). Mode-ID is robust: TM111 sits >1 GHz from its nearest sim
     neighbour (measured 1.08 GHz), so the nearest-to-analytic match is unambiguous.
 
     LEVERAGE (honest power of this gate): the graded-z (p=1) term contributes only
     ~29% of f^2 here (the (1/d)^2 term vs (1/a)^2+(1/b)^2), so f's sensitivity to the
-    graded-z extent is diluted ~sqrt. This gate therefore catches GROSS graded-z
-    metric errors (an effective-d wrong by more than ~12-17% would trip 4%), NOT
-    sub-percent ones — sub-percent graded-stencil correctness is the job of the
+    graded-z extent is diluted ~sqrt. Even so, at the 0.04% gate this catches
+    sub-percent graded-z metric errors (an effective-d wrong by ~0.14% =
+    0.04/0.2884 already trips it) — graded-STENCIL correctness is the job of the
     CORE-C2 per-stencil guard (test_review_tier1_validation_battery.py::test_corec2_*).
     This test's role is the end-to-end full-FDTD analytic anchor the oracle-free
     sibling lacks, not a high-resolution stencil probe.
@@ -152,8 +155,75 @@ def test_nonuniform_z_graded_cavity_tm111_accuracy():
 
     # The ANALYTIC accuracy gate (the gap this test fills): the z-graded NU mesh
     # reproduces the z-DEPENDENT closed-form TM111 to within the measured tolerance.
-    assert err < 0.04, (
-        f"NU-graded TM111 error {err*100:.3f}% >= 4% — the non-uniform grid does "
-        f"not reproduce the closed-form z-dependent cavity resonance "
+    # DERIVED gate: measured envelope x the repo-wide envelope multiplier,
+    # quantized up by the shared helper (#528/#539), in percent units.
+    # Envelope 0.0252 % at this test's configuration -> 0.04 %.
+    #
+    # It was 4 % until #562 removed the one-cell z-extent defect that dominated
+    # the residual (2.66 % -> 0.025 %, ~106x). A 4 % gate on a 0.025 % residual
+    # is 160x loose — it could not catch the defect class it exists for.
+    #
+    # Measured surrounding sensitivity (single machine; percent error of TM111
+    # vs the closed form):
+    #
+    #     dx = 1.0 mm, grading 4:1  ->  0.0252   <- this test
+    #     dx = 1.0 mm, grading 2:1  ->  0.0164
+    #     dx = 1.0 mm, uniform      ->  0.0011
+    #     dx = 0.5 mm, grading 4:1  ->  0.0032
+    #     dx = 2.0 mm, grading 4:1  ->  1.2567   <- 50x worse; do NOT
+    #                                              re-parameterize to 2 mm
+    #                                              without re-deriving the gate
+    #
+    # Domain-SIZE sensitivity, measured by the #573 reviewer at fixed dx and
+    # fixed 4:1 grading while sweeping cavity size (z, percent error):
+    #
+    #     0.0373 / 0.0306 / 0.0252 / 0.0264 / 0.0213
+    #
+    # The residual tracks f0, so the gate binds the dispersion floor rather than
+    # a fixture artifact — but the worst case is inside the gate, so the
+    # "do NOT re-parameterize without re-deriving" warning covers cavity SIZE as
+    # well as dx.
+    #
+    # Harminv window sensitivity, same source: over n_steps in {4k, 8k, 12k, 16k}
+    # the error spans 0.0071 pt (xy) / 0.0110 pt (z), and the committed 8000-step
+    # point is each family's MAXIMUM — so the envelope already covers estimator
+    # scatter by construction rather than by luck. z's margin over that scatter
+    # is ~1.35x, which makes z the more fragile of the two gates.
+    #
+    # The envelope is taken at THIS configuration, not over the scan: the test
+    # runs one configuration, so the gate is a regression lock on it and the
+    # neighbours are evidence. Both cavity tests are `slow`-marked and so run
+    # only in the weekly slow lane; the envelope is therefore single-machine.
+    # If another runner reds, re-measure and widen with the new datum recorded
+    # — do not blanket-loosen.
+    from tests._gate_policy import gate_from_envelope
+    _MEASURED_ENVELOPE_PCT = 0.0252
+    GATE = gate_from_envelope(_MEASURED_ENVELOPE_PCT, quantum=100) / 100.0
+
+    # In-test FALSIFIER, added with the tightening: a gate is worth only what it
+    # rejects. +-0.5 % is 12x the new gate and 8x BELOW the old one, so this
+    # demonstrates discrimination the 4 % gate did not have.
+    _FALSIFIER = 0.005
+    # And the gate must reject the REAL historical regression, not only a
+    # synthetic perturbation: the residual this configuration measured while the
+    # #562 extent defect was live was 2.66 %, which the new gate rejects
+    # by 66x. The old gate accepted it.
+    assert 0.0266 > GATE, (
+        "the derived gate would NOT have caught the #562-era residual "
+        f"(2.66 % vs gate {GATE*100:.3f} %) — tightening bought nothing")
+
+    for _sign in (+1.0, -1.0):
+        _f_wrong = f_tm111 * (1.0 + _sign * _FALSIFIER)
+        _err_wrong = abs(f_sim - _f_wrong) / _f_wrong
+        assert _err_wrong > GATE, (
+            f"falsifier failed: a {_sign*_FALSIFIER*100:+.2f}% frequency error "
+            f"(anchor {_f_wrong/1e9:.4f} GHz) gives err {_err_wrong*100:.4f}% "
+            f"which does NOT exceed the {GATE*100:.3f}% gate"
+        )
+
+    assert err < GATE, (
+        f"NU-graded TM111 error {err*100:.4f}% >= {GATE*100:.3f}% — the "
+        f"non-uniform grid does not reproduce the closed-form z-dependent "
+        f"cavity resonance "
         f"(f_sim={f_sim/1e9:.4f} vs analytic={f_tm111/1e9:.4f} GHz)"
     )

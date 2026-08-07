@@ -38,13 +38,24 @@ proved argmax gates are FFT-bin-blind, harminv resolves <0.05%):
     8000/12000/16000 steps; the mode is high-Q clean).
   * UNIFORM mesh, SAME extents (grading OFF): TM110 signed error **+2.47%**.
 
-The +2.4% bias is therefore NOT introduced by grading — it is present, to within
-0.04 pt, on the ungraded profile of the same coarse resolution. **The POSITIVE
-finding stands and is why this comparison was worth making: in-plane
-``dx_profile`` / ``dy_profile`` grading is faithful — it does not corrupt the
-resonance beyond the shared baseline.** Convergence direction (independent
-evidence the agreement is genuine): the error is dominated by the coarse 1mm
-bulk, not the 0.25mm fine band.
+The +2.4% bias was therefore NOT introduced by grading — it was present, to
+within 0.04 pt, on the ungraded profile of the same coarse resolution. That
+comparison was worth making, but read it for what it shows: **both legs shared a
+baseline that #562 dominated**, so it established that grading did not ADD to a
+2.4% defect, not that grading is free.
+
+With the defect gone the same comparison resolves the real grading term, measured
+at IDENTICAL extents on this harness: **graded 4:1 = 0.0282%, ungraded = 0.0084%
+— grading adds ~0.02 pt, a factor 3.35x above the uniform floor.** So grading is
+now the DOMINANT contribution rather than a null effect; both numbers remain
+negligible against the 0.05% gate, which is the honest form of the original
+claim. (Caveat checked, not assumed: matching the graded extents forces uniform
+cells of 1.0083/1.0096 mm, +0.83%/+0.96% over the nominal 1 mm — far too small to
+account for 3.35x. Corroborating points at the ~0.01% floor: the round-1 uniform
+leg 0.0108% and #564's committed -0.007%.)
+
+Convergence direction (independent evidence the agreement is genuine): the error
+is dominated by the coarse 1mm bulk, not the 0.25mm fine band.
 
 WHAT THAT SHARED BASELINE ACTUALLY WAS — correction (#562, 2026-08-04). This
 docstring attributed the +2.4% to "the standard coarse-Yee PEC-cavity
@@ -59,14 +70,23 @@ TM110 by harminv), before the fix: uniform builder **-0.007%**, NU builder
 built — both solvers were accurate; only one built the requested cavity). After
 restoring the bounding node the two builders are bit-identical on an identical
 mesh, and THIS test reads **0.028%** (was 2.43%) on the same graded geometry.
-The 3.5% gate below is now ~125x looser than the measured residual; tightening
-it is a separate, evidence-first decision.
+That left the then-3.5% gate ~125x looser than the measured residual; this PR
+makes the tightening, deriving 0.05% from the measured envelope (see the gate
+block in the body).
 
 LEVERAGE (honest power of this gate): because TM110's frequency is set 100% by the
 graded in-plane extents, this gate catches graded-metric errors on x/y directly
 (no sqrt-dilution). It is a full-FDTD end-to-end analytic anchor — the coverage
-the #403 blind-spot lacked — not a sub-percent stencil probe (that is the CORE-C2
-per-stencil guard's job, test_review_tier1_validation_battery.py::test_corec2_*).
+the #403 blind-spot lacked. Since the gate became 0.05% it IS a sub-percent
+probe, and because there is no dilution here the numbers follow the gate almost
+directly: TM110's f^2 shares are 0.4296 (a-axis) and 0.5704 (b-axis), so tripping
+0.05% takes an effective-extent error of 0.05% (both axes together) to 0.12%
+(a-axis alone), where the old 3.5% gate needed 3.5-8.1%. (An earlier revision of
+this paragraph imported the z-sibling's sqrt-diluted 12-17% figure into this
+file, two sentences after asserting there is no dilution, and rescaled it by the
+z gate's ratio — corrected here from the closed form.) (The per-stencil CORE-C2 guard,
+test_review_tier1_validation_battery.py::test_corec2_*, still covers the
+stencil-level question this end-to-end test cannot isolate.)
 """
 
 from __future__ import annotations
@@ -80,12 +100,17 @@ def test_nonuniform_xy_graded_cavity_tm110_accuracy():
     """A genuinely x- AND y-graded NU mesh reproduces the closed-form TM110 cavity
     resonance to within a measured tolerance.
 
-    Gate: |f_sim - f_analytic(actual a,b)| / f_analytic < 3.5% (measured 2.43% on a
-    4:1 graded x/y air cavity, main @199aafc 2026-07-20; ~1.44x margin for
-    cross-machine float32 drift, matching the z-sibling's ~1.5x discipline). The
-    error is grading-INVARIANT (uniform-mesh same extents = 2.47%), so the gate
-    bounds the coarse-Yee PEC-extent floor, and a grading regression that corrupted
-    the in-plane metric beyond that floor would trip it.
+    Gate: |f_sim - f_analytic(actual a,b)| / f_analytic < 0.05%, DERIVED from the
+    measured envelope via the shared envelope multiplier (see the gate block in
+    the body for the scan, the reasoning, and the limits). It was < 3.5% while
+    the #562 one-cell extent defect dominated the residual (2.43% then, 0.028%
+    now — an ~87x improvement on unchanged geometry).
+
+    The error remains grading-INVARIANT, which is the finding this test exists
+    for. What it bounds is the coarse-mesh DISPERSION floor: the "coarse-Yee
+    PEC-extent floor" this paragraph used to name was the #562 grid defect, and
+    the module docstring above withdraws that attribution — both legs of the
+    2.43% == 2.47% comparison had gone through the NU builder.
 
     Mode-ID is robust: TM110 sits >2.5 GHz from its nearest Ez-coupling neighbour
     (TM210), so the nearest-to-analytic match is unambiguous. The separation gate
@@ -93,7 +118,9 @@ def test_nonuniform_xy_graded_cavity_tm110_accuracy():
     would shrink the separation and trip it.
 
     Discrimination is proven IN-TEST (not asserted by construction): a solver or
-    analytic wrong by +/-10% is shown to trip the accuracy gate. Anti-vacuity is
+    analytic wrong by +/-0.5% is shown to trip the accuracy gate (it was +/-10%
+    against the old 3.5% gate; +/-10% would clear a 0.05% gate by 200x and prove
+    nothing about it). Anti-vacuity is
     enforced by a genuine-grading assert (max/min cell ratio > 2 on both in-plane
     axes) — verified externally that a near-uniform profile (ratio 1.11) FAILS it,
     so the gate cannot silently degrade into a uniform-mesh check.
@@ -188,25 +215,83 @@ def test_nonuniform_xy_graded_cavity_tm110_accuracy():
     print(f"[NU-xy-cavity] TM110 f_sim={f_sim/1e9:.4f} GHz, err={err*100:.3f}% "
           f"(2nd-nearest delta {d_second/1e9:.3f} GHz, sep ratio {d_second/d_near:.1f}x)")
 
-    # In-test FALSIFIER (proves the gate has discrimination power, not vacuous):
-    # a solver/analytic wrong by +/-10% MUST trip the accuracy gate. +/-10% clears
-    # the gate (3.5%) plus the base +2.4% bias in either sign, so both directions
-    # fail unambiguously (measured: +10% -> 6.9% err, -10% -> 13.8% err).
-    GATE = 0.035
+    # The gate is DERIVED, not chosen: measured envelope x the repo-wide
+    # envelope multiplier, quantized up by the shared helper (#528/#539), in
+    # percent units. Envelope = 0.0282 % measured at this test's own
+    # configuration; gate_from_envelope(0.0282, quantum=100) = 0.05 %.
+    #
+    # It was 3.5 % until #562 removed the one-cell extent defect that dominated
+    # the residual (2.43 % -> 0.028 %, an ~87x improvement on unchanged
+    # geometry). A 3.5 % gate on a 0.028 % residual could not catch the defect
+    # class it exists for — a 125x-loose gate is a formality.
+    #
+    # Measured surrounding sensitivity (single machine, this configuration and
+    # four neighbours; percent error of TM110 vs the closed form):
+    #
+    #     dx = 1.0 mm, grading 4:1  ->  0.0282   <- this test
+    #     dx = 1.0 mm, grading 2:1  ->  0.0224
+    #     dx = 1.0 mm, uniform      ->  0.0108
+    #     dx = 0.5 mm, grading 4:1  ->  0.0458   (fixed n_steps = shorter record)
+    #     dx = 2.0 mm, grading 4:1  ->  0.0868
+    #
+    # Domain-SIZE sensitivity, measured by the #573 reviewer at fixed dx and
+    # fixed 4:1 grading while sweeping cavity size (xy, percent error):
+    #
+    #     0.0489 / 0.0390 / 0.0282 / 0.0139 / 0.0203
+    #
+    # The residual tracks f0, so the gate binds the dispersion floor rather than
+    # a fixture artifact — but the worst case is 97.8% of the gate, so the
+    # "do NOT re-parameterize without re-deriving" warning covers cavity SIZE as
+    # well as dx.
+    #
+    # Harminv window sensitivity, same source: over n_steps in {4k, 8k, 12k, 16k}
+    # the error spans 0.0071 pt (xy) / 0.0110 pt (z), and the committed 8000-step
+    # point is each family's MAXIMUM — so the envelope already covers estimator
+    # scatter by construction rather than by luck. z's margin over that scatter
+    # is ~1.35x, which makes z the more fragile of the two gates.
+    #
+    # The envelope is deliberately taken at THIS configuration rather than over
+    # the whole scan: the test only ever runs this one, so the gate is a
+    # regression lock on it, and the neighbours are recorded as evidence rather
+    # than folded into the margin. These cases run only in the weekly slow lane
+    # (both cavity tests are `slow`-marked), so the envelope is single-machine.
+    # If another runner reds, the response is to re-measure and widen with the
+    # new datum recorded — not to blanket-loosen.
+    from tests._gate_policy import gate_from_envelope
+    _MEASURED_ENVELOPE_PCT = 0.0282
+    GATE = gate_from_envelope(_MEASURED_ENVELOPE_PCT, quantum=100) / 100.0
+
+    # In-test FALSIFIER (proves the gate has discrimination power, not vacuous).
+    # The perturbation has to scale with the gate: +/-10 % proved nothing about
+    # a 0.05 % gate, since it clears it by 200x. +/-0.5 % is 10x the gate and
+    # still an order of magnitude below the old one — so this now demonstrates
+    # discrimination the 3.5 % gate never had.
+    _FALSIFIER = 0.005
+    # And the gate must reject the REAL historical regression, not only a
+    # synthetic perturbation: the residual this configuration measured while the
+    # #562 extent defect was live was 2.43 %, which the new gate rejects
+    # by 49x. The old gate accepted it.
+    assert 0.0243 > GATE, (
+        "the derived gate would NOT have caught the #562-era residual "
+        f"(2.43 % vs gate {GATE*100:.3f} %) — tightening bought nothing")
+
     for sign in (+1.0, -1.0):
-        f_wrong = f_tm110 * (1.0 + sign * 0.10)
+        f_wrong = f_tm110 * (1.0 + sign * _FALSIFIER)
         err_wrong = abs(f_sim - f_wrong) / f_wrong
         assert err_wrong > GATE, (
-            f"falsifier failed: a {sign*10:+.0f}% frequency error (anchor "
-            f"{f_wrong/1e9:.4f} GHz) gives err {err_wrong*100:.3f}% which does NOT "
-            f"exceed the {GATE*100:.1f}% gate — the gate would not catch it"
+            f"falsifier failed: a {sign*_FALSIFIER*100:+.2f}% frequency error "
+            f"(anchor {f_wrong/1e9:.4f} GHz) gives err {err_wrong*100:.4f}% which "
+            f"does NOT exceed the {GATE*100:.3f}% gate — the gate would not catch it"
         )
 
     # The ANALYTIC accuracy gate (the coverage #403 flags as missing): the x&y
     # graded NU mesh reproduces the closed-form in-plane-dependent TM110 to within
-    # the measured tolerance (2.43% graded == 2.47% uniform -> grading faithful).
+    # the measured tolerance. (The grading-faithful finding is 0.0282% graded vs
+    # 0.0084% ungraded at identical extents — factor 3.35x, grading DOMINANT, as
+    # measured at :48-50; the 2.43% == 2.47% pair it used to
+    # cite was the #562-era baseline both legs shared.)
     assert err < GATE, (
-        f"NU in-plane-graded TM110 error {err*100:.3f}% >= {GATE*100:.1f}% — the "
+        f"NU in-plane-graded TM110 error {err*100:.4f}% >= {GATE*100:.3f}% — the "
         f"non-uniform x/y grid does not reproduce the closed-form cavity resonance "
         f"whose frequency is set by the graded in-plane extents "
         f"(f_sim={f_sim/1e9:.4f} vs analytic={f_tm110/1e9:.4f} GHz)"
