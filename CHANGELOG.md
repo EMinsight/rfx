@@ -6,6 +6,52 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased]
 
+### Fixed — non-uniform-mesh CPML absorber was not impedance-matched (issue #582)
+
+- The uniform-grid material assembler extends the interior-edge
+  `eps_r`/`sigma`/`mu_r` slice outward into the CPML padding so guided
+  modes see an impedance-matched absorber (`rfx/api/_compile.py`,
+  "equivalent to UPML"). The non-uniform-mesh assembler
+  (`assemble_materials_nu`, `rfx/runners/nonuniform.py`) never had this
+  step, so a structure touching the domain's interior edge (e.g. a
+  dielectric slab spanning the transverse extent) saw a **different
+  absorber medium per path**: on the issue's fixture, 736 CPML pad cells
+  carried `eps_r=4.0` on the uniform path and `eps_r=1.0` on the NU path.
+  Found via the uniform-mesh reduction anchor (#562/#568/#570): the
+  `boundary="cpml"` + `subpixel_smoothing=True` combination was the only
+  one of four boundary x smoothing combinations that did not reduce to the
+  uniform-path solve (amplitude off 0.18%, waveform residual 1.98e-2,
+  record-length-independent). Root cause was NOT the smoother — a new
+  staircase-only (no smoothing) discriminator case already carried ~90% of
+  the divergence (residual 7.7261e-3, measured on the pre-fix tree) — it
+  was the missing pad replication, confirmed by three independent
+  witnesses (input-array diff, field dump, causal A/B relocating the slab
+  away from the domain edge).
+  Fix: `assemble_materials_nu` now performs the same interior-edge
+  replication into the CPML pads, using the NU grid's existing per-face
+  `pad_{x,y,z}_{lo,hi}` bookkeeping. Guided-mode / dielectric-waveguide
+  structures on a non-uniform mesh now see the same impedance-matched
+  absorber the uniform path always has. PEC-bounded simulations are
+  unaffected (the new step is gated on `cpml_layers > 0`, which
+  `Simulation.__init__` forces to 0 for `boundary="pec"`).
+  **Scope**: the fix mirrors the uniform path's replication exactly,
+  including two gaps it inherits from that path (tracked separately in
+  #627, not addressed here): (a) for a `Box` whose upper face coincides
+  with the domain face, the hi-face replication copies a column the
+  rasterizer leaves at vacuum, so only the lo-side pad ends up matched;
+  (b) Debye/Lorentz dispersive poles are rasterized with no pad-extension
+  step, so a dispersive edge-touching material gets its static `eps_r`
+  matched into the pad but not its poles. In short: this closes the gap
+  for non-dispersive media, and — for boxes ending exactly on the domain
+  face — for the lo-side faces.
+  `tests/test_nonuniform_uniform_end_to_end_reduction.py`'s
+  `subpixel-cpml` case converts from `xfail(strict=True)` to a normal
+  assertion (residual 1.9890e-2 pre-fix -> 1.14e-4 post-fix); a new
+  `staircase-slab-cpml` case closes the blind spot that hid most of the
+  effect (residual 7.7261e-3 pre-fix -> 8.7e-5 post-fix). Pre-fix numbers
+  measured on the pre-fix tree (commit 31395e0); post-fix numbers
+  reproduce exactly on both trees.
+
 ### Fixed — distributed-NU pad-lane hi-x wall displacement (issue #622)
 
 - `rfx.runners.distributed_nu.run_nonuniform_distributed_pec` and the NU
