@@ -25,6 +25,7 @@ from rfx.geometry.csg import Box
 # broke the rcs_scattering tutorial's ``from rfx.geometry import
 # rasterize``).
 from rfx.geometry._pole_keying import _accumulate_pole_mask, _spec_from_pole_masks
+from rfx.geometry.rasterize_grid import extend_cpml_pad_materials
 from rfx.materials.debye import DebyePole, init_debye
 from rfx.materials.lorentz import LorentzPole, init_lorentz
 from rfx.materials.thin_conductor import apply_thin_conductor
@@ -189,6 +190,20 @@ class _CompileMixin:
         # modes in dielectric waveguides see an impedance-matched absorber
         # (equivalent to UPML).  Each CPML face copies the interior-edge
         # slice outward, as if the geometry continued beyond the domain.
+        # Shared with the NU mirror (rfx/runners/nonuniform.py) via
+        # extend_cpml_pad_materials — issue #627 found the two
+        # hand-duplicated copies (#582) both carrying a hi-face vacuum
+        # column for a domain-touching box; the fix lives once.
+        #
+        # Dispersion-pole masks are deliberately NOT extended here (#627b
+        # tried and reverted): extending a high-Q (Q~60) Lorentz pole into
+        # the pad turns a stable edge-touching simulation into a divergent
+        # one (last/mid energy ratio 649 vs 0.12-0.16 decaying on every
+        # other tested variant, including the static extension below with
+        # the same pole left un-extended in the interior) — with no NaN
+        # and no exception, so nothing downstream catches it. See
+        # extend_cpml_pad_materials's docstring and the follow-up issue
+        # (filed separately, tracking the stability factorial).
         if self._boundary in ("cpml", "upml") and self._cpml_layers > 0:
             # Per-face allocation (2026-04): (pad_{axis}_lo / _hi). Reflector /
             # periodic faces have pad=0 on that side and the corresponding
@@ -198,34 +213,9 @@ class _CompileMixin:
             plx, phx = grid.pad_x_lo, grid.pad_x_hi
             ply, phy = grid.pad_y_lo, grid.pad_y_hi
             plz, phz = grid.pad_z_lo, grid.pad_z_hi
-            eps_r_ext = eps_r
-            sigma_ext = sigma
-            mu_r_ext = mu_r
-            if plx > 0:
-                eps_r_ext = eps_r_ext.at[:plx,:,:].set(eps_r_ext[plx:plx+1,:,:])
-                sigma_ext = sigma_ext.at[:plx,:,:].set(sigma_ext[plx:plx+1,:,:])
-                mu_r_ext = mu_r_ext.at[:plx,:,:].set(mu_r_ext[plx:plx+1,:,:])
-            if phx > 0:
-                eps_r_ext = eps_r_ext.at[-phx:,:,:].set(eps_r_ext[-phx-1:-phx,:,:])
-                sigma_ext = sigma_ext.at[-phx:,:,:].set(sigma_ext[-phx-1:-phx,:,:])
-                mu_r_ext = mu_r_ext.at[-phx:,:,:].set(mu_r_ext[-phx-1:-phx,:,:])
-            if ply > 0:
-                eps_r_ext = eps_r_ext.at[:,:ply,:].set(eps_r_ext[:,ply:ply+1,:])
-                sigma_ext = sigma_ext.at[:,:ply,:].set(sigma_ext[:,ply:ply+1,:])
-                mu_r_ext = mu_r_ext.at[:,:ply,:].set(mu_r_ext[:,ply:ply+1,:])
-            if phy > 0:
-                eps_r_ext = eps_r_ext.at[:,-phy:,:].set(eps_r_ext[:,-phy-1:-phy,:])
-                sigma_ext = sigma_ext.at[:,-phy:,:].set(sigma_ext[:,-phy-1:-phy,:])
-                mu_r_ext = mu_r_ext.at[:,-phy:,:].set(mu_r_ext[:,-phy-1:-phy,:])
-            if plz > 0:
-                eps_r_ext = eps_r_ext.at[:,:,:plz].set(eps_r_ext[:,:,plz:plz+1])
-                sigma_ext = sigma_ext.at[:,:,:plz].set(sigma_ext[:,:,plz:plz+1])
-                mu_r_ext = mu_r_ext.at[:,:,:plz].set(mu_r_ext[:,:,plz:plz+1])
-            if phz > 0:
-                eps_r_ext = eps_r_ext.at[:,:,-phz:].set(eps_r_ext[:,:,-phz-1:-phz])
-                sigma_ext = sigma_ext.at[:,:,-phz:].set(sigma_ext[:,:,-phz-1:-phz])
-                mu_r_ext = mu_r_ext.at[:,:,-phz:].set(mu_r_ext[:,:,-phz-1:-phz])
-            eps_r, sigma, mu_r = eps_r_ext, sigma_ext, mu_r_ext
+            eps_r, sigma, mu_r = extend_cpml_pad_materials(
+                eps_r, sigma, mu_r, plx, phx, ply, phy, plz, phz,
+            )
 
         materials = MaterialArrays(eps_r=eps_r, sigma=sigma, mu_r=mu_r)
 
