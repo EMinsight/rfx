@@ -6,6 +6,169 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased]
 
+### Fixed — `vmap_material_sweep` didn't sweep the CPML absorber for material-named sweeps (issue #637)
+
+Found by an independent audit of the e4b565c..ce44661 arc: for a material-
+**named** sweep (`"substrate.eps_r"`, as opposed to a global `"eps_r"`
+sweep), `rfx/vmap_sweep.py`'s `_build_batched_materials` built its sweep
+mask from `Shape.mask(grid)` — physical-domain geometry cells only — and
+kept `base_materials` (the BASE simulation's own CPML-padded arrays)
+everywhere else, including the padding. `Simulation._assemble_materials`
+replicates each material's value into the CPML padding it touches
+(so the absorber stays impedance-matched); a material-named sweep never
+reached that replicated padding, so every swept batch element ran with
+an absorber matched to the *base* material instead of its own. Any
+substrate/dielectric running out to a CPML face — ordinary microwave
+geometry — was affected. Measured on the committed test fixture
+(box spanning the full transverse domain extent, `cpml_layers=6`, base
+`eps_r=4.0`, sweep `{2.0, 6.0}`): originally 780 of 12167 cells held the
+wrong `eps_r` (re-measured at 2040/12167 after this branch's rebase onto
+issue #627, which independently fixed a related hi-face pad gap and, in
+doing so, corrected the reference `run()` used for this count too — see
+"Overlap with issue #627" below); worst per-bin DFT-plane relative error
+against `sim.run()` was 5.281e-4 (8.83e-4 on the rebased fixture), which
+the previous `rtol=2e-3` gate absorbed and two test
+docstrings misattributed to "float32 accumulation roundoff" — the
+decisive discriminator (moving the same slab off the CPML faces so no
+material lands in the padding) dropped the identical comparison to
+exactly `0.0`, not merely smaller, which a genuine roundoff floor would
+not do. The error scaled with `|swept - base|`: up to ~6% relative on a
+harder edge-touching fixture, six orders above the old gate's nominal
+floor.
+
+Fix: a new `_extend_batched_cpml_pad` helper re-runs
+`_assemble_materials`'s own per-face edge-slice-copy padding rule on the
+already batch-correct interior (after the sweep mask is applied), so each
+swept batch element's padding matches what `Simulation.run()` would build
+for that value — a no-op on any face with zero CPML depth, so it is safe
+unconditionally. The GLOBAL (`"eps_r"`, no material name) sweep path was
+already accidentally correct (`non_vac = eps_r != 1.0` selects the
+replicated padding too, since it is evaluated on the already-padded base
+array) and is untouched; a new regression test pins that it stays
+correct. Verified post-fix on the original fixture: the edge-touching
+DFT-plane comparison against `run()` is exactly bit-identical (`0.0`),
+matching an inset (non-edge-touching) control that was already exact —
+stronger than the falsifier's own bar of "toward the inset floor" and,
+more generally, evidence that the vmap fast-path scan body reproduces
+`Simulation.run()` bit-for-bit whenever the two are actually handed the
+same materials (the padding mismatch, not independent scan-body
+roundoff, was the entire pre-fix gap). Re-measured across a
+representativeness sweep varying `|swept-base|`, which CPML face(s) the
+material touches, and `cpml_layers` (7 structurally distinct
+configurations, including two directly from the issue's own harder
+table): every configuration lands at or below ~4e-7 post-fix, bit-identical
+(`0.0`) on several including the committed fixture — versus 4.2e-3 to
+5.8e-2 pre-fix — four to five orders of magnitude tighter, none of it
+fitted to any one fixture.
+`tests/test_vmap_sweep_dft_planes.py` gates tightened from `rtol=2e-3` to
+`rtol=1e-6` (anchored near the measured float32/x64 floor with margin for
+cross-machine floating-point jitter) and gained three new tests: a
+mechanism-level pin comparing the batched material arrays directly
+against `Simulation._assemble_materials`, a second DFT-plane equivalence
+test on a structurally different geometry (touches the x_lo face instead
+of y/z, different domain/dx/cpml_layers/delta — its first draft touched
+the x_hi face at the exact domain-edge coordinate instead and turned out
+to be vacuous, since `Box.mask` is inclusive on a shape's `lo` corner but
+not its `hi` corner there; documented in the test's own docstring as a
+falsifier-of-the-test finding), and the global-sweep regression pin
+above. Two docstrings that attributed the defect's symptom to float32
+roundoff are corrected (module docstring and the x64 class docstring); a
+third (`TestVmapAmplitudeKindCurrent`) is partially corrected — its own
+floor also included this defect (6.88e-5 pre-fix, 1.74e-7 post-fix, a
+~396x drop, numbers re-measured after the rebase; conclusion unchanged
+from an earlier 4.89e-5/2.60e-7 pair) alongside genuine dynamic-Cb
+float32 noise it was originally trying to describe.
+
+`tests/test_vmap_cpml_dielectric.py::test_vmap_cpml_dielectric_is_finite_and_matches_run`
+(a #205 regression pin, unrelated in origin) shared the same fixture
+shape as this defect but asserted only the one sweep element
+(`eps_r=10.0`) that happened to equal its base simulation's own
+material — the one element where #637 can never manifest by
+construction. Now asserts every swept element; the previously-unchecked
+`eps_r=4.0` element measured rel=9.65e-3 against `run()` pre-fix (the
+#637 signature) and is exactly bit-identical post-fix.
+
+**Overlap with issue #627 (landed separately as fce1091, this same
+Unreleased block, below) — confirmed divergence, deliberately NOT fixed
+here.** #627 moved `Simulation._assemble_materials`'s pad-extension rule
+into a new shared `rfx.geometry.rasterize_grid.extend_cpml_pad_materials`,
+and changed the rule itself — a per-transverse-cell hi-face fallback (if
+the naive interior-edge column is vacuum but the column one further in is
+not, replicate from that inner column instead), fixing a case where a
+`Box` touching the domain's hi face loses its edge node to `Box`'s
+half-open rasterization. `_extend_batched_cpml_pad` (this entry) still
+reproduces the PRE-#627 rule — a straight edge-slice copy, no hi-face
+fallback. Measured directly post-rebase on a slab spanning the full
+domain (`Box((0,0,0), domain)`, touching all six CPML faces including
+x-hi exactly at the domain's last interior node, `cpml_layers=6`, base
+`eps_r=4.0`): `Simulation.run()`'s assembled x-hi pad now reads the
+correct `4.0` (the #627a fix); `vmap_material_sweep`'s batched x-hi pad
+for the SAME geometry stays at vacuum `1.0` regardless of the swept
+value (`2.0` and `6.0` both read `1.0` there) — the pre-#627 defect,
+unaffected by this entry's fix, which only ever reproduced the OLD rule.
+DFT-plane impact on this geometry: worst rel err 1.66e-2 (sweep to 2.0)
+/ 4.25e-2 (sweep to 6.0) against `run()` — the same order of magnitude
+as issue #637's own pre-fix numbers, on a case this entry does not
+correct. Both PR bodies already flag reconciling the two helpers as
+follow-up work rather than something either PR should absorb now; this
+paragraph is that disclosure, not a promise of a later commit in this
+PR. Tracked as **issue #643**, which also covers why the fix is not a
+drop-in (the batched arrays carry a leading sweep axis the shared
+helper's fallback test has to be evaluated per element against, not
+once) and its acceptance criterion (byte-identity between the batched
+path and `_assemble_materials` across #637's full geometry matrix plus
+this exact-hi-face case). Pinned by
+`tests/test_vmap_sweep_dft_planes.py::TestVmapMaterialSweepCpmlPad::test_exact_hi_face_touch_matches_run_via_shared_fallback`,
+marked `xfail(strict=True)` so it turns into a hard failure — not a
+silent pass — the day #643 is closed.
+
+**No-worse guard added to `_extend_batched_cpml_pad`, found in review.**
+Re-running #637's own 7-configuration representativeness sweep on the
+rebased tree (unmodified geometries, not the margin-nudged variants
+elsewhere in this entry) surfaced that #627 didn't just leave the
+exact-hi-face case unfixed — for 4 of 7 configurations it made the
+vmap/`run()` divergence WORSE than #637's own pre-fix numbers, wherever
+a swept value happened to equal the base value. Mechanism: pre-#637-fix,
+the unconditional pad copy inherited base's OWN (post-#627, correct)
+pad value everywhere, so the swept-equals-base element was accidentally
+right; post-#637-fix, that same cell falls back to the naive vacuum
+column instead, since `_extend_batched_cpml_pad` doesn't reproduce
+#627's fallback — actively discarding a value that was already correct.
+Fix: skip the pad-cell overwrite when the source column is vacuum,
+using the SAME joint test `rasterize_grid._vacuum` uses
+(`eps_r==1.0 & sigma==0.0 & mu_r==1.0`, not a per-field approximation —
+an earlier draft tested each field against its own default independently
+and, measured against this file's suite, left the same two residuals
+this joint version does, since none of these fixtures carries a second
+material with nonzero sigma or non-unity `mu_r` to distinguish the two
+predicates; the joint version is kept because it is the one that
+matches the rest of the package and generalizes to fixtures the current
+suite doesn't happen to exercise).
+
+Effect, measured per swept element (not aggregated) across all 14
+elements in the 7-configuration sweep: every element where the swept
+value equals the base value is now exact or unchanged (previously
+already-correct by the coincidence described above; confirmed still
+correct, not merely no-worse). Of the 10 elements where the swept value
+differs from base, 8 improved (by 0.4% to 16.7%) or were unchanged, and
+2 remain measurably worse than #637's pre-fix numbers: the "issue-table
+base=2.0" configuration's `eps_r=10.0` element (6.421e-2 -> 6.527e-2,
++1.6%) and the "committed fixture" configuration's `eps_r=2.0` element
+(1.193e-2 -> 1.199e-2, +0.5%). Both residuals are small, reproduced
+identically across repeated measurement (not floating-point noise), and
+their specific mechanism is not established — the joint-vacuum fix did
+not change either number, so whatever produces them is a different,
+smaller effect than the predicate mismatch the guard targets. Both sit
+on the same exact-domain-edge geometry class already disclosed above
+and covered by the `xfail(strict=True)` witness; shipped with the
+residual disclosed rather than pursuing a third guard variant, since
+the class itself is already known-broken and tracked by #643, and #637's
+actual target class (material reaching a pad without sitting exactly on
+the domain edge) is unaffected — the "single-face touch (x_lo only)"
+configuration, which never touches a domain edge exactly, goes
+4.191e-3/8.729e-4 -> 2.623e-7/2.258e-7 pre- to post-fix, unchanged by
+the guard either way.
+
 ### Fixed — import-time binding pollution in the uniform-grid runner (issue #628)
 
 - `rfx/runners/uniform.py` used to do `from rfx.simulation import run as
