@@ -5,10 +5,14 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 
-from rfx.simulation import (
-    make_source, make_j_source, make_probe, make_port_source, make_wire_port_sources,
-    run as _run, run_until_decay as _run_until_decay,
-)
+from rfx import simulation as _simulation
+# Every rfx.simulation symbol this module needs goes through `_simulation.*`
+# (never `from rfx.simulation import X as _x`, #628): this module is first
+# imported lazily, from inside Simulation.run()/forward(), so an import-time
+# alias can capture a test-monkeypatched rfx.simulation attribute
+# permanently, even after the patch is torn down — a module reference is
+# resolved at CALL time and always reflects the current attribute. These are
+# setup-time calls (once per port/source registration), not per-timestep.
 from rfx.sources.sources import LumpedPort, setup_lumped_port, WirePort, setup_wire_port
 from rfx.probes.probes import init_dft_plane_probe, init_flux_monitor
 from rfx.sources.waveguide_port import (
@@ -316,11 +320,11 @@ def run_uniform(
             # KIND only rescales the waveform inside the helper. kind=None
             # threads through as a no-op (legacy, bit-identical).
             if sim._boundary in ("cpml", "upml"):
-                sources.append(make_j_source(grid, pe.position, pe.component,
+                sources.append(_simulation.make_j_source(grid, pe.position, pe.component,
                                              pe.waveform, n_steps, materials,
                                              amplitude_kind=pe.amplitude_kind))
             else:
-                sources.append(make_source(grid, pe.position, pe.component,
+                sources.append(_simulation.make_source(grid, pe.position, pe.component,
                                            pe.waveform, n_steps,
                                            materials=materials,
                                            amplitude_kind=pe.amplitude_kind))
@@ -344,7 +348,7 @@ def run_uniform(
             materials = setup_wire_port(grid, wp, materials,
                                         pec_mask=pec_mask)
             if pe.excite:
-                sources.extend(make_wire_port_sources(
+                sources.extend(_simulation.make_wire_port_sources(
                     grid, wp, materials, n_steps, pec_mask=pec_mask))
             # Clear PEC mask at LIVE wire cells only (issue #318 commit 2).
             # Dead extent cells stay PEC: the old all-cells clearing punched
@@ -370,7 +374,7 @@ def run_uniform(
             lumped_ports.append(lp)
             materials = setup_lumped_port(grid, lp, materials)
             if pe.excite:
-                sources.append(make_port_source(grid, lp, materials, n_steps))
+                sources.append(_simulation.make_port_source(grid, lp, materials, n_steps))
             # Clear PEC mask at lumped port cell
             if pec_mask is not None:
                 idx = grid.position_to_index(pe.position)
@@ -473,7 +477,7 @@ def run_uniform(
                     pec_mask = pec_mask.at[cell[0], cell[1], cell[2]].set(False)
 
     for pe in sim._probes:
-        probes.append(make_probe(grid, pe.position, pe.component))
+        probes.append(_simulation.make_probe(grid, pe.position, pe.component))
 
     axis_to_index = {"x": 0, "y": 1, "z": 2}
     for pe in sim._dft_planes:
@@ -633,7 +637,7 @@ def run_uniform(
 
     # Main simulation
     if until_decay is not None:
-        sim_result = _run_until_decay(
+        sim_result = _simulation.run_until_decay(
             grid, materials,
             decay_by=until_decay,
             check_interval=decay_check_interval,
@@ -671,7 +675,7 @@ def run_uniform(
             stencil_order=sim._stencil_order,
         )
     else:
-        sim_result = _run(
+        sim_result = _simulation.run(
             grid, materials, n_steps,
             boundary=sim._boundary,
             cpml_axes=cpml_axes,
