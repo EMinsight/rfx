@@ -684,3 +684,231 @@ def test_g7_falsifier_severed_tape_reads_exactly_zero():
     # the transcript for a PR body excerpt; the assertions above are the
     # real gate.
     print(transcript)
+
+
+# ---------------------------------------------------------------------------
+# G8: batch_tangents=False's own out_axes=(None, 0) guard (arc-audit
+# follow-up item 4b). The batched path inherits a fail-loud check for free
+# from jax.vmap(..., out_axes=(None, 0)) -- see the API TRAP note in
+# jacobian_fwd's docstring. The sequential path has no vmap of its own, so
+# without an explicit guard a sim_fn that violates the "primal independent
+# of tangent" invariant would silently return one arbitrary tangent row's
+# primal instead of raising. `leaky`/`leaky_jvp` below is a deliberately
+# broken custom_jvp rule -- jax.jvp does not itself enforce primal purity,
+# so this is the only way to construct a genuine violation: the primal
+# output is defined to depend on the tangent argument.
+# ---------------------------------------------------------------------------
+
+@jax.custom_jvp
+def _leaky(x):
+    return x
+
+
+@_leaky.defjvp
+def _leaky_jvp(primals, tangents):
+    (x,), (t,) = primals, tangents
+    return x + jnp.sum(t), t  # BUG (deliberate): primal leaks the tangent
+
+
+def _leaky_sim_fn(params):
+    return _leaky(params)
+
+
+def _pure_sim_fn(params):
+    return jnp.sum(params ** 2)
+
+
+def test_g8_sequential_guard_raises_on_tangent_dependent_primal():
+    """The sequential path must raise -- the SAME class of error the
+    batched path raises for free -- not silently return a wrong primal.
+    Guard 1 (jax.eval_shape) catches THIS construction: `_leaky`'s primal/
+    tangent coupling is visible to vmap's batching interpreter even in a
+    single abstract trace, so it fires before the real sequential loop
+    (and before guard 2, which never gets a chance to run) -- the
+    "out_axes" message below IS guard 1 firing, not a fallback to the
+    default Python TypeError. See
+    test_g8_sequential_guard_catches_cross_call_impurity_guard1_cannot_see
+    below for the complementary case guard 1 structurally cannot detect."""
+    params = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    tangents = jnp.eye(3, dtype=jnp.float32)  # explicit escape hatch: identity
+    # requires scalar leaves, and params here is one flat (3,) leaf.
+
+    with pytest.raises(ValueError, match="out_axes"):
+        jacobian_fwd(_leaky_sim_fn, params, tangents=tangents, batch_tangents=False)
+
+    # Confirm the batched path independently raises too (both paths agree
+    # this sim_fn is unsafe -- neither one is the "safe" escape hatch).
+    with pytest.raises(ValueError, match="out_axes"):
+        jacobian_fwd(_leaky_sim_fn, params, tangents=tangents, batch_tangents=True)
+
+
+def test_g8_sequential_guard_catches_cross_call_impurity_guard1_cannot_see():
+    """Guard 1 (jax.eval_shape) traces sim_fn's body exactly ONCE (vmap
+    batches rather than looping), so a side effect that only manifests
+    ACROSS repeated independent Python-level calls -- not visible as a
+    structural batching dependency inside one trace -- is invisible to
+    it. The real sequential loop (`batch_tangents=False`, no jit) DOES
+    call sim_fn n_t separate times in eager Python, so it genuinely can
+    observe such a thing. This is guard 2's reason to exist: an exact
+    pairwise comparison of the n_t actually-computed primal values."""
+    call_count = {"n": 0}
+
+    def side_effecting_sim_fn(params):
+        call_count["n"] += 1
+        # A real (if contrived) impurity: the primal depends on how many
+        # times this Python function has been called so far, which a
+        # single abstract trace cannot see, but n_t independent eager
+        # jax.jvp calls can.
+        return jnp.sum(params ** 2) + float(call_count["n"])
+
+    params = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    tangents = jnp.eye(3, dtype=jnp.float32)
+
+    with pytest.raises(ValueError, match="depends on which tangent"):
+        jacobian_fwd(side_effecting_sim_fn, params, tangents=tangents, batch_tangents=False)
+
+
+def test_g8_sequential_guard_silent_for_well_behaved_sim_fn():
+    """No false positives: a normal, pure sim_fn must not trip the guard
+    on either path, and both paths must still agree on the actual value."""
+    params = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    tangents = jnp.eye(3, dtype=jnp.float32)
+
+    value_seq, jac_seq = jacobian_fwd(_pure_sim_fn, params, tangents=tangents, batch_tangents=False)
+    value_batch, jac_batch = jacobian_fwd(_pure_sim_fn, params, tangents=tangents, batch_tangents=True)
+
+    assert value_seq == value_batch == jnp.sum(params ** 2)
+    np.testing.assert_allclose(np.asarray(jac_seq), np.asarray(jac_batch))
+
+
+def test_g8_sequential_guard_trace_time_check_survives_outer_jit():
+    """Guard 1 (jax.eval_shape) must fire even when jacobian_fwd itself is
+    called from inside an outer jax.jit -- exactly how
+    scripts/benchmark_jacobian_fwd.py and this file's own compiled-jaxpr
+    measurements (G3) invoke the sequential path. Guard 2 (the eager
+    numeric cross-check) cannot run under trace -- params are tracers --
+    so this specifically isolates guard 1."""
+    params = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    tangents = jnp.eye(3, dtype=jnp.float32)
+
+    @jax.jit
+    def outer(p):
+        value, jacobian = jacobian_fwd(_leaky_sim_fn, p, tangents=tangents, batch_tangents=False)
+        return value
+
+    with pytest.raises(ValueError, match="out_axes"):
+        outer(params)
+
+    # And a well-behaved sim_fn must still compile and run fine under jit.
+    @jax.jit
+    def outer_ok(p):
+        value, jacobian = jacobian_fwd(_pure_sim_fn, p, tangents=tangents, batch_tangents=False)
+        return value, jacobian
+
+    value, jacobian = outer_ok(params)
+    assert float(value) == float(jnp.sum(params ** 2))
+
+
+# ---------------------------------------------------------------------------
+# G8 follow-up (arc-audit verification round, items B3/B5 + "guard 1 too
+# strict"): three defects found in the G8 guards themselves.
+# ---------------------------------------------------------------------------
+
+def test_g8_guard2_nan_divergence_not_misdiagnosed_as_tangent_dependence():
+    """B3: jnp.array_equal(nan, nan) is False by default (IEEE-754), so a
+    PURE, deterministic sim_fn whose computation diverged (returns the
+    SAME nan on every tangent row -- divergence is a property of params,
+    not of which tangent direction is evaluated) used to trip guard 2's
+    mismatch check and get told its primal "depends on which tangent
+    direction is being evaluated" -- wrong diagnosis. batch_tangents=True
+    just returns the nan silently (measured); the sequential path must
+    match that, not raise."""
+    def nan_sim_fn(p):
+        return jnp.nan + 0.0 * jnp.sum(p)  # same nan regardless of p or tangent
+
+    params = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    tangents = jnp.eye(3, dtype=jnp.float32)
+
+    value_seq, jac_seq = jacobian_fwd(nan_sim_fn, params, tangents=tangents, batch_tangents=False)
+    value_batch, jac_batch = jacobian_fwd(nan_sim_fn, params, tangents=tangents, batch_tangents=True)
+    assert jnp.isnan(value_seq) and jnp.isnan(value_batch)
+    np.testing.assert_array_equal(np.asarray(jac_seq), np.asarray(jac_batch))
+
+
+def test_g8_guard2_checks_all_params_leaves_for_tracer_ness():
+    """B5: guard 2 used to test only params_leaves[0] for tracer-ness.
+    A MIXED params pytree -- one leaf a jit-traced argument, one leaf a
+    plain Python/closure-captured CONCRETE value (not itself passed
+    through jit's argument list, so it never becomes a tracer) -- used to
+    crash guard 2's bool(jnp.array_equal(...)) with
+    TracerBoolConversionError whenever the traced leaf sorted before the
+    concrete one in pytree-flatten order, since checking only leaf 0
+    would wrongly conclude "not tracing" and try to concretely compare a
+    tracer. Pinned both orderings (traced-leaf-first and
+    concrete-leaf-first) so this cannot silently regress by luck of leaf
+    order."""
+    def sim_fn(params_tuple):
+        a, b = params_tuple
+        return jnp.sum(a ** 2) + jnp.sum(b ** 2)
+
+    tangents = (jnp.eye(2, dtype=jnp.float32), jnp.zeros((2, 1), dtype=jnp.float32))
+    b0_concrete = jnp.asarray([3.0], dtype=jnp.float32)
+
+    @jax.jit
+    def outer_traced_first(a):
+        # a: jit-traced; b0_concrete: closure-captured, stays concrete.
+        value, jacobian = jacobian_fwd(
+            sim_fn, (a, b0_concrete), tangents=tangents, batch_tangents=False,
+        )
+        return value
+
+    a0_concrete = jnp.asarray([1.0, 2.0], dtype=jnp.float32)
+
+    @jax.jit
+    def outer_concrete_first(b):
+        # a0_concrete: closure-captured, stays concrete; b: jit-traced.
+        value, jacobian = jacobian_fwd(
+            sim_fn, (a0_concrete, b), tangents=tangents, batch_tangents=False,
+        )
+        return value
+
+    out1 = outer_traced_first(jnp.asarray([1.0, 2.0], dtype=jnp.float32))
+    out2 = outer_concrete_first(jnp.asarray([3.0], dtype=jnp.float32))
+    expected = float(jnp.sum(jnp.asarray([1.0, 2.0]) ** 2) + jnp.sum(jnp.asarray([3.0]) ** 2))
+    assert float(out1) == expected
+    assert float(out2) == expected
+
+
+def test_g8_guard1_data_dependent_branch_on_params_not_misdiagnosed():
+    """Guard 1 too strict: jax.eval_shape abstracts EVERY value inside
+    the traced function, including `params` -- which stays CONCRETE
+    under a real jax.vmap(..., out_axes=(None, 0)) call (params is not
+    the vmapped axis) or under plain jax.jvp. A sim_fn with a
+    data-dependent Python branch on `params` (not the tangent) is
+    therefore fine under plain jax.jvp AND the batched path, but used to
+    crash guard 1 with TracerBoolConversionError purely because
+    eval_shape's abstract mode cannot decide the branch -- an eval_shape
+    LIMITATION, not a real out_axes violation. Guard 1 now catches
+    ConcretizationTypeError and falls through to guard 2 instead of
+    propagating it, so the sequential path is no longer STRICTER than
+    every other path for this class of sim_fn."""
+    def branchy_sim_fn(p):
+        return jnp.where(jnp.sum(p) > 0, jnp.sum(p ** 2), -jnp.sum(p ** 2))
+
+    params = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    tangents = jnp.eye(3, dtype=jnp.float32)
+
+    # A genuine Python `if` (not jnp.where) is the sharper reproduction
+    # of the reported failure -- jnp.where alone is traceable, but an
+    # `if` on a traced boolean is what raises TracerBoolConversionError
+    # under eval_shape's full abstraction.
+    def branchy_sim_fn_python_if(p):
+        if jnp.sum(p) > 0:
+            return jnp.sum(p ** 2)
+        return -jnp.sum(p ** 2)
+
+    for fn in (branchy_sim_fn, branchy_sim_fn_python_if):
+        value_seq, jac_seq = jacobian_fwd(fn, params, tangents=tangents, batch_tangents=False)
+        value_batch, jac_batch = jacobian_fwd(fn, params, tangents=tangents, batch_tangents=True)
+        assert float(value_seq) == float(value_batch) == 14.0
+        np.testing.assert_allclose(np.asarray(jac_seq), np.asarray(jac_batch))
