@@ -6,6 +6,135 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased]
 
+### Added — `report_every=N` makes a long solve supervisable (issue #667)
+
+A solve printed nothing between the call and its return, so a slow run was
+indistinguishable from a hang. The case that prompted it: a 42.15 M-cell /
+225,000-step `compute_msl_s_matrix` whose last log line was written at
+second 0 and was still the last line 4 h 10 min later, with the job still
+`running`. A rate extrapolated from the same campaign's 12.6 M and 24.5 M-cell
+runs predicted ~2 h and was wrong, because per-cell throughput falls at
+larger grids — so there was no way to tell a bad estimate from a stuck job
+except by waiting.
+
+`Simulation.run(report_every=N)`, `compute_msl_s_matrix(report_every=N)` and
+the low-level `rfx.simulation.run` / `run_until_decay` now emit one line per
+N steps on preflight's stdout channel:
+
+```
+  [PROGRESS] MSL drive p1/2: 500/787 steps (63.5%) | elapsed 0:00:02 | 185.9 steps/s | ETA 0:00:01
+```
+
+**The default is `None` — off — and nothing moves for existing callers.**
+With `report_every=None` the solve executes the unchanged single-`lax.scan`
+code path, so identity there is structural rather than tested-into.
+
+**Turning it on does not move a number either, and that is gated rather
+than asserted.** `run()` is one `jax.lax.scan`, and printing from inside the
+scan body would mean `jax.debug.print` / `io_callback` on the hot path.
+Instead the same compiled scan is driven from the host in `report_every`-step
+chunks with `carry` threaded through. The carry already holds the DFT
+accumulators and every port / flux / monitor state, so this is a
+continuation, not a re-solve. `tests/test_run_progress_reporting.py` locks
+that with SHA-256 digests over raw field bytes, the probe time series and the
+extracted `S` / `Z0` / `beta` — equal, not merely close — including chunk
+sizes that leave a ragged final chunk, and with a negative control proving
+the digests move when the physics does. The same architecture (host loop over
+constant-length jitted chunks) already shipped on the non-uniform
+`until_decay` lane in #383.
+
+**The per-chunk outputs are joined with a bounded-arity grouped
+concatenate, because the obvious flat one does not scale in the direction
+this feature is used.** `jnp.concatenate(parts)` takes one *argument* per
+chunk, and XLA's trace-and-compile cost grows superlinearly in argument
+count — so the cost lands hardest on exactly the long runs `report_every`
+exists for. Measured on an isolated `(225000, 20)` float32 join, first
+(compiling) call:
+
+| chunks | flat `jnp.concatenate` | grouped |
+|---|---|---|
+| 2,250 (225k steps @ `report_every=100`) | 2.567 s | **0.133 s** |
+| 22,500 (225k steps @ `report_every=10`) | 232.2 s | **0.994 s** |
+
+In a real solve at 200 chunks, the concatenate compilations drop from one
+per chunk to **3**. Grouping is exact — concatenation is associative, so the
+joined bytes are unchanged, which is what makes the optimisation admissible
+at all and is locked by `test_grouped_concat_matches_flat_concat`. The join
+stays on device; a host `numpy` round-trip was faster still in isolation but
+buys nothing at realistic chunk counts and would add a dtype-support
+question for no gain.
+
+**Runtime cost: below what this measurement can resolve, and the earlier
+table quoting it was withdrawn.** An initial version of this entry published
+−1.4 % / +1.0 % / −0.2 % / +10.7 % from a 3-run median with no stated noise
+floor. Those figures do not survive scrutiny and are retracted. What five
+measurement attempts on a 118k-cell / 2000-step CPU fixture actually found:
+
+- Round-robin over 8 configurations, 21 reps: two configurations
+  **byte-identical to the baseline** read **+5.6 %** and **+7.6 %**, and every
+  reporting cadence sat flat at +15.7…+18.5 % — including `report_every ==
+  n_steps`, which is a *single chunk* and cannot cost 17 %. The harness was
+  measuring position in the sequence, not the feature.
+- An order-flip A/B confirmed it: the same configuration ran **13 % faster**
+  in the second block than the first, while *adjacent* pairs reproduced
+  **+0.7 % / +0.8 %** for the single-chunk case in **both** orders.
+- A paired estimator (adjacent off/on pairs, bootstrap CI) put the
+  **off-vs-off self-control at −4.8 % [−9.3, −0.9]**, so the floor is ≈ ±9 %.
+  Against it: `report_every` 2000 → −0.25 %, 500 → +1.06 %, 250 → +0.12 %,
+  100 → +1.71 %, 25 → +5.02 %. Every one is inside the floor.
+
+So: **no cadence-dependent cost is resolvable above the noise on this
+fixture.** The one defensible number is the order-flip A/B's +0.7–0.8 % for a
+single-chunk run, which bounds the fixed per-report cost — one device
+synchronisation plus one print — at well under 1 %. There is weak,
+non-conclusive evidence of a real cost at the finest cadence tested
+(`report_every=25`, a chunk of ~70 ms), where several attempts land positive;
+its magnitude is not pinned. Direction only: finer cadence costs more.
+
+**What this measurement does not cover.** It is a small CPU, float32 fixture.
+It says nothing about the 42.15 M-cell / 225,000-step GPU regime that
+motivated the issue, where a 1000-step chunk is minutes of work and the
+per-report synchronisation should be proportionally invisible — that
+expectation is untested here. Size `report_every` for a useful reporting
+interval rather than to minimise an overhead this benchmark could not detect.
+
+XLA compilations, by contrast, were counted directly and are exact: full
+chunks share one executable and a ragged final chunk compiles once more
+(200 steps → 1 scan compile unchunked, 1 at `report_every=50`, 2 at
+`report_every=60`).
+
+Scope and fences, stated rather than discovered later:
+
+- **Uniform lane only.** The distributed, non-uniform, ADI and subgridded
+  lanes emit a `UserWarning` naming the reason instead of running silently
+  to completion with the request dropped.
+- **Forward-only.** It reads the host wall clock, so under
+  `jax.jit`/`grad`/`vmap` it raises rather than printing one fabricated line
+  at trace time. `compute_msl_s_matrix(eps_override=...)` routes through the
+  traced `forward()` and warns that it is ignored there.
+
+  The guard checks the pytrees it is handed — the carry, the per-step inputs
+  **and** the material / geometry arrays — rather than asking JAX whether a
+  trace is active, which its current API does not expose
+  (`jax.core.trace_state_clean` does not exist in JAX 0.10, and a freshly
+  built constant is a tracer only under `jit`, not under bare `grad`/`vmap`).
+  The material arrays are the route `forward()` / `optimize()` actually trace
+  through; a first version checked only the carry and the per-step inputs,
+  which stay concrete under bare `grad`/`vmap`, and so printed trace-time
+  lines instead of raising. Both are now rejected. A tracer arriving solely
+  through some other closure would still slip past and print a meaningless
+  elapsed and rate; the computed values are byte-identical in that case, so
+  the residue is cosmetic, and the docstrings say so rather than promising a
+  guarantee the check cannot make.
+- Rejected together with `checkpoint_segments`, whose own scan-of-scans
+  segmentation cuts the same axis.
+- Nothing in the path branches on a traced value; every loop bound is
+  Python-int arithmetic.
+- `report_every` must be a whole number ≥ 1. `inf` (which raises
+  `OverflowError` from `int()`, not `ValueError`) and `bool` (Python bools
+  are ints, so `True` would silently mean "every step") are rejected
+  explicitly.
+
 ### Added — `add_msl_port(direction=...)` accepts the in-board axes (issue #661)
 
 `direction` now takes `"+x"`, `"-x"`, `"+y"` and `"-y"`. A microstrip feed
