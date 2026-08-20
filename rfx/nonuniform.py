@@ -252,6 +252,25 @@ def e_node_dual_spacings(profile_full):
     return jnp.concatenate([arr[:1], 0.5 * (arr[:-1] + arr[1:])])
 
 
+def e_node_dual_spacing_at(profile_full, k: int):
+    """Scalar dual spacing at node ``k`` — same rule as
+    :func:`e_node_dual_spacings`, evaluated on the caller's array WITHOUT the
+    dtype-normalizing ``jnp.asarray``.
+
+    Two callers need that: a float64 numpy profile must keep float64 so a
+    uniform mesh stays bit-identical to the old primal spelling (a float32
+    round-trip alone moves the last bits), and a traced profile must stay a
+    tracer so the mesh-as-design-variable path keeps its gradient.
+
+    ``tests/test_nonuniform_source_port_dual_spacing.py`` pins this against
+    :func:`e_node_dual_spacings` element-by-element, so the two spellings
+    cannot drift.
+    """
+    if k <= 0:
+        return profile_full[0]
+    return 0.5 * (profile_full[k - 1] + profile_full[k])
+
+
 def make_nonuniform_grid(
     domain_xy: tuple[float, float],
     dz_profile: np.ndarray,
@@ -572,7 +591,10 @@ def make_current_source(grid: NonUniformGrid, position_ijk, component,
 
     The waveform specifies CURRENT (Amperes). The E-field addition is:
     E += (dt/ε) × I_source / dV
-    where dV = dx × dy × dz_local (actual cell volume).
+    where dV is the E node's control volume: the PRIMAL per-cell width on
+    the component's own axis and the DUAL spacing ``(d[k-1]+d[k])/2`` on the
+    two transverse axes (issue #672). On a uniform mesh the two coincide and
+    this is the familiar ``dx × dy × dz``.
 
     This gives resolution-independent injected POWER regardless of cell size.
     Same approach as Meep's internal source normalization.
@@ -607,21 +629,48 @@ def make_current_source(grid: NonUniformGrid, position_ijk, component,
     # Cb = dt / (eps * (1 + loss))
     cb = (grid.dt / eps) / (1.0 + loss)
 
-    # Cell volume: dx_i * dy_j * dz_k (per-cell on each axis).
-    # Stay in jnp so a tracer-valued cell-size profile (mesh-as-design
-    # variable) propagates the gradient into the waveform normalisation.
+    # Control volume of the E node this source injects into (issue #672).
+    # An E_a component is an EDGE along its own axis a and sits ON a node on
+    # the two transverse axes, so its control volume is MIXED:
+    #   axis == a  -> primal per-cell width d[idx]
+    #   axis != a  -> dual spacing (d[idx-1]+d[idx])/2, which is exactly the
+    #                 metric the NU E update divides curl H by (CORE-C2,
+    #                 ``_profile_to_inv_arrays``); the Ex update, for
+    #                 instance, uses inv_dy and inv_dz and never inv_dx.
+    # Using the primal width on all three axes (pre-#672) is right only where
+    # both neighbour pairs are equal. On a 2:1 grading step it mis-normalizes
+    # the injected current moment by the local cell ratio on each graded
+    # TRANSVERSE axis (measured: dV too large by 1.333 with one graded
+    # transverse axis, 1.778 with two).
+    # Stay in jnp when the profile is traced so a mesh-as-design variable
+    # propagates the gradient into the waveform normalisation.
+    _axis_of = {"ex": 0, "ey": 1, "ez": 2}
+    if component not in _axis_of:
+        raise ValueError(
+            f"make_current_source: unknown component {component!r} "
+            f"(expected one of {sorted(_axis_of)}). The control volume is "
+            f"component-dependent on a non-uniform mesh, so there is no safe "
+            f"fallback (issue #672)."
+        )
+    p_axis = _axis_of[component]
     grid_traced = (
         is_tracer(grid.dx_arr) or is_tracer(grid.dy_arr) or is_tracer(grid.dz)
     )
     any_traced = materials_traced or grid_traced
-    if grid_traced:
-        dx_local = jnp.asarray(grid.dx_arr)[i]
-        dy_local = jnp.asarray(grid.dy_arr)[j]
-        dz_local = jnp.asarray(grid.dz)[k]
-    else:
-        dx_local = float(np.asarray(grid.dx_arr)[i])
-        dy_local = float(np.asarray(grid.dy_arr)[j])
-        dz_local = float(np.asarray(grid.dz)[k])
+    _profiles = (grid.dx_arr, grid.dy_arr, grid.dz)
+    _idx = (i, j, k)
+    _widths = []
+    for _a in range(3):
+        if _a == p_axis:
+            _w = (jnp.asarray(_profiles[_a])[_idx[_a]] if grid_traced
+                  else float(np.asarray(_profiles[_a])[_idx[_a]]))
+        elif grid_traced:
+            _w = e_node_dual_spacing_at(jnp.asarray(_profiles[_a]), _idx[_a])
+        else:
+            _w = float(e_node_dual_spacing_at(
+                np.asarray(_profiles[_a], dtype=np.float64), _idx[_a]))
+        _widths.append(_w)
+    dx_local, dy_local, dz_local = _widths
     dV = dx_local * dy_local * dz_local
 
     # Normalized waveform: Cb * I(t) / dV
@@ -640,6 +689,40 @@ def make_current_source(grid: NonUniformGrid, position_ijk, component,
 
     waveform_out = waveform if any_traced else np.array(waveform)
     return (i, j, k, component, waveform_out)
+
+
+def wire_port_current(hx, hy, hz, comp, mi, mj, mk,
+                      dual_x, dual_y, dual_z):
+    """Enclosed current from the discrete Ampere loop at a wire-port cell.
+
+    For component ``a`` with ``(a, b, c)`` cyclic,
+    ``curl_a = dH_c/db - dH_b/dc`` and the pierced DUAL face has area
+    ``dual_b * dual_c``, so
+
+        I_a = (H_c[b] - H_c[b-1]) * dual_c - (H_b[c] - H_b[c-1]) * dual_b
+
+    i.e. each H-difference leg is weighted by the DUAL spacing along THAT H
+    COMPONENT'S OWN axis (the leg's own length as a contour segment) — never
+    by the axis it is differenced along, and never by a primal cell width.
+
+    Before issue #672 every branch got both of those wrong at once: one leg
+    carried the primal width of the right axis, the other carried a width
+    from an unrelated axis. Both errors are invisible on a uniform cubic
+    mesh, which is why the uniform lane (``rfx/simulation.py``) can spell the
+    whole thing with a single ``dx`` and still be correct there.
+
+    Signs match the pre-#672 code exactly; only the metrics changed.
+    """
+    if comp == "ez":
+        return ((hy[mi, mj, mk] - hy[mi - 1, mj, mk]) * dual_y
+                - (hx[mi, mj, mk] - hx[mi, mj - 1, mk]) * dual_x)
+    if comp == "ex":
+        return ((hz[mi, mj, mk] - hz[mi, mj - 1, mk]) * dual_z
+                - (hy[mi, mj, mk] - hy[mi, mj, mk - 1]) * dual_y)
+    if comp == "ey":
+        return ((hx[mi, mj, mk] - hx[mi, mj, mk - 1]) * dual_x
+                - (hz[mi, mj, mk] - hz[mi - 1, mj, mk]) * dual_z)
+    raise ValueError(f"wire_port_current: unknown component {comp!r}")
 
 
 def _curl_h_nu(state, inv_dx, inv_dy, inv_dz):
@@ -1012,12 +1095,21 @@ def _build_nu_scan(
              jnp.zeros(nf, dtype=jnp.complex64))   # v_inc_dft
             for _ in wire_ports
         )
-        # Pre-compute per-cell dx/dy at each wire-port cell so the
-        # JIT'd scan below uses the correct line-integral lengths even
-        # on non-uniform xy meshes. Carry `excite` and `direction` so
-        # the post-processing can orient the (a, b) wave decomposition.
-        _dx_arr_np = np.asarray(grid.dx_arr)
-        _dy_arr_np = np.asarray(grid.dy_arr)
+        # Pre-compute the port cell's metrics OUTSIDE the scan (repo
+        # engineering principle 4). Two families, and they are not
+        # interchangeable (issue #672):
+        #   PRIMAL  d[idx]                 -> V = -E_a * d_parallel, the
+        #                                     length of the E_a edge itself.
+        #   DUAL    (d[idx-1]+d[idx])/2    -> the Ampere-loop legs, each
+        #                                     weighted by the dual spacing on
+        #                                     that H component's own axis.
+        # x/y stay float() as before (np.asarray already refuses a traced xy
+        # profile here); the z metrics are indexed without np.asarray so a
+        # traced dz_profile keeps its gradient through the extractor.
+        # `excite` and `direction` are carried for the post-processing;
+        # `direction` no longer enters the wave split (issue #673).
+        _dx_arr_np = np.asarray(grid.dx_arr, dtype=np.float64)
+        _dy_arr_np = np.asarray(grid.dy_arr, dtype=np.float64)
         wp_meta = [(
             wp['mid_i'], wp['mid_j'], wp['mid_k'],
             wp['component'], wp['impedance'],
@@ -1025,6 +1117,10 @@ def _build_nu_scan(
             float(_dy_arr_np[wp['mid_j']]),
             bool(wp.get('excite', True)),
             str(wp.get('direction', '-x')),
+            float(e_node_dual_spacing_at(_dx_arr_np, wp['mid_i'])),
+            float(e_node_dual_spacing_at(_dy_arr_np, wp['mid_j'])),
+            grid.dz[wp['mid_k']],
+            e_node_dual_spacing_at(grid.dz, wp['mid_k']),
         ) for wp in wire_ports]
     else:
         use_wire_ports = False
@@ -1239,29 +1335,65 @@ def _build_nu_scan(
                     cfg_updated.n_steps_recorded,
                 ))
 
-        # Wire port V/I DFT accumulation
+        # Wire port V/I DFT accumulation.
+        #
+        # Ordering: AFTER source injection. That is this lane's original
+        # slot, and it deliberately does NOT match the uniform lane, which
+        # samples BEFORE injection. Which ordering a wire port should use is
+        # OPEN — issue #683 — and is not decided here.
+        #
+        # The uniform lane's contract (issue #72, rfx/probes/probes.py
+        # update_sparam_probe) says to sample "before apply_lumped_port() so
+        # that the sampled port voltage reflects only the cavity/load
+        # response, not the source injection".
+        #
+        # What does NOT separate the two lanes, checked rather than assumed:
+        # both injections are additive/SOFT. apply_lumped_port is
+        # `E += Cb*V_src/d_par` (rfx/sources/sources.py) and this lane's
+        # source loop is the `field.at[...].add(...)` above. So the argument
+        # that the uniform rule describes hard, field-REPLACING sources and
+        # therefore need not apply here does NOT hold on this code — if that
+        # reasoning is what put this block on one side or the other, it was
+        # reasoning from a premise the source does not support.
+        #
+        # Where #683 actually stands, spelled out so this reads as the open
+        # QUESTION it is and not as a settled answer. Three arguments have
+        # been offered and NONE of them currently decides it:
+        #   - the hard-vs-soft argument above — WITHDRAWN, refuted by the
+        #     two call sites quoted;
+        #   - a known-load sweep favouring post-injection — CONTESTED: an
+        #     independent reproduction agreed on the SIGN but could not
+        #     reproduce its unit-slope signature;
+        #   - the discrete Ampere identity I = -(G + jwC)V + I_imp holding
+        #     for the post-injection E — UNEXAMINED: offered as support,
+        #     never independently checked.
+        #
+        # So the placement of this block is the STATUS QUO ANTE, not a
+        # verdict, and citing #683 here points at that state rather than at
+        # an answer. Do not "align the lanes" without #683 deciding: making
+        # the two agree is not the same as establishing which one is right,
+        # and that is exactly how the earlier attempt at this went wrong.
+        #
+        # PASSIVE ports are unaffected either way: I reads H only, and the
+        # source loop writes E only, at the SOURCE cell.
         t = step_idx.astype(jnp.float32) * dt
         new_wire_sp = None
         if use_wire_ports:
             new_wire_sp = []
-            for (v_dft, i_dft, vinc_dft), (mi, mj, mk, comp, z0, dxi, dyj, _excite, _dir) in \
+            for (v_dft, i_dft, vinc_dft), (mi, mj, mk, comp, z0, dxi, dyj,
+                                           _excite, _dir, dual_xi, dual_yj,
+                                           dz_local, dual_zk) in \
                     zip(carry.get("wire_sparams", ()), wp_meta):
-                # V = -E_comp * d_parallel, I = H-loop * d_transverse
-                # dxi / dyj are the per-cell xy spacings at this port's
-                # (mi, mj); dz_local is the per-cell z spacing.
-                dz_local = grid.dz[mk]
-                if comp == "ez":
-                    v = -st.ez[mi, mj, mk] * dz_local
-                    i_val = (st.hy[mi,mj,mk] - st.hy[mi-1,mj,mk]
-                             - st.hx[mi,mj,mk] + st.hx[mi,mj-1,mk]) * dxi
-                elif comp == "ex":
-                    v = -st.ex[mi, mj, mk] * dxi
-                    i_val = (st.hz[mi,mj,mk] - st.hz[mi,mj-1,mk]
-                             - st.hy[mi,mj,mk] + st.hy[mi,mj,mk-1]) * dz_local
-                else:
-                    v = -st.ey[mi, mj, mk] * dyj
-                    i_val = (st.hx[mi,mj,mk] - st.hx[mi,mj,mk-1]
-                             - st.hz[mi,mj,mk] + st.hz[mi-1,mj,mk]) * dz_local
+                # V = -E_comp * (PRIMAL width on the component's own axis):
+                # the E edge's own length. I = the Ampere loop on the DUAL
+                # face (issue #672); both metric families are precomputed in
+                # wp_meta above.
+                v = -getattr(st, comp)[mi, mj, mk] * (
+                    dz_local if comp == "ez" else
+                    dxi if comp == "ex" else dyj)
+                i_val = wire_port_current(
+                    st.hx, st.hy, st.hz, comp, mi, mj, mk,
+                    dual_xi, dual_yj, dual_zk)
                 t_f64 = t.astype(jnp.float64) if hasattr(t, 'astype') else jnp.float64(t)
                 phase = jnp.exp(-1j * 2.0 * jnp.pi * sp_freqs.astype(jnp.float64) * t_f64).astype(jnp.complex64) * dt
                 new_wire_sp.append((
@@ -1689,20 +1821,61 @@ def _assemble_nu_result(setup: _NUScanSetup, final: dict, time_series) -> dict:
 
     # ---- Extract full S-matrix column from wire port DFTs ----
     #
-    # Each port has a V/I DFT pair, plus a direction that tells us the
-    # outward-normal (+x/-x/+y/-y). The wave decomposition is:
+    # Each port has a V/I DFT pair. The wave decomposition below is
+    # DIRECTION-FREE, and that is a physics statement, not a shortcut
+    # (issue #673). The port's outward normal is not a degree of freedom
+    # for a lumped gap V/I pair:
     #
-    #   direction "-x" (port at left end, outward = -x, inward = +x):
-    #       a = (V + Z·I) / 2   (incoming  = +x-moving wave)
-    #       b = (V - Z·I) / 2   (outgoing  = -x-moving wave)
+    #   V = -E_comp * d_parallel      (the E edge's own length)
+    #   I = (curl H)_comp * A_perp    (right-hand loop about the SAME axis)
     #
-    #   direction "+x" (port at right end, outward = +x, inward = -x):
-    #       a = (V - Z·I) / 2   (incoming  = -x-moving wave)
-    #       b = (V + Z·I) / 2   (outgoing  = +x-moving wave)
+    # Neither expression contains the port's position or an outward
+    # normal, so their RELATIVE sign is fixed by the sampling code and no
+    # port placement can flip it. The E update at that edge enforces
+    # eps*dE/dt + sigma*E = (curl H)_comp, so in phasor form, with
+    # C = eps*A/d and the runner's sigma = n_live*d/(Z0*dp1*dp2),
     #
-    #   direction "-y" / "+y": same idea rotated, with I in the
-    #   perpendicular loop direction (already encoded by the runner's
-    #   V/I formula via the curl-H integral around the cell).
+    #       V / I = -1 / (n_live/Z0 + j*w*C + Y_ext)
+    #
+    # for any passive Y_ext attached across the gap (Re Y_ext >= 0), at a
+    # port that is NOT itself driven. Hence Z_in = -V/I sits in the right
+    # half plane and
+    #
+    #       S = (Z_in - Z0)/(Z_in + Z0) = (V + Z0*I)/(V - Z0*I),
+    #
+    # which is the same ratio as a = (-V + Z0*I)/2, b = (-V - Z0*I)/2.
+    # The reciprocal form maps that passive disk to its EXTERIOR, i.e. it
+    # returns |S| >= 1 at EVERY bin on ANY passive structure — which is
+    # what the pre-#673 direction switch did on "-x"/"-y". That is what
+    # fixes the CONVENTION; the convention is then applied unconditionally,
+    # exactly as the uniform lane does.
+    # Scope note, measured: the |S| <= 1 consequence is a statement about an
+    # UNDRIVEN port, and it is a property of the port CELL rather than of the
+    # structure across the gap (vacuum, PEC plates shorting the gap and an
+    # eps_r=10 slab filling it all read S11 = -0.600000 at n_live = 4).
+    #
+    # At an EXCITED port this convention does not merely lose the |S| <= 1
+    # bound — the diagonal stops tracking the load at all. On the UNIFORM
+    # (validated) lane, one geometry with only `excite` flipped reads
+    # S11(0.2 GHz) = -0.600000 passive against +0.999670-0.022145j driven,
+    # though the quasi-static input impedance is the same in both cases; the
+    # 2-port MSL stub in tests/test_twoport_wire_port.py reaches
+    # max|S11| = 4.648. That is the known-wrong #313/#318 per-cell
+    # normalization (V and I sampled at ONE cell, so the measured Z is the
+    # per-cell Z0/n_live while the reflection formula references the whole-
+    # port Z0). It is shared with the uniform lane, not specific to this one,
+    # and #673 does not fix it — do not read a DRIVEN diagonal from this
+    # extractor as physics.
+    # Canonical references (validated, both direction-free):
+    #   rfx/runners/uniform.py  (uniform single-wire fast path)
+    #   rfx/probes/probes.py    decompose_wire_s_matrix (Z_in = -V/I)
+    # Quasi-static check: with Y_ext -> 0 and w*C*Z0/n_live << 1 this
+    # gives S11 -> (1 - n_live)/(1 + n_live), measured to 5 decimals on
+    # both lanes (tests/test_nu_wire_port_lane_parity.py).
+    #
+    # `direction` is still carried on the port spec — the reference-plane
+    # path (add_port(reference_plane_cells=...)) needs it for the outboard
+    # sign — but it must NOT enter this wave split.
     #
     # Given these, with ONE excited port `k` the full k-th column of
     # the S-matrix is
@@ -1730,23 +1903,20 @@ def _assemble_nu_result(setup: _NUScanSetup, final: dict, time_series) -> dict:
         if not excited_idx:
             excited_idx = list(range(n_wp))   # legacy: treat all as self-excited
 
-        def _ab(v_dft, i_dft, z0, direction):
-            """Return (a_incoming, b_outgoing) at one port."""
-            v = v_dft
+        def _ab(v_dft, i_dft, z0):
+            """Return (a_incoming, b_outgoing) at one port.
+
+            Direction-free, written in the uniform lane's sign so it reads
+            line-for-line against rfx/runners/uniform.py (the overall -1
+            cancels in the ratio b/a). See the derivation above (#673).
+            """
             zi = z0 * i_dft
-            if direction in ("-x", "-y"):
-                # inward is +x/+y, +x/+y wave is incoming → +sign on I
-                return (v + zi) / 2.0, (v - zi) / 2.0
-            elif direction in ("+x", "+y"):
-                return (v - zi) / 2.0, (v + zi) / 2.0
-            else:
-                raise ValueError(f"unknown port direction {direction!r}")
+            return (-v_dft + zi) / 2.0, (-v_dft - zi) / 2.0
 
         ab_per_port = []
         for (v_dft, i_dft, _), meta in zip(final["wire_sparams"], wp_meta):
             z0 = meta[4]
-            direction = meta[8]
-            a, b = _ab(v_dft, i_dft, z0, direction)
+            a, b = _ab(v_dft, i_dft, z0)
             ab_per_port.append((a, b))
 
         for k in excited_idx:
