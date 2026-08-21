@@ -269,10 +269,14 @@ def apply_thin_conductor(
         # 26.02/29.18 GHz on the stacked patch-pair A/B). Instead it is
         # emitted as a :class:`SheetImpedanceSpec` and realized NODE-THIN by
         # the per-step operator :func:`apply_sheet_impedance_e` on exactly
-        # the tangential E edges ``apply_pec_mask`` would zero — the PEC and
-        # f0 footprints are structurally identical, so the f0 toggle changes
-        # loss, never geometry. ``eps_r`` is deliberately left at the
-        # background value (the sheet is a surface, not a dielectric fill).
+        # the tangential E edges ``apply_pec_mask`` would zero — for a
+        # SINGLE sheet the PEC and f0 footprints are structurally identical,
+        # so the f0 toggle changes loss, never geometry. That identity is
+        # per sheet, not per stack: for two sheets on ADJACENT layers the f0
+        # path leaves the vacuum gap edge lossless (#690) while the PEC path
+        # still fuses the films, because ``pec_mask`` is a cell mask with no
+        # normal attached. ``eps_r`` is deliberately left at the background
+        # value (the sheet is a surface, not a dielectric fill).
         #
         # Thickness deliberately does NOT enter: Leontovich loss for a
         # conductor much thicker than its skin depth is thickness-
@@ -346,12 +350,27 @@ class SheetImpedanceCtx:
     """Assembled runtime context for all f0 sheets of one run.
 
     ``mask_ex/ey/ez`` are the TANGENTIAL edge masks from the shared
-    ``rfx.boundaries.pec.tangential_edge_masks`` neighbor rule — literally
-    the same edges ``apply_pec_mask`` would zero for the same cell mask
-    (G4 footprint identity), minus any edge the run's PEC mask already
-    owns (PEC wins on overlap). The sheet-normal component's mask is
-    all-False for a one-layer sheet by construction, so the normal E edge
-    is never touched.
+    ``rfx.boundaries.pec.tangential_edge_masks`` neighbor rule — the same
+    edges ``apply_pec_mask`` would zero for the same cell mask (G4
+    footprint identity), minus any edge the run's PEC mask already owns
+    (PEC wins on overlap), and minus any component that is NORMAL to every
+    sheet covering that cell.
+
+    That last veto is what keeps the sheet-normal component all-False
+    (#690). It used to be described as holding "by construction" for a
+    one-layer sheet, and that was wrong: the neighbour rule sees only
+    adjacency, so two one-layer sheets sharing a normal and sitting on
+    ADJACENT cell layers looked like one two-cell body and the gap edge
+    between them was loaded. Since #677 an f0 sheet is node-thin, so
+    adjacent layers are two films one dual spacing apart with vacuum
+    between — the gap edge must stay lossless. The veto uses each spec's
+    declared ``normal_axis``, so it holds for a stack of any depth.
+
+    Consequence worth knowing (and NOT re-litigating silently): for
+    adjacent stacked sheets the f0 footprint now differs from the PEC
+    thin-sheet footprint, which still fuses the two films because
+    ``pec_mask`` is a cell mask with no normal attached. The #677
+    PEC/f0 footprint identity holds per sheet, not for a stack.
     """
     mask_ex: object
     mask_ey: object
@@ -359,15 +378,35 @@ class SheetImpedanceCtx:
     sigma_sheet: object   # accumulated over sheets; 0 off-sheet
 
 
-def build_sheet_impedance_ctx(sheet_specs, pec_mask=None):
+def build_sheet_impedance_ctx(sheet_specs, pec_mask=None,
+                             periodic=(False, False, False)):
     """Union a run's :class:`SheetImpedanceSpec` list into a runtime ctx.
 
     Refuses crossing/overlapping sheets with DIFFERENT normals (their
     edge-set union is not a sheet operator's contract — two planes crossing
     share edges whose loss would double-count with no defined normal).
-    Same-normal overlaps ADD conductance (parallel sheets on one node —
-    physical). PEC-owned edges are excluded so ``apply_pec_mask`` (which
-    runs first) wins on overlap.
+    Same-normal OVERLAP (two sheets on the very same cells) ADDS
+    conductance — parallel sheet admittances on one node, physical.
+    Same-normal ADJACENCY (two one-layer sheets on neighbouring layers) is
+    two independent films with a vacuum gap, so the sheet-normal edge
+    between them is NOT loaded (#690); each component is kept only where
+    some covering sheet has it tangential. PEC-owned edges are excluded so
+    ``apply_pec_mask`` (which runs first) wins on overlap.
+
+    That per-component veto is skipped on a LENGTH-1 axis, where "normal to
+    the sheet" is not a direction the grid can represent — see the loop
+    below. Note the exception is the degenerate axis ONLY, not
+    ``periodic[c]``: on a periodic axis of length > 1 cells 0 and n-1 are
+    genuinely different cells, so two one-layer films sitting either side of
+    the seam are still two films and the edge between them is still their
+    gap. Widening the exception to ``periodic[c]`` would re-open #690 across
+    the seam; ``test_periodic_seam_gap_edge_stays_vetoed`` pins that.
+
+    ``periodic`` is forwarded to ``tangential_edge_masks`` for BOTH the
+    sheet union and the PEC subtraction (#689). Handing the two different
+    flags would compute the #677 G4 footprint identity against two
+    different neighbour rules; the caller must pass the same flags its
+    ``apply_pec_mask`` gets.
 
     Returns ``None`` for an empty spec list.
     """
@@ -394,14 +433,62 @@ def build_sheet_impedance_ctx(sheet_specs, pec_mask=None):
                         "double-counting their loss. Split the geometry so "
                         "f0 sheets of different orientation do not share "
                         "cells (PEC sheets may still cross freely).")
-    union = specs[0].mask
+    # #690: ``tangential_edge_masks`` classifies by ADJACENCY alone, so two
+    # sheets that share a normal axis and land on ADJACENT cell layers look
+    # like one two-cell body and the SHEET-NORMAL edge between them picks up
+    # the resistive update.  That edge is the dielectric gap of a two-layer
+    # board: since #677 an f0 sheet is node-thin, so adjacent layers are two
+    # films one dual spacing apart, not one 2-cell slab.  Each spec carries
+    # its own normal, so veto any component that is normal to EVERY sheet
+    # covering that cell.  Grouping the masks by normal axis first keeps the
+    # cost at n_specs cheap boolean ORs plus ONE classification.
+    per_axis = [None, None, None]
     sigma_sheet = specs[0].sigma_sheet
-    for sp in specs[1:]:
-        union = union | sp.mask
-        sigma_sheet = sigma_sheet + sp.sigma_sheet
-    mask_ex, mask_ey, mask_ez = tangential_edge_masks(union)
+    for k, sp in enumerate(specs):
+        a = int(sp.normal_axis)
+        per_axis[a] = sp.mask if per_axis[a] is None else (per_axis[a] | sp.mask)
+        if k:
+            # Coincident same-normal sheets are PARALLEL sheet admittances
+            # (1/Rs_tot = 1/Rs_1 + 1/Rs_2); ``sigma_sheet = G/d_dual`` is
+            # linear in G and both share the node's d_dual, so the per-node
+            # sum IS that parallel combination.  Disjoint cells never
+            # interact, so there the sum is only an assignment.  Summed in
+            # the original spec order so the float result is unchanged.
+            sigma_sheet = sigma_sheet + sp.sigma_sheet
+    union = None
+    for m in per_axis:
+        if m is not None:
+            union = m if union is None else (union | m)
+    masks = list(tangential_edge_masks(union, periodic))
+    for c in range(3):
+        if union.shape[c] == 1:
+            # DEGENERATE AXIS — leave the classification alone.  With one
+            # cell along ``c`` there is no "normal to c" direction to be
+            # normal to: every body spans the whole axis and is its own
+            # neighbour through the wrap ``tangential_edge_masks``
+            # deliberately keeps on a length-1 axis.  ``sheet_normal_axis``
+            # still names ``c`` the thinnest bounding-box axis, so on the
+            # 2-D lane (nz == 1) a flat patch reports ``normal_axis = 2``
+            # and the veto below would zero ``mask_ez`` — the ONLY live E
+            # component in ``mode="2d_tmz"``, making the sheet
+            # bit-identically inert (measured on a 6x6-cell copper patch,
+            # 20x20x1 grid: f0/none peak|Ez| = 1.000000 at the patch node
+            # against pec/none = 0.000000).  Skipped whole, not narrowed to
+            # ``masks[c] & allow``: with a second sheet of a different
+            # normal present, that AND would drop this sheet's own edges.
+            continue
+        # ``allow``: cells covered by at least one sheet for which component
+        # ``c`` is TANGENTIAL.  A component normal to every covering sheet is
+        # a gap edge, not a sheet edge.
+        allow = None
+        for a in range(3):
+            if a != c and per_axis[a] is not None:
+                allow = per_axis[a] if allow is None else (allow | per_axis[a])
+        masks[c] = (masks[c] & allow) if allow is not None \
+            else jnp.zeros_like(masks[c])
+    mask_ex, mask_ey, mask_ez = masks
     if pec_mask is not None:
-        pex, pey, pez = tangential_edge_masks(pec_mask)
+        pex, pey, pez = tangential_edge_masks(pec_mask, periodic)
         mask_ex = mask_ex & ~pex
         mask_ey = mask_ey & ~pey
         mask_ez = mask_ez & ~pez
