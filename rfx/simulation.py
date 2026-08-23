@@ -1889,7 +1889,7 @@ def run(
         and not _ctx["use_kerr"]
         and not _ctx["use_mag_sources"]
         # #677: the GPU baked fast path has an inline H+E update with no
-        # sheet-operator slot; per-plane baking is a documented follow-up.
+        # sheet-operator slot; per-plane baking is tracked in issue #701.
         and not _ctx["use_sheet_impedance"]
         and aniso_eps is None
         and periodic == (False, False, False)
