@@ -25,7 +25,7 @@
 
 | | |
 |---|---|
-| **GPU-accelerated** | 7,309 Mcells/s on RTX 4090 via `jax.lax.scan` JIT ([benchmarks](docs/public/guide/benchmarks.mdx)) |
+| **GPU-accelerated** | 7,309 Mcells/s peak on RTX 4090 (200³ grid, 24 GB; 5,249 on A6000) via `jax.lax.scan` JIT |
 | **Differentiable** | `jax.grad` through the time-domain solver for sensitivity and inverse design |
 | **RF workflow tools** | materials, sources, probes, ports, S-parameters, Harminv, far-field / RCS |
 | **Per-family S-parameters** | lumped/wire, microstrip, rectangular waveguide, and coaxial paths use distinct calculators |
