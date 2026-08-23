@@ -265,8 +265,8 @@ def apply_thin_conductor(
         # sqrt(pi*f0*mu0/sigma_bulk). Since #677 it is NOT folded into
         # ``materials.sigma`` (that realized the sheet as a full-cell slab —
         # the conductor surfaces moved half a cell each side and toggling f0
-        # moved resonances by GEOMETRY, measured 27.03/32.40 ->
-        # 26.02/29.18 GHz on the stacked patch-pair A/B). Instead it is
+        # moved resonances by GEOMETRY — measured shifts of 1.01 and
+        # 3.22 GHz on the #677 coupled-resonator A/B). Instead it is
         # emitted as a :class:`SheetImpedanceSpec` and realized NODE-THIN by
         # the per-step operator :func:`apply_sheet_impedance_e` on exactly
         # the tangential E edges ``apply_pec_mask`` would zero — for a
