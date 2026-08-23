@@ -3,8 +3,8 @@
 The issue: toggling ``surface_impedance_f0`` used to change the sheet's
 ELECTROMAGNETIC GEOMETRY (node-thin PEC plane -> full-cell conductive
 slab), moving resonances before loss entered. Original evidence (a
-private design, dz = 31.4 um, VESSL GPU): toggling f0 moved the two
-resonances by 1.01 and 3.22 GHz. This module rebuilds the
+private design, VESSL GPU): toggling f0 moved two resonances by 1.01
+and 3.22 GHz. This module rebuilds the
 fixture CLASS as a public, CPU-sized stacked patch pair with the same
 mechanism (z-gap-sensitive coupled patch modes over a ground plane at
 dz = 31.4 um), and runs the A/B on three realizations of the SAME cells:
