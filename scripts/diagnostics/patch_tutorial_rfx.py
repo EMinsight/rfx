@@ -59,6 +59,9 @@ margin_xy = float(os.environ.get("PT_MARGIN_XY_MM", "85")) * 1e-3
 air_below = float(os.environ.get("PT_AIR_BELOW_MM", "30")) * 1e-3
 air_above = float(os.environ.get("PT_AIR_ABOVE_MM", "95")) * 1e-3
 NUM_PERIODS = int(os.environ.get("PT_NUM_PERIODS", "250"))
+# PT_TWO_PLANE=1: #706 two-plane realization of the one-cell ground/patch
+# sheets — the radiation-damping A/B on a matched textbook radiator.
+_TP = dict(two_plane=True) if os.environ.get("PT_TWO_PLANE", "0") == "1" else {}
 eps_eff = (sub_epsR + 1) / 2 + (sub_epsR - 1) / 2 * (1 + 12 * (sub_thick / patch_w)) ** -0.5
 F_GUESS = C0 / (2 * patch_l * math.sqrt(eps_eff))
 
@@ -107,10 +110,10 @@ def build_cubic():
     sim = Simulation(freq_max=4e9, domain=(dom_x, dom_y, dom_z), dx=dx,
                      boundary=BoundarySpec.uniform("cpml"), cpml_layers=n_cpml)
     sim.add_material("sub", eps_r=sub_epsR, sigma=SIGMA)
-    sim.add(Box((gx_lo, gy_lo, z_gnd_lo), (gx_hi, gy_hi, z_gnd_hi)), material="pec")
+    sim.add(Box((gx_lo, gy_lo, z_gnd_lo), (gx_hi, gy_hi, z_gnd_hi)), material="pec", **_TP)
     sim.add(Box((gx_lo, gy_lo, z_sub_lo), (gx_hi, gy_hi, z_sub_hi)), material="sub")
     sim.add(Box((patch_x_lo, patch_y_lo, z_patch_lo),
-                (patch_x_hi, patch_y_hi, z_patch_hi)), material="pec")
+                (patch_x_hi, patch_y_hi, z_patch_hi)), material="pec", **_TP)
     src_z = z_sub_lo + 0.75 * dx
     sim.add_source(position=(feed_x, feed_y, src_z), component="ez",
                    waveform=GaussianPulse(f0=f_design, bandwidth=1.2))
@@ -163,10 +166,10 @@ def build():
                      dz_profile=dz_profile, boundary=BoundarySpec.uniform("cpml"),
                      cpml_layers=n_cpml)
     sim.add_material("sub", eps_r=sub_epsR, sigma=SIGMA)
-    sim.add(Box((gx_lo, gy_lo, z_gnd_lo), (gx_hi, gy_hi, z_gnd_hi)), material="pec")
+    sim.add(Box((gx_lo, gy_lo, z_gnd_lo), (gx_hi, gy_hi, z_gnd_hi)), material="pec", **_TP)
     sim.add(Box((gx_lo, gy_lo, z_sub_lo), (gx_hi, gy_hi, z_sub_hi)), material="sub")
     sim.add(Box((patch_x_lo, patch_y_lo, z_patch_lo),
-                (patch_x_hi, patch_y_hi, z_patch_hi)), material="pec")
+                (patch_x_hi, patch_y_hi, z_patch_hi)), material="pec", **_TP)
     src_z = z_sub_lo + dz_sub * 1.5
     sim.add_source(position=(feed_x, feed_y, src_z), component="ez",
                    waveform=GaussianPulse(f0=f_design, bandwidth=1.2))
