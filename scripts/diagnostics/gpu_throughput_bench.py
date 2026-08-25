@@ -34,29 +34,43 @@ def build(n, variant):
     return sim
 
 def measure(n, variant):
+    """Marginal-cost differencing: every ``sim.run(N)`` call pays a large
+    fixed cost (material assembly, rasterization, host<->device transfer,
+    dispatch) that has nothing to do with stepping.  The first version of
+    this harness timed whole ``run()`` calls and read 152 Mcells/s where
+    the same card's published measured number is 7,309 — the ladder ROSE
+    with grid size, the signature of fixed-overhead domination.  So:
+    time run(N_small) and run(N_big) and take
+    cells*(N_big-N_small)/(t_big-t_small) — the setup cost subtracts out
+    exactly, leaving the compiled scan's per-step cost.
+    """
     sim = build(n, variant)
-    cells = None
-    # steps per ~4 s window from a quick probe
     t0 = time.perf_counter()
-    r = sim.run(n_steps=32)          # includes compile
+    r = sim.run(n_steps=8)            # compile both step counts' graphs? no:
     t_compile = time.perf_counter() - t0
-    st = r.state
-    cells = int(np.prod(np.asarray(st.ez).shape))
-    t0 = time.perf_counter()
-    r = sim.run(n_steps=64)
-    jax.block_until_ready(r.state.ez)
-    per_step = (time.perf_counter() - t0) / 64
-    steps = max(64, int(4.0 / per_step))
+    cells = int(np.prod(np.asarray(r.state.ez).shape))
+    N1, N2 = 64, 1088                  # delta = 1024 scanned steps
+    # warm both graph shapes once (scan length can retrigger compilation)
+    jax.block_until_ready(sim.run(n_steps=N1).state.ez)
+    jax.block_until_ready(sim.run(n_steps=N2).state.ez)
     meds = []
     for _ in range(3):
         t0 = time.perf_counter()
-        r = sim.run(n_steps=steps)
-        jax.block_until_ready(r.state.ez)
-        meds.append(cells * steps / (time.perf_counter() - t0) / 1e6)
+        jax.block_until_ready(sim.run(n_steps=N1).state.ez)
+        t1 = time.perf_counter()
+        jax.block_until_ready(sim.run(n_steps=N2).state.ez)
+        t2 = time.perf_counter()
+        dt_steps = (t2 - t1) - (t1 - t0)
+        if dt_steps <= 0:
+            continue
+        meds.append(cells * (N2 - N1) / dt_steps / 1e6)
+    if not meds:
+        raise RuntimeError("differencing produced no positive window")
     return dict(cells=cells, variant=variant,
                 mc_per_s_median=float(np.median(meds)),
                 mc_per_s_spread=float(np.max(meds) - np.min(meds)),
-                steps=steps, windows=3, compile_s=round(t_compile, 2),
+                method=f"marginal cost, N={N1}->{N2}, 3 repeats",
+                windows=len(meds), compile_s=round(t_compile, 2),
                 jax_version=jax.__version__,
                 device=str(jax.devices()[0]),
                 dtype="float32")
