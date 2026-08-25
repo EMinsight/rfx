@@ -79,3 +79,44 @@ campaign spent multiple GPU runs and several review cycles discovering,
 one symptom at a time, what a plane-BC model would have excluded by
 construction. The PI's read: this direction is plausibly the largest
 remaining trial-and-error reducer for board-class work.
+
+## Design review outcome (Codex, 2026-08-25)
+
+An independent review (Codex CLI over this repo + issues) endorsed the
+direction with one architectural sharpening and several concrete checks:
+
+- **Build it as oriented surface topology, not mask reinterpretation**: a
+  `SheetPlaneSpec` (static normal axis, plane slot, footprint, impedance
+  model, junction IDs) with an explicit junction graph. Deriving the edge
+  set from unioned cell masks would preserve the root cause under a new
+  name — every incident in the error family above was an
+  orientation/ownership ambiguity of the mask representation.
+- **Keep three realizations**: plane sheet (default for sub-cell planar
+  metal) / volumetric (barrels, plating, finite thickness) / conformal
+  later. `two_plane` remains the compatibility realization.
+- **Semantics to state first**: the current operator mixes a penetrable-film
+  contract (folded sigma preserves DC film Rs) with a Leontovich opaque-
+  boundary Rs input — filed as #711 with the analytic infinite-sheet R/T/A
+  case as the pin.
+- **CPML**: the sheet update replaces, not composes with, CPML-corrected
+  edges; acceptable only because preflight P1.9 refuses geometry in the
+  absorber — documentation ask folded into #711.
+- **AD/vmap**: fixed-topology parameterization (plane slots with
+  softplus-spaced coordinates; Zs via softplus; never differentiate across
+  the finite-Zs-vs-PEC branch). Batch sweeps bucket by topology. The
+  current nonuniform position lookup (argmin + float) is a known cliff.
+- **Junctions are the hard part**: via-barrel-to-sheet contact needs an
+  explicit conductor graph; lumped terminations must own enumerated gap
+  edges (the termination-edge family) rather than thawing sheet-owned ones.
+- Reviewer pushback worth keeping: before scoping this as greenfield, check
+  whether the graded-mesh builder's existing plane/face registration can
+  serve as the plane registry.
+
+On the separate loaded-Q question the reviewer ranked **port/feed
+representation first** (loaded Q is external-Q-sensitive; the locus is a
+port observable), radiation loading second — and proposed the decisive
+first measurement: a source-off, port-free ring-down with a per-channel
+energy budget (Q_radiation / Q_conductor / Q_dielectric / Q_port from
+outward flux + per-mechanism dissipation vs stored energy). That
+experiment separates "resonator too lossless" from "feed undercoupled"
+in one run and is the planned follow-up to the current pattern run.
