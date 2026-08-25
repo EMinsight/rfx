@@ -66,7 +66,7 @@ def measure(n, variant):
         meds.append(cells * (N2 - N1) / dt_steps / 1e6)
     if not meds:
         raise RuntimeError("differencing produced no positive window")
-    return dict(cells=cells, variant=variant,
+    return dict(cells=cells, variant=variant, steps=f"{N1}->{N2}",
                 mc_per_s_median=float(np.median(meds)),
                 mc_per_s_spread=float(np.max(meds) - np.min(meds)),
                 method=f"marginal cost, N={N1}->{N2}, 3 repeats",
