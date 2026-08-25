@@ -7,7 +7,7 @@ patch theory (Balanis/Pozar) says the edge input resistance at the TM010 resonan
 the resonance. The resonance itself is where Im(Zin) crosses zero.
 
 This runs the *production* compute_msl_s_matrix on the issue-80 patch (same geometry as
-tests/test_issue80_patch_s11_regression.py), derives Zin(f) = Z0 (1+S11)/(1-S11), and reports:
+tests/test_patch_edgefed_s11_passivity.py), derives Zin(f) = Z0 (1+S11)/(1-S11), and reports:
   - f_dip          : argmin |S11|                     (the DIP)
   - f_match        : argmin |Zin - 50|                (the MATCH point; expect == f_dip)
   - f_res_ImZ0     : zero-crossing of Im(Zin)         (the RESONANCE; expect ~9.2-9.3 GHz)
@@ -19,7 +19,7 @@ FALSIFIER (this is the gate on the whole #118 re-spec):
         f_dip => the fields actually resonate at the dip, so the gate was right to flag it.
 
 R5: dumps the full per-frequency trace (|S11|, Re/Im Zin), never a bare headline.
-Run: JAX_PLATFORMS=cpu python scripts/diagnostics/issue118_match_vs_resonance_witness.py
+Run: JAX_PLATFORMS=cpu python scripts/diagnostics/patch_edgefed_match_vs_resonance_witness.py
 """
 from __future__ import annotations
 

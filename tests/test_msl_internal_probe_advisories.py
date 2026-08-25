@@ -13,7 +13,7 @@ Containment: ``Simulation._internal_probe_indices`` runtime bookkeeping
 (deliberately NOT an ``_ProbeEntry`` field — the entry field set is pinned
 by the interop design-IR contract). Probe-placement preflight advisories
 and #332/#336 skip internal indices; USER probes keep pre-#470 behavior
-exactly (the #332 fail-safe in test_issue80_patch_s11_regression relies on
+exactly (the #332 fail-safe in test_patch_edgefed_s11_passivity relies on
 user-probe series still being evaluated during MSL runs).
 """
 import warnings
@@ -67,7 +67,7 @@ def test_user_probe_advisories_and_332_still_fire():
     """USER probes keep pre-#470 behavior during the same MSL run: a probe
     near the x-CPML still draws a placement advisory, and an interior
     user probe's hot tail still fires #332 on the truncated record (the
-    fail-safe test_issue80_patch_s11_regression depends on).
+    fail-safe test_patch_edgefed_s11_passivity depends on).
 
     Issue #500 / review finding H1: on this fixture (dx=2e-4, cpml_layers=8
     -> pad=8) the second probe sits at x=200um = node 9, one cell inside

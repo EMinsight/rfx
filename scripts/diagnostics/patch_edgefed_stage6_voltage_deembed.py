@@ -269,12 +269,12 @@ def test_patch(meshes=(300e-6, 197e-6)):
     ref = {}
     for dxn in (300, 197):
         try:
-            d = np.load(f"/tmp/issue80_stage1b_{dxn}.npz")
+            d = np.load(f"/tmp/patch_edgefed_stage1b_{dxn}.npz")
             ref[dxn] = (d["freqs"], d["S11"])
         except FileNotFoundError:
             pass
     if not ref:
-        print("  [warn] no /tmp/issue80_stage1b_*.npz — run stage1b first for ref.")
+        print("  [warn] no /tmp/patch_edgefed_stage1b_*.npz — run stage1b first for ref.")
     freqs = np.linspace(4e9, 14e9, 41)
     mesh_map = {300e-6: 300, 197e-6: 197, 80e-6: 80, 50e-6: 50}
     for dx in meshes:

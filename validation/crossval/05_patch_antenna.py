@@ -25,8 +25,8 @@ Structure (stack from bottom to top):
     docs/research_notes/20260715_cv05_first_principles_review.md): it
     reports a coarse-mesh resonance and exercises the end-to-end path;
     it does NOT gate accuracy. Patch-accuracy evidence is delegated to
-    the committed tests (test_issue80_patch_resonance_harminv,
-    test_issue80_patch_s11_regression, test_patch_cavity_eps_oracle).
+    the committed tests (test_patch_edgefed_resonance_harminv,
+    test_patch_edgefed_s11_passivity, test_patch_cavity_eps_oracle).
     (OpenEMS side: 4 uniform z-cells.)
   - Patch: PEC rectangle on top of the substrate
   - Air region above the patch (MUR / CPML open boundaries)

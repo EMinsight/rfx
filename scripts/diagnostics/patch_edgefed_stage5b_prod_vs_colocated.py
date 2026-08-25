@@ -58,7 +58,7 @@ def main():
     for dx in (80e-6, 50.8e-6):
         # (P) production extractor with a raw dump
         sim, y_c = build_stub(dx)
-        dump = f"/tmp/issue80_s5b_{int(dx*1e6)}.npz"
+        dump = f"/tmp/patch_edgefed_s5b_{int(dx*1e6)}.npz"
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             sim.preflight()

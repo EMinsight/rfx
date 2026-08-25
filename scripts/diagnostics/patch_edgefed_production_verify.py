@@ -5,7 +5,7 @@ probe 0 clears the source near-field. The production diagonal S11 is already the
 validated offline. The historical |S11|=8.94 came from the default n_probe_offset (~5 cells ≈ 1mm)
 placing probe 0 INSIDE the ~13-cell source transient. Sweep n_probe_offset and confirm:
   small offset → non-passive (reproduce 8.94 family);  cleared offset → PASSIVE, dip toward 9.2.
-Run: python issue80_production_verify.py <n_probe_offset>   (cells; e.g. 5 vs 18)."""
+Run: python patch_edgefed_production_verify.py <n_probe_offset>   (cells; e.g. 5 vs 18)."""
 from __future__ import annotations
 
 import os, sys, warnings

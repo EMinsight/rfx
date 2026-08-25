@@ -86,7 +86,7 @@ def test_uniform_fine_substrate_builds_n_sub_cells_with_clearance(n_buf):
         f"grading transition too close to the resonator: {clr*1e3:.2f}mm < {CLEARANCE_MIN*1e3}mm (N_BUF={n_buf})"
 
 
-def test_committed_cv05_geometry_fails_the_lock():
+def test_committed_patch_crossval_geometry_fails_the_lock():
     """Fails-closed guard: the committed cv05 geometry (fixed air_below=12mm, no
     buffer) rasterizes the substrate to 2 coarse cells — the lock must reject it.
 

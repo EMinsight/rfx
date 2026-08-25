@@ -20,7 +20,7 @@ the WRONG PHYSICS for a *directly edge-fed* patch and is NOT achievable by refin
     diminishing-returns R2 loop here, not a fix.
 
 The RESONANCE itself is correct and is validated by the port-INDEPENDENT companion gate
-``test_issue80_patch_resonance_harminv.py`` (Harminv ring-down 9.32 GHz == OpenEMS S11 9.20
+``test_patch_edgefed_resonance_harminv.py`` (Harminv ring-down 9.32 GHz == OpenEMS S11 9.20
 == analytic Balanis 9.21). So this gate asserts the two things the |S11| curve *can* robustly
 witness, plus a soft bound:
 
@@ -29,7 +29,7 @@ witness, plus a soft bound:
       => the patch is poorly matched at its resonance => the |S11| dip is NOT the resonance.
   (3) (soft) the global |S11| minimum lies ABOVE the resonance band (it is the match point).
 
-Evidence: ``scripts/diagnostics/issue118_match_vs_resonance_witness.py`` derives Zin(f) =
+Evidence: ``scripts/diagnostics/patch_edgefed_match_vs_resonance_witness.py`` derives Zin(f) =
 Z0(1+S11)/(1-S11) on this exact geometry and shows Im(Zin)=0 (resonance) well below the dip.
 
 RING-DOWN SETTLING WITNESS (repo mandatory rule; issue #402)
@@ -64,7 +64,7 @@ import pytest
 from rfx import Box, Simulation
 from rfx.sources import GaussianPulse
 
-# --- issue #80 reproduction geometry (mirrors scripts/issue80_patch_s11_validation.py) ---
+# --- issue #80 reproduction geometry (mirrors scripts/patch_edgefed_s11_validation.py) ---
 EPS_R = 3.38
 H_SUB = 0.787e-3
 W = 10.129e-3
@@ -122,7 +122,7 @@ def _build_patch_sim() -> Simulation:
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_issue80_patch_s11_passive_and_edge_fed_match():
+def test_patch_edgefed_s11_passive_and_match():
     """Patch |S11| is passive AND shows the edge-fed signature (poorly matched at the
     resonance; dip is the off-resonance match point above it). Resonance frequency itself
     is validated by the Harminv companion gate."""
@@ -138,7 +138,7 @@ def test_issue80_patch_s11_passive_and_edge_fed_match():
 
     # R: never ignore preflight — surface any warning before trusting |S| numbers.
     advisories = [str(a) for a in sim.preflight()]
-    print(f"\n[ISSUE80/118-REG] preflight advisories ({len(advisories)}) — quoted verbatim:")
+    print(f"\n[PATCH-EDGEFED/118-REG] preflight advisories ({len(advisories)}) — quoted verbatim:")
     for a in advisories:
         print(f"  ! {a}")
 
@@ -158,7 +158,7 @@ def test_issue80_patch_s11_passive_and_edge_fed_match():
         str(w.message) for w in _settling
         if "#332" in str(w.message) or "ring-down truncated" in str(w.message)
     ]
-    print("[ISSUE80/118-SETTLING] framework #332 ring-down energy witness: "
+    print("[PATCH-EDGEFED/118-SETTLING] framework #332 ring-down energy witness: "
           f"{_trunc if _trunc else 'no truncation advisory — domain drained below -40 dB of peak'}")
     assert not _trunc, (
         "ring-down NOT settled at the gated num_periods — the DFT-extracted |S11| may carry "
@@ -179,14 +179,14 @@ def test_issue80_patch_s11_passive_and_edge_fed_match():
     s11_res_band_min = float(np.min(s11[band]))
 
     # --- R5 witnesses: full trace (|S11|, Re/Im Zin), never a bare headline ---
-    print(f"\n[ISSUE80/118-REG] max|S11| = {s11_max:.4f}  dip @ {f_dip:.3f} GHz "
+    print(f"\n[PATCH-EDGEFED/118-REG] max|S11| = {s11_max:.4f}  dip @ {f_dip:.3f} GHz "
           f"(|S11|={s11[i_dip]:.4f}, the off-resonance MATCH point)")
-    print(f"[ISSUE80/118-REG] min|S11| over resonance band {RES_BAND_GHZ} GHz = "
+    print(f"[PATCH-EDGEFED/118-REG] min|S11| over resonance band {RES_BAND_GHZ} GHz = "
           f"{s11_res_band_min:.4f} (HIGH => poorly matched at resonance, edge-fed signature)")
-    print(f"[ISSUE80/118-REG] Z0[0] median Re = {np.median(z0.real):.2f} ohm "
+    print(f"[PATCH-EDGEFED/118-REG] Z0[0] median Re = {np.median(z0.real):.2f} ohm "
           f"(analytic Hammerstad-Jensen ~50.6 ohm)")
     for f, a, zr, zi in zip(fr, s11, zin.real, zin.imag):
-        print(f"[ISSUE80/118-TRACE] {f:7.3f} GHz  |S11|={a:.5f}  "
+        print(f"[PATCH-EDGEFED/118-TRACE] {f:7.3f} GHz  |S11|={a:.5f}  "
               f"Re(Zin)={zr:9.2f}  Im(Zin)={zi:9.2f}")
 
     # --- (1) passivity: the issue #80 fix (was |S11|=1.44/8.94, now <= 1.05) ---

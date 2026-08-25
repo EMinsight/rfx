@@ -76,7 +76,7 @@ def main() -> None:
     grid = sim._build_grid()
     dt = float(grid.dt)
 
-    dump_path = "/tmp/issue80_stage0_dump.npz"
+    dump_path = "/tmp/patch_edgefed_stage0_dump.npz"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = sim.compute_msl_s_matrix(

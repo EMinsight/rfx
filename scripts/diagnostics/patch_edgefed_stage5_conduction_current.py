@@ -214,7 +214,7 @@ def main():
             phys = _Z0 * abs(r["I_tel"][i]) / (abs(r["V"][i]) + 1e-30)
             print(f"      {f[i]/1e9:5.2f}  {abs(r['S11_tel'][i]):.3f}  "
                   f"{r['Z_tel'][i].real:8.1f}  {r['Z_tel'][i].imag:8.1f}  {phys:.3e}")
-        np.savez(f"/tmp/issue80_stage5_stub_{int(dx*1e9)}.npz",
+        np.savez(f"/tmp/patch_edgefed_stage5_stub_{int(dx*1e9)}.npz",
                  **{k: v for k, v in r.items() if isinstance(v, np.ndarray)})
 
     print("\n=== STUB CONVERGENCE (dx=80→50.8µm) ===")

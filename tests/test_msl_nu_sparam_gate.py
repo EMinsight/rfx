@@ -12,7 +12,7 @@ Validation rationale (R5 / canonical anchor):
   * We assert the COMMITTED edge-fed physics gate (passivity + edge-fed signature +
     soft dip-above-band) — NEVER a re-spec to a dip-at-9.3 gate (that is the issue
     #118 category error). These are the exact assertions from
-    test_issue80_patch_s11_regression.py.
+    test_patch_edgefed_s11_passivity.py.
   * We do NOT gate on NU == uniform bit-for-bit: rfx's uniform Grid and
     NonUniformGrid constructors differ by ~1 cell per axis for the same domain/dx
     (verified), so the two rasterise the geometry slightly differently. The NU path
@@ -37,7 +37,7 @@ import pytest
 from rfx import Box, Simulation
 from rfx.sources import GaussianPulse
 
-# --- identical geometry to tests/test_issue80_patch_s11_regression.py ---
+# --- identical geometry to tests/test_patch_edgefed_s11_passivity.py ---
 EPS_R = 3.38
 H_SUB = 0.787e-3
 W = 10.129e-3

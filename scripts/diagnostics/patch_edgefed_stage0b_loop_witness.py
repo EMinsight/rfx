@@ -97,7 +97,7 @@ def main() -> None:
     _mslmod.msl_loop_current = _capturing_loop  # patched at source (imported locally in _sparams)
     sim = _build_stub()
     sim.preflight()
-    dump = "/tmp/issue80_stage0b.npz"
+    dump = "/tmp/patch_edgefed_stage0b.npz"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = sim.compute_msl_s_matrix(n_freqs=121, num_periods=60.0,

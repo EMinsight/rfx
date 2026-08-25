@@ -1,6 +1,6 @@
 """Issue #80 / #118 — patch RESONANCE gate via Harminv ring-down (port-independent).
 
-Companion to ``test_issue80_patch_s11_regression.py``. That gate validates the |S11|
+Companion to ``test_patch_edgefed_s11_passivity.py``. That gate validates the |S11|
 PASSIVITY and the edge-fed match-point physics; THIS gate validates the patch RESONANCE
 frequency itself, using a method that does not depend on the MSL port extractor.
 
@@ -11,7 +11,7 @@ DIP is the off-resonance impedance MATCH point (Re(Zin) -> ~50 ohm), which sits 
 TM010 resonance — NOT the resonance itself (the patch is badly matched at resonance, where
 the edge resistance is hundreds of ohms). So the |S11| dip frequency is the wrong observable
 for the resonance (issue #118; witnessed in
-``scripts/diagnostics/issue118_match_vs_resonance_witness.py`` — Im(Zin)=0 ~9.5-9.6 GHz vs
+``scripts/diagnostics/patch_edgefed_match_vs_resonance_witness.py`` — Im(Zin)=0 ~9.5-9.6 GHz vs
 the |S11| dip ~11 GHz at coarse mesh).
 
 The radiating resonance is measured here by the cv05-validated Harminv ring-down on a cavity
@@ -131,14 +131,14 @@ def _build_patch() -> "Simulation":
 
 
 @pytest.mark.slow
-def test_issue80_patch_resonance_harminv():
+def test_patch_edgefed_resonance_harminv():
     """The patch TM010 (Harminv ringdown) is near 9.2 GHz, NOT the spurious ~11.9, and the
     ring-down is settled below the -40 dB truncation bar before any frequency is trusted."""
     sim, _x_patch0, _y_c = _build_patch()
 
     # R: never ignore preflight — surface any warning before trusting any number.
     advisories = [str(a) for a in sim.preflight()]
-    print(f"\n[ISSUE80-HARMINV] preflight advisories ({len(advisories)}) — quoted verbatim:")
+    print(f"\n[PATCH-HARMINV] preflight advisories ({len(advisories)}) — quoted verbatim:")
     for a in advisories:
         print(f"  ! {a}")
 
@@ -154,7 +154,7 @@ def test_issue80_patch_resonance_harminv():
     peak = float(np.max(env))
     tail = float(np.max(env[int(len(env) * 0.95):]))
     end_db = 20.0 * math.log10(max(tail, 1e-300) / max(peak, 1e-300))
-    print(f"[ISSUE80-HARMINV] settling witness: end-of-run cavity envelope {end_db:.1f} dB "
+    print(f"[PATCH-HARMINV] settling witness: end-of-run cavity envelope {end_db:.1f} dB "
           f"of peak (bar {SETTLING_BAR_DB} dB)")
     assert end_db < SETTLING_BAR_DB, (
         f"ring-down not settled: end-of-run envelope {end_db:.1f} dB does not clear the "
@@ -168,7 +168,7 @@ def test_issue80_patch_resonance_harminv():
     assert modes, "Harminv found no ring-down modes — sim too short or unstable"
 
     spectrum = sorted((m.freq / 1e9, m.Q, float(abs(m.amplitude))) for m in modes)
-    print("[ISSUE80-HARMINV] ring-down spectrum: "
+    print("[PATCH-HARMINV] ring-down spectrum: "
           f"{[f'{f:.2f}/Q{q:.0f}/a{a:.2g}' for f, q, a in spectrum]}")
 
     # --- Mode-ID by frequency order (NOT global amplitude rank, NOT far-field: see the
@@ -184,7 +184,7 @@ def test_issue80_patch_resonance_harminv():
     f_patch = patch.freq / 1e9
     patch_amp = float(abs(patch.amplitude))
     feed_amp = max((float(abs(m.amplitude)) for m in feed_modes), default=0.0)
-    print(f"[ISSUE80-HARMINV] identified patch mode = {f_patch:.3f} GHz (Q={patch.Q:.1f}); "
+    print(f"[PATCH-HARMINV] identified patch mode = {f_patch:.3f} GHz (Q={patch.Q:.1f}); "
           f"patch-band amp {patch_amp:.3g} vs feed-band(>={FEED_BAND_LO_GHZ:.0f}GHz) amp {feed_amp:.3g}")
 
     # (1) the patch-band mode IS the TM010 near 9.2 (= OpenEMS 9.20 / analytic 9.21 anchor)

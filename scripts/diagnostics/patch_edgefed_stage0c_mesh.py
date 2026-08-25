@@ -52,7 +52,7 @@ def main() -> None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             sim.preflight()
-            dump = f"/tmp/issue80_s0c_{int(dx*1e6)}.npz"
+            dump = f"/tmp/patch_edgefed_s0c_{int(dx*1e6)}.npz"
             res = sim.compute_msl_s_matrix(n_freqs=81, num_periods=60.0,
                                            raw_3probe_dump_path=dump)
         d = np.load(dump, allow_pickle=True)
