@@ -54,11 +54,10 @@ def slab_rt_exact(f, sigma_eff, d):
     """Exact normal-incidence R,T of a slab: eps = 1 + i*sigma/(w*eps0)."""
     w = 2 * np.pi * f
     n = np.sqrt(1 + 1j * sigma_eff / (w * EPS0))
-    k0, k1 = w / C0, n * w / C0
+    k1 = n * w / C0
     r01 = (1 - n) / (1 + n)
     t01, t10 = 2 / (1 + n), 2 * n / (1 + n)
     ph = np.exp(1j * k1 * d)
-    r = r01 + t01 * t10 * (-r01) * ph**2 / (1 - (r01 * ph)**2 * 1.0)
     # standard Airy summation, r10 = -r01:
     r = r01 + (t01 * t10 * (-r01) * ph**2) / (1 - (-r01)**2 * ph**2)
     t = (t01 * t10 * ph) / (1 - (-r01)**2 * ph**2)
