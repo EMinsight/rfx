@@ -19,6 +19,23 @@ mesh to resolve the sheet volumetrically.
 References:
     Taflove & Hagness, Ch. 10 — Subcell modeling techniques
     Weiland, AEÜ 31(3), 1977 — Thin sheet technique
+
+MODEL CONTRACT (#711, measured 2026-08-26)
+------------------------------------------
+The lossy path is a PENETRABLE resistive film: one cell of folded volumetric
+conductivity transmits, reflects and absorbs per the exact conductive-slab
+solution (pinned by tests/test_sheet_film_rta_analytic.py: at Rs = eta0/2,
+measured band-mean R/T land within 0.01 of the analytic 0.25/0.25). It is NOT
+an opaque Leontovich boundary. The ``surface_impedance_f0`` path feeds this
+same penetrable update a thick-conductor Leontovich Rs — a valid loss model
+only while thickness >> skin depth, where the film's residual transmission
+(~(2 Rs/eta0)^2, -70 dB class for copper foils) is negligible. The PEC branch
+(sigma_bulk >= 1e6) is exact and opaque (pinned: T < 1e-3 in the same test).
+
+CPML composition: the sheet update REPLACES the CPML-corrected tangential
+update on edges it owns (runner order: bulk E -> CPML -> PEC -> sheet), so a
+sheet inside the absorber would silently drop the stretching correction —
+placement there is refused/flagged by preflight P1.9 (geometry-in-CPML).
 """
 
 from __future__ import annotations
