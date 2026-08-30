@@ -355,6 +355,13 @@ CLASSIFICATION: dict[str, Entry] = {
         "`run_example()` builds and calls .run(...) in the same function"),
 
     # ---- audited (23): builder is separable from solve ----
+    "validation/research/issue764_wireport_norm_falsifiers.py": Entry(
+        "audited",
+        "issue #764 falsifier battery: `build_fix_a()` returns Simulation "
+        "with no solve call (the solve lives in `run_nu()`); the machine "
+        "check rejected the earlier builder_fused_with_solve label for "
+        "exactly this separability",
+        (Builder("build_fix_a", None, (_v("short", load="short"),)),)),
     "examples/inverse_design/differentiable_s11_design.py": Entry(
         "audited", "`_build_sim()` returns Simulation with no solve call",
         (Builder("_build_sim", None, (_v("default"),)),)),
