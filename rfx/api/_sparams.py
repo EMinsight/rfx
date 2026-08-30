@@ -266,6 +266,46 @@ def _warn_msl_wave_split_unreliable(
     )
 
 
+def _warn_msl_beta_scan_railed(
+    beta_railed: np.ndarray, freqs: object, port_names: tuple
+) -> None:
+    """Emit one aggregate warning for β-scan rail-pinned bins (issue #681).
+
+    ``beta_railed`` is (n_ports, n_freqs) bool, True where a port's
+    own-drive N-probe β scan failed to bracket its optimum — the fitted
+    ``beta``/``Z0`` at that bin are the ±35% scan-window limit, not a
+    measurement.  Mirrors ``_warn_msl_wave_split_unreliable``: silent
+    while tracing (caller concretizes), one warning per extraction.
+    """
+    railed = np.asarray(beta_railed, dtype=bool)
+    affected_freqs = np.flatnonzero(np.any(railed, axis=0))
+    if not affected_freqs.size:
+        return
+
+    import warnings
+
+    freqs_arr = np.asarray(freqs)
+    f1 = freqs_arr[int(affected_freqs[0])] / 1e9
+    f2 = freqs_arr[int(affected_freqs[-1])] / 1e9
+    ports = ", ".join(
+        repr(port_names[p]) for p in np.flatnonzero(np.any(railed, axis=1))
+    )
+    warnings.warn(
+        "N-probe beta scan pinned at its own window limit: "
+        f"{affected_freqs.size} bins in [{f1:.4f}, {f2:.4f}] GHz at "
+        f"port(s) {ports} minimized the fit residual at the edge of the "
+        "±35% scan around the analytic Hammerstad-Jensen guess — the "
+        "reported Z0/beta at those bins are the scan limit, NOT a "
+        "measurement (issue #681). S11/S21 are unaffected (they use the "
+        "analytic Z0 anchor). Common causes: the real eps_eff is far from "
+        "the HJ estimate (wrong eps_r_sub / substrate not detected under "
+        "the port), or a contaminated/under-settled record at those bins "
+        "(check settling_db and the reliable mask). Check the result's "
+        "beta_railed mask before quoting Z0 or beta.",
+        stacklevel=2,
+    )
+
+
 _SETTLING_WITNESS_DB = -40.0
 
 
@@ -453,6 +493,43 @@ def _resolve_msl_auto_offsets(sim, entries, grid):
     STORED lower edge (``sim._msl_auto_offset_min``), so repeated calls are
     idempotent. Returns a new entries list; ``sim`` is not mutated.
 
+    Auto probe SPACING (issue #681). A ~0.1·λ_g probe span leaves the
+    N-probe β fit noise-fragile: the two model columns ``e^{∓jβx}`` are
+    nearly collinear and the residual-vs-β curve is nearly flat, so probe
+    noise walks the fitted β far from truth (measured, 500-trial
+    Monte-Carlo at 1% probe noise, N=5: median β error 5.5% at a
+    0.10 λ_g span vs 0.81% at 0.30 λ_g — a 6.8× degradation). For ports
+    whose ``n_probe_spacing`` was auto (``sim._msl_auto_probe_spacing``,
+    keyed like the offset bookkeeping) this solve therefore WIDENS the
+    spacing from the conservative registration default toward
+
+        ``spacing = λ_g(f_max)/4``  (λ_g from the registration HJ ε_eff),
+
+    i.e. a total span of ``(N−1)·λ_g(f_max)/4`` (one full λ_g at f_max
+    for the default N=5 — two periods of the λ_g/2 standing-wave
+    pattern), capped by the SAME geometry this solve already knows:
+
+    * spacing ≤ λ_g(f_max)/4 also keeps every probe pair far from the
+      ``β ↔ 2π/s − β`` sampling alias (which enters the ±35% scan window
+      only for s ≳ 0.42·λ_g);
+    * with a downstream reflector, the span may consume at most HALF the
+      compliant interval ``[offset_min, offset_max]`` — the other half
+      stays with the #469 midpoint rule, preserving the measured-clean
+      upstream margin for probe 0 (the #469 Sheen measurement showed the
+      near edge contaminated);
+    * the deepest probe stays ``λ_g/4``-clear of the absorbing boundary
+      (an absorber face is a discontinuity like any reflector, and CPML
+      cells are non-physical), i.e. inside
+      ``domain_edge − clear − n_cpml·dx``.
+
+    On a feed too short for any widening the caps floor at the hard
+    minimum of 2 cells — byte-identical to the pre-#681 defaults on the
+    committed Sheen interval-test geometry — and the existing
+    empty-interval warning still fires when even that does not fit.
+    Explicit spacings are never touched. Graded/unevaluable propagation
+    axes keep the stored registration value (short and safe) via the
+    same skip-and-warn path as the offset solve.
+
     Non-uniform meshes (issue #686). The bail-out is per PORT and keys on
     that port's PROPAGATION axis, not on "is any axis graded". A
     cell-counted probe interval is ill-defined when the axis the probes
@@ -466,7 +543,8 @@ def _resolve_msl_auto_offsets(sim, entries, grid):
     as before — but the skip now WARNS once per call instead of being
     silent.
     """
-    if not sim._msl_auto_offset_min:
+    _auto_spacing = getattr(sim, "_msl_auto_probe_spacing", {}) or {}
+    if not sim._msl_auto_offset_min and not _auto_spacing:
         return entries
 
     import dataclasses
@@ -486,13 +564,13 @@ def _resolve_msl_auto_offsets(sim, entries, grid):
     _graded_skips: list[str] = []
     for pe in entries:
         off_min = sim._msl_auto_offset_min.get(pe.name)
-        if off_min is None:
+        sp_eps_eff = _auto_spacing.get(pe.name)
+        if off_min is None and sp_eps_eff is None:
             resolved.append(pe)
             continue
-        span = (int(pe.n_probes) - 1) * int(pe.n_probe_spacing)
         # Issue #661: project position/domain onto this port's propagation
         # and width axes before handing them to the x-frame helper.
-        _prop_ax, _width_ax, _, _ = _msl_axis_roles(pe.direction)
+        _prop_ax, _width_ax, _, _dir_sign = _msl_axis_roles(pe.direction)
         _ip = _MSL_AX[_prop_ax]
         _iw = _MSL_AX[_width_ax]
         # Issue #686: the bail-out is about THIS port's propagation axis.
@@ -536,14 +614,52 @@ def _resolve_msl_auto_offsets(sim, entries, grid):
                 + "; ".join(_unevaluated))
             resolved.append(pe)
             continue
-        if not np.isfinite(d_refl):
-            resolved.append(pe)
+        # --- Auto probe-spacing widening (issue #681, docstring above).
+        # Target λ_g(f_max)/4 per probe step, capped by half the reflector
+        # interval and by the absorber clearance; floors at the hard
+        # 2-cell minimum. Explicit spacings (sp_eps_eff is None) pass
+        # through untouched.
+        spacing = int(pe.n_probe_spacing)
+        off_base = int(off_min if off_min is not None else pe.n_probe_offset)
+        if sp_eps_eff is not None:
+            from rfx.core.yee import EPS_0 as _EPS_0, MU_0 as _MU_0
+            _c0 = 1.0 / float(np.sqrt(_MU_0 * _EPS_0))
+            lam_g_fmax = _c0 / (
+                float(sim._freq_max) * float(sp_eps_eff) ** 0.5
+            )
+            _target = max(2, int(round(0.25 * lam_g_fmax / dx_u)))
+            _x_feed = float(pe.position[_ip])
+            _dist_edge = (
+                float(sim._domain[_ip]) - _x_feed
+                if _dir_sign > 0 else _x_feed
+            )
+            _n_cpml = int(getattr(grid, "cpml_layers", 0) or 0)
+            _b_dom = int((_dist_edge - clear) / dx_u) - _n_cpml - off_base
+            if np.isfinite(d_refl):
+                _b_refl = int((d_refl - clear) / dx_u) - off_base
+                _span_budget = min(_b_refl // 2, _b_dom)
+            else:
+                _span_budget = _b_dom
+            spacing = max(
+                2,
+                min(_target, _span_budget // (int(pe.n_probes) - 1)),
+            )
+        span = (int(pe.n_probes) - 1) * spacing
+        _fields: dict = {}
+        if spacing != int(pe.n_probe_spacing):
+            _fields["n_probe_spacing"] = spacing
+
+        if off_min is None or not np.isfinite(d_refl):
+            # Explicit offset, or no downstream reflector: no offset
+            # midpoint to solve — carry only the spacing resolution.
+            resolved.append(
+                dataclasses.replace(pe, **_fields) if _fields else pe
+            )
             continue
         off_max = int((d_refl - clear) / dx_u) - span
         if off_max >= off_min:
-            resolved.append(dataclasses.replace(
-                pe, n_probe_offset=(off_min + off_max) // 2,
-            ))
+            _fields["n_probe_offset"] = (off_min + off_max) // 2
+            resolved.append(dataclasses.replace(pe, **_fields))
         else:
             warnings.warn(
                 f"MSL port {pe.name!r}: the upstream and downstream "
@@ -560,12 +676,16 @@ def _resolve_msl_auto_offsets(sim, entries, grid):
                 f"probes. Extend the feed line to fix (issue #469).",
                 stacklevel=3,
             )
-            resolved.append(pe)
+            resolved.append(
+                dataclasses.replace(pe, **_fields) if _fields else pe
+            )
     if _graded_skips:
         warnings.warn(
             "MSL auto probe-offset interval solve (issue #469) SKIPPED for "
             + str(len(_graded_skips)) + " port(s); the stored upstream-only "
-            "lower edge is kept, so the downstream reflector clearance is "
+            "lower edge is kept (and any auto probe spacing keeps its "
+            "conservative registration default — no #681 span widening), "
+            "so the downstream reflector clearance is "
             "NOT enforced for them: " + "; ".join(_graded_skips)
             + ". This used to be silent for every non-uniform mesh (issue "
             "#686). Set n_probe_offset explicitly on these ports, or make "
@@ -3097,6 +3217,10 @@ class _SparamMixin:
             raw_i1 = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
             raw_z0 = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
             raw_q = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
+            # β-scan rail flags per (driven, port) fit (issue #681).
+            raw_beta_railed = jnp.zeros(
+                (n_ports, n_ports, n_freqs_used), dtype=bool
+            )
             # Wave amplitudes per (driven, port) for the multi-drive solve
             # (issue #507). Python lists of jnp arrays, not a stacked array,
             # so eps_override tracers stay on the AD tape.
@@ -3396,6 +3520,9 @@ class _SparamMixin:
                     z0_fit = jnp.asarray(res_p["z0"], dtype=_complex_dtype) * dir_sign
                     raw_z0 = raw_z0.at[driven, p_idx, :].set(z0_fit)
                     raw_q = raw_q.at[driven, p_idx, :].set(jnp.asarray(res_p["q"], dtype=_complex_dtype))
+                    raw_beta_railed = raw_beta_railed.at[driven, p_idx, :].set(
+                        jnp.asarray(res_p["beta_railed"], dtype=bool)
+                    )
                     if p_idx == driven:
                         # V·I single-plane wave split at probe 0 (issue #80
                         # stage S1): a=(V+Z0*I)/2, b=(V-Z0*I)/2, S11=b/a —
@@ -3570,6 +3697,32 @@ class _SparamMixin:
                 # Diagnostics cannot materialize phasors while tracing.  The
                 # eager forward result still carries the reliability mask.
                 pass
+
+            # β-scan rail flags for the SHIPPED fit numbers (issue #681):
+            # Z0[i, :] comes from port i's OWN-drive run and beta from run 0
+            # / port 0, so the own-drive diagonal of raw_beta_railed is
+            # exactly the provenance of every fitted number the result
+            # carries. A railed bin's Z0/beta are the ±35% scan-window
+            # limit, not a measurement — used to be returned silently
+            # pinned (repro: eps_eff 6.30 line reported as 4.60 at
+            # 0.974·rail with zero warnings). S11/S21 never ride on the
+            # fitted β (analytic HJ anchor), so S is NOT condemned.
+            beta_railed = None
+            try:
+                beta_railed = np.stack([
+                    np.asarray(
+                        jax.lax.stop_gradient(raw_beta_railed[p, p, :])
+                    )
+                    for p in range(n_ports)
+                ]).astype(bool)
+                _warn_msl_beta_scan_railed(
+                    beta_railed, freqs_arr,
+                    tuple(pe.name for pe in entries),
+                )
+            except (jax.errors.ConcretizationTypeError, TypeError):
+                # Cannot materialize while tracing; the eager forward
+                # result still carries the mask.
+                beta_railed = None
 
             # --- Honesty guard (issue #80 Fix A, retargeted in stage S1) ---
             # S11/S21 come from the OpenEMS-style V·I wave amplitudes, now
@@ -3767,6 +3920,7 @@ class _SparamMixin:
                 passivity_correction=passivity_correction,
                 assembly=msl_assembly,
                 cond_a=msl_cond_a,
+                beta_railed=beta_railed,
             )
             _warn_if_ringdown_truncated(
                 settling_db_runs,
@@ -4547,6 +4701,7 @@ class _SparamMixin:
             # magnitude is reported without a sign claim.
             from rfx.probes.msl_wave_decomp import extract_msl_nprobe
             z0_msl_fit = np.full((n_msl, n_freqs_used), np.nan)
+            beta_railed_msl = np.zeros((n_msl, n_freqs_used), dtype=bool)
             for d in range(n_msl):
                 run_d = n_lw + d
                 n_p = len(probe_xs[d])
@@ -4560,6 +4715,9 @@ class _SparamMixin:
                 z0_msl_fit[d, :] = np.abs(np.asarray(
                     jax.lax.stop_gradient(res_fit["z0"])
                 ).astype(np.complex128))
+                beta_railed_msl[d, :] = np.asarray(
+                    jax.lax.stop_gradient(res_fit["beta_railed"])
+                ).astype(bool)
                 _dev = float(np.max(
                     np.abs(z0_msl_fit[d, :] - z0_hj_per_port[d])
                     / z0_hj_per_port[d]
@@ -4578,6 +4736,14 @@ class _SparamMixin:
                         "differs (Yee staircase on coarse meshes).",
                         stacklevel=2,
                     )
+            # β-scan rail flags for the diagnostic N-probe fit (issue
+            # #681): a railed bin's |Zc|/β above are the ±35% scan-window
+            # limit, not a measurement. S is unaffected (the MSL diagonal
+            # uses the analytic HJ anchor).
+            _warn_msl_beta_scan_railed(
+                beta_railed_msl, freqs_arr,
+                tuple(pe.name for pe in entries),
+            )
             s_wave_full = None
 
             if magnitude_channel == "flux":
@@ -4671,6 +4837,7 @@ class _SparamMixin:
                 passivity_correction=passivity_correction,
                 S_wave=s_wave_full,
                 magnitude_channel=magnitude_channel,
+                beta_railed=beta_railed_msl,
             )
             _warn_if_ringdown_truncated(
                 settling_db_runs, port_names, num_periods=num_periods,
