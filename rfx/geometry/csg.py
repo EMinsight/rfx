@@ -13,6 +13,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from rfx.core.jax_utils import is_tracer
 from rfx.grid import Grid
 
 
@@ -59,14 +60,23 @@ class Shape(Protocol):
 
 
 def _grid_coords(grid: Grid):
-    """Extract 1D physical coordinate arrays from a uniform Grid."""
+    """Extract 1D physical node-coordinate arrays from a uniform Grid.
+
+    HOST float64, exact and independent of ``jax_enable_x64`` (#802). This
+    used to be ``(jnp.arange(n) - pad) * dx`` in JAX's default dtype, so
+    under x64=0 every node was the double-rounded ``f32(f32(i)*f32(dx))``,
+    ~1e-10 m off the exact value — enough to flip the documented half-open
+    ``[lo, hi)`` inclusion at node-aligned faces and change realized cells
+    by whole node planes between x64 settings. The traced coordinate path
+    exists only for traced NU profiles and never comes through here.
+    """
+    from rfx.geometry.rasterize_grid import _uniform_axis_nodes
     nx, ny, nz = grid.shape
     dx = grid.dx
     pad_x, pad_y, pad_z = grid.axis_pads
-    x = (jnp.arange(nx) - pad_x) * dx
-    y = (jnp.arange(ny) - pad_y) * dx
-    z = (jnp.arange(nz) - pad_z) * dx
-    return x, y, z
+    return (_uniform_axis_nodes(nx, pad_x, dx),
+            _uniform_axis_nodes(ny, pad_y, dx),
+            _uniform_axis_nodes(nz, pad_z, dx))
 
 
 @dataclass(frozen=True)
@@ -92,24 +102,26 @@ class Box:
        load-bearing one — see the facing-pair discussion below, where it
        cancels in one case and not the other.
 
-    2. **A corner exactly on a node plane is a knife edge.** What you can
-       observe: *the same drawing recipe, on the same grid, gives a
-       one-cell-too-wide opening at one aperture and a two-cell-too-wide
-       opening at another* — WR-90 fins drawn to the nominal opening give
-       ``d + dx`` at ``d`` = 7.620 and 18.288 mm but ``d + 2*dx`` at
-       12.192 mm, at both a/30 and a/60. Nothing about the nominal
-       dimensions predicts which.
+    2. **A corner exactly on a node plane is a knife edge — now a
+       float64-route one.** Since the exact-coordinate fix (#802), node
+       coordinates are host float64 ``(i - pad) * dx`` and comparisons run
+       in float64, independent of ``jax_enable_x64``. A corner whose f64
+       value equals the node's bitwise sits on the convention's exact
+       boundary and behaves predictably (``lo`` keeps it, ``hi`` drops it).
+       The residual hazard is the ROUTE: a corner computed as ``a - n*dx``
+       or ``a + b`` can land one f64 ulp off the algebraically identical
+       ``m*dx`` node value and flip a whole node plane. Spell
+       intended-on-lattice corners in lattice arithmetic (``m*dx``), or
+       use the midpoint recipe below, which is immune to both.
 
-       Why: masks are evaluated in the default float32 precision, and the
-       node coordinates are themselves double-rounded.
-       :func:`_grid_coords` computes ``f32(f32(i) * f32(dx))`` while a
-       caller's corner is computed in float64 and cast once, so
-       **algebraically equal values land on opposite sides of the
-       comparison**. On a real WR-90 grid an f64 reconstruction of the nodes
-       disagrees with production on 30 of 31 nodes by up to 1.1e-9 m (1e-6
-       of a cell), which is enough to move the occupied-node count by a
-       whole cell. A corner computed as ``a - n*dx`` may thus rasterize
-       differently from the algebraically identical ``m*dx``.
+       Historical (pre-#802, kept because committed values were pinned to
+       it): masks compared float32 coordinates, themselves double-rounded
+       ``f32(f32(i) * f32(dx))``, so a WR-90 f64 node reconstruction
+       disagreed with production on 30 of 31 nodes by up to 1.1e-9 m and
+       the SAME drawing recipe gave ``d + dx`` at one aperture and
+       ``d + 2*dx`` at another, unpredictably. That scatter is gone:
+       drawing fins to the nominal opening now costs exactly one cell
+       (the ``hi``-face retreat), at every aperture.
 
     For a **PEC obstacle** the occupied nodes are where the tangential ``E``
     is zeroed, so consequence (1) is an *electrical* dimension error, not a
@@ -158,12 +170,16 @@ class Box:
     * ``d + 2*dx`` when rounding made the hi fin retreat as well. The two
       retreats cancel and the opening is **symmetric**.
 
-    Which one you get is **not predictable from the nominal dimensions**.
-    Measured on WR-90 at both a/30 and a/60: ``d`` = 7.620 and 18.288 mm
-    give ``d + dx`` (centre offset -0.5 cell), while ``d`` = 12.192 mm gives
-    ``d + 2*dx`` (centred). Over ~99k (guide, mesh, aperture) combinations
-    the split is 82% / 9% / 8% across ``d + dx`` / ``d + 2*dx`` / ``d`` at
-    even parity, shifting one cell up at odd parity (see the recipe).
+    Since #802 the nominal drawing lands on the FIRST case at every
+    aperture (measured across the WR-90 table at a/30 and a/60: excess is
+    uniformly one cell, asymmetric): the hi fin's lo corner, being an
+    exact node value, always captures its node. The second case now needs
+    an actual route mismatch (a corner one f64 ulp below its node), not a
+    rounding accident. Historical (pre-#802, float32): which case you got
+    was unpredictable — ``d`` = 12.192 mm gave ``d + 2*dx`` while 7.620
+    and 18.288 mm gave ``d + dx``, and over ~99k (guide, mesh, aperture)
+    combinations the split was 82% / 9% / 8% across ``d + dx`` /
+    ``d + 2*dx`` / ``d`` at even parity.
     Shifting each interior face half a cell the *wrong* way (toward the
     metal) retreats both faces by construction rather than by luck, giving
     ``d + 2*dx`` deterministically at every aperture — that is the drawing
@@ -222,8 +238,15 @@ class Box:
     docstring exists to prevent.
 
     A box thinner than one local cell takes a separate **thin-sheet**
-    branch (single nearest-centre node); the notes above apply to the
-    volume branch only.
+    branch (a single node); the notes above apply to the volume branch
+    only. The thin branch's node is chosen by the volume rule whenever
+    that rule is decisive: a thin box whose half-open ``[lo, hi)`` window
+    selects exactly one node realizes on THAT node — so a face-registered
+    one-cell box lands on its ``lo``-face node deterministically, not on
+    whichever side of the exact half-cell tie the last f64 ulp of
+    ``(lo+hi)*0.5`` favours (#802 follow-up). Only a window with zero
+    nodes (a sub-cell box straddling none) or several falls back to the
+    nearest-node rule.
     """
 
     corner_lo: tuple[float, float, float]
@@ -251,12 +274,22 @@ class Box:
             # cell; the volume path uses half-open ``coords < hi`` so a
             # ``hi`` landing on a cell centre does not admit an extra cell.
             #
-            # GEO Tier-2: this stays fully JAX-traceable — ``np.asarray``
-            # on ``coords`` raised TracerArrayConversionError on the
-            # differentiable-mesh path. Both branches are computed and
-            # selected with ``jnp.where``; the output is byte-identical
-            # to the pre-refactor np-based path on concrete coordinates.
-            coords = jnp.asarray(coords)
+            # GEO Tier-2 + #802: TRACED coords (mesh-as-design-variable)
+            # stay fully JAX-traceable as before — ``np.asarray`` on a
+            # tracer raised TracerArrayConversionError. CONCRETE coords are
+            # compared on the host in float64: ``jnp.asarray`` here silently
+            # downcast float64 node positions to float32 under x64=0, which
+            # flipped the half-open inclusion at node-aligned faces (the
+            # #802 defect) and split the thin-branch plane between lanes
+            # (#807). At an exact half-cell tie the thin branch resolves to
+            # the LOWER plane (argmin first occurrence) — deterministic and
+            # flag-independent now, but still one f64 ulp of ``mid`` away
+            # from the tie, so registered sheets should sit ON a node plane
+            # when the exact plane matters.
+            traced = is_tracer(coords)
+            xp = jnp if traced else np
+            coords = (jnp.asarray(coords) if traced
+                      else np.asarray(coords, dtype=np.float64))
             mid = (lo + hi) * 0.5
             extent = float(hi - lo)          # lo/hi are concrete Box corners
             if coords.size <= 1:             # static (shape, not values)
@@ -276,35 +309,57 @@ class Box:
                 # grid's per-cell width array threaded through mask_on_coords.
                 # On a uniform axis s_left==s_right==dx so this is bit-identical
                 # to the legacy centre-spacing.
-                k_mid = jnp.clip(
-                    jnp.searchsorted(coords, mid) - 1, 0, coords.size - 2)
-                im1 = jnp.clip(k_mid - 1, 0, coords.size - 1)
-                ip1 = jnp.clip(k_mid + 1, 0, coords.size - 1)
+                k_mid = xp.clip(
+                    xp.searchsorted(coords, mid) - 1, 0, coords.size - 2)
+                im1 = xp.clip(k_mid - 1, 0, coords.size - 1)
+                ip1 = xp.clip(k_mid + 1, 0, coords.size - 1)
                 s_left = coords[k_mid] - coords[im1]    # 0 at the lo end
                 s_right = coords[ip1] - coords[k_mid]   # 0 at the hi end
-                dc_local = jnp.where(
+                dc_local = xp.where(
                     (s_left > 0) & (s_right > 0),
-                    jnp.minimum(s_left, s_right),
-                    jnp.maximum(s_left, s_right))
+                    xp.minimum(s_left, s_right),
+                    xp.maximum(s_left, s_right))
             # Thin sheet: the single cell whose centre is nearest ``mid``.
             # (#371) On the collocated scheme, apply_pec_mask zeros tangential
             # Ex/Ey at this cell's CENTRE, so nearest-centre = minimum realized-
             # plane placement error. A matching-thickness (sub-cell) box takes
             # this same thin branch and agrees; only a >=1-cell VOLUME box
             # (different object) selects a different layer on a graded axis.
-            nearest_idx = jnp.argmin(jnp.abs(coords - mid))
-            thin_mask = jnp.zeros(coords.shape, dtype=bool).at[
-                nearest_idx].set(True)
+            nearest_idx = xp.argmin(xp.abs(coords - mid))
+            if traced:
+                thin_mask = jnp.zeros(coords.shape, dtype=bool).at[
+                    nearest_idx].set(True)
+            else:
+                thin_mask = np.zeros(coords.shape, dtype=bool)
+                thin_mask[nearest_idx] = True
             # Volume: half-open [lo, hi).
             volume_mask = (coords >= lo) & (coords < hi)
+            # Thin-branch tie rule (#802 follow-up): a face-registered
+            # one-cell box is an EXACT half-cell tie — mid sits midway
+            # between two nodes — and argmin would resolve it by the last
+            # f64 ulp of (lo+hi)*0.5: same declaration idiom, different
+            # realized plane per fixture, which is the class defect one
+            # level down. Whenever the volume window [lo, hi) selects
+            # EXACTLY ONE node, that node is the realized plane: it is the
+            # documented convention's own answer (lo-face node in, hi-face
+            # node out) and it is ulp-robust in exactly the way the volume
+            # branch is. Zero nodes (a sub-cell box straddling no node) or
+            # several (a graded-transition window) keep nearest-node
+            # argmin. A corner INTENDED on-lattice but computed through a
+            # different f64 route (a+b vs m*dx) can still miss its node by
+            # one ulp — that is the documented knife-edge class; spell such
+            # corners in lattice arithmetic (see the class docstring).
+            n_vol = xp.sum(volume_mask)
+            thin_mask = xp.where(n_vol == 1, volume_mask, thin_mask)
             # Thin sheet when the extent is within one local cell.
             is_thin = extent <= dc_local * 1.01
-            return jnp.where(is_thin, thin_mask, volume_mask)
+            return xp.where(is_thin, thin_mask, volume_mask)
 
         mx = _axis_mask(x, self.corner_lo[0], self.corner_hi[0])
         my = _axis_mask(y, self.corner_lo[1], self.corner_hi[1])
         mz = _axis_mask(z, self.corner_lo[2], self.corner_hi[2])
-        return mx[:, None, None] & my[None, :, None] & mz[None, None, :]
+        return jnp.asarray(
+            mx[:, None, None] & my[None, :, None] & mz[None, None, :])
 
     def mask(self, grid: Grid) -> jnp.ndarray:
         x, y, z = _grid_coords(grid)
@@ -332,6 +387,15 @@ class Cylinder:
             return ((cx - h, cy - r, cz - r), (cx + h, cy + r, cz + r))
 
     def mask_on_coords(self, x, y, z):
+        # #802: concrete coordinates are compared on the host in float64 so
+        # surface-touching cells do not depend on jax_enable_x64; traced
+        # coordinates (mesh-as-design-variable) keep the jnp path.
+        traced = any(is_tracer(c) for c in (x, y, z))
+        xp = jnp if traced else np
+        if not traced:
+            x = np.asarray(x, dtype=np.float64)
+            y = np.asarray(y, dtype=np.float64)
+            z = np.asarray(z, dtype=np.float64)
         xc = x - self.center[0]
         yc = y - self.center[1]
         zc = z - self.center[2]
@@ -350,7 +414,8 @@ class Cylinder:
             r2 = y3**2 + z3**2
             h = x3
 
-        return (r2 <= self.radius**2) & (jnp.abs(h) <= self.height / 2)
+        return jnp.asarray(
+            (r2 <= self.radius**2) & (xp.abs(h) <= self.height / 2))
 
     def mask(self, grid: Grid) -> jnp.ndarray:
         x, y, z = _grid_coords(grid)
@@ -370,11 +435,17 @@ class Sphere:
         return ((cx - r, cy - r, cz - r), (cx + r, cy + r, cz + r))
 
     def mask_on_coords(self, x, y, z):
+        # #802: host float64 comparison for concrete coordinates (see
+        # Cylinder.mask_on_coords); traced coordinates keep the jnp path.
+        if not any(is_tracer(c) for c in (x, y, z)):
+            x = np.asarray(x, dtype=np.float64)
+            y = np.asarray(y, dtype=np.float64)
+            z = np.asarray(z, dtype=np.float64)
         xc = x - self.center[0]
         yc = y - self.center[1]
         zc = z - self.center[2]
         r2 = xc[:, None, None]**2 + yc[None, :, None]**2 + zc[None, None, :]**2
-        return r2 <= self.radius**2
+        return jnp.asarray(r2 <= self.radius**2)
 
     def mask(self, grid: Grid) -> jnp.ndarray:
         x, y, z = _grid_coords(grid)
@@ -423,6 +494,27 @@ class PolylineWire:
         if len(A) == 0:
             return jnp.zeros((len(x), len(y), len(z)), dtype=jnp.bool_)
 
+        if not any(is_tracer(c) for c in (x, y, z)):
+            # #802: concrete coordinates — host float64 per-segment loop
+            # (same clip/dist2 algebra as the traced scan below), so
+            # surface-touching cells do not depend on jax_enable_x64. The
+            # loop keeps the scan's memory profile: one (Nx,Ny,Nz) array
+            # per step, never (n_seg, Nx, Ny, Nz) at once.
+            xn = np.asarray(x, dtype=np.float64)[:, None, None]
+            yn = np.asarray(y, dtype=np.float64)[None, :, None]
+            zn = np.asarray(z, dtype=np.float64)[None, None, :]
+            mask_np = np.zeros((xn.size, yn.size, zn.size), dtype=bool)
+            for (ax, ay, az), (dx_s, dy_s, dz_s), sl2 in zip(A, D, seg_len2):
+                t = ((xn - ax) * dx_s + (yn - ay) * dy_s
+                     + (zn - az) * dz_s) / sl2
+                t = np.clip(t, 0.0, 1.0)
+                dist2 = ((xn - (ax + t * dx_s)) ** 2
+                         + (yn - (ay + t * dy_s)) ** 2
+                         + (zn - (az + t * dz_s)) ** 2)
+                mask_np |= dist2 <= r2_thresh
+            return jnp.asarray(mask_np)
+
+        # Traced coordinates (mesh-as-design-variable): jnp path unchanged.
         # Pre-compute segment data as JAX arrays: (n_valid, 3) and (n_valid,)
         A_j = jnp.array(A, dtype=jnp.float32)
         D_j = jnp.array(D, dtype=jnp.float32)
