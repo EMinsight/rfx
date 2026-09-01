@@ -3,7 +3,7 @@
 Provides post-processing routines to shift reference planes and remove
 unwanted fixture or feed-line effects from measured or simulated S-parameters.
 
-Two methods are implemented:
+Three methods are implemented:
 
 1. **Port extension de-embedding** — removes the phase delay introduced by
    known lengths of transmission line at each port.  This is the simplest
@@ -12,6 +12,11 @@ Two methods are implemented:
 2. **Thru-line de-embedding** — uses a measured thru standard to remove
    symmetric fixture effects from a DUT measurement (TRL-lite / thru-only
    calibration).
+
+3. **Series-element de-embedding** — removes a known lumped series
+   impedance (e.g. a feed-post inductance) at each port of a 2-port
+   network via the exact wave-cascade inverse
+   (``docs/design_notes/thru_feedpost_deembed_predeclaration.md``).
 """
 
 from __future__ import annotations
@@ -236,3 +241,192 @@ def _matrix_sqrt_2x2(m: np.ndarray) -> np.ndarray:
 
     sqrt_m = (m + sqrt_det * np.eye(2, dtype=np.complex128)) / s
     return sqrt_m
+
+
+def deembed_series_impedance(
+    s_matrix: np.ndarray,
+    freqs: np.ndarray,
+    series_z: np.ndarray,
+    z0: float = 50.0,
+) -> np.ndarray:
+    """Remove a known series impedance at each port of a 2-port network.
+
+    De-embeds a lumped series discontinuity (e.g. a feed-post inductance)
+    sitting between each port's reference plane and the DUT, via the exact
+    wave-cascade inverse
+
+        ``T_dut = T_post(z_1)^-1 . T_meas . T_post(z_2)^-1``
+
+    where ``T_post(z)`` is the wave-transfer matrix (reference ``z0``) of
+    the series element with ``S11 = z/(z + 2*z0)``,
+    ``S21 = 2*z0/(z + 2*z0)`` (equivalently ABCD ``[[1, z], [0, 1]]``).
+    This removes BOTH discontinuities exactly — including the far-side one
+    seen through the DUT by a driven-port reflection measurement — which a
+    naive per-port ``Z_in - z`` subtraction cannot do (it removes only the
+    near element and leaves the line-transformed far mismatch).
+
+    Derivation + measured provenance for the wire-port feed-post use case:
+    ``docs/design_notes/thru_feedpost_deembed_predeclaration.md``.
+
+    Post-processing only: no simulation or extraction path calls this.
+
+    Parameters
+    ----------
+    s_matrix : ndarray, shape (2, 2, n_freqs)
+        Measured 2-port S-parameters (reference impedance ``z0``).
+    freqs : ndarray, shape (n_freqs,)
+        Frequency points in Hz (validated for shape consistency; the
+        impedances are supplied per-frequency in ``series_z``).
+    series_z : ndarray, shape (2, n_freqs)
+        Complex series impedance to remove at each port, per frequency.
+    z0 : float
+        Port reference impedance (ohm).
+
+    Returns
+    -------
+    ndarray, shape (2, 2, n_freqs)
+        De-embedded S-parameters, same reference impedance.
+    """
+    s_matrix = np.asarray(s_matrix, dtype=np.complex128)
+    freqs = np.asarray(freqs, dtype=np.float64)
+    series_z = np.asarray(series_z, dtype=np.complex128)
+
+    if s_matrix.shape[:2] != (2, 2):
+        raise ValueError("s_matrix must be a 2-port S-matrix (2, 2, n_freqs)")
+    n_freqs = s_matrix.shape[2]
+    if freqs.shape != (n_freqs,):
+        raise ValueError(
+            f"freqs has shape {freqs.shape}, expected ({n_freqs},)")
+    if series_z.shape != (2, n_freqs):
+        raise ValueError(
+            f"series_z has shape {series_z.shape}, expected (2, {n_freqs})")
+
+    s_dut = np.empty_like(s_matrix)
+    for fi in range(n_freqs):
+        t_meas = _s_to_t(s_matrix[:, :, fi])
+        t_dut = t_meas
+        inv_posts = []
+        for p in range(2):
+            z = series_z[p, fi]
+            denom = z + 2.0 * z0
+            s_post = np.array(
+                [[z / denom, 2.0 * z0 / denom],
+                 [2.0 * z0 / denom, z / denom]], dtype=np.complex128)
+            inv_posts.append(np.linalg.inv(_s_to_t(s_post)))
+        t_dut = inv_posts[0] @ t_meas @ inv_posts[1]
+        s_dut[:, :, fi] = _t_to_s(t_dut)
+    return s_dut
+
+
+def deembed_series_inductance(
+    s_matrix: np.ndarray,
+    freqs: np.ndarray,
+    inductances: "list[float] | np.ndarray",
+    z0: float = 50.0,
+) -> np.ndarray:
+    """Remove a series inductance ``L_p`` at each port of a 2-port network.
+
+    Convenience wrapper over :func:`deembed_series_impedance` with
+    ``series_z[p, f] = 1j * 2*pi*f * L_p`` — the feed-post de-embed of
+    ``docs/design_notes/thru_feedpost_deembed_predeclaration.md``.
+
+    Parameters
+    ----------
+    s_matrix : ndarray, shape (2, 2, n_freqs)
+    freqs : ndarray, shape (n_freqs,) — Hz.
+    inductances : sequence of 2 floats — henries, one per port.
+    z0 : float — reference impedance (ohm).
+    """
+    freqs = np.asarray(freqs, dtype=np.float64)
+    inductances = np.asarray(inductances, dtype=np.float64)
+    if inductances.shape != (2,):
+        raise ValueError(
+            f"inductances has shape {inductances.shape}, expected (2,)")
+    omega = 2.0 * np.pi * freqs
+    series_z = 1j * omega[None, :] * inductances[:, None]
+    return deembed_series_impedance(s_matrix, freqs, series_z, z0=z0)
+
+
+def deembed_line_segment(
+    s_matrix: np.ndarray,
+    freqs: np.ndarray,
+    segments: "list[tuple[float, float]] | np.ndarray",
+    z0: float = 50.0,
+) -> np.ndarray:
+    """Remove a short lossless line segment at each port of a 2-port network.
+
+    De-embeds a uniform transmission-line segment (characteristic
+    impedance ``zc_seg``, one-way delay ``tau_seg``) sitting between each
+    port's reference plane and the DUT, via the exact wave-cascade inverse
+
+        ``T_dut = T_seg(zc_1, tau_1)^-1 . T_meas . T_seg(zc_2, tau_2)^-1``
+
+    where ``T_seg`` is the wave-transfer matrix (reference ``z0``) of the
+    segment with ABCD ``[[cos th, j*zc*sin th], [j*sin(th)/zc, cos th]]``,
+    ``th = 2*pi*f*tau``.  This is the two-segment FEED-POST model of
+    ``docs/design_notes/thru_feedpost_twoseg_predeclaration.md``: each
+    post is a short line segment (series L = zc*tau AND shunt
+    C = tau/zc, i.e. a delay), which a point series element
+    (:func:`deembed_series_inductance`) under-describes — attempt 2 of
+    that lane measured the omitted per-post transit being absorbed into
+    the fitted line length.
+
+    In the ``tau -> 0`` limit with ``zc*tau = L`` held fixed this
+    reduces exactly to :func:`deembed_series_inductance`.
+
+    Post-processing only: no simulation or extraction path calls this.
+
+    Parameters
+    ----------
+    s_matrix : ndarray, shape (2, 2, n_freqs)
+        Measured 2-port S-parameters (reference impedance ``z0``).
+    freqs : ndarray, shape (n_freqs,)
+        Frequency points in Hz.
+    segments : sequence of 2 (zc_seg, tau_seg) pairs
+        Segment characteristic impedance (ohm) and one-way delay
+        (seconds) to remove at each port.
+    z0 : float
+        Port reference impedance (ohm).
+
+    Returns
+    -------
+    ndarray, shape (2, 2, n_freqs)
+        De-embedded S-parameters, same reference impedance.
+    """
+    s_matrix = np.asarray(s_matrix, dtype=np.complex128)
+    freqs = np.asarray(freqs, dtype=np.float64)
+    segs = np.asarray(segments, dtype=np.float64)
+
+    if s_matrix.shape[:2] != (2, 2):
+        raise ValueError("s_matrix must be a 2-port S-matrix (2, 2, n_freqs)")
+    n_freqs = s_matrix.shape[2]
+    if freqs.shape != (n_freqs,):
+        raise ValueError(
+            f"freqs has shape {freqs.shape}, expected ({n_freqs},)")
+    if segs.shape != (2, 2):
+        raise ValueError(
+            f"segments has shape {segs.shape}, expected (2, 2) — two "
+            "(zc_seg, tau_seg) pairs")
+    if np.any(segs[:, 0] <= 0.0):
+        raise ValueError("segment characteristic impedances must be > 0")
+
+    s_dut = np.empty_like(s_matrix)
+    omega = 2.0 * np.pi * freqs
+    for fi in range(n_freqs):
+        t_meas = _s_to_t(s_matrix[:, :, fi])
+        inv_segs = []
+        for p in range(2):
+            zc_seg, tau_seg = segs[p]
+            th = omega[fi] * tau_seg
+            a = np.cos(th)
+            b = 1j * zc_seg * np.sin(th)
+            c = 1j * np.sin(th) / zc_seg
+            delta = a + b / z0 + c * z0 + a
+            s_seg = np.array(
+                [[(a + b / z0 - c * z0 - a) / delta, 2.0 / delta],
+                 [2.0 / delta, (-a + b / z0 - c * z0 + a) / delta]],
+                dtype=np.complex128)
+            inv_segs.append(np.linalg.inv(_s_to_t(s_seg)))
+        t_dut = inv_segs[0] @ t_meas @ inv_segs[1]
+        s_dut[:, :, fi] = _t_to_s(t_dut)
+    return s_dut
