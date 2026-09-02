@@ -147,9 +147,22 @@ Relevant checks include `validation/crossval/05_patch_antenna.py`,
   (`validation/crossval/_06b_notch_uniform_logs/20260827T131217Z_run.log`)
   reports `1.40%` frequency error against the analytic notch evaluated on the
   realized `635.0 um` trace width, `-43.3 dB` notch depth, and median
-  `Re(Z0)=46.5 ohm` (port 0, median over the 100 bins); it passes the listed
-  gates of frequency error `<15%`, notch depth `<-10 dB`, and median
-  `Re(Z0)` in `(40, 65) ohm`. That `Re(Z0)` sits `-2.9%` from
+  `Re(Z0)=46.5 ohm` (port 0, median over the 100 bins); it passes the gates
+  IN FORCE WHEN IT RAN -- frequency error `<15%`, notch depth `<-10 dB`, and
+  median `Re(Z0)` in `(40, 65) ohm`. **Those are not the case's current
+  gates.** The #812 P3 re-gate (2026-09-01,
+  `docs/design_notes/estimator_resolution_regate.md`) replaced the
+  bin-quantised `argmin` with a sub-bin log-parabolic vertex, TIGHTENED the
+  frequency window to `<4.0%`, added a `-10 dB` stopband-WIDTH gate against
+  the ideal shunt-open-stub closed form `(4/pi)atan(r/6) = 0.210274` at
+  `r = 1` (window `+-20%`), added an in-run half-grid resolution witness
+  (`< 1.000` full-grid bin), and demoted the `<-10 dB` depth gate to a witness
+  because on this `63.6364 MHz` grid an ideal `r = 1` stub's WORST sampled
+  minimum is `-31.23 dB`, `21.2 dB` inside it. The 2026-08-27 log PREDATES
+  those gates and therefore carries no measurement of the two new quantities:
+  re-running the case on GPU
+  (`scripts/vessl_cv06b_estimator_falsifiers.yaml`) is what will judge them.
+  That `Re(Z0)` sits `-2.9%` from
   Hammerstad-Jensen on the DESIGN board (`600/254 um`, `47.90 ohm`) and
   reproduces the independent `msl_z0_bias_floor_sweep` "aligned h_sub/4"
   point (`46.098 ohm`) to `0.87%`. Read it with that run's own warnings, not
@@ -332,6 +345,8 @@ A `True` entry is not an accuracy guarantee.
   at driver time (midpoint with a reflector, unchanged without one) and warns
   loudly when a short feed cannot satisfy both clearances (#469). Library
   witness probes are excluded from preflight advisories (#470).
+
+**cv06b re-gate, judged on its own board (2026-09-02, VESSL 369367257702, issue #812 P3 round 2).** Every gate passed on the shipped dx = 63.5 µm mesh: notch error `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.err_pct = 1.453` % (window 4.0 %), −10 dB width ratio `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.bw_ratio = 0.9684` (window 0.80–1.20). The build-level narrow-stub falsifier fires the width gate while the retained depth witness stays blind. One pre-declared falsifier FIRED and is recorded, not softened: a one-cell stub-length error (analytic shift 0.532 %, `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.true_shift_pct = 0.532`) moved the refined notch estimate by `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.refined_delta_pct = 0.145` % — non-zero, but below the declared half-of-predicted visibility criterion — so sub-bin resolution of the notch frequency on this board is not demonstrated; cause not attributed (design note section 7.6 names the two candidates and the finer-DFT experiment that separates them).
 
 ## Rectangular-waveguide port
 
