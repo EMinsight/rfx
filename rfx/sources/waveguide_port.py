@@ -699,7 +699,7 @@ def init_waveguide_port(
     # reciprocity at the cost of capping PEC-short closure.
     #
     # 2026-04-29 update: test_mesh_convergence_s21_scaled_cpml in
-    # tests/test_waveguide_port_validation_battery.py is a LIVE, currently
+    # tests/oracle/test_waveguide_port_validation_battery.py is a LIVE, currently
     # green committed gate under DROP, not xfail. The 2026-04-22..04-29 jitter
     # that briefly locked it as xfail was root-caused to Box.mask_on_coords
     # closed-closed semantics (issue #75), not to the DROP weight; see the
@@ -1397,7 +1397,7 @@ def update_waveguide_port_probe(cfg: WaveguidePortConfig, state,
     # post-scan rect DFT (``_extract_global_waves_from_time_series``)
     # uses the right ``Δt`` even when the caller initialised the cfg
     # via the low-level ``init_waveguide_port`` without passing ``dt=``
-    # (legacy path used by ``tests/test_waveguide_port.py`` Python loops).
+    # (legacy path used by ``tests/unit/ports/test_waveguide_port.py`` Python loops).
     n_t = cfg.v_probe_t.shape[0]
     safe_step = jnp.clip(jnp.asarray(state.step, dtype=jnp.int32), 0, n_t - 1)
     return cfg._replace(

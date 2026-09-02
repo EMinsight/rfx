@@ -14,8 +14,8 @@ read the full table before drawing conclusions because:
     accuracy, not an absolute correctness gate.
 
 Authoritative rfx correctness gates live in
-``tests/test_waveguide_port_validation_battery.py`` and
-``tests/test_waveguide_twoport_contract_v1.py``.
+``tests/oracle/test_waveguide_port_validation_battery.py`` and
+``tests/unit/sparams/test_waveguide_twoport_contract_v1.py``.
 
 Three canonical geometries drive the rfx waveguide-port S-parameter
 pipeline against closed-form references. All three must pass
@@ -97,7 +97,7 @@ Status (2026-05-04):
     Meep-class on this geometry.
   - This script remains a diagnostic reporter for the slab/reference-plane
     envelope. The authoritative correctness gates live in
-    ``tests/test_waveguide_port_validation_battery.py``.
+    ``tests/oracle/test_waveguide_port_validation_battery.py``.
 
 Mesh / reference convention (issue #722, #724):
   #722 requires that when a cell size does not divide a declared dimension,
@@ -236,7 +236,7 @@ diagnosed cause.
 Sizing it: the excursion above unity is 0.0019 where the ceiling allows
 0.05, i.e. 3.8% of the allowance, and far inside the documented
 single-run envelope the ``normalize=False`` waveguide path is locked
-silent to — ``tests/test_sparam_passivity_guard.py`` holds that path
+silent to — ``tests/unit/sparams/test_sparam_passivity_guard.py`` holds that path
 silent up to column power ~2.0 (|S11| ~ 1.4 for a 1-port) because
 band-edge Yee dispersion overshoots there. #729 is where the correct
 column set gets derived; until then the trim's cost is this line.
