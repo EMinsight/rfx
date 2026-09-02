@@ -57,6 +57,20 @@ def _declared_material(sim, name):
                 n_lorentz=len(getattr(spec, "lorentz_poles", None) or ()))
 
 
+def _assembled_as_pec(sim, entry):
+    """Does ``_assemble_materials`` route this geometry entry to the PEC
+    branch? Keyed the way the assembly keys it (rfx/api/_compile.py: the
+    RESOLVED material's ``sigma >= _PEC_SIGMA_THRESHOLD``), not on the
+    literal name "pec" — a named copper with sigma 5.8e7 is PEC there too.
+    """
+    try:
+        mat = sim._resolve_material(entry.material_name)
+    except Exception:
+        return entry.material_name == "pec"
+    thr = float(getattr(sim, "_PEC_SIGMA_THRESHOLD", 1e6))
+    return float(getattr(mat, "sigma", 0.0) or 0.0) >= thr
+
+
 def _max_run_length(mask, axis):
     """Longest contiguous run of True along `axis` over occupied lines.
 
@@ -261,6 +275,32 @@ def fidelity_report(sim, print_report: bool = True):
                        "plane; otherwise no action is needed"))
     report.append(dom_item)
 
+    # Issue #589: ``_assemble_materials`` is PEC-OR-only (``pec_mask =
+    # pec_mask | mask``; rfx/api/_compile.py) and there is no CSG
+    # subtraction shape, so a dielectric declared AFTER a conductor cannot
+    # carve it — its overlapping cells are a silent no-op. The committed
+    # coax-MSL junction fixture declared its clearance hole exactly that way
+    # (full-plane PEC ground, then a PTFE Cylinder) and the settled run
+    # measured a short (S00 = -0.9928 at 6 GHz). This is the OR of every
+    # PEC-assembled geometry entry seen so far, in declaration order; the
+    # ordered finding below reads it. Geometry entries only: thin
+    # conductors are OR-ed in after ALL geometry (a different ordering
+    # question, not audited here).
+    pec_before = np.zeros(eps.shape, dtype=bool)
+    # Every PEC-assembled geometry entity's realized cells, rasterized ONCE
+    # and kept as flat indices (memory scales with occupied cells, not with
+    # the grid). The ordered finding below reads this instead of
+    # re-rasterizing every earlier conductor for every overlapping
+    # dielectric, which was O(n^2) rasterizations on a 20-box ground sheet.
+    pec_cells_by_entity: dict = {}
+    # Conductors whose mask could not be rasterized. They are NOT in
+    # pec_before, so the ordered check cannot see them; the failure is
+    # reported on the conductor's own row (entity name + exception class)
+    # and named again on every later dielectric row, so a skipped check
+    # never reads as a clean one (the #303 class: "All checks passed" with
+    # a silently skipped family).
+    pec_unrasterized: list = []
+
     for kind_src, i, entry in entries:
         if kind_src == "thin_conductor":
             sig = float(getattr(entry, "sigma_bulk", 0.0))
@@ -273,14 +313,37 @@ def fidelity_report(sim, print_report: bool = True):
         try:
             lo, hi = entry.shape.bounding_box()
         except Exception:
-            report.append(dict(entity=name, findings=[dict(
+            nb_item = dict(entity=name, findings=[dict(
                 kind="no-analytic-bounds",
                 detail="shape exposes no bounding_box(); declared-vs-realized "
                        "bounds cannot be audited",
-                remedy="give the shape an axis-aligned bounding box")]))
+                remedy="give the shape an axis-aligned bounding box")])
+            report.append(nb_item)
+            if kind_src == "geometry" and _assembled_as_pec(sim, entry):
+                try:
+                    nb_mask = _entity_mask(entry, sim, grid, nonuniform)
+                except Exception as exc:
+                    pec_unrasterized.append((i, name, type(exc).__name__))
+                    nb_item["findings"].append(dict(
+                        kind="rasterization-failed",
+                        exception=type(exc).__name__,
+                        detail=(f"mask() raised {type(exc).__name__}: {exc} — "
+                                "this conductor's realized cells are unknown, "
+                                "so it is NOT in the ordered PEC accumulator "
+                                "and dielectric-after-conductor-no-op cannot "
+                                "see it (every later dielectric row carries a "
+                                "dielectric-after-conductor-unaudited finding "
+                                "naming it)"),
+                        remedy="fix the shape so it rasterizes on this grid; "
+                               "until then the ordered-overlap audit is "
+                               "incomplete for this conductor"))
+                else:
+                    pec_before |= nb_mask
+                    pec_cells_by_entity[i] = np.flatnonzero(nb_mask)
             continue
         boxlike = type(entry.shape).__name__ == "Box"
         mask = _entity_mask(entry, sim, grid, nonuniform)
+        pec_assembled = kind_src == "geometry" and _assembled_as_pec(sim, entry)
         item = dict(entity=name, material=_declared_material(sim, mat_name),
                     declared_lo=tuple(float(v) for v in lo),
                     declared_hi=tuple(float(v) for v in hi),
@@ -310,6 +373,63 @@ def fidelity_report(sim, print_report: bool = True):
                            "fraction of the declared material is not solved",
                     remedy="check the overlap against the intended stack; "
                            "shrink whichever body is over-declared"))
+        # Ordered case of the overlap above (issue #589): a non-PEC entity
+        # sharing cells with a PEC entity declared EARLIER. claimed-by-
+        # conductor stays byte-identical (it fires for either order); this
+        # adds the statement that the assembly order makes these cells a
+        # no-op — a hole "carved" by a later dielectric does not exist in
+        # the solve. Report-only: a slab deliberately drawn through a
+        # ground sheet is a legitimate pattern and lands here too.
+        if kind_src == "geometry" and not pec_assembled:
+            n_ov = int(np.count_nonzero(mask & pec_before))
+            if n_ov > 0:
+                flat = mask.ravel()
+                contributors = []
+                for m, cells_m in pec_cells_by_entity.items():
+                    if m >= i:      # declaration order; defensive
+                        continue
+                    n_m = int(np.count_nonzero(flat[cells_m]))
+                    if n_m > 0:
+                        contributors.append((m, n_m))
+                who = ", ".join(
+                    f"geometry[{m}] '{sim._geometry[m].material_name}' "
+                    f"({n_m} cells)" for m, n_m in contributors)
+                item["findings"].append(dict(
+                    kind="dielectric-after-conductor-no-op",
+                    overlap_cells=n_ov,
+                    conductor_entities=[m for m, _ in contributors],
+                    detail=(f"{n_ov} of this entity's {item['n_cells']} cells "
+                            f"({100.0 * n_ov / item['n_cells']:.1f}%) are "
+                            f"already PEC from an entity declared EARLIER: "
+                            f"{who}. _assemble_materials is PEC-OR-only, so a "
+                            "dielectric declared after a conductor cannot "
+                            f"carve it — these {n_ov} cells are a no-op (the "
+                            "eps_r/sigma written there is never solved); if a "
+                            "clearance/hole was intended, build the conductor "
+                            "with the hole"),
+                    remedy="if the overlap is intended (e.g. a slab drawn "
+                           "through a ground sheet) no action is needed; if a "
+                           "hole/clearance was intended, build the conductor "
+                           "WITH the hole (split it into boxes around the "
+                           "aperture) — no later entity can remove PEC"))
+            missing = [(m, nm, ex) for m, nm, ex in pec_unrasterized if m < i]
+            if missing:
+                item["findings"].append(dict(
+                    kind="dielectric-after-conductor-unaudited",
+                    conductor_entities=[m for m, _, _ in missing],
+                    detail=("the ordered-overlap audit above is INCOMPLETE "
+                            "for this entity: " + ", ".join(
+                                f"{nm} (mask() raised {ex})"
+                                for _, nm, ex in missing)
+                            + " declared earlier could not be rasterized, so "
+                            "any cells shared with it are not counted — a "
+                            "silent dielectric-after-conductor no-op against "
+                            "that conductor is still possible"),
+                    remedy="fix that conductor's shape so it rasterizes, "
+                           "then re-run fidelity_report"))
+        if pec_assembled:
+            pec_before |= mask
+            pec_cells_by_entity[i] = np.flatnonzero(mask)
         # Absorber overlap: cells outside [0, domain) live in the CPML pad.
         pad_hit = []
         for a in range(3):

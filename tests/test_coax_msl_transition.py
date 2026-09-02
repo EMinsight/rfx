@@ -655,10 +655,12 @@ def _build_coax_msl_transition_sim():
     return sim
 
 
-def test_pin_axis_pec_connectivity_is_continuous():
+def test_attempt1_pin_axis_pec_column_is_continuous_because_ground_is_solid():
     """Non-FDTD (~1s) connectivity check -- the claim behind N5/the module
     comment's "missing PEC z-layer" fix, committed as an artifact instead of
     living only in throwaway debugging output (issue #581 review N1).
+    Formerly named ``test_pin_axis_pec_connectivity_is_continuous``
+    (renamed for issue #589; no other file references the old symbol).
 
     Reproduces exactly what compute_coax_msl_transition builds on the pin
     axis (registered geometry via _assemble_materials, THEN the coax stub's
@@ -666,6 +668,20 @@ def test_pin_axis_pec_connectivity_is_continuous():
     there is no gap: every z-index from the coax stub's near-source end
     through the trace's own layer is either registered PEC (pec_mask) or
     coax-stamped PEC-conductivity (sigma >= PEC_SIGMA/2), with no break.
+
+    WHAT THIS DOES NOT CERTIFY (issue #589 root cause): the column is
+    continuous in attempt 1/2 partly BECAUSE the ground plane is a solid
+    PEC sheet at the junction node -- the later ``ptfe`` Cylinder only
+    overwrites eps_r (``_assemble_materials`` ORs PEC masks and never
+    clears one), so the pin passes through solid ground and the coax stub
+    is terminated in a short (settled VESSL 369367257263: S00 = -0.9928 at
+    6 GHz). Column continuity through a solid ground certifies nothing
+    about an OPEN launch. The second assertion below pins that historical
+    fact (all 36 clearance-annulus cells at the junction node are PEC) so
+    this test reads as what it is: a PEC-column witness, not a launch
+    certificate. The launch (open-hole) contract lives in the attempt-3
+    tests (``test_attempt3_ground_clearance_annulus_is_open`` and
+    siblings) further down.
     """
     from rfx.sources.coaxial_port import stamp_coaxial_line, PEC_SIGMA
 
@@ -698,6 +714,18 @@ def test_pin_axis_pec_connectivity_is_continuous():
         f"gap in pin-axis PEC/sigma connectivity between the coax stub "
         f"(z_stub_lo={z_stub_lo}) and the trace (idx={trace_idx}): missing "
         f"indices {z_stub_lo + np.where(~span)[0]}"
+    )
+
+    # Issue #589: the ground under the coax dielectric is SOLID in attempt 1
+    # (the declared clearance disk never carved it) -- the pin column above
+    # is continuous through PEC ground, i.e. shorted. Pinned as history.
+    annulus = _lattice_ring_mask(grid, i0, j0, PIN_R_CELLS, CLEAR_R_CELLS)
+    n_pec_in_annulus = int((pec[:, :, z_junction_idx] & annulus).sum())
+    assert int(annulus.sum()) == ANNULUS_CELLS_3
+    assert n_pec_in_annulus == ANNULUS_CELLS_3, (
+        f"attempt 1's junction-node clearance annulus is {n_pec_in_annulus}/"
+        f"{ANNULUS_CELLS_3} PEC -- this fixture is committed history as a "
+        f"SHORTED launch; if this changed, attempt 1 was edited (forbidden)"
     )
 
 
@@ -2406,3 +2434,845 @@ def test_flux_spectrum_exact_f64_matches_default_on_healthy_magnitudes():
     tiny = _mon(1.0e-15)  # products ~1e-30: inside the f32 flush zone
     t64 = np.asarray(flux_spectrum(tiny, exact_f64=True), dtype=np.float64)
     assert np.all(np.isfinite(t64)) and np.any(t64 != 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Issue #589 attempt 3 -- the ground plane WITH a REALIZED clearance hole.
+#
+# ROOT CAUSE (verified on main by direct inspection of
+# sim._assemble_materials, 2026-08-30): attempts 1 and 2 declare the
+# clearance as ``sim.add(Cylinder(radius=CLEAR_R), material="ptfe")`` AFTER
+# the full-plane ground Box. rfx/api/_compile.py::_assemble_materials is
+# PEC-OR-only (``pec_mask = pec_mask | mask``); a dielectric entity only
+# overwrites eps_r/sigma and can NOT clear PEC, and rfx/geometry/csg.py has
+# no subtraction Shape. Realized at the junction node (z node 25): pec_mask
+# is True at EVERY cell out to the domain edge (eps_r = 2.1 inside r <= 0.4
+# mm -- the PTFE wrote eps only). compute_coax_msl_transition stamps its
+# coax stub only up to z_stub_hi = z_junction_idx - 1 (node 24), so pin AND
+# shell meet a solid PEC plane at node 25: the launch is a SHORT. That is
+# what the settled runs measured (VESSL 369367257263: S00 = (-0.9928,
+# -0.0048) at 6 GHz, |S10| = -90 dB; wide domain |S00| -> 0.9999). The one
+# structural test of the era (test_pin_axis_pec_connectivity_is_continuous,
+# now test_attempt1_pin_axis_pec_column_is_continuous_because_ground_is_
+# solid) asserted pin-COLUMN PEC continuity -- trivially true through a
+# solid ground -- and never asserted the hole is OPEN.
+#
+# FIX (design option 1c, fixture-only, no production change): the single
+# ground Box is replaced by N_GROUND_BOXES_3 = 20 half-cell PEC Boxes that
+# tile the ground plane EXCEPT the integer-lattice disk di^2+dj^2 <= 16
+# (CLEAR_R_CELLS = 4) around the pin axis -- the SAME 0.4 mm clearance
+# attempt 2 predeclared ("clearance disk (radius = pin + 2 cells)"). Every
+# inner face is on a cell midpoint (_half_cell_box, #802) and the two outer
+# x-slab faces are attempt 2's own 0.0 / LX_2; 1-cell-wide row boxes take
+# csg's thin branch (nearest node), so nothing is a knife edge. The PTFE
+# Cylinder, substrate Box, trace Box, pin Cylinder, both ports, domain,
+# materials and compute kwargs are byte-identical to attempt 2; the ONLY
+# realized difference is 38 pec_mask cells at node 25 (49-cell hole minus
+# the pin's 11-cell realized footprint). Attempt 2 is NOT edited -- it
+# stays as committed history and is re-measured below as the shorted
+# witness (test_attempt2_junction_is_shorted_by_registered_ground).
+#
+# Realized z = node 25 picture around the axis (measured, # PEC . open):
+#   r <= 0.2 mm   PEC  (pin footprint, 11 cells, attempt 2's own asymmetry)
+#   0.2 < r <= 0.4 OPEN (36 cells, eps 2.1 after the method's stamp)
+#   0.4 < r <= 0.5 PEC  (ground lip over the coax dielectric, 32/32 -- part
+#                        of the predeclared 0.4 mm clearance, NOT a defect)
+#   0.5 < r <= 0.6 PEC  (ground under the stamped shell: 32/32 contact)
+#
+# Test taxonomy (design review blocker 1): the tests below are split into
+# DISCRIMINATING tests -- FAIL on the committed attempt 2, PASS on attempt
+# 3 (annulus open; post-stamp junction open; xor == hole; window == disk)
+# -- and PRESERVATION INVARIANTS that pass on attempt 2 AND attempt 3 (pin
+# column continuous; shell-ground contact and lip intact; trace unchanged)
+# and therefore certify nothing about the launch on their own: each is
+# parametrized over both fixtures so the record shows it passing on the
+# short too. The fail-before-fix evidence for the discriminating tests is
+# committed as test_attempt2_junction_is_shorted_by_registered_ground,
+# which asserts the SAME helper assertions FAIL on attempt 2.
+# ---------------------------------------------------------------------------
+PIN_R_CELLS = int(round(PIN_R / DX))          # 2
+CLEAR_R_CELLS = int(round(CLEAR_R / DX))      # 4  (= PIN_R_CELLS + 2, as predeclared)
+SHELL_INNER_CELLS = int(round((OUTER_R - DX) / DX))   # 5: stamp_coaxial_line's shell_thickness = min(dz, (b-a)/2) = dz
+OUTER_R_CELLS = int(round(OUTER_R / DX))      # 6
+N_GROUND_BOXES_3 = 20
+HOLE_CELLS_3 = 49        # |{(di, dj): di^2 + dj^2 <= 16}|
+ANNULUS_CELLS_3 = 36     # |{4 < di^2 + dj^2 <= 16}|  -- PIN_R < r <= CLEAR_R on the lattice
+LIP_CELLS_3 = 32         # |{16 < di^2 + dj^2 <= 25}| -- CLEAR_R < r <= shell_inner
+SHELL_CELLS_3 = 32       # |{25 < di^2 + dj^2 <= 36}| -- shell_inner < r <= OUTER_R
+PIN_FOOTPRINT_CELLS_2 = 11   # attempt 2's REALIZED pin Cylinder footprint at node 25 (knife edge, #802)
+TRACE_NODE_ROWS_2 = 6        # attempt 2's REALIZED trace width in node rows on exact node coordinates (= the declared 600 um)
+HOLE_XOR_CELLS_3 = HOLE_CELLS_3 - PIN_FOOTPRINT_CELLS_2   # 38
+# RASTERIZER NOTE (re-derived on b5605391, identical under JAX_ENABLE_X64=0
+# and =1). #834 (635ab2e3) moved the rasterizer to exact host-float64 node
+# coordinates AFTER the two attempt-3 runs below were made (VESSL
+# 369367257283 / 369367257533, both on the pre-#834 float32 path at x64=0).
+# On this fixture, whose radii and faces sit on lattice knife edges
+# (PIN_R = 2 dx, CLEAR_R = 4 dx, node-aligned Box faces), that changed:
+#   * TRACE_NODE_ROWS_2: 7 -> 6. The trace Box's y span [Y_C - 300 um,
+#     Y_C + 300 um] = nodes [14, 20] exactly; the documented half-open
+#     ``lo <= y < hi`` on exact coordinates gives nodes 14..19 = 6 rows =
+#     the declared 600 um. The 7th row was the float32-included hi node
+#     (the #802 class #834 fixed). Hammerstad-Jensen Z0 of the realized
+#     trace is therefore the declared-width 53.11 ohm, not the 48.27 ohm
+#     PREDECLARATION_ATTEMPT3 quotes for the 700 um the runs realized.
+#   * PIN_FOOTPRINT_CELLS_2 stays 11, but the two knife-edge cells at
+#     r = 2 dx that count changed from (0,+2),(+2,0) to (-2,0),(0,-2):
+#     ``r^2 <= R^2`` resolves each of the four lattice points by the
+#     float64 rounding of (node - centre)^2. HOLE_XOR_CELLS_3 stays 38.
+#   * The PTFE Cylinder (radius 4 dx, z faces on nodes 24 and 27) realizes
+#     48 cells per plane (was 47: three of the four r = 4 dx lattice
+#     points resolve inside, was two) on 4 planes (was 3: the closed
+#     ``|h| <= height/2`` now includes both node-plane end faces) = 192
+#     cells, was 141. The pin Cylinder likewise gains its lower end plane
+#     (66 -> 77 cells). The one lattice-hole cell outside the realized
+#     PTFE disk, (0,+4), carries vacuum (eps_r 1.0), not PTFE.
+#   * The full-plane Boxes lose the float32-included hi node on the
+#     node-aligned x and y faces: ground sheet 4410 -> 4250 cells,
+#     substrate 13230 -> 12750, trace 805 -> 690.
+#   * Attempt 2's ground sheet is a one-node PEC sheet, so its own-cell
+#     eps_r is RESAMPLED half a cell up, at z = 25.5 dx (#702,
+#     rfx/geometry/rasterize_grid.py::resample_sheet_node_materials) --
+#     which is exactly the substrate Box's lower face
+#     (_half_cell_box_z(26, 28) -> 25.5 dx). Exact coordinates put that
+#     point inside the substrate (half-open includes lo) -> 3.66 across the
+#     sheet, where float32 put it below the face -> 2.1 under the PTFE
+#     Cylinder and 1.0 elsewhere. Attempt 3's hole cells are not
+#     conductor cells, so they are not resampled and keep the PTFE volume
+#     sample (2.1). eps_r therefore differs between the two builders at
+#     EXACTLY the 38 hole cells (test_attempt3_junction_is_attempt2_plus_
+#     hole_only), where it was np.array_equal on the float32 path.
+# Consequence for the archived runs: the current tree realizes the same
+# declared attempt-3 fixture differently in 315 pec_mask cells (planes
+# 24..30) and 7244 eps_r cells (planes 24..25, mostly the sheet resample),
+# so those runs are records of the pre-#834 realization and are not
+# bit-reproducible from this tree. The shell-contact (32/32), ground-lip
+# (32/32), annulus (0/36) and first-ring (0/16) counts are unchanged.
+
+
+def _integer_disk_row_half_widths(r_cells):
+    """Integer-lattice disk di^2 + dj^2 <= r^2: row dj -> largest |di|."""
+    import math
+    return {dj: int(math.isqrt(r_cells * r_cells - dj * dj))
+            for dj in range(-r_cells, r_cells + 1)}
+
+
+def _ground_plane_boxes_with_clearance(lx, ly, jx_node, jy_node, k_node, r_cells):
+    """PEC ground sheet at z node ``k_node`` tiled by half-cell Boxes so the
+    integer-lattice disk di^2 + dj^2 <= r_cells^2 about (jx_node, jy_node)
+    is NOT covered (the realized clearance hole).
+
+    2 x-slabs (outer faces on 0.0 / lx exactly as attempt 2's single Box,
+    inner faces half a cell outside the hole's x-band), 2 y-strips within
+    the x-band, then per row |dj| with half-width w < r_cells two boxes
+    filling x beyond w. Every inner face is (n +/- 0.5) * DX (#802).
+    """
+    from rfx.geometry.csg import Box
+
+    R = r_cells
+    z_lo, z_hi = _half_cell_box_z(k_node, k_node)
+    rows = _integer_disk_row_half_widths(R)
+    boxes = []
+    # x-slabs: everything left of / right of the hole's x-band, full y.
+    boxes.append(Box((0.0, 0.0, z_lo), (_half_cell_box(jx_node - R - 1, jx_node - R - 1)[1], ly, z_hi)))
+    boxes.append(Box((_half_cell_box(jx_node + R + 1, jx_node + R + 1)[0], 0.0, z_lo), (lx, ly, z_hi)))
+    xl, xh = _half_cell_box(jx_node - R, jx_node + R)
+    # y-strips: within the x-band, below / above the hole's y-band.
+    boxes.append(Box((xl, 0.0, z_lo), (xh, _half_cell_box(jy_node - R - 1, jy_node - R - 1)[1], z_hi)))
+    boxes.append(Box((xl, _half_cell_box(jy_node + R + 1, jy_node + R + 1)[0], z_lo), (xh, ly, z_hi)))
+    # per-row fill outside the disk's half-width (rows with w == R need none).
+    for dj in sorted(rows):
+        w = rows[dj]
+        if w >= R:
+            continue
+        yl, yh = _half_cell_box(jy_node + dj, jy_node + dj)
+        boxes.append(Box((xl, yl, z_lo), (_half_cell_box(jx_node - w - 1, jx_node - w - 1)[1], yh, z_hi)))
+        boxes.append(Box((_half_cell_box(jx_node + w + 1, jx_node + w + 1)[0], yl, z_lo), (xh, yh, z_hi)))
+    return boxes
+
+
+def _build_coax_msl_transition_sim_attempt3():
+    """Attempt 3 (issue #589): attempt 2 with the single ground Box replaced
+    by N_GROUND_BOXES_3 half-cell PEC Boxes that leave the predeclared 0.4 mm
+    clearance disk OPEN at the junction node. Everything else -- PTFE
+    Cylinder, substrate, trace, pin, both ports, domain, materials -- is
+    attempt 2's own code path with attempt 2's own constants; compute
+    kwargs are ``_attempt2_kwargs`` unchanged.
+    """
+    from rfx.api import Simulation
+    from rfx.boundaries.spec import BoundarySpec
+    from rfx.geometry.csg import Box, Cylinder
+
+    sim = Simulation(
+        freq_max=FREQ_MAX_2, domain=(LX_2, LY, LZ_2), dx=DX, cpml_layers=8,
+        boundary=BoundarySpec(x="cpml", y="cpml", z="cpml"),
+    )
+    sim.add_material("sub", eps_r=EPS_SUB)
+    sim.add_material("ptfe", eps_r=EPS_COAX)
+
+    jx_node = int(round(JUNCTION_X / DX))
+    jy_node = int(round(Y_C / DX))
+    ground_boxes = _ground_plane_boxes_with_clearance(
+        LX_2, LY, jx_node, jy_node, N_GND, CLEAR_R_CELLS)
+    assert len(ground_boxes) == N_GROUND_BOXES_3
+    for box in ground_boxes:
+        sim.add(box, material="pec")
+    clr_c, clr_h = _margin_cylinder_z(N_GND, N_SUB_LO)
+    sim.add(
+        Cylinder(center=(JUNCTION_X, Y_C, clr_c), radius=CLEAR_R, height=clr_h, axis="z"),
+        material="ptfe",
+    )
+    sub_lo, sub_hi = _half_cell_box_z(N_SUB_LO, N_SUB_HI)
+    sim.add(Box((0.0, 0.0, sub_lo), (LX_2, LY, sub_hi)), material="sub")
+    trc_lo, trc_hi = _half_cell_box_z(N_TRACE, N_TRACE)
+    sim.add(
+        Box((JUNCTION_X, Y_C - W_TRACE / 2, trc_lo), (LX_2, Y_C + W_TRACE / 2, trc_hi)),
+        material="pec",
+    )
+    pin_c, pin_h = _margin_cylinder_z(N_GND, N_TRACE)
+    sim.add(
+        Cylinder(center=(JUNCTION_X, Y_C, pin_c), radius=PIN_R, height=pin_h, axis="z"),
+        material="pec",
+    )
+
+    sim.add_coaxial_port(
+        position=(JUNCTION_X, Y_C, N_GND * DX), face="bottom",
+        pin_radius=PIN_R, outer_radius=OUTER_R, impedance=50.0,
+    )
+    sim.add_msl_port(
+        position=(FEED_X_2, Y_C, N_SUB_LO * DX), width=W_TRACE, height=H_SUB,
+        direction="-x", impedance=50.0, eps_r_sub=EPS_SUB,
+    )
+    return sim
+
+
+PREDECLARATION_ATTEMPT3 = {
+    "leg": "issue #589 attempt 3 -- realized ground-plane clearance hole (fixture fix for the attempt-1/2 short)",
+    "authorization": (
+        "R2's escape clause requires 'an identified implementation defect' "
+        "in writing: the defect is the fixture's own -- attempts 1 and 2 "
+        "declared the 0.4 mm clearance disk as a dielectric Cylinder AFTER "
+        "the ground Box, which _assemble_materials (PEC-OR-only) cannot "
+        "honour, so the pin was shorted to solid ground at the junction "
+        "node (verified by direct inspection of the assembled pec_mask: "
+        "36/36 clearance-annulus cells PEC; post-stamp node-25 open "
+        "fraction 0.0). This is a construction defect of the same class as "
+        "attempt 1's missing-PEC-layer / knife-edge fixes (plumbing, not a "
+        "mechanism-hypothesis loop) and is what the settled runs measured "
+        "(S00 = -0.9928 at 6 GHz, |S10| = -90 dB). PI-directed."
+    ),
+    "geometry_change": (
+        "ONLY the ground plane entity: one full-plane PEC Box -> 20 half-"
+        "cell PEC Boxes generated from the integer-lattice disk di^2+dj^2 "
+        "<= 16 (CLEAR_R_CELLS = 4 = pin + 2 cells, the SAME 0.4 mm clearance "
+        "attempt 2 predeclared). pec_mask differs from attempt 2 in exactly "
+        "38 cells, all at z node 25 (the 49-cell hole minus the pin's 11-"
+        "cell realized footprint); eps_r/sigma arrays np.array_equal; PTFE "
+        "Cylinder, substrate, trace, pin, both ports, domain, kwargs "
+        "unchanged (asserted by test_attempt3_junction_is_attempt2_plus_"
+        "hole_only). The 0.4 < r <= 0.5 mm ring under the coax dielectric "
+        "stays PEC (a one-cell ground lip, 32/32) -- part of the "
+        "predeclared clearance, flagged for the PI as a convention question "
+        "(flush 0.5 mm aperture would be a NEW predeclaration)."
+    ),
+    "instrument_unchanged": (
+        "MSL ladder (9 probes x 10 cells from cell 4), coax ladder (6 x 2 "
+        "from 4), band {6, 8, 10} GHz, freq_max 16 GHz, domain 12.5 x 3.4 "
+        "mm, dx 100 um, n_steps target 135000 (SETTLED_RUN_RECORD): all "
+        "attempt 2's. The driver's --fixture attempt3 reuses _attempt2_"
+        "kwargs verbatim; _a0_compare labels the run NOT COMPARABLE against "
+        "the attempt-2 baseline by design (the baseline is the short)."
+    ),
+    "realization_contract_tests": [
+        "test_attempt3_ground_clearance_annulus_is_open",
+        "test_attempt3_method_stamp_leaves_junction_open",
+        "test_attempt3_junction_is_attempt2_plus_hole_only",
+        "test_attempt3_hole_matches_integer_disk_and_contains_ptfe_disk",
+        "test_attempt2_junction_is_shorted_by_registered_ground",
+        "test_junction_pin_axis_is_pec_continuous_stub_to_trace[attempt2|attempt3]",
+        "test_junction_coax_shell_contacts_ground[attempt2|attempt3]",
+        "test_junction_trace_width_in_cells_is_attempt2s[attempt2|attempt3]",
+    ],
+    "expected_if_hole_was_the_whole_story": {
+        "reasoning": (
+            "Transmission-line arithmetic, brackets not points. Coax stub "
+            "Z_TEM: the stamped shell realizes shell_inner = 0.5 mm "
+            "(shell_thickness = min(dz, (b-a)/2) = 100 um), so the stub lies "
+            "between Z_TEM(0.2, 0.6) = 45.46 ohm and Z_TEM(0.2, 0.5) = 37.91 "
+            "ohm. Hammerstad-Jensen Z0 of the REALIZED 700 um trace (7 node "
+            "rows) on 300 um / eps 3.66 = 48.27 ohm (declared 600 um: 53.11). "
+            "Impedance step alone: |Gamma| in [0.030, 0.120] vs the realized "
+            "trace ([0.077, 0.167] vs the declared width). Pin through the "
+            "300 um substrate: 0.02-0.1 nH -> X_L <= 6 ohm at 10 GHz -> "
+            "|Gamma| contribution <= 0.07, rising with frequency. Ground lip "
+            "iris (0.4-0.5 mm, 42% node coverage of the coax dielectric): "
+            "thin-iris estimate B/Y0 ~ 0.008 at 10 GHz -> |Gamma| ~ 0.004."
+        ),
+        "s00_abs": "0.05 - 0.25 (-26 to -12 dB) at 6/8/10 GHz, rising with frequency",
+        "s10_abs": "0.95 - 1.0 (-0.5 to 0 dB)",
+        "passivity": "|S00|^2 + |S10|^2 <= 1 within a few percent leakage",
+        "reciprocity": "|S10 - S01| within the attempt-2 f32 replicate spread",
+        "msl_ladder_residuals": (
+            "fit/recurrence residuals fall from attempt 2's 0.19-0.25 (MSL "
+            "drive) / 0.59-0.78 (coax drive) toward the 0.02 class under BOTH "
+            "drives"
+        ),
+        "settling": "settling_db <= -40 dB on both drives at 135000 steps (else #662 warning -> report, do not pin)",
+    },
+    "falsifiers": {
+        "a": "|S00| > 0.9 at all bins -> a second short/open remains (check pin nodes 26-28 and trace start node 11 vs pin nodes 9-12)",
+        "b": "|S00| 0.3-0.8 with MSL residuals still ~0.2 -> the hole was necessary but the MSL-side instrument is an independent second layer; do not attribute to the junction",
+        "c": "|S00| in band but |S10| far below sqrt(1 - |S00|^2) -> power unseen by both ports (substrate/pad leakage; read the driver's flux monitors)",
+    },
+    "measurement_command": (
+        "cd <run-clone> && PYTHONPATH=$PWD JAX_ENABLE_X64=0 python scripts/"
+        "diagnostics/coax_msl_transition_settled_run.py --fixture attempt3 "
+        "--n-steps 135000 --preflight --baseline scripts/diagnostics/"
+        "_coax_msl_transition_settled_run_logs/remeasure_369367257263_"
+        "attempt2_x64-0_result.json --output <run-dir>/attempt3_x64-0_"
+        "result.json (VESSL remilab-c0 lane, scripts/vessl_coax_msl_"
+        "transition_remeasure.yaml FIXTURE=attempt3)"
+    ),
+    "preflight_noise_expected": (
+        "The 20-Box ground makes fidelity_report 26 entities (repeats of the "
+        "attempt-2 ground row's off-lattice-face/sheet-own-cell-live kinds) "
+        "and adds ~35 'Gap between PEC structures' + 36 mesh_resolution "
+        "advisories (pairs of ring boxes across the hole) -- decomposition "
+        "artefacts, not physics; quantify in the record, do not gate."
+    ),
+    "status": "UNRUN",
+    "measured": None,
+    "log_path": None,
+    "vessl_run_id": None,
+}
+
+
+def test_attempt3_predeclaration_is_committed_unrun_and_self_consistent():
+    """Fill-contract invariant, same as SETTLED_RUN_RECORD's: UNRUN <=> no
+    numbers, no log path, no run id. The prediction fields hold ranges as
+    text, not measured values."""
+    r = PREDECLARATION_ATTEMPT3
+    required = {
+        "leg", "authorization", "geometry_change", "instrument_unchanged",
+        "realization_contract_tests", "expected_if_hole_was_the_whole_story",
+        "falsifiers", "measurement_command", "preflight_noise_expected",
+        "status", "measured", "log_path", "vessl_run_id",
+    }
+    missing = required - set(r.keys())
+    assert not missing, f"PREDECLARATION_ATTEMPT3 missing fields: {missing}"
+    assert set(r["falsifiers"]) == {"a", "b", "c"}
+    if r["status"] == "UNRUN":
+        assert r["measured"] is None
+        assert r["log_path"] is None
+        assert r["vessl_run_id"] is None
+    else:
+        assert r["measured"] is not None
+        assert r["log_path"] is not None
+    # Every named realization-contract test exists in this module.
+    names = {n.split("[")[0] for n in r["realization_contract_tests"]}
+    missing_tests = {n for n in names if n not in globals()}
+    assert not missing_tests, missing_tests
+
+
+# ---- realization helpers (pure NumPy on the assembled arrays; no FDTD) ----
+_JUNCTION_FIXTURES = {
+    "attempt2": _build_coax_msl_transition_sim_attempt2,
+    "attempt3": _build_coax_msl_transition_sim_attempt3,
+}
+
+
+def _assemble_junction(sim):
+    """(grid, materials, pec, i0, j0, k_junction) -- what compute_coax_msl_
+    transition sees BEFORE its own coax-stub stamp."""
+    grid = sim._build_grid()
+    materials, _, _, pec_mask, _, _, _ = sim._assemble_materials(grid)
+    port = sim._coaxial_ports[0]
+    i0, j0, kj = (int(v) for v in grid.position_to_index(port.position))
+    return grid, materials, np.asarray(pec_mask), i0, j0, kj
+
+
+def _lattice_d2(grid, i0, j0):
+    """Squared lattice distance (di^2 + dj^2, in cells) of every (i, j)
+    node from the pin axis node -- an exact integer, so ring membership
+    has no float knife edge (design review blocker 2)."""
+    di = np.arange(grid.shape[0]) - i0
+    dj = np.arange(grid.shape[1]) - j0
+    return di[:, None] ** 2 + dj[None, :] ** 2
+
+
+def _lattice_ring_mask(grid, i0, j0, r_in_cells, r_out_cells):
+    """Cells with r_in < r <= r_out on the integer lattice."""
+    d2 = _lattice_d2(grid, i0, j0)
+    return (d2 > r_in_cells ** 2) & (d2 <= r_out_cells ** 2)
+
+
+def _stamp_like_method(sim, grid, materials):
+    """Apply compute_coax_msl_transition's own coax-stub stamps at its own
+    z indices (z_stub_lo = pad_z_lo + 2, z_stub_hi = z_junction_idx - 1,
+    resistor at z_feed = z_stub_lo + 1) -- returns (materials, shell_inner,
+    z_stub_lo, z_stub_hi)."""
+    from rfx.sources.coaxial_port import (
+        stamp_coaxial_line, stamp_coaxial_annular_resistor,
+        coaxial_tem_characteristic_impedance,
+    )
+    port = sim._coaxial_ports[0]
+    center_xy = (float(port.position[0]), float(port.position[1]))
+    z_junction_idx = int(grid.position_to_index(port.position)[2])
+    z_stub_lo = int(grid.pad_z_lo) + 2
+    z_stub_hi = z_junction_idx - 1
+    materials, shell_inner = stamp_coaxial_line(
+        grid, materials, center_xy=center_xy, z_lo_index=z_stub_lo,
+        z_hi_index=z_stub_hi, pin_radius=PIN_R, outer_radius=OUTER_R,
+    )
+    materials = stamp_coaxial_annular_resistor(
+        grid, materials, center_xy=center_xy, z_index=z_stub_lo + 1,
+        pin_radius=PIN_R, outer_radius=OUTER_R,
+        target_impedance=float(coaxial_tem_characteristic_impedance(PIN_R, OUTER_R)),
+        shell_inner_radius=shell_inner,
+    )
+    return materials, shell_inner, z_stub_lo, z_stub_hi
+
+
+def _assert_clearance_annulus_open(sim):
+    """DISCRIMINATING assertion: at the junction node every lattice cell
+    with PIN_R < r <= CLEAR_R (36 cells, all azimuths) is NOT registered
+    PEC. Fails on attempt 2 (36/36 PEC), passes on attempt 3 (0/36)."""
+    grid, _, pec, i0, j0, kj = _assemble_junction(sim)
+    annulus = _lattice_ring_mask(grid, i0, j0, PIN_R_CELLS, CLEAR_R_CELLS)
+    assert int(annulus.sum()) == ANNULUS_CELLS_3
+    n_pec = int((pec[:, :, kj] & annulus).sum())
+    assert n_pec == 0, (
+        f"clearance annulus PIN_R<r<=CLEAR_R at junction node {kj - grid.pad_z_lo} "
+        f"has {n_pec}/{ANNULUS_CELLS_3} registered-PEC cells: the pin is "
+        f"shorted to ground (issue #589 root cause)"
+    )
+
+
+def _post_stamp_junction_open_fraction(sim):
+    """(node-24 annulus dielectric fraction, node-25 annulus OPEN fraction)
+    after the method's own coax-stub stamps -- the DISCRIMINATING post-stamp
+    read. 'Open' at the junction node = not registered PEC AND not
+    sigma-PEC; 'dielectric' at node 24 = not sigma-PEC AND eps == EPS_COAX."""
+    from rfx.sources.coaxial_port import PEC_SIGMA
+    grid, materials, pec, i0, j0, kj = _assemble_junction(sim)
+    materials, _, _, z_stub_hi = _stamp_like_method(sim, grid, materials)
+    assert z_stub_hi == kj - 1
+    sigma = np.asarray(materials.sigma)
+    eps = np.asarray(materials.eps_r)
+    annulus = _lattice_ring_mask(grid, i0, j0, PIN_R_CELLS, CLEAR_R_CELLS)
+    below = ((sigma[:, :, kj - 1][annulus] < 0.5 * PEC_SIGMA)
+             & np.isclose(eps[:, :, kj - 1][annulus], EPS_COAX))
+    at = ((~pec[:, :, kj][annulus]) & (sigma[:, :, kj][annulus] < 0.5 * PEC_SIGMA))
+    return float(np.mean(below)), float(np.mean(at))
+
+
+def _assert_method_stamp_leaves_junction_open(sim):
+    frac_below, frac_at = _post_stamp_junction_open_fraction(sim)
+    assert frac_below == 1.0, (
+        f"node below the junction: annulus dielectric fraction {frac_below} != 1.0"
+    )
+    assert frac_at == 1.0, (
+        f"junction node: clearance-annulus OPEN fraction after the method's "
+        f"stamp is {frac_at} (1.0 = open launch; 0.0 = the #589 short)"
+    )
+
+
+def _node25_hole_window(sim):
+    """(open_window, disk_window, pin_footprint_window) -- (2R+1)^2 boolean
+    windows about the axis at the junction node, R = CLEAR_R_CELLS."""
+    grid, _, pec, i0, j0, kj = _assemble_junction(sim)
+    R = CLEAR_R_CELLS
+    sl = (slice(i0 - R, i0 + R + 1), slice(j0 - R, j0 + R + 1))
+    open_w = ~pec[:, :, kj][sl]
+    disk_w = (_lattice_d2(grid, i0, j0) <= R * R)[sl]
+    pin_entity = [e for e in sim._geometry
+                  if e.material_name == "pec" and type(e.shape).__name__ == "Cylinder"]
+    assert len(pin_entity) == 1
+    pin_w = np.asarray(pin_entity[0].shape.mask(grid))[:, :, kj][sl]
+    ptfe_entity = [e for e in sim._geometry if e.material_name == "ptfe"]
+    assert len(ptfe_entity) == 1
+    ptfe_w = np.asarray(ptfe_entity[0].shape.mask(grid))[:, :, kj][sl]
+    return open_w, disk_w, pin_w, ptfe_w
+
+
+def _assert_hole_matches_integer_disk(sim):
+    open_w, disk_w, pin_w, ptfe_w = _node25_hole_window(sim)
+    assert int(disk_w.sum()) == HOLE_CELLS_3
+    assert int(pin_w.sum()) == PIN_FOOTPRINT_CELLS_2
+    assert np.all(pin_w <= disk_w)   # the pin footprint lies inside the disk
+    expected = disk_w & ~pin_w
+    assert int(expected.sum()) == HOLE_XOR_CELLS_3
+    assert np.array_equal(open_w, expected), (
+        f"open cells at the junction node in the {2 * CLEAR_R_CELLS + 1}x"
+        f"{2 * CLEAR_R_CELLS + 1} window: {int(open_w.sum())}, expected the "
+        f"integer disk minus the pin footprint ({HOLE_XOR_CELLS_3})"
+    )
+    # The PTFE Cylinder's own realized node-25 disk is a strict subset of
+    # the hole+pin (cyl & ~(hole | pin) == 0): the carved hole is at least
+    # what the dielectric declared.
+    assert int((ptfe_w & ~disk_w).sum()) == 0
+    assert 0 < int(ptfe_w.sum()) <= HOLE_CELLS_3
+
+
+# ---- DISCRIMINATING tests: FAIL on attempt 2, PASS on attempt 3 ------------
+def test_attempt3_ground_clearance_annulus_is_open():
+    """At the junction node every cell with PIN_R < r <= CLEAR_R (36 cells,
+    all azimuths) has pec_mask False. Attempt 2 measured 36/36 PEC (FAILS
+    -- see test_attempt2_junction_is_shorted_by_registered_ground); attempt
+    3: 0/36."""
+    _assert_clearance_annulus_open(_build_coax_msl_transition_sim_attempt3())
+
+
+def test_attempt3_method_stamp_leaves_junction_open():
+    """After the method's own stamp_coaxial_line (+ annular resistor) at its
+    own z_stub_lo/z_stub_hi = z_junction_idx - 1: the node BELOW the
+    junction carries the coax dielectric in the annulus (fraction 1.0) and
+    the junction node's annulus is OPEN (~pec_mask & sigma < PEC_SIGMA/2)
+    with fraction 1.0. Attempt 2 measured 0.0 at the junction node (FAILS);
+    attempt 3: 1.0."""
+    _assert_method_stamp_leaves_junction_open(_build_coax_msl_transition_sim_attempt3())
+
+
+def test_attempt3_junction_is_attempt2_plus_hole_only():
+    """Byte-level: sigma and mu_r np.array_equal to attempt 2; pec_mask ^
+    pec_mask_attempt2 is EXACTLY the 38 cells at the junction node equal
+    to the integer disk minus the pin footprint; eps_r differs from
+    attempt 2 at EXACTLY those same 38 cells and nowhere else, and there
+    attempt 3 carries what the hole exposes (the PTFE volume sample where
+    the realized PTFE disk covers the cell, vacuum at the one lattice-hole
+    cell outside it) while attempt 2 carries the sheet's resampled
+    own-cell value (RASTERIZER NOTE above: the resample point 25.5 dx is
+    the substrate's lower face, so 3.66). Ports/materials/domain identical
+    (mirrors test_attempt2_junction_geometry_is_byte_identical_to_
+    attempt1). Fails trivially on attempt 2 vs itself (xor 0 cells).
+
+    Pre-#834 the eps_r arrays were np.array_equal: the float32 resample
+    point fell below the substrate face and the sheet cells read the PTFE
+    (2.1) the hole cells also read. That equality was a knife-edge
+    coincidence, not a property of the hole."""
+    sim2 = _build_coax_msl_transition_sim_attempt2()
+    sim3 = _build_coax_msl_transition_sim_attempt3()
+    g2, m2, pec2, i2, j2, k2 = _assemble_junction(sim2)
+    g3, m3, pec3, i3, j3, k3 = _assemble_junction(sim3)
+    assert g2.shape == g3.shape and (i2, j2, k2) == (i3, j3, k3)
+    assert np.array_equal(np.asarray(m2.sigma), np.asarray(m3.sigma))
+    assert np.array_equal(np.asarray(m2.mu_r), np.asarray(m3.mu_r))
+
+    xor = pec2 ^ pec3
+    assert int(xor.sum()) == HOLE_XOR_CELLS_3, int(xor.sum())
+
+    eps2, eps3 = np.asarray(m2.eps_r), np.asarray(m3.eps_r)
+    eps_diff = eps2 != eps3
+    assert np.array_equal(eps_diff, xor), (
+        "eps_r differs outside the hole cells: "
+        f"{np.argwhere(eps_diff & ~xor).tolist()[:8]}; "
+        f"hole cells with equal eps_r: {np.argwhere(xor & ~eps_diff).tolist()[:8]}")
+    ptfe3 = np.asarray(sim3._geometry[N_GROUND_BOXES_3].shape.mask(g3), bool)
+    assert sim3._geometry[N_GROUND_BOXES_3].material_name == "ptfe"
+    # float32 material arrays vs float64 constants: compare to 1 ulp.
+    np.testing.assert_allclose(eps3[xor & ptfe3], EPS_COAX, rtol=1e-6)
+    np.testing.assert_array_equal(eps3[xor & ~ptfe3], 1.0)
+    assert int((xor & ~ptfe3).sum()) == 1, int((xor & ~ptfe3).sum())   # the (0,+4) knife-edge cell
+    np.testing.assert_allclose(eps2[xor], EPS_SUB, rtol=1e-6)
+    z_hit = np.where(xor.any(axis=(0, 1)))[0]
+    assert z_hit.tolist() == [k3], (z_hit - g3.pad_z_lo).tolist()
+    # attempt 3 only REMOVES PEC (the hole); it never adds any.
+    assert not np.any(pec3 & ~pec2)
+    open_w, disk_w, pin_w, _ = _node25_hole_window(sim3)
+    R = CLEAR_R_CELLS
+    xor_w = xor[:, :, k3][i3 - R:i3 + R + 1, j3 - R:j3 + R + 1]
+    assert np.array_equal(xor_w, disk_w & ~pin_w)
+    assert int(xor[:, :, k3].sum()) == int(xor_w.sum())   # nothing outside the window
+
+    # Registered ports, materials, domain: attempt 2's own.
+    p2, p3 = sim2._coaxial_ports[0], sim3._coaxial_ports[0]
+    for f in ("pin_radius", "outer_radius", "face", "impedance"):
+        assert getattr(p2, f) == getattr(p3, f), f
+    assert tuple(p2.position) == tuple(p3.position)
+    q2, q3 = sim2._msl_ports[0], sim3._msl_ports[0]
+    for f in ("width", "height", "eps_r_sub", "direction", "impedance"):
+        assert getattr(q2, f) == getattr(q3, f), f
+    assert tuple(q2.position) == tuple(q3.position)
+    assert sim2._materials.keys() == sim3._materials.keys() == {"sub", "ptfe"}
+    for name in ("sub", "ptfe"):
+        assert sim2._materials[name].eps_r == sim3._materials[name].eps_r
+    # Entity inventory: 20 ground boxes replace 1; the other 4 entities are
+    # in the same declaration order with the same materials.
+    mats2 = [e.material_name for e in sim2._geometry]
+    mats3 = [e.material_name for e in sim3._geometry]
+    assert mats2 == ["pec", "ptfe", "sub", "pec", "pec"]
+    assert mats3 == ["pec"] * N_GROUND_BOXES_3 + ["ptfe", "sub", "pec", "pec"]
+
+
+def test_attempt3_hole_matches_integer_disk_and_contains_ptfe_disk():
+    """~pec_mask at the junction node in the 9x9 window == {di^2+dj^2 <= 16}
+    minus the pin's realized footprint (49 - 11 = 38 cells), and the PTFE
+    Cylinder's realized node-25 mask is a subset of that disk. Attempt 2:
+    the window has 0 open cells (FAILS)."""
+    _assert_hole_matches_integer_disk(_build_coax_msl_transition_sim_attempt3())
+
+
+def test_attempt2_junction_is_shorted_by_registered_ground():
+    """REGRESSION WITNESS on the COMMITTED attempt-2 builder (never edited):
+    the fail-before-fix evidence for the three discriminating assertions
+    above, committed as an artifact. Issue #589 root cause: the ground Box
+    is a solid PEC sheet at the junction node; the later ``ptfe`` Cylinder
+    cannot carve it (_assemble_materials is PEC-OR-only), so
+      * 36/36 cells with PIN_R < r <= CLEAR_R are registered PEC,
+      * 68/68 cells with PIN_R < r <= shell_inner (0.5 mm) are PEC,
+      * after the method's own stamp the junction-node annulus is 0.0 open
+        (the node below is 1.0 coax dielectric -- the stamp stops at
+        z_junction_idx - 1, the sheet is the termination),
+      * the 9x9 window has NO open cell,
+    i.e. the coax stub is terminated in a short by REGISTERED geometry --
+    what VESSL 369367257263 measured (S00 = -0.9928 at 6 GHz). If this test
+    ever fails, attempt 2 was edited -- forbidden; attempt 2 is history."""
+    sim2 = _build_coax_msl_transition_sim_attempt2()
+    grid, _, pec, i0, j0, kj = _assemble_junction(sim2)
+    annulus = _lattice_ring_mask(grid, i0, j0, PIN_R_CELLS, CLEAR_R_CELLS)
+    wide = _lattice_ring_mask(grid, i0, j0, PIN_R_CELLS, SHELL_INNER_CELLS)
+    assert int(annulus.sum()) == ANNULUS_CELLS_3
+    assert int(wide.sum()) == ANNULUS_CELLS_3 + LIP_CELLS_3   # 68
+    assert int((pec[:, :, kj] & annulus).sum()) == ANNULUS_CELLS_3
+    assert int((pec[:, :, kj] & wide).sum()) == ANNULUS_CELLS_3 + LIP_CELLS_3
+
+    with pytest.raises(AssertionError, match="shorted to ground"):
+        _assert_clearance_annulus_open(sim2)
+
+    frac_below, frac_at = _post_stamp_junction_open_fraction(sim2)
+    assert frac_below == 1.0
+    assert frac_at == 0.0
+    with pytest.raises(AssertionError, match="OPEN fraction"):
+        _assert_method_stamp_leaves_junction_open(sim2)
+
+    open_w, disk_w, pin_w, _ = _node25_hole_window(sim2)
+    assert int(open_w.sum()) == 0
+    assert int(disk_w.sum()) == HOLE_CELLS_3 and int(pin_w.sum()) == PIN_FOOTPRINT_CELLS_2
+    with pytest.raises(AssertionError):
+        _assert_hole_matches_integer_disk(sim2)
+
+
+# ---- PRESERVATION INVARIANTS: pass on attempt 2 AND attempt 3 ---------------
+# Each certifies nothing about the launch alone (design review blocker 1);
+# its discriminating partner is named in the docstring.
+@pytest.mark.parametrize("fixture", sorted(_JUNCTION_FIXTURES))
+def test_junction_pin_axis_is_pec_continuous_stub_to_trace(fixture):
+    """INVARIANT (did-not-over-carve, pin side): registered pec_mask OR
+    stamped sigma >= PEC_SIGMA/2 on the axis for every z in [z_stub_lo,
+    trace node], AND the axis cell at the junction node is REGISTERED PEC
+    (the pin). Passes on attempt 2 too -- through solid ground -- so it is
+    only meaningful together with test_attempt3_ground_clearance_annulus_
+    is_open, which is what distinguishes 'pin' from 'ground' at that node."""
+    from rfx.sources.coaxial_port import PEC_SIGMA
+    sim = _JUNCTION_FIXTURES[fixture]()
+    grid, materials, pec, i0, j0, kj = _assemble_junction(sim)
+    materials, _, z_stub_lo, _ = _stamp_like_method(sim, grid, materials)
+    sigma = np.asarray(materials.sigma)
+    trace_idx = int(grid.position_to_index((JUNCTION_X, Y_C, N_TRACE * DX))[2])
+    column = pec[i0, j0, :] | (sigma[i0, j0, :] >= 0.5 * PEC_SIGMA)
+    span = column[z_stub_lo:trace_idx + 1]
+    assert np.all(span), f"gap at indices {z_stub_lo + np.where(~span)[0]}"
+    assert bool(pec[i0, j0, kj]), "axis cell at the junction node is not registered PEC (pin)"
+
+
+@pytest.mark.parametrize("fixture", sorted(_JUNCTION_FIXTURES))
+def test_junction_coax_shell_contacts_ground(fixture):
+    """INVARIANT (did-not-over-carve, shell side): at the junction node every
+    cell with shell_inner (0.5 mm) < r <= OUTER_R is PEC (32/32 -- the
+    stamped shell lands on ground) AND every cell with CLEAR_R < r <=
+    shell_inner is PEC (32/32 -- the predeclared 0.4 mm clearance leaves a
+    one-cell ground lip over the coax dielectric). Passes on attempt 2 by
+    construction (everything is PEC there); its discriminating partner is
+    test_attempt3_ground_clearance_annulus_is_open."""
+    sim = _JUNCTION_FIXTURES[fixture]()
+    grid, materials, pec, i0, j0, kj = _assemble_junction(sim)
+    _, shell_inner, _, _ = _stamp_like_method(sim, grid, materials)
+    assert int(round(shell_inner / DX)) == SHELL_INNER_CELLS
+    shell = _lattice_ring_mask(grid, i0, j0, SHELL_INNER_CELLS, OUTER_R_CELLS)
+    lip = _lattice_ring_mask(grid, i0, j0, CLEAR_R_CELLS, SHELL_INNER_CELLS)
+    assert int(shell.sum()) == SHELL_CELLS_3 and int(lip.sum()) == LIP_CELLS_3
+    n_shell = int((pec[:, :, kj] & shell).sum())
+    n_lip = int((pec[:, :, kj] & lip).sum())
+    assert n_shell == SHELL_CELLS_3, f"shell-ground contact {n_shell}/{SHELL_CELLS_3}"
+    assert n_lip == LIP_CELLS_3, f"ground lip CLEAR_R<r<=shell_inner {n_lip}/{LIP_CELLS_3}"
+
+
+@pytest.mark.parametrize("fixture", sorted(_JUNCTION_FIXTURES))
+def test_junction_trace_width_in_cells_is_attempt2s(fixture):
+    """INVARIANT (MSL side untouched): the contiguous PEC node-row run across
+    the trace at the trace node, 5 cells down the trace from the junction,
+    is TRACE_NODE_ROWS_2 rows on both fixtures; the trace Box is the same
+    code path in both. 6 rows on exact node coordinates (= the declared
+    600 um); the archived runs realized 7 on the pre-#834 float32 path
+    (RASTERIZER NOTE and KNIFE-EDGE NOTE above)."""
+    sim = _JUNCTION_FIXTURES[fixture]()
+    grid, _, pec, i0, j0, kj = _assemble_junction(sim)
+    kt = int(grid.position_to_index((JUNCTION_X, Y_C, N_TRACE * DX))[2])
+    row = pec[i0 + 5, :, kt]
+    assert row[j0]
+    lo = j0
+    while lo - 1 >= 0 and row[lo - 1]:
+        lo -= 1
+    hi = j0
+    while hi + 1 < row.size and row[hi + 1]:
+        hi += 1
+    assert hi - lo + 1 == TRACE_NODE_ROWS_2, (lo, hi, int(row.sum()))
+    assert int(row.sum()) == TRACE_NODE_ROWS_2   # no PEC elsewhere on that row at node 29
+
+
+def test_attempt3_builder_entity_inventory_and_kwargs():
+    """The attempt-3 builder registers exactly N_GROUND_BOXES_3 ground Boxes
+    (+ the same 4 attempt-2 entities) and the driver reuses _attempt2_kwargs
+    unchanged for it (no attempt-3 kwargs symbol exists by design)."""
+    sim = _build_coax_msl_transition_sim_attempt3()
+    assert len(sim._geometry) == N_GROUND_BOXES_3 + 4
+    assert sum(1 for e in sim._geometry
+               if e.material_name == "pec" and type(e.shape).__name__ == "Box") == N_GROUND_BOXES_3 + 1
+    assert "_attempt3_kwargs" not in globals()
+    kw = _attempt2_kwargs(135000)
+    assert kw["junction_x"] == JUNCTION_X and kw["n_steps"] == 135000
+
+
+# ---------------------------------------------------------------------------
+# Attempt-3 flux box (issue #589 witness W4) -- opt-in monitors only.
+# ---------------------------------------------------------------------------
+# Six faces of ONE lossless control volume around the junction, plus one
+# full-plane comparator. The volume is
+#
+#   V = {inside the coax shell, 2.2 mm <= z <= 2.5 mm}          (below ground)
+#       U {0.5 <= x <= 2.0, 0.3 <= y <= 3.1, 2.5 <= z <= 3.6 mm} (above ground)
+#
+# and its boundary is closed by PEC where no monitor sits: the coax shell wall,
+# the ground plane at z = N_GND*DX = 2.5 mm outside the 0.4 mm clearance hole,
+# and the pin. A PEC surface carries zero normal Poynting flux (E_tangential = 0
+# there), so those parts of the boundary contribute nothing and the six
+# monitored faces alone close the budget:
+#
+#   coax_z22 = msl_x20 + top_z36 - xlo_x05 - ylo_y03 + yhi_y31
+#
+# (+axis-positive convention; the two -axis-facing faces enter with a minus).
+# No lossy cell is inside V -- the coax annular resistor sits at k = 11
+# (z = 0.3 mm) and the MSL sigma sheet at i = 118 (x = 11.0 mm), both outside --
+# so the residual of that identity measures only radiation leaving through the
+# CPML-facing faces plus discretization, NOT dissipation.
+#
+# All six faces are PATCHES with consistent extents (adversarial-review item:
+# the first draft mixed full planes with patches and gave the side faces a
+# z-span that did not meet the top face, so its "closure residual" was not a
+# closed surface at all). ``msl_x20_full`` is the SAME plane taken full-domain,
+# reported next to the patch as the total +x power (guided + radiated + the
+# part flowing outside the box footprint); it is NOT part of the closure sum.
+#
+# RELATION TO THE STANDING #589 FLUX PREDECLARATION -- READ THIS FIRST.
+# This is the SECOND flux instrument on issue #589 and it does NOT supersede
+# the first. scripts/diagnostics/coax_msl_flux_adjudication.py (merged in
+# #597/#599) implements, verbatim, the face table pre-declared on #589 in the
+# comment of 2026-08-07 ("PRE-DECLARATION -- item 2 adjudication attempt"):
+# xp x=2.2, xm x=0.3, yp y=3.1, ym y=0.3, zt z=3.4, zb z=0.9 mm on the
+# ATTEMPT-2 fixture, with explicit outward signs, C1/C2 control runs that GATE
+# interpretation of the target (rc=2 if a control fails), +-2-cell face-SHIFT
+# invariance, and below-ground strip_{xp,xm,yp,ym} sub-strips that witness
+# coax-shell tightness ("must read ~0"). None of that is reproduced here.
+# Only the two y-face coordinates below (0.3 and 3.1 mm) coincide with that
+# table's ym/yp -- and even they carry a different footprint, since these are
+# patches of a box whose z-span is 2.5-3.6 mm rather than 0.9-3.4 mm. The x
+# and z faces differ outright. W4's numbers are therefore NOT directly
+# comparable to that instrument's and the PI must arbitrate the two knowingly.
+#
+# Why attempt 3 cannot simply reuse the predeclared table:
+#   * The predeclared box was built for ATTEMPT 2, where the ground plane is
+#     solid (the clearance hole is a SHORT). On attempt 3 the hole is OPEN, so
+#     the coax-shell interior is on the power path and the box must have a
+#     face INSIDE the coax; the predeclared zb (z = 0.9 mm) is a below-ground
+#     plane spanning x [0.3, 2.2], y [0.3, 3.1] mm, i.e. the whole footprint,
+#     not a coax cross-section.
+#   * W4's job here is to compare that face to the coax LADDER's own pencil
+#     amplitudes, which are referred to ref_coax_m = 2.5 mm. The bottom face
+#     must therefore sit ABOVE the highest coax probe (k = 27, z = 1.9 mm) and
+#     BELOW the reference plane; the predeclared zb = 0.9 mm sits at the
+#     BOTTOM of the ladder and would enclose the probes it is compared with.
+#   * The remaining coordinates (x 0.5/2.0, y 0.3/3.1, top 3.6 mm) are a
+#     tighter box chosen so that all six faces are PATCHES of one closed
+#     volume that meet at the top face; the y-face COORDINATES coincide with
+#     the predeclared ym/yp (their footprints do not), the x and z faces do
+#     not. That tightening is this instrument's choice, NOT something attempt
+#     3 forces.
+#
+# NOT part of this box, declared here so the omission is not read as a result:
+#   * NO control runs. Nothing here gates interpretation the way C1/C2 do.
+#   * NO face-SHIFT invariance member. top_z36 = 3.6 mm sits only 3 cells
+#     below the interior top (LZ_2 = 3.9 mm) -- inside the predeclaration's
+#     >= 3-cell rule, but TIGHTER than its zt = 3.4 mm, and the predeclaration
+#     restricted one-sided shifts precisely because a face near the CPML inner
+#     edge is absorber-fringe contaminated. With no shift witness, a settled
+#     closure residual here CANNOT be separated from face placement.
+#   * NO below-ground shell-tightness strips. This box ASSUMES the coax-shell
+#     tightness that the predeclared instrument MEASURES; if that assumption
+#     is in doubt, the strip witness lives in coax_msl_flux_adjudication.py,
+#     not here.
+FLUX_BOX_X_3 = (0.5e-3, 2.0e-3)     # x faces: xlo_x05 (-x face), msl_x20 (+x face)
+FLUX_BOX_Y_3 = (0.3e-3, 3.1e-3)     # y faces: ylo_y03, yhi_y31
+FLUX_BOX_Z_3 = (N_GND * DX, 3.6e-3)  # ground plane (2.5 mm) up to top_z36
+FLUX_COAX_Z_3 = 2.2e-3               # bottom face: k = 30, strictly between the
+                                     # top coax probe (k = 27, z = 1.9 mm) and the
+                                     # stub top / junction node (k = 32/33)
+FLUX_COAX_PATCH_3 = 1.6e-3           # covers r <= 0.8 mm about the pin axis, i.e.
+                                     # the whole coax cross-section (outer shell
+                                     # radius 0.6 mm + the stamped wall)
+
+
+def _attempt3_scratch_flux_entries():
+    """Flux entries for the attempt-3 W4 box, built the documented way: a
+    scratch Simulation sharing the attempt-3 domain, handing over its
+    ``._flux_monitors`` list (same pattern as
+    ``_attempt2_scratch_flux_entries``; attempt 3 shares attempt 2's domain
+    and dx, only the ground-plane entity differs).
+
+    Report-only instrument: these monitors are passed through
+    ``compute_coax_msl_transition(extra_flux_monitors=...)``, whose
+    non-perturbation is witnessed by
+    ``test_extra_flux_monitors_do_not_perturb_s``.
+    """
+    from rfx.api import Simulation as _Sim
+    scratch = _Sim(freq_max=FREQ_MAX_2, domain=(LX_2, LY, LZ_2), dx=DX,
+                   boundary="cpml")
+    (x_lo, x_hi), (y_lo, y_hi), (z_lo, z_hi) = FLUX_BOX_X_3, FLUX_BOX_Y_3, FLUX_BOX_Z_3
+    x_c, x_s = 0.5 * (x_lo + x_hi), x_hi - x_lo
+    y_c, y_s = 0.5 * (y_lo + y_hi), y_hi - y_lo
+    z_c, z_s = 0.5 * (z_lo + z_hi), z_hi - z_lo
+
+    # bottom face (inside the coax, below the ground plane)
+    scratch.add_flux_monitor(
+        axis="z", coordinate=FLUX_COAX_Z_3, freqs=FREQS_2,
+        size=(FLUX_COAX_PATCH_3, FLUX_COAX_PATCH_3), center=(JUNCTION_X, Y_C),
+        name="coax_z22",
+    )
+    # +x face (toward the MSL feed), between the junction footprint (x <= 1.7 mm)
+    # and the first MSL ladder probe (i = 34, x = 2.6 mm)
+    scratch.add_flux_monitor(
+        axis="x", coordinate=x_hi, freqs=FREQS_2, size=(y_s, z_s),
+        center=(y_c, z_c), name="msl_x20",
+    )
+    # top face
+    scratch.add_flux_monitor(
+        axis="z", coordinate=z_hi, freqs=FREQS_2, size=(x_s, y_s),
+        center=(x_c, y_c), name="top_z36",
+    )
+    # -x face (away from the MSL, above the ground plane)
+    scratch.add_flux_monitor(
+        axis="x", coordinate=x_lo, freqs=FREQS_2, size=(y_s, z_s),
+        center=(y_c, z_c), name="xlo_x05",
+    )
+    # the two y faces
+    scratch.add_flux_monitor(
+        axis="y", coordinate=y_lo, freqs=FREQS_2, size=(x_s, z_s),
+        center=(x_c, z_c), name="ylo_y03",
+    )
+    scratch.add_flux_monitor(
+        axis="y", coordinate=y_hi, freqs=FREQS_2, size=(x_s, z_s),
+        center=(x_c, z_c), name="yhi_y31",
+    )
+    # comparator, NOT part of the closure sum: the same +x plane, full domain
+    scratch.add_flux_monitor(
+        axis="x", coordinate=x_hi, freqs=FREQS_2, name="msl_x20_full",
+    )
+    return scratch._flux_monitors
