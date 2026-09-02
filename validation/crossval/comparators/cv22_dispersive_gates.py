@@ -414,23 +414,38 @@ def slab_ringdown_rates(model: str, params: dict):
     f = np.linspace(f_lo, f_hi, 1401)
     eps = de.eps_analytic(f, model, params)
     n = np.sqrt(eps)
-    n = np.where(n.imag > 0, -n, n)         # decaying branch in e^{+jwt}
+    # Forward branch: Re n >= 0 (the principal sqrt already has it; for a
+    # passive medium, Im eps < 0, that branch is the decaying one). The
+    # earlier `where(n.imag > 0, -n, n)` was a no-op for every passive arm
+    # but negated Re n for a GAIN medium (cv23's passivity falsifier),
+    # giving |r|^2 = 9; found while deriving that arm's record.
+    n = np.where(n.real < 0, -n, n)
     k0 = TWO_PI * f / C0
     r = (1 - n) / (1 + n)
-    rho = np.abs(r) ** 2 * np.exp(-2 * k0 * (-n.imag) * D_SLAB_M)
+    rho = np.abs(r) ** 2 * np.exp(2 * k0 * n.imag * D_SLAB_M)   # |e^{-j k0 n d}|^2 per round trip
     t_rt = 2 * np.abs(n.real) * D_SLAB_M / C0
+    if np.any(rho >= 1.0):
+        raise ValueError(f"{model}: etalon round-trip gain >= 1 at {f[np.argmax(rho)]/1e9:.2f} GHz "
+                         f"(rho {rho.max():.3f}); the slab does not ring down")
     rate_et = -np.log(rho) / t_rt
     if model == "debye":
         rate_mat = 1.0 / params["tau"]
     elif model == "lorentz":
         rate_mat = float(params["delta"])
+    elif model == "conductive":
+        # cv23: J = sigma E is memoryless (no P recurrence, no material
+        # ring-down mode); the charge-relaxation pole sigma/(eps0 eps') is a
+        # longitudinal mode that normal incidence does not excite. Only the
+        # etalon decays, and its absorption per pass is already in rho.
+        rate_mat = float("inf")
     else:
         rate_mat = float(params["gamma"]) / 2.0
     w = incident_amplitude_rel(f)
     rate = np.minimum(rate_et, rate_mat)
     t_need = np.log(100.0 * w) / rate       # seconds to -40 dB of the incident peak
     i = int(np.argmax(t_need))
-    return {"rate_material_1_s": float(rate_mat), "rate_etalon_slowest_1_s": float(rate_et.min()),
+    return {"rate_material_1_s": (float(rate_mat) if math.isfinite(rate_mat) else None),
+            "rate_etalon_slowest_1_s": float(rate_et.min()),
             "f_etalon_slowest_hz": float(f[int(np.argmin(rate_et))]),
             "ring_band_hz": [f_lo, f_hi], "ring_w_min": RING_W_MIN,
             "t_ring_s": float(t_need[i]), "f_ring_hz": float(f[i]), "w_ring": float(w[i]),
@@ -473,17 +488,18 @@ def derive_record_length(model: str, params: dict, dt: float, *, nx_interior: in
             "src_t0_s": t0, "src_tau_s": tau, "v_cells": float(v_cells), **cells}
 
 
-def meep_ladder_summary(results_dir: str, rfx_doc: dict) -> dict:
+def meep_ladder_summary(results_dir: str, rfx_doc: dict, resolutions=MEEP_LADDER_RESOLUTIONS) -> dict:
     """Meep-vs-TMM deviation per resolution (from meep_<arm>__res<N>.json) and the
     measured convergence order per doubling. Measured-in-r2 evidence, not a
     pre-declared window term."""
     import json as _json
-    out = {"schema": "cv22-meep-ladder/v1", "resolutions": list(MEEP_LADDER_RESOLUTIONS), "arms": {}}
+    resolutions = tuple(int(r) for r in resolutions)
+    out = {"schema": "cv22-meep-ladder/v1", "resolutions": list(resolutions), "arms": {}}
     for arm, ad in rfx_doc["arms"].items():
         e2 = evaluate_e2(ad["freqs_hz"], ad["R_rfx"], ad["T_rfx"], ad["model"], ad["params"], ad["dt_s"],
                          tail=ad["tail"])
         rungs = {}
-        for res in MEEP_LADDER_RESOLUTIONS:
+        for res in resolutions:
             p = os.path.join(results_dir, f"meep_{arm}__res{res}.json")
             if not os.path.isfile(p):
                 continue
@@ -499,7 +515,7 @@ def meep_ladder_summary(results_dir: str, rfx_doc: dict) -> dict:
                                "max_dR_meep_tmm_gated": e4["max_dR_meep_tmm_gated"],
                                "max_dT_meep_tmm_gated": e4["max_dT_meep_tmm_gated"]}
         orders = {}
-        for lo, hi in ((10, 20), (20, 40)):
+        for lo, hi in zip(resolutions[:-1], resolutions[1:]):
             a, b = rungs.get(str(lo)), rungs.get(str(hi))
             if a and b and a.get("finite") and b.get("finite"):
                 for q in ("mean_dR_meep_tmm_gated", "mean_dT_meep_tmm_gated"):
@@ -524,7 +540,10 @@ def fit_tail_rate(env_rel, dt: float, start: int = 0):
     first = int(math.ceil(max(0, start + TAIL_WINDOW) / TAIL_WINDOW)) * TAIL_WINDOW
     e = e[first:]
     nb = e.size // TAIL_WINDOW
-    if nb < 3:
+    # Two blocks give a two-point slope: reported, flagged unreliable by
+    # refit_tail (fit_reliable = nb >= 3; cv23 note section 14 -- the
+    # shortest cv23 record has 109 post-window steps = 2 blocks).
+    if nb < 2:
         return float("nan"), int(nb)
     blocks = e[: nb * TAIL_WINDOW].reshape(nb, TAIL_WINDOW).max(axis=1)
     if np.any(blocks <= 0):
@@ -544,6 +563,7 @@ def refit_tail(tail: dict, dt: float, n_steps: int, n_pulse_end: int) -> dict:
     start = int(n_pulse_end) - env_start
     r_s, nb_s = fit_tail_rate(tail["envelope_scat_refl_rel"], dt, start=start)
     r_t, nb_t = fit_tail_rate(tail["envelope_total_trans_rel"], dt, start=start)
+    nb = int(min(nb_s, nb_t))
     return dict(tail, envelope_start_step=env_start, fit_start_step=int(n_pulse_end) + TAIL_WINDOW,
                 fitted_rate_scat_refl_1_s=r_s, fitted_rate_total_trans_1_s=r_t,
-                fitted_rate_blocks=int(min(nb_s, nb_t)))
+                fitted_rate_blocks=nb, fit_reliable=bool(nb >= 3))
