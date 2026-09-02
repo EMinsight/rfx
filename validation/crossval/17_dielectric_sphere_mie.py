@@ -127,6 +127,46 @@ material value.
     ``--write-fixture`` regeneration, done in lockstep with the fixture
     and artifact JSON so the suite never observes a mismatched pair.
 
+MATERIAL-FIDELITY GATE (issue #812 re-gate, 2026-09-01)
+---------------------------------------------------------------------------
+The #812 audit measured this case's dB gate passing for a rasterized
+permittivity wrong by a factor, and it is right. How wrong is committed, not
+restated: validation/crossval/_17_dielectric_results/material_blind_window.json
+(summary.blind_window_bracket_eps and its two first-failing neighbours), built
+with no FDTD from the committed gated_coarse deltas and the Mie oracle, and
+reproducing the live defect runs' pass/fail verdict at round 1's four probed
+permittivity. That is not a loose threshold, it is the SENSITIVITY of the
+observable: the Mie oracle
+moves 9.816 / 10.202 / 9.978 / 7.134 dB per unit RELATIVE permittivity at
+ka = 0.50 / 0.75 / 1.00 / 1.25, so 6.3 dB simply IS a factor-wide window in
+eps_r. GATE_COARSE_DB is already round-up(envelope x 1.5) and cannot be
+tightened under the repo rule; and no dB threshold this case could legally
+carry would resolve a few-percent permittivity error. **So the claim is
+re-scoped rather than the gate pretended tighter: the dB tier is an RCS
+agreement envelope, NOT a permittivity calibration**, and the permittivity is
+gated on a channel of its own — the material twin of the per-row
+``A_EFF_TOL_COARSE`` geometric gate, which exists for exactly this reason on
+the geometry side.
+  * G17-A ``EPS_REALIZED_TOL`` — the permittivity read back OUT of the
+    rasterized array must be within 0.5% relative of the declared ``EPS_R``.
+    Derived from the sensitivity above: half the gate's own reporting quantum
+    (0.1 dB, the PR #475 round-up convention) divided by the worst gated-ka
+    slope 10.202 dB per unit relative eps = 0.0049 -> 0.005.
+  * G17-B ``N_DISTINCT_EPS_EXPECTED`` — the array must hold EXACTLY two
+    distinct values. This is the FIRST check anywhere of this case's headline
+    scope claim ("the BINARY rasterize dielectric interface — no sub-cell
+    interface averaging exists"); sub-cell averaging, a partial fill or a
+    smoothed interface each put a third value in the array, and G17-A alone
+    is blind to that.
+  * Measured on today's code: realized eps_r = float32(2.56) = 2.5599999428,
+    2.2e-8 relative (four orders inside G17-A), exactly two distinct values
+    at every gated bin.
+  * NOT claimed: any permittivity resolution from the dB channel. The dB
+    tier's blind window is the committed pass set in
+    validation/crossval/_17_dielectric_results/material_blind_window.json
+    (summary.pass_runs_eps: [2.0, 4.5] and [5.0, 5.6], with a FAIL island at
+    4.6-4.9 on the ka = 1.25 Mie resonance) and stays that way.
+
 NOTE on preflight: this script drives the functional ``compute_rcs`` entry
 point, which runs NO preflight. The operating-point guarantees (internal-
 wavelength floor, cells-per-radius floor, cell-unit clearance, transit-scaled
@@ -205,6 +245,64 @@ GATE_COARSE_DB = 6.3    # scan envelope 4.18 dB (ka=1.25, clearance 30)
 # required change 8) — see the module docstring's GEOMETRY-FIDELITY
 # CONVENTION note. Measured worst case at cpr=6.4 is 1.197%.
 A_EFF_TOL_COARSE = 0.015   # 1.5% of declared radius, cpr=6.4
+
+# --- issue #812 re-gate: the MATERIAL twin of A_EFF_TOL_COARSE -------------
+# This case exists to make the first cross-method record of the BINARY
+# dielectric rasterize path at eps_r = 2.56, and until #812 NOTHING anywhere
+# in it looked at the permittivity that was actually rasterized. The dB
+# channel cannot do that job: d(sigma_dB)/d(eps/eps) from the Mie oracle is
+# 9.816 / 10.202 / 9.978 / 7.134 dB per unit RELATIVE permittivity at
+# ka = 0.50 / 0.75 / 1.00 / 1.25, so a 6.3 dB window is ~ a factor-of-two
+# window in eps_r: the committed model pass set is [2.0, 4.5] and
+# [5.0, 5.6] with a FAIL island at 4.6-4.9 (material_blind_window.json,
+# summary.pass_runs_eps / summary.fail_islands_eps); live defect runs at
+# 2.0 / 5.5 (pass) and 1.8 / 6.0 (fail) agree with the model's verdicts;
+# INSIDE the island the live solver passes at 4.6-4.8 and fails only at 4.9
+# (_17_dielectric_results/cv17_permittivity_island.json) -- the model
+# over-predicts on the resonance, the live window is wider. See the note.
+#
+# G17-A: the realized permittivity is gated on its own channel, with the
+# window derived from that sensitivity — half the gate's own reporting
+# quantum (0.1 dB, the PR #475 round-up convention) divided by the worst
+# gated-ka sensitivity 10.202 dB per unit relative eps gives 0.0049, i.e. the
+# largest permittivity error that cannot move the recorded dB envelope by as
+# much as the case can report. Rounded to:
+EPS_REALIZED_TOL = 0.005    # 0.5% relative, cpr=6.4 and cpr=12.8 alike
+#
+# G17-B: structure, no tolerance. The claim_scope's headline — "the BINARY
+# rasterize dielectric interface (no sub-cell interface averaging exists);
+# this is a measured envelope of that staircase" — is presently prose that
+# nothing checks. A binary rasterization puts EXACTLY two values in the
+# array; sub-cell averaging, a partial fill, or a smoothed interface each add
+# a third.
+N_DISTINCT_EPS_EXPECTED = 2
+
+
+def check_realized_material(eps_r_array) -> dict:
+    """Read the permittivity back OUT of the rasterized grid (G17-A/G17-B).
+
+    Returns the three numbers the material gate is made of. Deliberately
+    reads the array the solver will integrate, not the constant that was
+    handed to ``rasterize`` — the point is to catch a material path that does
+    not deliver what it was asked for.
+    """
+    a = np.asarray(eps_r_array)
+    vals = np.unique(a)
+    non_bg = vals[vals != 1.0]
+    eps_realized = float(non_bg.max()) if non_bg.size else float("nan")
+    return {
+        "n_distinct_eps": int(vals.size),
+        "n_nonbackground_eps": int(non_bg.size),
+        "eps_realized": eps_realized,
+        "eps_rel_dev": abs(eps_realized / EPS_R - 1.0),
+    }
+
+
+def material_gate_ok(stats: dict) -> bool:
+    """G17-A and G17-B together. False means the run is not about eps_r=2.56."""
+    return (stats["n_distinct_eps"] == N_DISTINCT_EPS_EXPECTED
+            and stats["n_nonbackground_eps"] == 1
+            and stats["eps_rel_dev"] <= EPS_REALIZED_TOL)
 
 
 # --------------------------------------------------------------------------- #
@@ -287,6 +385,7 @@ def run_point(ka: float, cpr: float, clear_cells: int, steps_mult: float = 1.0):
     center = (domain / 2,) * 3
     eps_r, sigma = rasterize(grid, [(Sphere(center=center, radius=radius), EPS_R, 0.0)])
     n_occupied = int(np.sum(np.asarray(eps_r) > 1.0))
+    material = check_realized_material(eps_r)   # issue #812 G17-A/G17-B
     a_eff = (3 * n_occupied * dx ** 3 / (4 * np.pi)) ** (1.0 / 3.0)
     ka_eff = 2 * np.pi * a_eff / LAM
     mats = MaterialArrays(eps_r=eps_r, sigma=sigma,
@@ -312,6 +411,9 @@ def run_point(ka: float, cpr: float, clear_cells: int, steps_mult: float = 1.0):
         "resolution": res, "grid": list(grid.shape), "n_steps": n_steps,
         "a_over_dx": round(radius / dx, 2),
         "n_occupied": n_occupied,
+        "n_distinct_eps": material["n_distinct_eps"],
+        "eps_realized": round(material["eps_realized"], 9),
+        "eps_rel_dev": float(f"{material['eps_rel_dev']:.3e}"),
         "a_eff_over_a": round(a_eff / radius, 6),
         "ka_eff": round(ka_eff, 4),
         "rfx_monostatic_dbsm": round(mono, 4),
@@ -348,9 +450,17 @@ def main(argv):
         gated.append(r)
         passed = abs(r["delta_db"]) <= GATE_COARSE_DB
         aeff_ok = abs(r["a_eff_over_a"] - 1.0) <= A_EFF_TOL_COARSE
-        ok &= passed and aeff_ok
+        mat_ok = material_gate_ok({"n_distinct_eps": r["n_distinct_eps"],
+                                   "n_nonbackground_eps": 1,
+                                   "eps_realized": r["eps_realized"],
+                                   "eps_rel_dev": r["eps_rel_dev"]})
+        ok &= passed and aeff_ok and mat_ok
         print(_fmt(r) + ("  PASS" if passed else "  FAIL")
-              + ("" if aeff_ok else f"  A_EFF_OVER_A FAIL ({r['a_eff_over_a']:.4f})"))
+              + ("" if aeff_ok else f"  A_EFF_OVER_A FAIL ({r['a_eff_over_a']:.4f})")
+              + ("" if mat_ok else
+                 f"  MATERIAL FAIL (realized eps_r {r['eps_realized']:.6g}, "
+                 f"{r['n_distinct_eps']} distinct values; declared {EPS_R}, "
+                 f"tol {EPS_REALIZED_TOL} rel, {N_DISTINCT_EPS_EXPECTED} values)"))
 
     # No gated fine rung — a measured decision (module docstring): the
     # cpr-12.8 clearance scan (committed below as fine_rung_witness)
@@ -468,7 +578,8 @@ def main(argv):
                 "appearing convergent only at single clearances inside "
                 "the gated region, and the domain-size axis dominates. Non-FDTD corroboration "
                 "(Bempp PMCHWT) is an offline follow-up; no Bempp leg is "
-                "committed for the dielectric case yet."
+                "committed for the dielectric case yet. "
+                "MATERIAL FIDELITY (issue #812 re-gate, 2026-09-01): until #812 no gate in this case looked at the permittivity that was actually rasterized, and the dB channel cannot do that job -- the Mie oracle's sensitivity is 9.816/10.202/9.978/7.134 dB per unit RELATIVE permittivity at ka = 0.50/0.75/1.00/1.25, so the 6.3 dB window is a FACTOR-wide window in eps_r: the width of that window is COMMITTED rather than restated here -- validation/crossval/_17_dielectric_results/material_blind_window.json, keys summary.pass_runs_eps (every contiguous PASS run on the declared grid: [2.0, 4.5] and [5.0, 5.6]), summary.fail_islands_eps (the FAIL island 4.6-4.9 between them, where the ka = 1.25 bin sits on a Mie resonance -- found by the round-2 review after the original grid stepped over it; the grid now carries 0.1 steps from 4.0 to 5.6), summary.blind_window_bracket_eps (the run containing the declared 2.56, [2.0, 4.5]), summary.outer_pass_envelope_eps ([2.0, 5.6]), summary.first_failing_eps_below (1.8), summary.first_failing_eps_above (4.6) and summary.blind_window_over_material_gate_x (237.5, over the whole pass set), with the per-permittivity rows under scan[*] -- built with NO FDTD from the committed gated_coarse deltas plus the Mie oracle (scripts/diagnostics/build_cv17_material_blind_window.py) and re-derived from the same committed rows in tests/crossval/test_rcs_dielectric_sphere_mie_gates.py. Live defect runs at round 1's four permittivities (1.8 / 2.0 / 5.5 / 6.0) return the model's pass/fail verdict (design note section 5.1, prose-only magnitudes), but INSIDE the island they do not: the round-2 probe validation/crossval/_17_dielectric_results/cv17_permittivity_island.json (rasterizer delivering eps 4.5 ... 5.0, oracle at 2.56, four gated bins each) agrees with the model at summary.n_verdicts_agree_with_model = 3 of summary.n_runs = 6 -- the live gate PASSES at 4.6 / 4.7 / 4.8 where the model says FAIL (live 4.545 / 5.152 / 6.138 dB vs model 7.134 / 9.039 / 9.787) and FAILS only at 4.9 (6.405 dB). The first-order model's assumption -- discretization error independent of the permittivity -- does not hold on the ka = 1.25 Mie resonance, so the model over-predicts the island; the LIVE blind window is wider than the model's, which strengthens the conclusion this gate exists for and is stated rather than tuned. The 6.3 dB gate is round-up(envelope x 1.5) and cannot be tightened under the repo rule, and no tightening of it could resolve a permittivity error of a few percent anyway; this is stated rather than papered over. The permittivity is therefore gated on its OWN channel, the material twin of the existing per-row a_eff geometric gate: G17-A requires the permittivity read back out of the rasterized array to be within 0.5% relative of the declared 2.56 -- derived as half the gate's own 0.1 dB reporting quantum divided by the worst gated-ka sensitivity 10.202 dB per unit relative eps -- and G17-B requires the array to hold EXACTLY two distinct values (background 1.0 and the declared eps_r), which is the first check anywhere of this case's headline BINARY-rasterize claim; sub-cell averaging, a partial fill or a smoothed interface each add a third value. Measured on today's code the realized permittivity is float32(2.56) = 2.5599999428, i.e. 2.2e-8 relative, four orders inside G17-A, with exactly two distinct values at every gated bin."
             ),
             "config": {
                 "f0_hz": F0, "bandwidth": BANDWIDTH, "eps_r": EPS_R,
@@ -486,6 +597,8 @@ def main(argv):
             },
             "gates": {
                 "coarse_ka": KA_GATED_COARSE, "coarse_gate_db": GATE_COARSE_DB,
+                "eps_realized_tol": EPS_REALIZED_TOL,
+                "n_distinct_eps_expected": N_DISTINCT_EPS_EXPECTED,
                 "coarse_measured_envelope_db": round(env_coarse, 3),
                 "fine_rung_witness_envelope_db": round(env_fine_witness, 3),
                 "posture": "single gated tier: gate = round-UP(measured "
