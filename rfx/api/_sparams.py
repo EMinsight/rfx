@@ -1589,6 +1589,40 @@ def _assemble_coaxial_two_port_from_voltages(
     fact of the extractor — a different feed placement would need a
     different mapping.
 
+    **The general rule that constant is an instance of (issue #822)**.
+    ``forward_amp`` is the branch travelling TOWARD the reference plane
+    (already resolved inside the extractor by its own ``load_below``
+    test, for either ladder orientation). Which of ``a``/``b`` that is
+    depends on ONE further fact the extractor cannot know: whether the
+    reference plane is on the DUT side of the probes.
+
+    * Reference plane on the DUT side -- the plane IS the DUT, as in
+      :func:`_assemble_coax_msl_transition_from_voltages`, where both
+      planes are the junction: the wave travelling toward it is the
+      INCIDENT wave -> ``a = forward_amp``.
+    * Reference plane on the FAR side of the probes from the DUT -- this
+      lane: each plane is that port's own feed, with the through line
+      beyond the probes on the other side, for the top and the bottom
+      array alike: the wave travelling toward it is LEAVING the DUT ->
+      ``a = backward_amp``.
+
+    Each lane's answer is a constant of its geometry and each is written
+    as one. The sibling lane copied THIS lane's constant onto the opposite
+    geometry and inverted its whole S-matrix (#822).
+
+    This function's constant is unchanged and numerically byte-identical
+    through the #822 work: the lane is recorded as **validated with
+    scope** (issue #489, PI decision 2026-08-06) in
+    ``docs/guides/sparameter_support_matrix.md``, and any production edit
+    to it is PI-gated. What the #822 work DOES change
+    on this lane is the TEST contract: the planted fixtures below are now
+    built from geometry by
+    ``tests/_wave_convention.py::_plant_ladder_voltages_physical`` instead
+    of by inverting the extractor's own labels, so the constant above is
+    now PINNED by a test that would fail if it were wrong, and the
+    wrong-convention mirror asserts the exact ``inv(S_true)`` signature
+    instead of merely "not close".
+
     AD note (#489 leg 3)
     ---------------------
     ``s_params`` (and the other four returned arrays) are differentiable
@@ -1734,6 +1768,78 @@ def _assemble_coaxial_two_port_from_voltages(
     return solve.s_params, solve.cond_a, rec_resid, fit_resid, gamma
 
 
+def _ladder_split_witness(planes_m, v_by_drive, ref_m):
+    """Disjoint-half self-consistency witness for ONE probe ladder (issue #823).
+
+    Refit the SAME extractor
+    (:func:`rfx.sources.coaxial_port.coaxial_line_reflection_from_plane_voltages`)
+    on two DISJOINT CONTIGUOUS halves of the ladder, against the SAME reference
+    plane, and report how far the two halves disagree. For ``N`` probes the
+    halves are ``idx[0:N//2]`` and ``idx[N - N//2:N]`` -- for odd ``N`` the
+    middle probe belongs to neither, so the two fits never share a plane.
+
+    Why this exists: the lane's committed single-mode witness is
+    ``fit_residual``, computed over the WHOLE ladder. A residual computed over
+    a window that includes garbage cannot detect that the window is the
+    problem. Measured on the settled attempt-3 run (VESSL 369367257533), the
+    production 9-probe MSL ladder reports ``fit_residual`` 0.342/0.264/0.222 --
+    large, but attributed for three attempts to "the field is not two-wave
+    here" rather than to the ladder. Its two halves disagree about ``|Gamma|``
+    by 4.379/4.487/4.321 DECADES; the compliant 8-probe subset of the very
+    same dump disagrees by 0.005/0.001/0.002. That is three orders of
+    separation on a quantity the residual could not resolve at all.
+
+    Returns
+    -------
+    (gamma_dev, reflection_decades) : two ``(n_drives, n_freqs)`` float64 arrays
+        ``gamma_dev = |g_A - g_B| / (0.5*|g_A + g_B|)`` -- the symmetric relative
+        deviation of the complex propagation constant, and
+        ``reflection_decades = |log10(|Gamma_A| / |Gamma_B|)|`` -- decades of
+        disagreement in the reflection magnitude referred to ``ref_m``.
+        ``NaN`` when the ladder carries fewer than 6 probes (each half needs
+        >= 3 planes for the matrix pencil) or when a half's ``|Gamma|`` is zero
+        or non-finite. NaN means "no witness", never "a small number".
+
+    REPORT-ONLY. No gate, no refusal, no tolerance. The coax stub's own ladder
+    reads ``gamma_dev`` 0.11-0.34 on every run of this family -- the already
+    known 1 mm-span alpha-identification limit (#589) -- so a bar tight enough
+    to catch the MSL ladder would refuse the coax ladder for a different
+    defect. Gating is deliberately deferred (the PI sequencing puts the
+    standoff rule and this witness BEFORE any ``msl_fit_residual_max``).
+    """
+    from rfx.sources.coaxial_port import coaxial_line_reflection_from_plane_voltages
+
+    planes = np.asarray(planes_m, dtype=np.float64)
+    v = np.asarray(v_by_drive, dtype=np.complex128)
+    n_drives, n_planes, n_f = v.shape
+    gamma_dev = np.full((n_drives, n_f), np.nan, dtype=np.float64)
+    decades = np.full((n_drives, n_f), np.nan, dtype=np.float64)
+    half = n_planes // 2
+    if half < 3:
+        return gamma_dev, decades
+    lo = np.arange(half)
+    hi = np.arange(n_planes - half, n_planes)
+    for di in range(n_drives):
+        for fi in range(n_f):
+            try:
+                out_a = coaxial_line_reflection_from_plane_voltages(
+                    planes[lo], v[di, lo, fi], reference_plane_m=float(ref_m))
+                out_b = coaxial_line_reflection_from_plane_voltages(
+                    planes[hi], v[di, hi, fi], reference_plane_m=float(ref_m))
+            except (ValueError, np.linalg.LinAlgError):
+                continue
+            g_a, g_b = complex(out_a.gamma), complex(out_b.gamma)
+            g_mid = 0.5 * abs(g_a + g_b)
+            if g_mid > 0.0 and np.isfinite(g_mid):
+                dev = abs(g_a - g_b) / g_mid
+                if np.isfinite(dev):
+                    gamma_dev[di, fi] = float(dev)
+            r_a, r_b = abs(complex(out_a.reflection)), abs(complex(out_b.reflection))
+            if (np.isfinite(r_a) and np.isfinite(r_b) and r_a > 0.0 and r_b > 0.0):
+                decades[di, fi] = float(abs(np.log10(r_a / r_b)))
+    return gamma_dev, decades
+
+
 def _assemble_coax_msl_transition_from_voltages(
     *,
     z_coax_planes_m,
@@ -1829,6 +1935,54 @@ def _assemble_coax_msl_transition_from_voltages(
         POWER-wave amplitudes actually fed to the two-drive solve (post
         ``sqrt(Z0)`` division), exposed for audit per issue #581 review
         finding B2.
+
+    Notes
+    -----
+    **Wave-role convention (issue #822)**. ``forward_amp`` is the branch
+    travelling TOWARD the reference plane -- the extractor's own contract,
+    resolved inside it by its ``load_below = reference_plane_m <= z.mean()``
+    test, for either orientation of the ladder. Which of ``a``/``b`` that
+    branch is depends on ONE further fact the extractor cannot know:
+    whether the reference plane is on the DUT side of the probes.
+
+    * :meth:`_SparamMixin.compute_coax_msl_transition` (this function):
+      both reference planes are placed AT the junction (``ref_coax_m`` =
+      the junction z, ``ref_msl_m`` = ``float(junction_x)``) -- the
+      reference plane IS the DUT. The wave travelling toward the reference
+      plane is therefore the wave incident on the DUT, so
+      ``a = forward_amp`` and ``b = backward_amp`` at BOTH ports. That is
+      a constant of this lane and it is written as one. It does NOT depend
+      on which side of its ladder the junction sits: the extractor already
+      resolved "toward the reference plane" per call, so the same constant
+      holds for both MSL facings the calling method supports (``"-x"``,
+      junction below the ladder -- the committed attempt-2/3/3b fixture --
+      and ``"+x"``, junction above it; see the method's
+      ``(1 if msl_pe.direction == "+x" else -1)`` monotonicity branch).
+      Pinned by ``tests/test_coax_msl_transition_wave_roles.py::
+      test_assembler_wave_roles_hold_on_a_mirrored_msl_ladder``, whose
+      docstring records what reading ``a = backward_amp`` at the MSL port
+      of the mirrored fixture does to ``S_code``.
+      (An earlier revision of this fix wrote the choice as a per-port bit
+      ``(ref_m - centroid) * sign(ref_m - centroid) > 0``. That expression
+      is true whenever ``ref_m != centroid``, so it was this constant with
+      an unreachable ``backward_amp`` branch; it is now written as the
+      constant it always was.)
+    * :func:`_assemble_coaxial_two_port_from_voltages`: each reference
+      plane is that port's own feed, on the FAR side of the probes from
+      the DUT, so the wave travelling toward it is LEAVING the DUT ->
+      ``a = backward_amp``.
+
+    Before #822 this function used the two-port lane's constant
+    (``a = backward_amp``) on the opposite geometry, which swaps ``a`` and
+    ``b`` at BOTH ports; since ``S = B inv(A)``, exchanging ``A`` and ``B``
+    returns ``inv(S_true)``. Every number this function produced before the
+    fix is that inverse. The regression gate is
+    ``tests/test_coax_msl_transition_wave_roles.py::
+    test_assembler_wave_roles_follow_the_junction_side_reference_plane``,
+    whose planted voltages are built from GEOMETRY
+    (``tests/_wave_convention.py::_plant_ladder_voltages_physical``) and
+    never from the extractor's own labels -- planting from the labels is
+    why the pre-existing planted test passed under either assignment.
     """
     from rfx.sources.coaxial_port import (
         coaxial_line_reflection_from_plane_voltages,
@@ -1874,11 +2028,20 @@ def _assemble_coax_msl_transition_from_voltages(
                 x_msl, v_msl_by_drive[drive_idx, :, fi],
                 reference_plane_m=float(ref_msl_m),
             )
+            # Wave roles (#822): the extractor already resolved which branch
+            # travels TOWARD each reference plane (forward_amp, by its own
+            # load_below test, for either ladder orientation). On THIS lane
+            # both reference planes ARE the junction, so that branch is the
+            # wave incident on the DUT: a = forward_amp, b = backward_amp at
+            # both ports -- a constant of the lane, written as one. See the
+            # Notes section above.
+            a_coax, b_coax = out_coax.forward_amp, out_coax.backward_amp
+            a_msl, b_msl = out_msl.forward_amp, out_msl.backward_amp
             # Raw modal-voltage waves (volts, Z0-free) -> power waves.
-            a_inc[0, drive_idx, fi] = out_coax.backward_amp / sqrt_z0[0]
-            b_out[0, drive_idx, fi] = out_coax.forward_amp / sqrt_z0[0]
-            a_inc[1, drive_idx, fi] = out_msl.backward_amp / sqrt_z0[1]
-            b_out[1, drive_idx, fi] = out_msl.forward_amp / sqrt_z0[1]
+            a_inc[0, drive_idx, fi] = a_coax / sqrt_z0[0]
+            b_out[0, drive_idx, fi] = b_coax / sqrt_z0[0]
+            a_inc[1, drive_idx, fi] = a_msl / sqrt_z0[1]
+            b_out[1, drive_idx, fi] = b_msl / sqrt_z0[1]
             rec_resid[0, drive_idx, fi] = out_coax.recurrence_residual
             fit_resid[0, drive_idx, fi] = out_coax.fit_residual
             gamma[0, drive_idx, fi] = out_coax.gamma
@@ -6516,6 +6679,32 @@ class _SparamMixin:
             attempt 1's exact behavior (and its committed fixture's
             numbers) when left unset.
 
+            NEAR-FIELD STANDOFF (issue #823) — the one constraint these
+            three are NOT free of. Every probe must clear BOTH ends the
+            ladder is referred to (the MSL port's own feed plane AND the
+            reference plane at ``junction_x``) by at least
+            ``max(3, round(5*h_sub/dx))`` cells. Both are launch
+            discontinuities, and within a few substrate thicknesses of one
+            the field is not the guided mode yet, so a matrix-pencil fit
+            that includes such a probe reports the LADDER's error as the
+            field's: on the settled attempt-3 run (VESSL 369367257533) a
+            single probe 0.4 mm = 1.33*h_sub from the feed dragged the
+            full-ladder residual from 3.7e-3 to 0.342, and this lane spent
+            three attempts attributing that to junction physics. The
+            threshold is the repo's EXISTING issue-#80 Fix B constant —
+            see :func:`rfx.api._preflight.msl_source_near_field_standoff_cells`
+            for the derivation that licenses reusing it here, and for the
+            W/h limitation it carries. Preflight cannot enforce it on this
+            lane (these are METHOD arguments and never reach the
+            registered ``_MSLPortEntry``), so this method evaluates the
+            same predicate on its own REALIZED ladder and emits a
+            ``UserWarning`` naming the offending probes. REPORT-ONLY:
+            nothing is refused. Read it together with
+            ``result.ladder_split_gamma_dev`` /
+            ``result.ladder_split_reflection_decades`` (computed when
+            ``return_ladder_voltages=True``, ``None`` otherwise), which say
+            whether the ladder actually disagrees with itself.
+
         ``extra_flux_monitors`` (issue #589 flux-adjudication instrument):
         an ENERGY-WITNESS channel, not an extractor change. Pass the entry
         objects ``Simulation.add_flux_monitor`` registers (build them on a
@@ -6542,13 +6731,21 @@ class _SparamMixin:
         LABEL. The dict is documented field-by-field on
         :class:`~rfx.api._spec.CoaxMSLTransitionResult`. It is built from
         ``.copy()`` of arrays that are complete before, and consumed by,
-        :func:`_assemble_coax_msl_transition_from_voltages`, and nothing else
-        in this method reads the flag, so every returned number is
-        bit-identical with the option off or on — gated by
-        ``tests/test_coax_msl_transition_ladder_dump.py::
+        :func:`_assemble_coax_msl_transition_from_voltages`, so every
+        S-parameter number is bit-identical with the option off or on —
+        gated by ``tests/test_coax_msl_transition_ladder_dump.py::
         test_return_ladder_voltages_does_not_perturb_s`` (byte-identity A/B,
         the same discipline as the flux witness above; the round-trip
         assertion there also proves the dump IS what the assembler consumed).
+        The same flag switches on the issue-#823 LADDER SELF-CONSISTENCY
+        WITNESS, ``result.ladder_split_gamma_dev`` /
+        ``result.ladder_split_reflection_decades`` (``None`` when the flag
+        is off): a disjoint-half refit of each ladder, i.e. a Python loop of
+        2 drives x n_freqs x 2 matrix pencils per ladder over exactly the
+        arrays the dump exposes. It is computed AFTER the assembler from
+        those arrays and moves no S-parameter number; it is opt-in so that
+        a default call pays for no extra pencil solves. Documented
+        field-by-field on :class:`~rfx.api._spec.CoaxMSLTransitionResult`.
 
         Returns
         -------
@@ -6894,6 +7091,77 @@ class _SparamMixin:
         # DFT-plane construction and the voltage array stay index-consistent.
         xs_sorted = sorted(xs_ladder)
 
+        # ---- Issue #823: source near-field standoff on the REALIZED ladder.
+        # ``msl_probe_count/start/spacing`` are METHOD arguments — they never
+        # reach the registered ``_MSLPortEntry``, so preflight's own check 5
+        # (``_check_msl_port_geometry``) is structurally blind to this ladder.
+        # Evaluate the SAME predicate here, on the coordinates the extractor
+        # will actually sample, at BOTH ends the ladder is referred to: the
+        # port's own feed plane AND the reference plane at the junction.
+        #
+        # Emitted with ``warnings.warn``, deliberately NOT by constructing a
+        # PreflightWarning: this is not a preflight check (this method never
+        # calls preflight — it is DIAGNOSTIC_ONLY in
+        # tests/test_preflight_advisory_emission_contract.py's
+        # EMISSION_CLASSIFICATION) and the emission-site freeze in that file
+        # counts PreflightWarning/PreflightErrorWarning/PreflightIssue/
+        # PreflightConfigError constructions only.
+        #
+        # REPORT-ONLY: no gate, no refusal, and no msl_fit_residual_max —
+        # that gate is explicitly out of scope until the standoff rule and
+        # the ladder self-consistency witness have both been exercised on a
+        # settled run (PI sequencing).
+        from rfx.api._preflight import (
+            msl_source_near_field_standoff_cells as _msl_standoff_cells,
+        )
+        _standoff_cells = _msl_standoff_cells(float(msl_pe.height), float(dz))
+        _standoff_m = _standoff_cells * float(dz)
+        _feed_x_msl = float(msl_pe.position[0])
+        _standoff_hits = []
+        for _end_label, _end_x in (
+            (f"the MSL port feed plane (x = {_feed_x_msl * 1e3:.2f} mm)", _feed_x_msl),
+            (f"the reference plane at the junction "
+             f"(x = {float(junction_x) * 1e3:.2f} mm)", float(junction_x)),
+        ):
+            _bad = [x for x in xs_sorted if abs(x - _end_x) < _standoff_m - 1e-12]
+            if _bad:
+                _standoff_hits.append(
+                    f"{len(_bad)} of {len(xs_sorted)} probes sit within "
+                    f"{_standoff_m * 1e3:.2f} mm of {_end_label} "
+                    f"(nearest {min(abs(x - _end_x) for x in _bad) * 1e3:.2f} mm "
+                    f"= {min(abs(x - _end_x) for x in _bad) / float(msl_pe.height):.2f}"
+                    f"·h_sub)"
+                )
+        if _standoff_hits:
+            import warnings as _wnf
+            _wnf.warn(
+                "compute_coax_msl_transition(): the MSL probe ladder "
+                f"(msl_probe_count={_msl_probe_count}, "
+                f"msl_probe_start_cells={_msl_probe_start_cells}, "
+                f"msl_probe_spacing_cells={_msl_probe_spacing_cells}; realized "
+                f"x = {', '.join(f'{x * 1e3:.2f}' for x in xs_sorted)} mm) "
+                "violates the source near-field standoff of "
+                f"{_standoff_cells} cells ({_standoff_m * 1e3:.2f} mm = "
+                "5·h_sub, the issue-#80 Fix B constant add_msl_port's own auto "
+                "n_probe_offset already floors to): "
+                + "; ".join(_standoff_hits)
+                + ". Within a few substrate thicknesses of a launch "
+                "discontinuity the field is not the guided mode yet, and the "
+                "matrix-pencil fit reports the LADDER's error as the field's: "
+                "measured on the settled attempt-3 run (VESSL 369367257533) a "
+                "probe at 1.33·h_sub carried 82-128% two-wave model error and "
+                "dragged the full-ladder fit_residual to 0.342/0.264/0.222, "
+                "while every window excluding it fit to 1e-5..4e-3. Move the "
+                "ladder inside [junction + 5·h_sub, feed - 5·h_sub] by raising "
+                "msl_probe_start_cells and/or lowering msl_probe_count, and "
+                "read result.ladder_split_gamma_dev / "
+                "result.ladder_split_reflection_decades (computed when "
+                "return_ladder_voltages=True) for whether this ladder "
+                "actually disagrees with itself. REPORT-ONLY: nothing is "
+                "refused.",
+                stacklevel=2,
+            )
+
         pec_mask_np = None if pec_mask is None else np.asarray(pec_mask)
         cells = _msl_yz_cells(grid, msl_port_base)
         j_set = sorted({c[1] for c in cells})
@@ -7040,6 +7308,27 @@ class _SparamMixin:
         reference_planes = np.asarray([ref_coax_m, float(junction_x)], dtype=float)
         z0_ref = np.asarray([float(z_tem), float(z0_msl)], dtype=float)
 
+        # ---- Issue #823 ladder self-consistency witness (REPORT-ONLY) ----
+        # Refit each port's ladder on two disjoint contiguous halves with the
+        # same reference plane and the same extractor, and report the
+        # disagreement. Computed AFTER the assembler has produced every
+        # number above, from the same arrays, so it cannot move one:
+        # ``fit_residual`` cannot detect that its own window is the problem,
+        # this can. See _ladder_split_witness for the measured separation.
+        # OPT-IN with the ladder dump: it is a Python-loop refit (2 drives x
+        # n_freqs x 2 matrix pencils per ladder) over the very arrays
+        # ``return_ladder_voltages`` exposes, so a default call never runs
+        # it and both fields stay None.
+        ladder_split_gamma_dev = None
+        ladder_split_reflection_decades = None
+        if return_ladder_voltages:
+            _split_g_coax, _split_d_coax = _ladder_split_witness(
+                z_planes_coax_m, v_coax_by_drive, ref_coax_m)
+            _split_g_msl, _split_d_msl = _ladder_split_witness(
+                np.asarray(xs_sorted), v_msl_by_drive, float(junction_x))
+            ladder_split_gamma_dev = np.stack([_split_g_coax, _split_g_msl])
+            ladder_split_reflection_decades = np.stack([_split_d_coax, _split_d_msl])
+
         # #589 ladder dump (read-only). Taken AFTER the assembler consumed
         # the very same arrays, so no number above can depend on the flag.
         # ``msl_ladder_i`` is recomputed here with the same expression the
@@ -7077,6 +7366,8 @@ class _SparamMixin:
             a_inc=a_inc,
             b_out=b_out,
             settling_db=settling_db,
+            ladder_split_gamma_dev=ladder_split_gamma_dev,
+            ladder_split_reflection_decades=ladder_split_reflection_decades,
             status="experimental",
             flux_monitors=(flux_by_drive if extra_flux_monitors else None),
             ladder_voltages=ladder_voltages,

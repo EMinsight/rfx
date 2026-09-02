@@ -30,9 +30,10 @@ exponential branch the assembler READS as ``a``, so it passes for either
 label assignment and cannot discriminate H1. The planting here uses only
 the physical direction of travel and never consults the extractor.
 
-Status of the W5 gate (measured 2026-09-01, unmodified assembler, this file)
----------------------------------------------------------------------------
-RED, and the failure is exactly the label swap and nothing else::
+Status of the W5 gate (was RED; GREEN since the #822 fix, measured 2026-09-01)
+------------------------------------------------------------------------------
+BEFORE the fix (unmodified assembler, ``a_inc = backward_amp``), RED, and
+the failure was exactly the label swap and nothing else::
 
     bin0: max|S_code-S_true|=1.476  max|S_code-inv(S_true)|=9.29e-14
     bin1: max|S_code-S_true|=1.15   max|S_code-inv(S_true)|=4.25e-14
@@ -42,20 +43,46 @@ RED, and the failure is exactly the label swap and nothing else::
     label-swap counterfactual max|S-S_true| = 4.82e-14
     lam_min(I-S^H S): truth +0.326/+0.467/+0.533, code -1.59/-1.52/-3.29
 
-i.e. BOTH ports' incident/outgoing roles are inverted, ``S_code =
-inv(S_true)``, and re-solving with ``a`` and ``b`` exchanged returns
-``S_true`` to 5e-14. The fix (swap ``forward_amp``/``backward_amp`` at the
-four assignments in the assembler, plus flipping ``_voltages_from_ab``'s
-planting branch in ``tests/test_coax_msl_transition.py``) is a PRODUCTION
-change and is PI-gated (design open question 1); it is deliberately NOT
-applied in the commit that adds this file. The gate is therefore committed
-as ``xfail(strict=True)`` -- never as a weakened assertion -- so the fix PR
-MUST remove the marker (an unexpected pass reds the suite). The two
-mechanism pins
-(``test_h1_diagnostic_unmodified_assembler_returns_inverse_of_s_true``,
-``test_h1_diagnostic_label_swap_counterfactual_recovers_s_true``) MUST be
-deleted in that same PR: after the fix they describe code that no longer
-exists.
+i.e. BOTH ports' incident/outgoing roles were inverted and ``S_code =
+inv(S_true)``. AFTER the fix (``a = forward_amp`` at both ports of
+``_assemble_coax_msl_transition_from_voltages`` -- the constant of a lane
+whose reference planes ARE the DUT), GREEN, and the same three numbers
+read the other way round::
+
+    bin0: max|S_code-S_true|=4.82e-14  max|S_code-inv(S_true)|=1.476
+    bin1: max|S_code-S_true|=2.81e-14  max|S_code-inv(S_true)|=1.150
+    bin2: max|S_code-S_true|=2.67e-14  max|S_code-inv(S_true)|=1.700
+    max fit_residual = 1.72e-15            (unchanged: same pencil)
+    |a_code[0,1]|/|b_code[0,1]| = 0.09     (= the planted echo itself)
+    lam_min(I-S^H S): code +0.326/+0.467/+0.533, equal to the truth
+
+and the wrong-side control (both ``dut_sign`` flipped, CORRECTED
+assembler) reproduces the old RED table exactly, as it must -- planting on
+the wrong side and reading with the wrong constant are the same error::
+
+    max|S-inv(S_true)| = 9.37e-14/3.63e-14/5.14e-14
+    max|S-S_true|      = 1.48/1.15/1.70
+    |a[0,1]|/|b[0,1]|  = 11.1111,  lam_min = -1.59/-1.52/-3.28
+
+The gate was committed as ``xfail(strict=True)`` -- never as a weakened
+assertion -- and the fix PR removed the marker (with the fix in place and
+the marker still on, pytest reported ``[XPASS(strict)] #589 H1: ...``).
+
+Disposition of the two mechanism pins, which this docstring originally
+predeclared deleting BOTH of (changed deliberately, not silently; routed
+to the PI as design open question 7):
+
+* ``test_h1_diagnostic_unmodified_assembler_returns_inverse_of_s_true``
+  is DELETED as predeclared -- it asserted a property of code that no
+  longer exists, and it failed under the fix (measured max absolute
+  difference 1.69997933) exactly as designed.
+* ``test_h1_diagnostic_label_swap_counterfactual_recovers_s_true`` is
+  INVERTED rather than deleted, as
+  ``test_wrong_side_planting_returns_the_inverse_of_s_true``: plant BOTH
+  ports on the wrong side of their reference planes and the CORRECTED
+  assembler must return exactly ``inv(S_true)``. Keeping it costs nothing
+  and buys the one thing a newly-green gate needs -- a non-firing control
+  proving the gate can still fail.
 
 Independence note (review blocker 2): this file is a REGRESSION test of a
 convention, not new evidence about the FDTD run. It cannot by itself decide
@@ -73,6 +100,7 @@ import pytest
 
 from rfx.api._sparams import _assemble_coax_msl_transition_from_voltages
 from rfx.sources.coaxial_port import coaxial_line_reflection_from_plane_voltages
+from tests._wave_convention import plant_ladder_voltages_physical
 
 C0 = 299_792_458.0
 
@@ -93,6 +121,33 @@ _ALPHA_MSL = 5.0         # /m
 _Z0_COAX = 45.46         # analytic coax TEM Z0 the method normalises with
 _Z0_MSL = 53.11          # analytic HJ microstrip Zc the method normalises with
 _GAMMA_T = 0.09          # terminator echo on the NON-driven port (F2 estimate)
+
+# Which side of each ladder the DUT (the coax<->MSL junction) sits on. NOT a
+# free choice: asserted against the realized plane positions above by
+# ``test_the_planted_dut_signs_are_the_fixture_geometry`` -- the coax
+# junction (2.5 mm) is at LARGER z than its probes (0.9-1.9 mm), the MSL
+# junction (1.0 mm) at SMALLER x than its probes (2.6-10.6 mm).
+_DUT_SIGN_COAX = +1.0
+_DUT_SIGN_MSL = -1.0
+
+# The OTHER MSL orientation the calling method supports (issue #822 review).
+# ``compute_coax_msl_transition`` accepts a "+x"-facing MSL port -- its
+# ladder monotonicity branch is ``(1 if msl_pe.direction == "+x" else -1)``
+# -- and passes ``ref_msl_m = float(junction_x)`` for either facing. On such
+# a fixture the junction sits at LARGER x than the ladder, so the MSL
+# ``dut_sign`` is +1, the mirror image of the committed one. Geometry below:
+# the same 9 probes at 1 mm pitch and the same 1.6 mm junction standoff,
+# mirrored about the ladder.
+_X_MSL_MIRROR_M = 2.8e-3 + 1.0e-3 * np.arange(9)
+_REF_MSL_MIRROR_M = 12.4e-3
+_DUT_SIGN_MSL_MIRROR = +1.0
+
+
+def _msl_geometry(mirror):
+    """(planes, reference plane, dut_sign) for either MSL port facing."""
+    if mirror:
+        return _X_MSL_MIRROR_M, _REF_MSL_MIRROR_M, _DUT_SIGN_MSL_MIRROR
+    return _X_MSL_M, _REF_MSL_M, _DUT_SIGN_MSL
 
 
 def _gammas():
@@ -153,42 +208,48 @@ def _plant_ab_signal_flow(s, gamma_t):
     return a, b
 
 
-def _physical_ladder_voltages(a, b, *, gamma, planes_m, ref_m, junction_above, z0):
+def _physical_ladder_voltages(a, b, *, gamma, planes_m, ref_m, dut_sign, z0):
     """V(axis) at the probe planes from the PHYSICAL direction of travel.
 
-    ``junction_above=True`` (coax): the incident wave travels +axis toward
-    the junction, ``V_a = sqrt(z0) a exp(-gamma (z - z_ref))``; the outgoing
-    wave travels -axis, ``V_b = sqrt(z0) b exp(+gamma (z - z_ref))``.
-    ``junction_above=False`` (MSL): the incident wave travels -axis toward
-    the junction, ``V_a = sqrt(z0) a exp(+gamma (x - x_ref))``; the outgoing
-    wave travels +axis, ``V_b = sqrt(z0) b exp(-gamma (x - x_ref))``.
+    Thin modal-voltage wrapper (the ``sqrt(z0)`` power-wave -> volt-wave
+    scale) around the ONE frozen planting contract,
+    :func:`tests._wave_convention.plant_ladder_voltages_physical`, shared
+    with ``tests/test_coax_two_port_fdtd.py`` and
+    ``tests/test_coax_msl_transition.py`` (issue #822). ``dut_sign = +1``
+    (coax here): the junction lies at LARGER coordinate than the ladder, so
+    the incident wave travels +axis toward it as ``exp(-gamma (z - z_ref))``
+    and the outgoing wave travels -axis. ``dut_sign = -1`` (MSL here): the
+    junction lies at smaller coordinate, so the two exponentials exchange.
     In both cases ``V(ref) = sqrt(z0) (a + b)`` and the incident wave DECAYS
-    (alpha > 0) as it approaches the junction. Phase decreases along the
+    (alpha > 0) as it approaches the junction; phase decreases along the
     direction of travel (``exp(-j beta s)``), matching the repo's
     ``exp(-j 2 pi f t)`` DFT kernel.
     """
-    d = np.asarray(planes_m, dtype=np.float64) - float(ref_m)     # (n_planes,)
-    g = np.asarray(gamma, dtype=np.complex128)                    # (n_f,)
-    sign = -1.0 if junction_above else +1.0
-    e_inc = np.exp(sign * np.multiply.outer(d, g))
-    e_out = np.exp(-sign * np.multiply.outer(d, g))
-    return np.sqrt(z0) * (e_inc * a[None, :] + e_out * b[None, :])
+    return np.sqrt(z0) * plant_ladder_voltages_physical(
+        a, b, gamma=gamma, planes_m=planes_m, ref_m=ref_m, dut_sign=dut_sign,
+    )
 
 
-def _w5_fixture():
+def _w5_fixture(*, wrong_side=False, mirror_msl=False):
+    """Planted ladders. ``wrong_side=True`` flips ``dut_sign`` at BOTH ports
+    (the non-firing control: the fixture, not the assembler, is wrong).
+    ``mirror_msl=True`` plants the MSL ladder on the OTHER supported port
+    facing (junction at larger x), where the MSL ``dut_sign`` is +1."""
     s = _s_true()
     a, b = _plant_ab_signal_flow(s, _GAMMA_T)
     g_c, g_m = _gammas()
+    x_msl, ref_msl, dut_sign_msl = _msl_geometry(mirror_msl)
+    flip = -1.0 if wrong_side else +1.0
     v_coax = np.stack([
         _physical_ladder_voltages(
             a[0, drive], b[0, drive], gamma=g_c, planes_m=_Z_COAX_M,
-            ref_m=_REF_COAX_M, junction_above=True, z0=_Z0_COAX,
+            ref_m=_REF_COAX_M, dut_sign=flip * _DUT_SIGN_COAX, z0=_Z0_COAX,
         ) for drive in range(2)
     ])
     v_msl = np.stack([
         _physical_ladder_voltages(
-            a[1, drive], b[1, drive], gamma=g_m, planes_m=_X_MSL_M,
-            ref_m=_REF_MSL_M, junction_above=False, z0=_Z0_MSL,
+            a[1, drive], b[1, drive], gamma=g_m, planes_m=x_msl,
+            ref_m=ref_msl, dut_sign=flip * dut_sign_msl, z0=_Z0_MSL,
         ) for drive in range(2)
     ])
     return s, a, b, v_coax, v_msl
@@ -203,12 +264,14 @@ def _lambda_min_passivity(s):
     return np.asarray(out)
 
 
-def _run_unmodified_assembler():
-    s, a, b, v_coax, v_msl = _w5_fixture()
+def _run_assembler(*, wrong_side=False, mirror_msl=False):
+    s, a, b, v_coax, v_msl = _w5_fixture(wrong_side=wrong_side,
+                                         mirror_msl=mirror_msl)
+    x_msl, ref_msl, _ = _msl_geometry(mirror_msl)
     s_code, cond_a, cond_a_eq, rec_resid, fit_resid, gamma_fit, a_code, b_code = (
         _assemble_coax_msl_transition_from_voltages(
-            z_coax_planes_m=_Z_COAX_M, x_msl_planes_m=_X_MSL_M,
-            ref_coax_m=_REF_COAX_M, ref_msl_m=_REF_MSL_M,
+            z_coax_planes_m=_Z_COAX_M, x_msl_planes_m=x_msl,
+            ref_coax_m=_REF_COAX_M, ref_msl_m=ref_msl,
             v_coax_by_drive=v_coax, v_msl_by_drive=v_msl,
             z0_coax=_Z0_COAX, z0_msl=_Z0_MSL,
         )
@@ -238,11 +301,11 @@ def test_planted_truth_is_passive_and_the_planting_is_self_consistent():
     for drive in range(2):
         v_ref_c = _physical_ladder_voltages(
             a[0, drive], b[0, drive], gamma=g_c, planes_m=[_REF_COAX_M],
-            ref_m=_REF_COAX_M, junction_above=True, z0=_Z0_COAX)[0]
+            ref_m=_REF_COAX_M, dut_sign=_DUT_SIGN_COAX, z0=_Z0_COAX)[0]
         np.testing.assert_allclose(v_ref_c, np.sqrt(_Z0_COAX) * (a[0, drive] + b[0, drive]))
         v_ref_m = _physical_ladder_voltages(
             a[1, drive], b[1, drive], gamma=g_m, planes_m=[_REF_MSL_M],
-            ref_m=_REF_MSL_M, junction_above=False, z0=_Z0_MSL)[0]
+            ref_m=_REF_MSL_M, dut_sign=_DUT_SIGN_MSL, z0=_Z0_MSL)[0]
         np.testing.assert_allclose(v_ref_m, np.sqrt(_Z0_MSL) * (a[1, drive] + b[1, drive]))
     assert v_coax.shape == (2, 6, 3) and v_msl.shape == (2, 9, 3)
 
@@ -271,33 +334,14 @@ def test_extractor_forward_amp_means_toward_reference_plane(fi):
 
 
 # ---------------------------------------------------------------------------
-# W5 -- the H1 gate (RED on the unmodified assembler; PI-gated fix)
+# W5 -- the H1 gate (was RED as xfail(strict=True); GREEN since the #822 fix)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#589 H1: _assemble_coax_msl_transition_from_voltages assigns "
-        "a_inc = backward_amp / b_out = forward_amp (copied from the coax "
-        "two-port lane whose reference planes sit on the FAR side of the "
-        "probes); on this lane both reference planes sit at the junction so "
-        "forward_amp IS the incident wave and S_code = inv(S_true). "
-        "Measured RED 2026-09-01 (max|S_code - S_true| = 1.48/1.15/1.70 per "
-        "bin; max|S_code - inv(S_true)| = 9.3e-14/4.3e-14/9.4e-14; "
-        "max fit_residual 1.7e-15). Fix is a PRODUCTION change and is "
-        "PI-gated (design open question 1); remove this marker in the fix PR. "
-        "Lane: this is an offline numpy test with no slow/slow_physics "
-        "marker, so the default fast suite (.github/workflows/pr-tests.yml "
-        "fast-suite, plain pytest under pyproject addopts) collects it on "
-        "every PR and strict=True reds that lane the day the fix lands "
-        "without removing this marker."
-    ),
-)
 def test_assembler_wave_roles_follow_the_junction_side_reference_plane():
     """W5: physical-convention planted voltages -> the assembler must return
     S_true, a passive S, and a SMALL incident wave at the non-driven coax
     port (the far-drive case: the backward wave dominates there)."""
-    s, a, b, s_code, fit_resid, gamma_fit, a_code, b_code = _run_unmodified_assembler()
+    s, a, b, s_code, fit_resid, gamma_fit, a_code, b_code = _run_assembler()
     assert np.all(fit_resid < 1e-9), fit_resid.max()     # the pencil itself is clean
     g_c, g_m = _gammas()
     np.testing.assert_allclose(gamma_fit[0], np.broadcast_to(g_c, gamma_fit[0].shape), rtol=1e-6)
@@ -310,49 +354,112 @@ def test_assembler_wave_roles_follow_the_junction_side_reference_plane():
         np.abs(a_code[0, 1]), np.abs(b_code[0, 1]))
 
 
-def test_h1_diagnostic_unmodified_assembler_returns_inverse_of_s_true():
-    """DIAGNOSTIC PIN of the H1 mechanism (temporary -- DELETE in the fix PR,
-    where it must fail): on the W5 planting the unmodified assembler returns
-    exactly ``inv(S_true)`` -- the signature of BOTH ports having their
-    incident/outgoing roles swapped (``B inv(A)`` with A and B exchanged).
-    The recorded attempt-3 run shows the same symptom family: coax-ladder
-    ``|a_inc/b_out| = 11.1/11.6/11.9`` at the NON-driven coax port under MSL
-    drive, and ``inv(S_code)`` not passive (H1 alone is not the whole story
-    -- see design H4/H8)."""
-    s, a, b, s_code, fit_resid, gamma_fit, a_code, b_code = _run_unmodified_assembler()
+def test_wrong_side_planting_returns_the_inverse_of_s_true():
+    """Non-firing control for the now-GREEN gate: the wrong convention must
+    NOT also pass, and it must fail in the ONE way the physics predicts.
+
+    Plant both ladders with ``dut_sign`` flipped -- i.e. claim the junction
+    is on the far side of each ladder from where it actually is -- and feed
+    them to the CORRECTED assembler. Both ports then have their
+    incident/outgoing roles exchanged, so ``S = B inv(A)`` with ``A`` and
+    ``B`` swapped, i.e. exactly ``inv(S_true)``. Asserting the exact inverse
+    (not merely "not close") is what makes this a statement about the LABELS
+    rather than about the pencil, the Z0 normalization, the reference-plane
+    extrapolation or the two-drive solve: every one of those stages runs
+    unchanged here.
+
+    This test replaces
+    ``test_h1_diagnostic_label_swap_counterfactual_recovers_s_true``, which
+    described the pre-#822 assembler (see this module's docstring for the
+    disposition of both former mechanism pins).
+    """
+    s, a, b, s_code, fit_resid, gamma_fit, a_code, b_code = _run_assembler(
+        wrong_side=True)
+    assert np.all(fit_resid < 1e-9), fit_resid.max()   # the pencil is still clean
     s_inv = np.stack([np.linalg.inv(s[:, :, fi]) for fi in range(s.shape[-1])], axis=-1)
     np.testing.assert_allclose(s_code, s_inv, atol=1e-9)
-    # The two labels are exactly exchanged: a_code == sqrt-normalised b, b_code == a.
-    np.testing.assert_allclose(a_code, b, atol=1e-9)
-    np.testing.assert_allclose(b_code, a, atol=1e-9)
-    # And the mislabelled 'incident' wave at the non-driven coax port under
-    # MSL drive is the BIG one (1/gamma_t = 11.1), as in the attempt-3 JSON.
+    # ... and it is NOT the truth: the two differ by O(1), so this control
+    # genuinely fires (a degenerate S_true with inv(S_true) == S_true would
+    # make the assertion above vacuous).
+    for fi in range(s.shape[-1]):
+        assert np.abs(s_inv[:, :, fi] - s[:, :, fi]).max() > 1.0
+    # The exchanged roles are visible in the raw amplitudes too: the
+    # mislabelled 'incident' wave at the non-driven coax port under the MSL
+    # drive is the BIG one (1/gamma_t = 11.1), the symptom family recorded on
+    # the attempt-3 run before the fix.
     ratio = np.abs(a_code[0, 1]) / np.abs(b_code[0, 1])
     np.testing.assert_allclose(ratio, 1.0 / _GAMMA_T, rtol=1e-9)
-    # Not passive: a swapped passive S is generally over-unity.
-    assert np.any(_lambda_min_passivity(s_code) < 0.0)
 
 
-def test_h1_diagnostic_label_swap_counterfactual_recovers_s_true():
-    """DIAGNOSTIC PIN (temporary -- DELETE in the fix PR): re-solving the
-    assembler's OWN power waves with ``a`` and ``b`` exchanged returns
-    ``S_true``.
+def test_assembler_wave_roles_hold_on_a_mirrored_msl_ladder():
+    """The SAME gate on the OTHER MSL port facing the method supports.
 
-    This is what makes the W5 red a statement about the LABELS rather than
-    about the pencil, the Z0 normalization, the reference-plane
-    extrapolation or the two-drive solve: every one of those stages is used
-    unchanged here, and only the two roles are exchanged at the solve. It is
-    also the exact algebraic content of the driver's report-only
-    "label-swap counterfactual" table -- a PREDICTION of H1, never a
-    measurement.
+    ``compute_coax_msl_transition`` places no guard on ``msl_pe.direction``
+    -- it handles both facings explicitly (its ladder monotonicity test is
+    ``(1 if msl_pe.direction == "+x" else -1)``) and sets
+    ``ref_msl_m = float(junction_x)`` either way. The assembler's constant
+    ``a = forward_amp`` is facing-independent because the EXTRACTOR
+    resolves "the branch travelling toward the reference plane" per call
+    (its ``load_below`` test); what this arm pins is that nothing in the
+    assembler re-derives the orientation on top of that. Measured
+    2026-09-01 on this mirrored fixture with the MSL port read as
+    ``a = backward_amp`` instead, pencil clean (max fit_residual 2.52e-15,
+    i.e. not a fit problem)::
+
+        max|S_code - S_true|   3.554 / 2.649 / 5.107
+        lam_min(I - S^H S)    -20.87 / -13.72 / -39.12  (truth +0.326/+0.467/+0.533)
+
+    With the shipped constant the same fixture reads instead::
+
+        max|S_code - S_true|   4.88e-14 / 2.79e-14 / 2.67e-14
+        lam_min(I - S^H S)     +0.3258 / +0.4670 / +0.5334 (equal to the truth)
+
+    Re-measured 2026-09-02 with the same swap applied on the COMMITTED
+    facing: identical, 3.554 / 2.649 / 5.107 and -20.87 / -13.72 / -39.12.
+    Note what this arm can NOT do: it cannot fail under a hard-coded
+    ``a = forward_amp``, because that constant is physically right for
+    both facings -- the wrong reading fails identically on both. An earlier revision of the fix wrote the constant as a
+    per-port bit ``(ref_m - centroid) * sign(ref_m - centroid) > 0``, which
+    is true whenever ``ref_m != centroid`` and so was the same constant
+    with an unreachable branch; the assembler now states the constant
+    plainly (see its Notes).
     """
-    from rfx.sources.coaxial_port import solve_two_port_from_wave_amplitudes
+    # The mirrored fixture really is the other orientation; the planting
+    # convention takes the DUT side as an input, production takes none.
+    assert _REF_MSL_MIRROR_M > _X_MSL_MIRROR_M.max()     # junction ABOVE the ladder
+    assert _REF_MSL_M < _X_MSL_M.min()                   # committed: BELOW it
+    assert _DUT_SIGN_MSL_MIRROR == np.sign(_REF_MSL_MIRROR_M - _X_MSL_MIRROR_M.mean())
+    assert _DUT_SIGN_MSL_MIRROR == -_DUT_SIGN_MSL
 
-    s, a, b, s_code, fit_resid, gamma_fit, a_code, b_code = _run_unmodified_assembler()
-    swapped = solve_two_port_from_wave_amplitudes(
-        b_code, a_code, cond_warn=1.0e30).s_params
-    np.testing.assert_allclose(swapped, s, atol=1e-9)
-    # ... and it is exactly the matrix inverse of what the code returned.
-    s_code_inv = np.stack(
-        [np.linalg.inv(s_code[:, :, fi]) for fi in range(s.shape[-1])], axis=-1)
-    np.testing.assert_allclose(swapped, s_code_inv, atol=1e-9)
+    s, a, b, s_code, fit_resid, gamma_fit, a_code, b_code = _run_assembler(
+        mirror_msl=True)
+    assert np.all(fit_resid < 1e-9), fit_resid.max()     # the pencil is clean
+    np.testing.assert_allclose(s_code, s, atol=1e-9)
+    lam = _lambda_min_passivity(s_code)
+    assert np.all(lam >= -1e-12), lam
+    # ... and NOT the inverse: the mirrored ladder is not a degenerate case
+    # in which the two readings coincide.
+    s_inv = np.stack([np.linalg.inv(s[:, :, fi]) for fi in range(s.shape[-1])], axis=-1)
+    for fi in range(s.shape[-1]):
+        assert np.abs(s_inv[:, :, fi] - s[:, :, fi]).max() > 1.0
+
+
+def test_the_planted_dut_signs_are_the_fixture_geometry():
+    """``dut_sign`` is not a tuning knob: it is read off the fixture.
+
+    The frozen planting contract
+    (:func:`tests._wave_convention.plant_ladder_voltages_physical`) is
+    parameterised by WHERE THE DUT IS, so this test derives both signs from
+    the realized plane positions and the junction coordinates rather than
+    trusting the literals -- the same check
+    ``tests/test_coax_two_port_fdtd.py`` makes for its own two ladders.
+    """
+    assert _REF_COAX_M > _Z_COAX_M.max()      # junction above the coax ladder
+    assert _REF_MSL_M < _X_MSL_M.min()        # junction below the MSL ladder
+    assert _DUT_SIGN_COAX == np.sign(_REF_COAX_M - _Z_COAX_M.mean())
+    assert _DUT_SIGN_MSL == np.sign(_REF_MSL_M - _X_MSL_M.mean())
+    # These two literals are inputs to the PLANTING only. Production takes
+    # no side bit: on this lane each reference plane IS the junction, so the
+    # extractor's "toward the reference plane" branch is the incident wave
+    # at both ports (``a = forward_amp``, a constant of the lane), and the
+    # gate above is what pins it.
