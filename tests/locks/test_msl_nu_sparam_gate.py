@@ -33,6 +33,16 @@ uniform issue-80 gate's resourcing).
 """
 from __future__ import annotations
 
+LOCK_PROVENANCE = {
+    "fixture": "none",
+    "generator": "scripts/diagnostics/patch_edgefed_s11_band_repin.py (band imported from test_patch_edgefed_s11_passivity)",
+    "commit": "c7527cb",
+    "date": "2026-09-01",
+    "run_id": "unknown",
+    "host": "unknown (gpu+slow; NU lane not executed at pin time -- rides the next VESSL validation run)",
+    "pinned_until": "2027-02-28",
+}
+
 import warnings
 
 import jax.numpy as jnp
@@ -48,7 +58,7 @@ from rfx.sources import GaussianPulse
 # constants were measured on Board S (this file declares the identical geometry, and
 # since #834 the uniform-valued dz_profile raster is lane-identical — the #834
 # contract suite pins mask equality — so the band transfers to the NU build).
-from tests.test_patch_edgefed_s11_passivity import (
+from tests.locks.test_patch_edgefed_s11_passivity import (
     PASSIVE_TOL,
     RES_BAND_GHZ,
     RES_BAND_RE_ZIN_MIN_OHM,
@@ -56,7 +66,7 @@ from tests.test_patch_edgefed_s11_passivity import (
     _gate_readings,
 )
 
-# --- identical geometry to tests/test_patch_edgefed_s11_passivity.py ---
+# --- identical geometry to tests/locks/test_patch_edgefed_s11_passivity.py ---
 EPS_R = 3.38
 H_SUB = 0.787e-3
 W = 10.129e-3
@@ -106,7 +116,7 @@ def _build_patch_sim_nu() -> Simulation:
     # #332 ring-down witness evaluates a POINT-PROBE time series, so the
     # internal compute_msl_s_matrix run needs at least one probe or the
     # witness has no data and can never fire. Same cavity Ez probe, same
-    # position, as tests/test_patch_edgefed_s11_passivity.py.
+    # position, as tests/locks/test_patch_edgefed_s11_passivity.py.
     x_patch0 = PORT_MARGIN + L_MSL
     sim.add_probe(
         position=(x_patch0 + 0.7 * L, Y_C - 0.2 * W, 4e-3 + DX + H_SUB * 0.5),
