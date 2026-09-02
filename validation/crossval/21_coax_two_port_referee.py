@@ -505,6 +505,47 @@ witness, and an AD gate all closed -- see
 SCOPE statement. This referee's own scope fence is unchanged by that
 decision: it still only brackets, it still does not judge.
 
+CORRECTION (2026-09-01, issue #812 audit pattern P1) -- "gated claim =
+per-solver self-consistency" was an accurate label on a gate set that
+could not fail for its own stated reason. Stage B's matched-through
+witness compares ``unwrap(angle(S21))`` against ``-beta_measured*L``
+with ``beta_measured`` from the SAME field solve, so a coherent
+phase-velocity error -- the line's real beta is wrong, and the port
+measures the wrong value along with the wrong through-path phase --
+cancels identically. The audit measured it: ``max_phase_dev`` is
+EXACTLY 0.000 deg and ``gd_dev`` EXACTLY 0.00 ps at k = 1.02 / 1.10 /
+1.30 / 1.50 / 1.57, against a 30 deg / 200 ps gate.
+
+Stage B's gate set is now, with each leg's level stated in the artifact:
+
+  E1  ``_matched_through_witness`` -- angle(S21) vs the port's OWN
+      measured beta. UNCHANGED and still gated (30 deg / 200 ps); it is
+      what catches a length/referral error at FIXED beta. Relabelled,
+      not weakened.
+  E2  ``_analytic_beta_witness`` -- the port's measured beta, and the
+      group delay measured from S21 alone, against the EXACT continuum
+      coax TEM values ``2*pi*f*sqrt(eps_r)/c0`` and
+      ``L12*sqrt(eps_r)/c0``. Reference side contains no run quantity.
+      Envelope pre-declared in ``BETA_ENVELOPE_PREDECLARATION``.
+
+Stage A is unaffected: its own matched-through call already passes
+``beta=None`` (the analytic path), so it has always been E2 on this leg.
+
+NO leg in this case is E4 -- not Stage B and not Stage A. The other
+candidate independent reference -- "the committed external solver's own
+phase" -- does not exist here: this script imports no rfx module and
+reads no rfx fixture, so nothing puts an rfx quantity on either side of
+a comparison (cv20, the MSL referee, is the case that does, and it is
+gated there). CORRECTION (round-2 review, 2026-09-01): an earlier
+revision of this paragraph kept the case's E4 registration on the
+argument that it covered Stage A's tutorial reproduce-gate; that is
+wrong for the same reason -- Stage A compares openEMS against Coax.m's
+own closed form, an analytic check ON the external solver, not a
+cross-solver check OF rfx. The manifest now registers ["E1", "E2"], and
+the E4 this referee's output feeds is owned DOWNSTREAM by the
+compute_coaxial_two_port label-lift chain in
+docs/guides/sparameter_support_matrix.md.
+
 Usage (VESSL-only; openEMS is not expected to be importable outside the
 lane in ``scripts/vessl_coax_two_port_referee.yaml``, and that lane runs
 the PRIMARY checkout -- this script must be merged to main before
@@ -774,6 +815,128 @@ B_MEAS_STENCIL_MARGIN_CELLS = 5  # M3 fix: extra clearance so CoaxialPort's
                                   # plane to mesh and extract 3 adjacent
                                   # lines") cannot land back on a
                                   # PML-adjacent mesh line
+
+
+# ---------------------------------------------------------------------------
+# ANALYTIC-BETA ENVELOPE (issue #812 audit pattern P1 -- PRE-DECLARED
+# 2026-09-01, in the commit that carries docs/design_notes/
+# issue812_phase_identity_predeclaration.md and BEFORE any number this
+# lane measures was computed. Nothing below is used yet by any gate at
+# the moment of this declaration; the witness that consumes it lands in
+# the NEXT commit.)
+#
+# WHY: ``_matched_through_witness``'s Stage-B call passes ``beta`` = the
+# port's OWN measured propagation constant, so ``expected_phase =
+# -beta_measured*L`` and ``measured_phase = unwrap(angle(S21))`` are two
+# readings of ONE field solve. A COHERENT propagation error -- the line's
+# real phase velocity is wrong, so the port's measured beta AND the
+# through-path phase move together by the same factor k -- cancels
+# identically: the deviation is 0.000 deg at EVERY k (measured by the
+# issue #812 audit at k = 1.02/1.10/1.30/1.50/1.57; gd_dev 0.00 ps at
+# every k too, for the same reason -- it is a derivative of the same
+# identity). The gate cannot fail for its own stated reason.
+#
+# THE INDEPENDENT REFERENCE: for a coax TEM mode the continuum
+# propagation constant is EXACT and depends on eps_r ALONE --
+# beta = omega*sqrt(eps_r)/c0, no dependence on a, b, the mesh, or
+# anything this run produces. That is the reference side, and it contains
+# zero run quantities. (The other candidate -- "the committed external
+# reference's own phase" -- does NOT exist for this case: Stage B is a
+# single-solver openEMS fixture and reads no rfx S-parameters at all.
+# See the design note's section 2.)
+#
+# THE ENVELOPE, AND WHY IT IS NOT FITTED: this fixture's measured beta
+# sits a real ~12% ABOVE the continuum value -- Yee staircasing of a
+# curved PTFE annulus spanned by only ~3.8 cells, already diagnosed,
+# attributed, and shown to CONVERGE by the committed 1.5x mesh-refinement
+# run. So the envelope is mesh-dependent, and both its form and its scale
+# come from committed prior provenance (MESH_REFINEMENT_PREDECLARATION
+# below, pre-declared 2026-08-04, filled from VESSL 369367251845):
+#   form  : excess ~ (N_REF/N)**P, the committed two-point convergence law
+#   scale : EXCESS_REF at N_REF, the committed registered-mesh excess
+# The ONLY new number is BETA_ENVELOPE_HEADROOM -- a declared safety
+# factor, one round step above unity, chosen before measurement.
+#
+# The property the old gate lacked: this envelope SHRINKS when the mesh
+# improves. BOUND is 0.157040 at the registered mesh (N=3.789) and
+# 0.086011 at the committed 1.5x refinement (N=5.6835). A gate whose
+# width is round-up(measured x 1.5) never tightens; this one tightens as
+# N**-1.485.
+#
+# DECLARED DETECTION FLOOR (stated, not discovered): a coherent k*beta
+# perturbation fires when |k*(1+EXCESS_REF) - 1| > BOUND, i.e.
+# k > 1.032334 or k < 0.752106 at the registered mesh. The gate therefore
+# CANNOT discriminate the audit's k=1.02. CORRECTION (#812 round-2 review,
+# 2026-09-02): that floor is the HEADROOM choice, not a property of the
+# annulus -- the same formula at headroom 1.10 puts it at k > 1.010778 and
+# at 1.04 at k > 1.004311, and criterion (A) still passes at both; the only
+# floor physics forces at this mesh is the tightest envelope the committed
+# data itself admits, k > 1.003945 (regate_evidence.json::
+# cv21.detection_floor.{headroom_dependence,physics_forced_registered}).
+# No honest analytic gate here can be tighter than the staircase bias
+# itself -- that sentence stands; the "not a choice" built on it did not.
+# HEADROOM is NOT tightened post hoc (that would be a post-measurement
+# threshold change); a tighter value may be pre-declared for a future
+# round. It DOES discriminate k = 1.10/1.30/1.50/1.57 and the factor-2
+# (k=0.5) case.
+BETA_ENVELOPE_EXCESS_REF = 0.1208               # MESH_REFINEMENT_PREDECLARATION["excess_before"]
+BETA_ENVELOPE_N_REF = 3.789                     # ..."annulus_cells_before" = (2.055-0.635)/0.37474
+BETA_ENVELOPE_ORDER_P = 1.4847707054524188      # ..."implied_convergence_order" (two-point, VESSL 369367251845)
+BETA_ENVELOPE_HEADROOM = 1.30                   # DECLARED HERE, 2026-09-01
+BETA_ENVELOPE_PREDECLARATION: dict = {
+    "issue": 812,
+    "pattern": "P1 (self-referential phase gate)",
+    "predeclared_on": "2026-09-01",
+    "design_note": "docs/design_notes/issue812_phase_identity_predeclaration.md",
+    "gated_quantities": [
+        "max |beta_measured/beta_analytic - 1| over the gated central band",
+        "max |gd_measured/gd_analytic - 1| over the gated central band",
+    ],
+    "analytic_reference": "beta = 2*pi*f*sqrt(B_PTFE_EPS_R)/c0 (exact continuum coax TEM); "
+                          "gd = L12*sqrt(B_PTFE_EPS_R)/c0",
+    "envelope": "HEADROOM * EXCESS_REF * (N_REF/N)**P, N = (B_B_MM-B_A_MM)/dx_mm",
+    "excess_ref": BETA_ENVELOPE_EXCESS_REF,
+    "n_ref": BETA_ENVELOPE_N_REF,
+    "order_p": BETA_ENVELOPE_ORDER_P,
+    "headroom": BETA_ENVELOPE_HEADROOM,
+    "bound_at_n_ref": BETA_ENVELOPE_HEADROOM * BETA_ENVELOPE_EXCESS_REF,
+    "provenance": "form and scale from MESH_REFINEMENT_PREDECLARATION (committed "
+                  "2026-08-04, filled from VESSL 369367251845); headroom declared 2026-09-01",
+    "detection_floor_k_hi": 1.032334,
+    "detection_floor_k_lo": 0.752106,
+    "falsifier": (
+        "(A) the witness must PASS on the committed run-3 registered-mesh data "
+        "(tests/crossval/test_coax_two_port_referee_header.py::_RUN3_*, VESSL 369367251629) AND on "
+        "the committed 1.5x-refinement run (_21_coax_two_port_referee_logs/"
+        "mesh_refinement_369367251845_result.json). (B) it must FAIL on a coherent "
+        "k=1.57 perturbation (beta_measured -> k*beta_measured AND s21 rotated by "
+        "exp(-1j*(k-1)*beta_measured*L12)), with the RuntimeError text naming the "
+        "measured-vs-analytic beta comparison. If (A) fails at either mesh: STOP, do "
+        "NOT widen BETA_ENVELOPE_HEADROOM."
+    ),
+}
+
+
+def _beta_envelope_bound(annulus_cells: float) -> float:
+    """Pre-declared fractional envelope on |beta_measured/beta_analytic - 1|.
+
+    ``annulus_cells`` = (b - a)/dx, pure geometry. See
+    ``BETA_ENVELOPE_PREDECLARATION`` above for the derivation and the
+    reason this is the only defensible width at this mesh. Valid as
+    declared for ``annulus_cells >= BETA_ENVELOPE_N_REF`` (the registered
+    mesh and any refinement of it); a COARSER mesh than the registered one
+    is not a registered configuration and the value returned there is an
+    extrapolation of the committed convergence law.
+    """
+    n = float(annulus_cells)
+    if not np.isfinite(n) or n <= 0.0:
+        raise ValueError(f"annulus_cells must be finite and positive, got {annulus_cells!r}")
+    return float(
+        BETA_ENVELOPE_HEADROOM
+        * BETA_ENVELOPE_EXCESS_REF
+        * (BETA_ENVELOPE_N_REF / n) ** BETA_ENVELOPE_ORDER_P
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -1608,6 +1771,33 @@ def _matched_through_witness(freqs_hz: np.ndarray, s21: np.ndarray, *, L_m: floa
     idealization -- the same discipline as the channel/floor fixes in
     prior rounds: prefer the port's OWN measured quantities over an
     assumed constant wherever the port already measures it.
+
+    SELF-REFERENCE -- CORRECTION (2026-09-01, issue #812 audit pattern
+    P1). The paragraph above is right that the measured beta is the
+    correct comparand for a staircased fixture, and wrong to leave the
+    consequence unstated: with ``beta`` given, ``expected_phase =
+    -beta_measured*L`` and ``measured_phase = unwrap(angle(S21))`` are
+    two readings of ONE field solve. A COHERENT propagation error -- the
+    line's real phase velocity is wrong, so the port's measured beta AND
+    the through-path phase move together by a factor k -- cancels
+    identically. The issue #812 audit measured exactly that: at
+    k = 1.02 / 1.10 / 1.30 / 1.50 / 1.57 this witness reports
+    ``max_phase_dev_deg`` = 0.000 and ``group_delay_dev_ps`` = 0.00 at
+    EVERY k, against its own 30 deg / 200 ps tolerances. The group-delay
+    leg is blind for the same reason -- it differentiates the same
+    identity. The claim in this docstring that the check "pins the
+    ABSOLUTE phase reference too" is true only relative to the port's own
+    beta; it pins nothing to the physics.
+
+    This is therefore an **E1** leg (intra-run self-consistency), and the
+    result dict now says so in ``evidence_level``. It is KEPT -- it is a
+    real and necessary check, and it is what catches a length/referral
+    error at FIXED beta -- but it is no longer the only thing standing
+    between Stage B and a wrong phase velocity:
+    ``_analytic_beta_witness`` below gates the measured beta itself
+    against the EXACT continuum coax TEM value, whose reference side
+    contains no quantity from this run. The two together pin
+    ``angle(S21)`` to the physics; neither alone does.
     """
     idx = _central_band_idx(freqs_hz.size)
 
@@ -1681,11 +1871,129 @@ def _matched_through_witness(freqs_hz: np.ndarray, s21: np.ndarray, *, L_m: floa
         "group_delay_dev_ps": gd_dev_ps, "gd_tol_ps": gd_tol_ps, "gd_ok": gd_ok,
         "expected_group_delay_ps": expected_gd_report_ps,
         "beta_source": "measured" if beta is not None else "analytic",
+        # CORRECTION (2026-09-01, issue #812 P1): name what this leg
+        # actually is. With ``beta`` given, BOTH sides of the phase
+        # comparison come from the same field solve, so this is
+        # intra-run self-consistency (E1), NOT an analytic oracle -- see
+        # the "SELF-REFERENCE" section of this function's docstring and
+        # ``_analytic_beta_witness`` for the leg that IS independent.
+        "evidence_level": "E1 (intra-run self-consistency)" if beta is not None
+                          else "E2 (analytic oracle)",
         "beta_ratio_measured_over_analytic": beta_ratio_report,
         "passed": passed,
     }
     if not passed:
         raise RuntimeError(f"[{label}] matched-through witness failed: {result}")
+    return result
+
+
+def _analytic_beta_witness(freqs_hz: np.ndarray, s21: np.ndarray, beta_measured: np.ndarray, *,
+                           L_m: float, eps_r: float, annulus_cells: float,
+                           label: str) -> dict:
+    """E2: the run's phase, referred to a reference that contains NO run quantity.
+
+    Issue #812 audit pattern P1. ``_matched_through_witness`` (above),
+    once handed the port's own measured ``beta``, compares a solve
+    against itself and reads 0.000 deg for ANY coherent propagation
+    error. This witness supplies the missing independent leg.
+
+    THE REFERENCE. For a coaxial TEM mode the continuum propagation
+    constant is EXACT and depends on the fill permittivity ALONE:
+
+        beta_analytic(f) = 2*pi*f*sqrt(eps_r)/c0
+
+    -- no dependence on ``a``, ``b``, the mesh, the excitation, or
+    anything this run produces. (The other candidate reference class,
+    "the committed external solver's own phase", does not exist for this
+    case: Stage B is a single-solver openEMS fixture and reads no rfx
+    S-parameters at all. See ``docs/design_notes/
+    issue812_phase_identity_predeclaration.md`` section 2.)
+
+    TWO GATED LEGS, one envelope:
+      (1) ``max |beta_measured/beta_analytic - 1|`` -- the port's own
+          measured propagation constant against the continuum value.
+          Immune to phase unwrapping: ``CalcPort`` reports ``beta``
+          directly from its own field stencil, not from an unwrapped
+          angle, so a coherent error cannot alias out of this leg.
+      (2) ``max |gd_measured/gd_analytic - 1|`` -- the group delay
+          measured from ``S21`` ALONE (so this leg binds the through-path
+          phase, not just the port's beta) against
+          ``L*sqrt(eps_r)/c0``. This leg IS unwrap-limited: at this
+          fixture's 1 GHz bin spacing the per-bin phase advance reaches
+          pi at k ~= 1.5786, so a coherent error beyond that aliases.
+          Leg (1) is the alias-immune backstop; leg (2) is the one that
+          reaches ``S21``.
+
+    THE ENVELOPE is ``_beta_envelope_bound(annulus_cells)`` -- pre-
+    declared in ``BETA_ENVELOPE_PREDECLARATION``, derived from the
+    committed mesh-refinement convergence law, and NOT fitted to
+    anything measured after the declaration. It is wide (0.157 at the
+    registered mesh) because this fixture's staircase bias is genuinely
+    ~12%; it SHRINKS as N**-1.485 when the mesh refines, which is
+    precisely the property a round-up(measured x 1.5) width lacks.
+
+    WHAT THIS DOES NOT CATCH, stated up front: the declared detection
+    floor is k > 1.032334 / k < 0.752106 at the registered mesh. The
+    audit's k = 1.02 is inside it. No honest analytic gate on a 3.8-cell
+    annulus can be tighter than the staircase bias itself -- but the floor
+    as declared is the 1.30 HEADROOM's choice, not the annulus's (round-2
+    review, 2026-09-02): headroom 1.10 would put it at k > 1.010778 with
+    criterion (A) intact, and the physics-forced floor at this mesh is
+    k > 1.003945. Refining the mesh moves the floor with no change to the
+    gate; a tighter pre-declared headroom would move it too.
+    """
+    idx = _central_band_idx(np.asarray(freqs_hz).size)
+    freqs = np.asarray(freqs_hz, dtype=np.float64)
+
+    beta_analytic = 2.0 * np.pi * freqs * np.sqrt(eps_r) / _C0
+    beta_meas = np.real(np.asarray(beta_measured, dtype=np.complex128))
+    ratio = beta_meas[idx] / beta_analytic[idx]
+    beta_dev = float(np.max(np.abs(ratio - 1.0)))
+
+    _phase, gd_measured_s = _group_delay(freqs, s21)
+    gd_analytic_s = L_m * np.sqrt(eps_r) / _C0
+    gd_ratio = gd_measured_s[idx] / gd_analytic_s
+    gd_dev = float(np.max(np.abs(gd_ratio - 1.0)))
+
+    bound = _beta_envelope_bound(annulus_cells)
+    beta_ok = bool(beta_dev <= bound)
+    gd_ok = bool(gd_dev <= bound)
+    passed = bool(beta_ok and gd_ok)
+
+    result = {
+        "annulus_cells": float(annulus_cells),
+        "envelope_bound_frac": bound,
+        "beta_analytic_rad_per_m": beta_analytic[idx].tolist(),
+        "beta_measured_rad_per_m": beta_meas[idx].tolist(),
+        "beta_ratio_measured_over_analytic": ratio.tolist(),
+        "beta_max_abs_dev_frac": beta_dev,
+        "beta_ok": beta_ok,
+        "gd_analytic_ps": float(gd_analytic_s * 1e12),
+        "gd_measured_ps": (gd_measured_s[idx] * 1e12).tolist(),
+        "gd_max_abs_dev_frac": gd_dev,
+        "gd_ok": gd_ok,
+        # Reported, not gated: what the beta gap is worth in degrees of
+        # through-path phase, so a reviewer can read this witness in the
+        # same units as the self-consistency one.
+        "implied_phase_error_deg": float(
+            np.max(np.abs(np.degrees((beta_meas[idx] - beta_analytic[idx]) * L_m)))
+        ),
+        "evidence_level": "E2 (analytic oracle -- exact continuum coax TEM beta)",
+        "reference": "beta = 2*pi*f*sqrt(eps_r)/c0; gd = L*sqrt(eps_r)/c0",
+        "passed": passed,
+    }
+    if not passed:
+        raise RuntimeError(
+            f"[{label}] analytic-beta witness failed: the port's MEASURED beta "
+            f"disagrees with the EXACT continuum coax TEM beta "
+            f"(2*pi*f*sqrt(eps_r={eps_r})/c0) beyond the pre-declared staircase "
+            f"envelope for this mesh. beta dev={beta_dev:.6f} (ok={beta_ok}), "
+            f"group-delay dev={gd_dev:.6f} (ok={gd_ok}), envelope={bound:.6f} at "
+            f"annulus_cells={float(annulus_cells):.4f}. This is an INDEPENDENT "
+            f"reference (no quantity from this run appears on the reference side), "
+            f"so unlike the matched-through witness it cannot be satisfied by a "
+            f"coherent phase-velocity error. Full result: {result}"
+        )
     return result
 
 
@@ -2141,6 +2449,19 @@ def _run_stage_b(*, sim_root: str, threads: int, nrts: int, end_criteria: float,
         matched_thru_s12 = _matched_through_witness(
             B_FREQS_HZ, s12, L_m=B_L12_MM * 1e-3, eps_r=B_PTFE_EPS_R,
             mag_band=B_S21_THRU_BAND, label="stage_b_s12", beta=beta_measured)
+
+        # Issue #812 P1: the two witnesses above are E1 -- both sides of
+        # their phase comparison come from this same solve, so a coherent
+        # phase-velocity error cancels and they read 0.000 deg at every
+        # k (measured by the audit at k up to 1.57). This one is E2: its
+        # reference is the EXACT continuum coax TEM beta, built from the
+        # declared eps_r alone. Wired into sanity_passed, not merely
+        # reported.
+        analytic_beta = _analytic_beta_witness(
+            B_FREQS_HZ, s21, beta_measured, L_m=B_L12_MM * 1e-3,
+            eps_r=B_PTFE_EPS_R,
+            annulus_cells=_stage_b_layout(dx_scale=dx_scale)["annulus_cells"],
+            label="stage_b_analytic_beta")
     except RuntimeError as exc:
         # Forensics fix (see partial_data comment above): a guard/witness
         # failure here must not lose the numbers that led to it.
@@ -2156,6 +2477,7 @@ def _run_stage_b(*, sim_root: str, threads: int, nrts: int, end_criteria: float,
         not drive1["truncated_suspected"] and not drive2["truncated_suspected"]
         and passivity_drive1["passed"] and passivity_drive2["passed"]
         and matched_thru_s21["passed"] and matched_thru_s12["passed"]
+        and analytic_beta["passed"]
     )
 
     # issue #489 leg 1 (mesh-refinement convergence witness): surface the
@@ -2183,6 +2505,7 @@ def _run_stage_b(*, sim_root: str, threads: int, nrts: int, end_criteria: float,
         "group_delay_ps": (gd21_s * 1e12).tolist(),
         "reciprocity_max_mag_dev": recip_mag_dev,
         "reciprocity_max_phase_dev_deg": recip_phase_dev_deg,
+        "analytic_beta_witness": analytic_beta,
         "passivity_drive1": passivity_drive1, "passivity_drive2": passivity_drive2,
         "matched_through_witness": matched_thru_s21,
         "matched_through_witness_s12": matched_thru_s12,
