@@ -2111,7 +2111,9 @@ class _SparamMixin:
             (Z_TE_num/Z_TE_exact ≈ 3 % at dx/λ = 0.07).  Use for
             |S11| of strong reflectors (PEC short, high-Q resonators)
             where this error is smaller than the ±10–20 % round-trip
-            dispersion error introduced by ``normalize=True``.
+            dispersion error introduced by ``normalize=True``.  On the
+            differentiable chain: a traced ``eps_override`` /
+            ``sigma_override`` flows through it.
 
             ``True`` — two-run modal normalization.  Cancels one-way
             Yee dispersion for **transmission** (off-diagonal) by
@@ -2119,14 +2121,40 @@ class _SparamMixin:
             at the same port.  **Does not** cancel dispersion for
             reflection (round-trip vs one-way path mismatch); use
             ``normalize=False`` or ``normalize="flux"`` for S11 of
-            strong reflectors.
+            strong reflectors.  Host-assembled and **outside the
+            differentiable chain**: a traced ``eps_override`` /
+            ``sigma_override`` (``jax.grad``, ``jax.jit``) raises
+            ``NotImplementedError`` at this call, before any FDTD run;
+            a concrete override still runs forward.
 
             ``"flux"`` — hybrid power-flux extraction.  Magnitude from
             Poynting-vector DFT (|S|² = P_flux / P_inc), phase from
             modal V/I.  Corrects both the Z_TE impedance-mismatch error
             in S11 and the round-trip dispersion error in the
             ``normalize=True`` diagonal formula.  Costs 2 × N_ports
-            FDTD runs (same as ``normalize=True``).
+            FDTD runs (same as ``normalize=True``).  On the
+            differentiable chain like ``False``.  The result dtype
+            follows the ``freqs`` precision — complex64 by default,
+            complex128 under ``JAX_ENABLE_X64`` — the same rule as
+            ``False`` (a hard complex64 cast on this lane was removed
+            in v1.8).
+
+            **Reference impedance.**  On ``False`` and ``True`` each
+            S_ij is the modal voltage-wave ratio ``b_i / a_j``, where
+            the waves at a port are decomposed with that port's OWN
+            discrete modal impedance (Yee-discrete Z_TE or Z_TM from
+            the port's cutoff and cell size); no ``sqrt(Z_i / Z_j)``
+            renormalization is applied.  ``"flux"`` takes |S_ij| from
+            the power ratio and its phase from the same modal waves.
+            The returned matrix therefore equals a power-wave S only
+            when every port shares one cross-section and mode — the
+            validated scope (straight guides and same-guide junctions).
+            Ports with dissimilar cross-sections are outside it.
+
+            **Multimode.**  ``n_modes > 1`` on any port is assembled on
+            the host for every ``normalize`` value and is outside the
+            differentiable chain; ``eps_override`` / ``sigma_override``
+            differentiation is single-mode only.
         checkpoint_segments : int or None
             Segmented gradient checkpointing for the **uniform** waveguide
             AD path (issue #73 / PR #125).  Splits the ``n_steps`` scan
@@ -2413,6 +2441,33 @@ class _SparamMixin:
                 # (|S11|>>1); normalize=True/"flux" correct dispersion -> tight.
                 passivity_tol=2.0 if normalize is False else 0.10,
             )
+
+        # Uniform-lane honesty guard (v1.8 WP1), the mirror of the
+        # non-uniform guard above. The two-run normalized lane
+        # (normalize=True) assembles S on the host:
+        # extract_waveguide_s_params_normalized converts the device-run
+        # outgoing wave with np.array, so a TRACED eps_override /
+        # sigma_override (jax.grad, jax.jit) cannot flow through it.
+        # Measured 2026-09-02 (tests/test_waveguide_two_run_lane_traced_override.py):
+        # only the device-run site fires — the vacuum reference run carries
+        # no design variable. Raise here, naming the lane, instead of a
+        # TracerArrayConversionError deep in the extractor. A concrete
+        # override still runs forward on this lane; the differentiable
+        # lanes are normalize=False and normalize="flux".
+        if normalize and normalize != "flux":
+            for _ov_name, _ov_val in (
+                ("eps_override", eps_override),
+                ("sigma_override", sigma_override),
+            ):
+                if _ov_val is not None and is_tracer(_ov_val):
+                    raise NotImplementedError(
+                        "compute_waveguide_s_matrix(normalize=True) is the "
+                        "host-assembled two-run lane and is outside the "
+                        f"differentiable chain: a traced {_ov_name} (under "
+                        "jax.grad / jax.jit) cannot pass its np.array sites. "
+                        "Use normalize=False or normalize='flux' to "
+                        f"differentiate with respect to {_ov_name}."
+                    )
 
         grid = self._build_grid()
         _wg_sheet_specs: list = []
