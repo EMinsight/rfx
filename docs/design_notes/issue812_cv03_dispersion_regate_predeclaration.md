@@ -1,0 +1,435 @@
+# Issue #812 — cv03 re-gate: pre-declared oracle, estimator, and thresholds
+
+Committed **BEFORE** the measurement that judges it, per the rfx pre-declaration
+discipline (SPEC-00 §0.2.2). Nothing in this file may be widened after a
+measurement. A miss is reported as a miss with the residual mechanism named.
+
+## 1. What the audit measured, and why the case needs a new gate
+
+`validation/crossval/03_straight_waveguide_flux.py` is claims-bearing at E1+E4.
+Its only pass gate is the band-mean transmission
+
+    T(f) = flux_out(f) / flux_in(f),        gate: <T>_band in [0.95, 1.05]
+
+`T = 1` is **energy conservation for any bound mode in any lossless uniform
+section**. It is an identity of the flux bookkeeping, not a statement about the
+guide: it holds for every `eps_wg`, every guide width, and every mode. The #812
+audit measured exactly that — sweeping the case's own `eps_wg`:
+
+| `eps_wg` | audit's `<T>_band` | verdict | audit's measured `<n_eff>_band` |
+|---:|---:|:--|---:|
+| 12 | 0.9657 | PASS | 2.8593 |
+| 11 | 0.9700 | PASS | (not reported) |
+| 10 | 0.9882 | PASS | (not reported) |
+| 8  | 1.0257 | PASS | 2.1905 |
+
+**Correction, same session, before any measurement in this lane:** the first
+commit of this file put "2.1905" in the `eps = 11` row of the table above. That
+was wrong — the audit reported `<n_eff>_band` only at the two endpoints of its
+sweep, 2.8593 at `eps = 12` and 2.1905 at `eps = 8`. The intermediate rows are
+"not reported". No threshold in §3 was derived from any of these numbers, so the
+error changed nothing downstream; it is corrected here rather than rewritten
+away.
+
+The guide the case declares changed by **−23.4 %** in effective index while the
+gate stayed green with margin. The case's committed reference set is
+`artifact_paths: []` (verified: `validation/crossval/manifest.json` case
+`03_straight_waveguide_flux`, and `grep -rl '03_straight\|cv03'` over the whole
+tree returns no fixture directory, no committed stdout, no `.npy`/`.json`
+reference), so on a host without Meep — this one — **nothing that decides PASS
+depends on the guide at all**.
+
+## 2. The quantity that does depend on the guide
+
+The guided-mode **effective index / dispersion** `n_eff(f) = beta(f)/k0(f)`.
+
+The rfx run is `mode="2d_tmz"` (`Ez`, `Hx`, `Hy`) with the slab infinite in `x`
+and `z` and bounded in `y`. `Ez` lies **in** the slab faces, so the guided mode
+is the slab-waveguide **TE** mode, governed by the scalar Helmholtz problem for
+`Ez` with `Ez` and `dEz/dy` continuous at the interfaces. For the symmetric slab
+(core `eps_1`, thickness `d`, cladding `eps_2`) the fundamental even TE mode is
+the smallest root of
+
+    u * tan(u) = w,     u^2 + w^2 = V^2,     V = (k0 d / 2) sqrt(n1^2 - n2^2)
+    kappa = 2u/d,       beta  = sqrt(n1^2 k0^2 - kappa^2),   n_eff = beta / k0
+
+This is a **closed-form E2 oracle**: it is computed from the declared recipe
+(`eps`, `width`), it shares no code and no data with the FDTD run, and unlike
+`T` it is a different number for every guide.
+
+Analytic values at the recipe (`d = 1a`, `eps_2 = 1`, `f = 0.15 c/a`), each
+independently confirmed against a 1-D finite-difference Helmholtz eigensolve on
+a 16001-point grid over 8a (agreement 1.4e-4 relative, consistent with that
+grid's own O(h^2)):
+
+| `eps_1` | `n_eff` (closed form) | shift vs recipe |
+|---:|---:|---:|
+| 12 | 2.844110 | — |
+| 11 | 2.693252 | −5.30 % |
+| 10 | 2.536487 | −10.82 % |
+| 8  | 2.202998 | −22.54 % |
+
+The audit's measured 2.8593 at `eps=12` sits +0.53 % from 2.844110 and its
+2.1905 at `eps=8` sits −0.57 % from 2.202998 — i.e. the audit's own numbers are
+consistent with a correct guide plus second-order discretization error, which is
+the envelope §3 derives independently below.
+
+## 3. Pre-declared thresholds (frozen here, before measurement)
+
+### G1 — dispersion against the analytic slab-mode oracle (NEW, E2, hard gate)
+
+    max over the gated band of | n_eff_rfx(f) / n_eff_analytic(f) - 1 |  <=  2.0 %
+
+Gated band = the same `fcen +/- 0.15*df` window the existing transmission gate
+uses. The statistic is the **max over bins, not the mean** — deliberately, to
+avoid the audit's P2 "band-mean collapse" mechanism, whose null space is every
+zero-mean shape error. The band mean is printed for information only.
+
+**Derivation (first principles, no measured input).** The error of a Yee run
+against the continuous slab mode is second order in the cell size. Its one
+computable leading term is the bulk Yee numerical dispersion in the core, which
+for `2d_tmz` with `c*dt = S*dx/sqrt(2)` obeys
+
+    (n/(c dt))^2 sin^2(w dt/2) = (1/dx)^2 [ sin^2(kx dx/2) + sin^2(ky dx/2) ]
+
+Solved exactly for axial propagation (the worst orientation) at `n = sqrt(12)`,
+`dx = a/10`, `S = 0.99`, at the **top** of the gated band `f = 0.165 c/a`:
+
+    T1 = 0.523 %          (0.348 % / 0.431 % at f = 0.135 / 0.150)
+
+Two same-order terms remain whose constants are not available in closed form for
+this configuration — the transverse (`kappa`) eigenvalue truncation and the
+grid-aligned dielectric-interface term. The estimator adds one bounded term: a
+residual counter-propagating wave of relative amplitude `r` biases a
+least-squares linear phase fit over a window `L` by `6r/(beta^2 L^2)`, which is
+**0.131 %** at `r = 0.10, L = 8a` (`beta = 2.681/a`).
+
+Threshold = **4 x T1 = 2.09 %, declared as 2.0 %**. The factor 4 is an a-priori
+allowance for the two un-derived same-order constants plus the estimator bias
+(computed budget 0.523 + 0.523 + 0.131 = 1.18 %); it is **not** fitted to any
+measurement of this quantity, none of which has been taken in this lane at the
+time this file is committed. The gate is 2.5x smaller than the *smallest* step
+of the audit's own sweep (`eps` 12→11, −5.30 %) and 11x smaller than its
+endpoint (−22.54 %), so it discriminates the defect it exists for by an order of
+magnitude. **If the measurement lands outside 2.0 %, this is reported as a miss
+and the case STOPs; the window is not widened.**
+
+### G2 — flux identity, retained but correctly labelled (E1 self-check)
+
+    <T>_band in [0.95, 1.05]
+
+Byte-unchanged in value and in statistic. What changes is only its **label**: it
+is an E1 physical-invariant self-check on the flux bookkeeping (energy
+conservation in a lossless uniform section), and the script, the manifest, and
+the public benchmark table must stop presenting it as evidence about the guide.
+It is a real check — it catches a broken flux normalization, a truncated DFT, a
+lossy or leaking section — and it is kept for exactly that.
+
+### G3 — Meep cross-check (E4, unchanged, only when Meep is present)
+
+    <T>_meep_band in [0.95, 1.05] ;  | <T>_rfx_band - <T>_meep_band | < 0.05
+
+Unchanged. Exit 2 when Meep is absent, as today.
+
+## 4. Pre-declared estimator (frozen here)
+
+`n_eff_rfx(f)` is measured from the run's own fields, not from `T`:
+
+1. A `y`-normal DFT plane probe on the **guide centre line** records the complex
+   `Ez(f, x)` on the same frequency grid the flux monitors use.
+2. The fit window is the guide interval between the two flux planes, inset by
+   1a at each end to exclude the source's near field and any monitor
+   perturbation: Meep `x` in `[-4, +4]`, i.e. `L = 8a = 80 cells`, ~3.4 guided
+   wavelengths at the carrier.
+3. `phi(x) = unwrap(arg Ez(f, x))`; `beta(f) = -slope` of an ordinary
+   least-squares line through `phi(x)`. At the carrier `beta*dx = 0.268 rad`,
+   well under `pi`, so the unwrap is unambiguous by construction.
+4. `n_eff(f) = beta(f) c / (2 pi f)`.
+
+Pre-declared estimator self-checks (these gate the *instrument*, not the
+physics, and live in `tests/`):
+
+- **S1** on a synthetic `exp(-i beta x)` line with known `beta`: recovered
+  `n_eff` within 1e-9 relative.
+- **S2** the closed-form oracle against an independent 1-D FD Helmholtz
+  eigensolve: within 3e-4 relative.
+- **S3** fit quality on the real run: residual RMS of the linear phase fit
+  `<= 0.15 rad` at every gated bin. A larger residual means the single-mode
+  linear-phase premise is not met and the reported `n_eff` is not to be trusted;
+  it is a hard gate, not a warning.
+
+## 5. Pre-declared falsifiers — what must FAIL, and for what stated reason
+
+A re-gate that only makes the case pass is cosmetic. Both of these are run.
+
+- **F1 (the audit's own probe).** Re-run the case with the simulated guide's
+  `eps_wg` set to 11, 10, 8 while the declared recipe stays the Meep tutorial's
+  `eps = 12`. **G1 must FAIL at all three**, with a message naming the measured
+  and analytic `n_eff`; **G2 must still PASS at all three** — that contrast is
+  the whole finding. Expected G1 deviations, from §2: −5.3 %, −10.8 %, −22.5 %.
+- **F2 (no constant is touched).** Realize the guide **one cell narrower** than
+  declared (`d = 0.9a`, the smallest width error this grid can express) with
+  every declared constant, including `eps_wg`, left at the recipe value. **G1
+  must FAIL** (analytic signal −2.95 %, 1.5x the gate) and **G2 must still
+  PASS**. F2 exists to refute the objection that G1 only compares two literals:
+  here the literals are identical and the gate still fires, because it measures
+  the guide.
+
+## 6. Scope
+
+Instrument work. No physics verdict of cv03 is challenged or changed. The E4
+Meep leg is untouched and still exits 2 on a host without Meep; this lane adds
+an E2 leg that runs on every host, and demotes the flux identity from
+"the gate" to "a self-check", which is what it always was.
+
+---
+
+## 7. CORRECTION — the pre-declared estimator was falsified by its own self-check
+
+Appended 2026-09-01, **before** the falsifier runs of §5 and **without touching
+G1**. Append-only: §4 above stands as written; this section states what was
+wrong with it and what replaces it.
+
+**What was declared (§4):** a single-mode ordinary-least-squares fit of
+`unwrap(arg Ez)` against `x`, with self-check **S3**: linear-phase residual RMS
+`<= 0.15 rad` at every gated bin.
+
+**What happened:** the first measurement on the real run gave a residual RMS of
+**0.37 - 0.40 rad** at every gated bin — S3 FAILED, for exactly the reason it
+was written for. The premise "one mode, linear phase" does not hold on this
+case's guide. Diagnosis of the residual:
+
+- its dominant spatial component is at `k = 5.43e6 rad/m`, and `2*beta =
+  5.33e6 rad/m` — a ratio of 1.018, i.e. the signature of a **counter-
+  propagating pair**, not of noise;
+- `|Ez(x)|` along the guide centre line has SWR `max/min = 3.33` over the fit
+  window, giving `|B/A| = 0.538`;
+- an ESPRIT decomposition of the same line resolves exactly two undamped
+  components at `n = -2.841` and `+2.843` with `|eigenvalue| = 1.0000`, and the
+  Hankel singular values fall from `0.52` (2nd) to `0.004` (3rd): the line is
+  rank-2 to 0.4 %.
+
+So the guide carries a large backward wave. **That is a physics/solver finding
+about cv03's setup, not an instrument finding, and this lane does not fix it —
+it is reported for separate filing** (see §8). The band-mean transmission is
+`0.96574` in the same run: `T = flux_out/flux_in` is the *net* flux ratio, which
+for a lossless section is `(|A|^2-|B|^2)` at both planes and is therefore
+identically blind to a standing wave of any depth. A guide reflecting more than
+half its amplitude reads `T = 0.966`, PASS — an independent, unplanned
+confirmation of the audit's thesis about this gate.
+
+**Replacement estimator (frozen here, before the §5 falsifier runs).** Fit the
+physically correct two-wave model of a lossless uniform section,
+
+    Ez(x, f) = A(f) exp(-i beta x) + B(f) exp(+i beta x)
+
+by minimizing the relative least-squares residual over `beta`, with `A` and `B`
+solved linearly at each trial `beta`. The search bracket is
+`beta / k0 in (sqrt(eps_clad), sqrt(eps_core))` — the bound-mode window between
+the cladding and core light lines, a first-principles bracket, not a fitted one.
+`|B/A|` is **reported, never gated**: this lane does not own it.
+
+Revised self-checks:
+
+- **S1'** two-wave synthetic with known `beta` and `|B/A| = 0.5`: recovered
+  `n_eff` within 1e-9 relative.
+- **S2** unchanged (closed-form oracle vs independent 1-D FD eigensolve, 3e-4).
+- **S3'** relative residual of the two-wave fit `<= 0.05` at every gated bin,
+  hard gate. Derivation: an unmodelled third spatial component of relative
+  amplitude `rho` separated by `2*beta` biases the fitted `beta` by at most
+  `6*rho/(beta^2 L^2)`; at `rho = 0.05`, `beta = 2.681/a`, `L = 8a` that is
+  **0.065 %**, i.e. 30x inside G1's 2.0 %. The bound, not a measured residual,
+  is what sets 0.05.
+
+**G1 is untouched: still 2.0 %, still derived only from §3.** The estimator was
+wrong about the field's *form*; nothing about the accuracy budget changed.
+
+## 8. Physics finding to file separately (NOT fixed in this lane)
+
+cv03's guide carries a standing wave with `|B/A| ~ 0.52-0.54` at the carrier.
+Measured behaviour of the ratio (band-centre bin, `|Ez|` SWR over Meep
+`x in [-4, 4]`):
+
+| configuration | SWR | `|r|` |
+|---|---:|---:|
+| recipe: `upml`, 20 absorber cells, `sx = 16a`, 400 a/c | 3.33 | 0.538 |
+| `upml`, 40 cells | 3.98 | 0.598 |
+| `upml`, 60 cells | 4.38 | 0.628 |
+| `cpml`, 40 cells | 4.06 | 0.605 |
+| `upml`, 20 cells, 120 a/c integration | 2.68 | 0.457 |
+| `upml`, 20 cells, `sx = 28a` | 4.35 | 0.626 |
+
+The guide *is* continued through the absorber padding (verified on the
+rasterized `eps_r`: `eps = 12` at every `x` index of the centre row, absorber
+cells included), so this is not a bare end facet. Deepening the absorber makes
+the ratio **worse**, which rules out a simple under-absorbing PML and is the
+part that most needs an owner. `T = flux_out/flux_in` cannot see any of it.
+
+### 8.1 Mechanism established: it is a reflection off the guide's own termination
+
+Appended after the §5 falsifier runs. The `|B/A|` trend in the §8 table did not
+identify a mechanism, so a time-of-flight test was run: lengthen the guide and
+stop the DFT before the round trip can complete. Group index `n_g ~ 3.3`, so a
+`sx = 40a` guide with the fit window at Meep `x in [-16, -8]` needs `~211 a/c`
+for a wave to reach the far end and return.
+
+| `sx` | DFT window | fit window | `|B/A|` | measured `n_eff` | rel. residual |
+|---:|---:|---|---:|---:|---:|
+| 40a | 150 a/c (before the return) | [−16, −8] | **0.0002** | 2.84338 | 0.0019 |
+| 40a | 400 a/c (after the return) | [−16, −8] | 0.4979 | 2.84318 | 0.0031 |
+| 16a | 400 a/c | [−4, +4] | 0.5311 | 2.84175 | 0.0061 |
+| 16a | 150 a/c (round trip only ~53 a/c) | [−4, +4] | 0.5233 | 2.84474 | 0.0152 |
+
+The backward wave is **absent to 2e-4 before the round-trip time and 0.50 after
+it**, and the switch-over tracks the domain length. It is a reflection of the
+guided mode off the domain termination — roughly **−6 dB in amplitude, ~25 % in
+power**. Note the contrast with the known-issues ledger, which records the
+hollow WR-90 case as `|b1/a1|` = 11.7 % / 4.2 % / 1.8 % at 10 / 20 / 40 CPML
+layers and marks it resolved: here the guided mode is in `eps = 12` dielectric,
+the reflection is 4x worse than that entry's *worst* number, and the §8 table
+shows it getting **worse**, not better, with absorber depth. Whether that is the
+same defect on a harder configuration or a different one is not established here
+and needs an owner.
+
+Two consequences worth carrying into whatever issue takes this:
+
+1. **`T = flux_out/flux_in` is structurally blind to it.** Net flux in a
+   lossless section is `|A|^2 - |B|^2` at every plane, so a 25 %-power
+   reflection reads `T = 0.9657`, PASS. This is the same blindness #812 found by
+   sweeping `eps_wg`, arrived at from the opposite direction.
+2. **rfx's guide dispersion is right.** In the reflection-free window the
+   measured `n_eff` is **2.84338** against the closed form's **2.84411** —
+   **−0.026 %**, 77x inside G1's window. The case's physics is not what is
+   wrong; its instrument was, and its termination is.
+
+### 8.2 CORRECTION (round 2, 2026-09-01) — item 2 of §8.1 compared two frequencies
+
+Append-only; §8.1 stands as written except for its item 2, corrected here. Every
+quantity below is a key of the committed artifact
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json`, emitted by
+`scripts/diagnostics/cv03_flux/build_cv03_matched_frequency.py` (no FDTD) and
+pinned by `tests/crossval/test_cv03_slab_dispersion_oracle.py`.
+
+**What was wrong.** Item 2 divided a measured `n_eff` taken at the case's
+carrier DFT bin, `docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::grid.carrier_bin_f_c_over_a = 0.14898`,
+by the analytic `n_eff` at `f = fcen` **exactly**,
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.n_eff_at_fcen_exact = 2.84411`.
+Those are different frequencies —
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::grid.fcen_minus_carrier_bin_c_over_a = 0.00102` —
+and `n_eff` rises with `f` across the gated band by
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.band_n_eff_increase_over_band = 0.1361`,
+so the mismatch inflated the denominator and inverted the sign. The analytic
+value at the measured operand's own bin is
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.n_eff_at_carrier_bin = 2.83887`.
+
+**The diagnosis is mechanical, not asserted.** Recomputing at the wrong
+frequency regenerates the published number
+(`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::round1_error.published_dev_pct = -0.026`
+vs `docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::round1_error.reproduces_published_value = -0.0257`),
+and recomputing at the matched frequency flips its sign to
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::round1_error.corrected_dev_pct = +0.1588`.
+Both directions are tests in `tests/crossval/test_cv03_slab_dispersion_oracle.py`.
+
+**The margin is withdrawn, not restated.** Item 2's factor
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::round1_error.published_margin_factor_vs_g1 = 77`
+compared a single-bin deviation against G1, whose statistic is the max over the
+gated band; no factor may be read off one bin. Reason recorded at
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::round1_error.margin_factor_withdrawn_because`.
+Criterion (A) rests on the committed case run's own band-max, already in the
+results note.
+
+**Unaffected.** §8.1's `|B/A|` table, the time-of-flight reasoning and the
+conclusion that the standing wave is a reflection off the domain termination:
+those turn on `|B/A|`, not on the dispersion comparison. Item 1 of §8.1 is
+unaffected. **No gate, threshold or estimator moves** — G1 is still 2.0 %,
+derived only from §3.
+
+**Provenance grade.** Round 1's driver for the §8.1 rows was never committed, so
+its four measured operands carry note provenance, labelled at
+`docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::measured.provenance`;
+every analytic operand and every deviation in the artifact is recomputed from
+committed code. `scripts/diagnostics/cv03_flux/tof_reflection_free.py` is the
+missing driver and `scripts/vessl_cv03_tof_reflection_free.yaml` regenerates the
+measured side with harness provenance.
+
+---
+
+## Correction C1 — the §8.1 group index was wrong (`n_g ~ 3.3` → 3.6083)
+
+Appended 2026-09-01 after independent adversarial review. This note is
+append-only; §8.1 above is left as written and is superseded by this section.
+
+§8.1 states *"Group index `n_g ~ 3.3`, so a `sx = 40a` guide with the fit window
+at Meep `x in [-16, -8]` needs `~211 a/c` for a wave to reach the far end and
+return."* Both numbers are wrong.
+
+The lane's own oracle — `validation/crossval/comparators/slab_te_dispersion.py`,
+`slab_te0_neff(eps_core, eps_clad, thickness, k0)`, the same closed form the
+case is judged against — gives, at the case's own carrier bin
+`f = 0.1489796 c/a`:
+
+| quantity | committed value (cited by artifact key, per #829) |
+|---|---|
+| `n_eff` | `docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.n_eff_at_carrier_bin = 2.8389` |
+| `n_g = d(f·n_eff)/df` | `docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.n_group_at_carrier_bin = 3.6083` |
+| `n_core = sqrt(12)` | `docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.n_core = 3.4641` |
+| src → far end → back, 64a | `docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.tof_round_trip_a_over_c0.src_to_far_end_and_back_64a = 230.93` a/c0 |
+| src → far end → fit window, 75a | `docs/design_notes/issue812_cv03_dispersion_matched_frequency.json::oracle.tof_round_trip_a_over_c0.src_to_far_end_to_fit_window_75a = 270.62` a/c0 |
+
+(emitted by the generator so the numbers are machine-checked rather than retyped;
+`n_g > n_core` is the expected sign for a guided mode below cutoff-free
+single-mode operation, where waveguide dispersion adds to material dispersion.)
+
+**Where 3.3 came from.** It is a transcription collision: `3.33` is the standing
+wave ratio `max/min` of `|Ez(x)|` reported two sections above (§8 table and the
+`upml` row). The SWR was copied into the group-index slot.
+
+**What moves as a result: nothing.** The error is *conservative* in the only
+direction that matters. §8.1's argument needs the far-end return to arrive
+*after* the DFT window closes; it claimed the return arrives at 211 a/c0 and
+used a 150 a/c0 window. The return actually arrives at 231 a/c0 (or 271 a/c0 to
+re-enter the fit window) — **later**, so the 150 a/c0 window is reflection-free
+by a wider margin than claimed, not a narrower one. Every measured row in the
+§8.1 table stands, and the mechanism conclusion (the backward wave is a
+reflection off the domain termination, absent to 2e-4 before the round trip and
+0.50 after it) is unaffected.
+
+**Why it still had to be fixed.** A wrong number in a durable document is the
+failure class #814 and #829 exist to stop, and "it happened to be conservative"
+is a property of this instance, not of the practice. The corrected values now
+live in a committed artifact under keys the prose cites by name, so the next
+reader gets the number from the generator rather than from a retyped constant.
+
+---
+
+## Correction C2 — the §8 finding is now filed as #831, with six explanations eliminated
+
+Appended 2026-09-01. §8 says the standing wave is "reported for separate
+filing" and names the deepening-makes-it-worse trend as "the part that most
+needs an owner". It is now **issue #831**.
+
+Before filing, the six candidate explanations were checked against this tree,
+and all six were eliminated:
+
+1. deeper absorber shortens the guide — no: `Grid.interior` is bit-identically
+   161 cells (16a) at `cpml_layers` 20 and 60;
+2. deeper absorber moves the outer wall nearer — no, the opposite: CPML pads
+   outward, `nx` = 201 / 241 / 281 at 20 / 40 / 60 layers;
+3. bare end facet — no: `eps_r = 12` at 201/201 and 281/281 centre-row x-cells
+   (`_assemble_materials(..., include_cpml_pad_extension=True)`), which
+   independently re-confirms §8's own rasterization check;
+4. the CPML profile is N-dependent — it is N-invariant *by construction*
+   (`cpml.py:143` `d = n_layers*dx`, `:147` `sigma_max ∝ 1/d`, so `∫σ dz` is
+   fixed; numerically identical at N = 20/40/60);
+5. `cpml.py:142` uses the vacuum impedance for `sigma_max` regardless of the
+   terminated medium — a real deviation from Gedney's `√ε_r` form, but it only
+   degrades `R_asymptotic` 1e-15 → 4.68e-5 (−86.6 dB), ~4 orders below the
+   measured 0.5, and it is N-invariant;
+6. CFS α — `:158` gives `alpha / sigma_max = 1.4e-6`, effectively zero and
+   N-invariant.
+
+Items 1–3 kill the geometric explanations (both predict the wrong sign), and
+4–6 kill the profile-design explanations. The finding survives all of them and
+is genuinely not root-caused; #831 carries the pre-declared settling run and
+its falsifiers.
+
