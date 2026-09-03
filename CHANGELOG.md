@@ -6,6 +6,39 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased]
 
+### Changed — the rectangular-waveguide support rows now carry the chain-battery verdict: measured, gates red, family NOT chain-closed (v1.8 WP7)
+
+`docs/guides/support_matrix.md`, `docs/guides/sparameter_support_matrix.md`
+and `docs/guides/sparameter_support_matrix.json` previously described the
+rectangular-waveguide family by its magnitude and phase referees alone. They
+now also state its status against the per-family contract in
+`docs/design_notes/chain_closure_contract.md`, and that status is **not
+closed**. The chain battery ran one pre-declared WR-90 measurement over the
+dx rungs `a/9`, `a/18` and `a/36` on the `normalize=False` and
+`normalize="flux"` lanes and left 26 of its 185 stored verdicts red — 23
+failures plus 3 dx ladders the pre-declared guard reports as *not
+interpretable* — in five families: the flux lane's forward identity
+(criterion 1, float32 reassociation of the Poynting DFT, with an x64 witness
+agreeing with the untraced call to `1.5e-15`); the settling witness at the
+PEC-short fine rung (criterion 2, `settling_db` reading `0.00 dB` on records
+that underflowed float32 to zero — issue #869); one zero-derivative AD-vs-FD
+leg (criterion 3(a)); the reference-plane rotation, `6.602` degrees against
+the Yee-discrete beta with a `3` degree gate, because the port's discrete
+TE10 cutoff is solved on an aperture one cell wider than the guide (criterion
+3(b) — issue #868); and three dx ladders below the next admissible rung
+`a/72` (criterion 3(c)). Criterion 3(d) is green at the claims rung, with the
+analytic Airy slab, the PEC short and the five broad-E5 replay bands as
+referees. Power closure is witnessed **independent in the plane index only (both routes integrate the same transverse window with the same uniform dA through the same flux kernel, and neither sees the reference-plane de-embedding, which is phase-only)** and is **bounded** rather than demonstrated:
+two interior `add_flux_monitor` planes and the port route agree to `2.146e-05`
+against a `0.02` gate at the coarse rung, but both sit at that rung's float32
+field-noise floor; that measurement landed on `main` in PR #870 (`1bccdfba`).
+re-run for this entry. Artifacts: `tests/oracle/test_waveguide_chain_battery.py`,
+`tests/unit/geometry/test_waveguide_chain_battery_geometry.py`,
+`tests/fixtures/waveguide_chain_battery/fixture.json`,
+`docs/design_notes/waveguide_chain_battery_predeclaration.md`, and the
+`scripts/diagnostics/waveguide_chain_battery_measure.py` /
+`scripts/vessl_waveguide_chain_battery.yaml` pair that produced it.
+
 ### Changed — `normalize="flux"` waveguide S-matrix now follows `JAX_ENABLE_X64` (v1.8 chain closure, WP1)
 
 `compute_waveguide_s_matrix(normalize="flux")` on the uniform mesh
