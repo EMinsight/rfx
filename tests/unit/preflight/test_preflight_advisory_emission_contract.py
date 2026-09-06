@@ -240,8 +240,20 @@ def _enumerate_emission_sites():
 # from the grid build or a port mode solve and reports
 # waveguide_setup_audit_skipped instead of letting it escape a
 # before-the-run safety call. One new site, one new literal code.
-_FROZEN_TOTAL_SITES = 97
-_FROZEN_LITERAL_CODE_COUNT = 64
+# 97 -> 98 sites / 64 -> 65 literal codes, issue #885 (stacked on every edit
+# above, so the counts sum): ``_validate_cfg_settling_witness_present`` says at
+# CONFIGURATION time that a run requesting NTFF or a field-DFT plane with no
+# point probe will come back with no ring-down settling witness
+# (``Result.settling_db is None``), because run() scores that witness from the
+# probe time series. One new site, one new literal code
+# (``settling_witness_will_be_absent``) -- a new check family, not another
+# voice in an existing one, so it does not reuse a slug the way #823's check 5
+# did. Input-side by construction: it reads the declared probe/NTFF/DFT
+# registration, not any solved field, so it is a preflight check and not a
+# runtime guard. _FROZEN_DYNAMIC_SITES_BY_FUNCTION is unchanged (no new bare
+# except). EMISSION_CLASSIFICATION is unchanged: no new preflight call site.
+_FROZEN_TOTAL_SITES = 98
+_FROZEN_LITERAL_CODE_COUNT = 65
 # Dynamic sites are frozen by ENCLOSING FUNCTION and count, not by line
 # number. What this test exists to catch is a new bare ``except`` path
 # emitting PreflightIssue(code=getattr(exc, "code", "uncoded")) — a site
