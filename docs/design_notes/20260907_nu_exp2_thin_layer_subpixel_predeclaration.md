@@ -479,3 +479,19 @@ sign (2.3). What the production path should do with a sub-cell layer is
   over two cells), which is also run.
 - The builder's free cores are 0.5-2.5 % smaller than dc on the R meshes
   (1d); reported, the model carries the realised cells.
+
+## Addendum before any measurement (2026-09-07; instrument bring-up, no window edited)
+
+The first `--selfcheck` of the committed instrument (`e3059d3d`)
+reproduced every model row of 2.5 and then raised `KeyError: 's1|2|350'`:
+E2-F3 names SIX S1 units with t < h and 1b / 2.5 quote six law
+deviations (+7.4 / +6.1 / +9.0 / -5.3 / -5.5 / -6.3 %), but the declared
+unit set of 2.5 (L1 + L2 + T) contains only five of them — `s1 2 350`
+(t = dc/4 at s = 2) was in the model exploration and in the F3 text but
+not in the ladders. Resolution, before any FDTD: the unit is ADDED to
+the run set as a 49th unit (its model row: err -134.0393, err_ref
+-140.1520, e_shift +6.1127 MHz; uniform mesh, 13 664 cells, 13 251
+steps; its reference `ref|u|2` already declared), the instrument's
+`MODEL_TABLE_MHZ` carries the row, and F3 is evaluated on the six units
+exactly as written. No window, tolerance or model number changes; "48
+units" in 2.5 reads 49.

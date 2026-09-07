@@ -97,6 +97,7 @@ MODEL_TABLE_MHZ = {                          # "arm|s|t": (err, err_ref, e_shift
     "r4|1|700": (-32.5163, -32.7204, +0.2040),
     "s1|2|175": (-136.5783, -140.1520, +3.5737), "s1b|2|175": (-139.3686, -140.1520, +0.7834),
     "r4|2|175": (-104.2638, -104.1469, -0.1169),
+    "s1|2|350": (-134.0393, -140.1520, +6.1127),      # the sixth F3 law unit (note Results addendum)
     "s1|2|700": (-132.0695, -140.1520, +8.0825), "s1b|2|700": (-136.9034, -140.1520, +3.2486),
     "s0|2|700": (-170.7506, -140.1520, -30.5986), "r2|2|700": (-107.9900, -108.3166, +0.3266),
     "r4|2|700": (-98.5541, -98.5536, -0.0005), "r8|2|700": (-115.0258, -113.8394, -1.1865),
@@ -382,6 +383,7 @@ def declared_units(ladders=("L1", "L2", "T")) -> list[dict]:
                 add(arm, s, 175)
         for arm in ("s1", "s1b", "r4"):
             add(arm, 0.5, 175)
+        add("s1", 2.0, 350)          # sixth S1 law unit (t < h), note Results addendum
     if "T" in ladders:
         for t_um in THICK_UM:
             for arm in ("s1", "s1b", "r4"):
@@ -674,7 +676,7 @@ def selfcheck(verbose: bool = True) -> dict:
     sc["units"] = {}
     sc["meshes"] = {}
     specs = {u["key"]: u for u in declared_units()}
-    ch["n_declared_units"] = bool(len(specs) == 48)
+    ch["n_declared_units"] = bool(len(specs) == 49)
     fm = {}
     for key, spec in specs.items():
         s, t_mesh = spec["scale"], spec["t_mesh_um"] * 1e-6
