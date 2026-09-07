@@ -210,6 +210,35 @@ Confirm runs after the re-pins: `patch-s11` 369367259239, `msl-nu-gate`
 369367259240 (re-submitted so it reads Board S's re-pinned band, which it
 imports), `patch-harminv` 369367259237.
 
+## Round 3 — the confirm runs
+
+| case | run | result |
+|---|---|---|
+| `patch-s11` | **369367259239** | **3 passed** (18 m 27 s). Every headline reproduces the evidence run: max abs S11 0.9837, in-band min 0.9096, crossing 7.7620 GHz IN the re-pinned band, in-band max Re(Zin) 4157 ohm, dip 8.800 GHz above the band, preflight advisories 3 with the cavity check silent |
+| `msl-nu-gate` | **369367259240** | **2 passed** (19 m 12 s) — the NU twin on Board S's re-pinned band, plus the new build-time parity test (same wall planes, same footprint extents in metres on both lanes) |
+| `patch-harminv` | **369367259237** | 7 passed / 1 failed at 200 periods. Settling **-58.30 dB** UNFED and -58.31 FED against the -40 bar (120 periods ended at -35.43), Leg A **-1.886 %**, Leg B **-7.061 %** PASSING. The one red was Leg A against its un-re-pinned window; re-pinned from this run, confirm run **369367259250** |
+| `sheet-resonance-ab` | **369367259241** | **1 passed** (24 s) on the re-pinned census pair |
+| `sheet-perturbation-q` | **369367259242** | **1 passed, 1 xfailed** (1 m 51 s) on the re-pinned mode-tracking value |
+| `leontovich-alpha` | **369367259243 / 369367259244** | envelope regression lock GREEN after the endpoint-ratio re-pin; the two O3 model-trust reds remain, un-widened, and the profile dump explains them (fit residual 0.00245 -> 0.00866, so the two-mode model fits a beatier profile worse) |
+
+The 120-period and 200-period Board H runs put Leg A at -1.871 % and -1.886 %,
+0.015 pp apart. The longer record changed the settling, not the physics — which
+is the check that the re-pin is a measurement of the board and not of the run
+length.
+
+## Fast-lane state of the four T6 directories at the end of this pass
+
+```
+tests/contracts + tests/locks   1224 passed, 6 skipped, 18 failed
+                                all 18 are tests/contracts/test_example_fidelity_contract.py (13)
+                                and test_tutorial_examples.py (5) — the E group's
+                                snapshot, regenerated last by plan
+tests/studio                     474 passed
+tests/oracle                     735 passed, 17 xfailed, 1 failed
+                                the 1 is test_pec_short_s11_magnitude, left RED on
+                                purpose with the thickness sweep behind it
+```
+
 ## Measured on this pod, no VESSL needed
 
 **Waveguide chain battery LIVE layer** —
