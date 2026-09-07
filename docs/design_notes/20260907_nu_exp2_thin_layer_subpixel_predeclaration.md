@@ -495,3 +495,196 @@ steps; its reference `ref|u|2` already declared), the instrument's
 `MODEL_TABLE_MHZ` carries the row, and F3 is evaluated on the six units
 exactly as written. No window, tolerance or model number changes; "48
 units" in 2.5 reads 49.
+
+## Results
+
+Measured 2026-09-07 (KST) on the shared machine, CPU only, one process
+at a time. Instrument commits `70b008f9` (s = 2 units), `8d4df8bd` (s = 1),
+`8c30f33a` (s = 0.5) — the same instrument source at every sha (the
+commits between them are the replay test and the results snapshot);
+`rfx.__file__ = /Users/byungkwankim/Documents/rfx-nu-exp2/rfx/__init__.py`
+printed by every call; `git_dirty = false` on all 49 rows; no `rfx/`
+source touched. One attempt per unit, no unit re-run, no `--force`, no
+window edited. Everything below is read from
+`validation/research/multiband_nu/results/e2_thin_layer_subpixel.json`
+(commit `3a7f035b`). Selfcheck (auto-run before every call): oracle (i)
+2.7e-16 (10 roots), (i') 3.4e-16 (8), (i'') 3.9e-16 (5); every model row
+of 2.5 reproduced; all_pass.
+
+### Per unit (49 of 49 valid, none INCONCLUSIVE)
+
+`err = f_meas - f_true`, `model = f_model - f_true`, `resid = f_meas -
+f_model` (E2-G3, window 0.15), `inv = |f(15 ns) - f(10 ns)|` (E2-V,
+window 0.1), `e_shift` measured and model (2.4). MHz.
+
+| unit | f_meas GHz | err | model | resid | inv | e_shift | e_shift model | nz | dt (s) | steps | cells | wall s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ref u 0.5 | 10.671516 | -8.6260 | -8.6672 | +0.0413 | 0.0315 | | | 124 | 2.830e-13 | 53004 | 753125 | 55 |
+| s1 0.5 175 | 10.678119 | -8.0688 | -8.0883 | +0.0195 | 0.0509 | +0.5571 | +0.5789 | 124 | 2.830e-13 | 53004 | 753125 | 68 |
+| s1b 0.5 175 | 10.677066 | -8.5806 | -8.6048 | +0.0243 | 0.0468 | +0.0454 | +0.0624 | 124 | 2.830e-13 | 53004 | 753125 | 70 |
+| s0 0.5 175 | 10.684699 | -1.4880 | -1.4893 | +0.0013 | 0.0638 | +7.1380 | +7.1779 | 124 | 2.830e-13 | 53004 | 753125 | 67 |
+| ref r2 0.5 175 | 10.671947 | -8.1945 | -8.2219 | +0.0275 | 0.0444 | | | 130 | 2.053e-13 | 73047 | 789275 | 79 |
+| r2 0.5 175 | 10.678018 | -8.1699 | -8.1993 | +0.0294 | 0.0445 | +0.0245 | +0.0226 | 130 | 2.053e-13 | 73047 | 789275 | 77 |
+| ref r4 0.5 175 | 10.672099 | -8.0429 | -8.0690 | +0.0260 | 0.0374 | | | 136 | 1.295e-13 | 115847 | 825425 | 136 |
+| r4 0.5 175 | 10.678168 | -8.0195 | -8.0481 | +0.0286 | 0.0273 | +0.0235 | +0.0209 | 136 | 1.295e-13 | 115847 | 825425 | 126 |
+| ref r8 0.5 175 | 10.671983 | -8.1582 | -8.1852 | +0.0270 | 0.0451 | | | 143 | 7.012e-14 | 213913 | 867600 | 249 |
+| r8 0.5 175 | 10.678050 | -8.1371 | -8.1666 | +0.0295 | 0.0428 | +0.0211 | +0.0186 | 143 | 7.012e-14 | 213913 | 867600 | 262 |
+| ref p4 0.5 175 | 10.687690 | +7.5485 | +7.5191 | +0.0293 | 0.0127 | | | 136 | 1.295e-13 | 115847 | 825425 | 120 |
+| p4 0.5 175 | 10.693900 | +7.7124 | +7.6871 | +0.0252 | 0.0139 | +0.1639 | +0.1680 | 136 | 1.295e-13 | 115847 | 825425 | 126 |
+| ref u 1 | 10.645423 | -34.7184 | -34.7443 | +0.0258 | 0.0581 | | | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| s1 1 175 | 10.653180 | -33.0075 | -33.0280 | +0.0205 | 0.0754 | +1.7109 | +1.7162 | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| s1 1 350 | 10.660930 | -32.3734 | -32.3940 | +0.0206 | 0.0481 | +2.3450 | +2.3503 | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| s1 1 700 | 10.676393 | -34.3471 | -34.3756 | +0.0285 | 0.0363 | +0.3713 | +0.3686 | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| s1b 1 175 | 10.651158 | -34.4885 | -34.5104 | +0.0219 | 0.0750 | +0.2299 | +0.2339 | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| s1b 1 350 | 10.656893 | -34.2444 | -34.2647 | +0.0202 | 0.0698 | +0.4740 | +0.4796 | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| s1b 1 700 | 10.668363 | -33.7918 | -33.8173 | +0.0255 | 0.0104 | +0.9266 | +0.9270 | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| s0 1 350 | 10.676393 | -16.9107 | -16.9394 | +0.0287 | 0.0361 | +17.8078 | +17.8049 | 62 | 5.660e-13 | 26502 | 99099 | 4 |
+| ref r2 1 350 | 10.648754 | -31.3871 | -31.4150 | +0.0280 | 0.0284 | | | 68 | 4.107e-13 | 36523 | 108537 | 5 |
+| r2 1 350 | 10.662047 | -31.2570 | -31.2806 | +0.0237 | 0.0378 | +0.1301 | +0.1344 | 68 | 4.107e-13 | 36523 | 108537 | 6 |
+| ref r4 1 175 | 10.650401 | -29.7407 | -29.7712 | +0.0305 | 0.0253 | | | 78 | 1.402e-13 | 106957 | 124267 | 16 |
+| r4 1 175 | 10.656488 | -29.6992 | -29.7267 | +0.0275 | 0.0309 | +0.0415 | +0.0445 | 78 | 1.402e-13 | 106957 | 124267 | 18 |
+| ref r4 1 350 | 10.650017 | -30.1247 | -30.1509 | +0.0262 | 0.0862 | | | 74 | 2.590e-13 | 57923 | 117975 | 9 |
+| r4 1 350 | 10.663279 | -30.0244 | -30.0489 | +0.0245 | 0.0254 | +0.1003 | +0.1020 | 74 | 2.590e-13 | 57923 | 117975 | 9 |
+| ref r4 1 700 | 10.647450 | -32.6918 | -32.7204 | +0.0285 | 0.0284 | | | 69 | 4.107e-13 | 36523 | 110110 | 5 |
+| r4 1 700 | 10.678253 | -32.4871 | -32.5163 | +0.0292 | 0.0431 | +0.2047 | +0.2040 | 69 | 4.107e-13 | 36523 | 110110 | 6 |
+| ref r8 1 350 | 10.648924 | -31.2171 | -31.2477 | +0.0306 | 0.0248 | | | 81 | 1.402e-13 | 106957 | 128986 | 18 |
+| r8 1 350 | 10.662142 | -31.1621 | -31.1871 | +0.0250 | 0.0377 | +0.0550 | +0.0606 | 81 | 1.402e-13 | 106957 | 128986 | 17 |
+| ref p4 1 350 | 10.619271 | -60.8703 | -60.8899 | +0.0196 | 0.0416 | | | 74 | 2.590e-13 | 57923 | 117975 | 10 |
+| p4 1 350 | 10.632258 | -61.0458 | -61.0682 | +0.0225 | 0.0112 | -0.1755 | -0.1784 | 74 | 2.590e-13 | 57923 | 117975 | 8 |
+| ref u 2 | 10.539989 | -140.1524 | -140.1520 | -0.0004 | 0.0445 | | | 31 | 1.132e-12 | 13251 | 13664 | 1 |
+| s1 2 175 | 10.549605 | -136.5827 | -136.5783 | -0.0044 | 0.0229 | +3.5697 | +3.5737 | 31 | 1.132e-12 | 13251 | 13664 | 1 |
+| s1 2 350 | 10.559266 | -134.0379 | -134.0393 | +0.0014 | 0.0477 | +6.1145 | +6.1127 | 31 | 1.132e-12 | 13251 | 13664 | 1 |
+| s1 2 700 | 10.578680 | -132.0604 | -132.0695 | +0.0092 | 0.0330 | +8.0920 | +8.0825 | 31 | 1.132e-12 | 13251 | 13664 | 1 |
+| s1b 2 175 | 10.546273 | -139.3729 | -139.3686 | -0.0043 | 0.0341 | +0.7795 | +0.7834 | 31 | 1.132e-12 | 13251 | 13664 | 1 |
+| s1b 2 700 | 10.565259 | -136.8955 | -136.9034 | +0.0079 | 0.0867 | +3.2569 | +3.2486 | 31 | 1.132e-12 | 13251 | 13664 | 1 |
+| s0 2 700 | 10.539989 | -170.7512 | -170.7506 | -0.0006 | 0.0446 | -30.5988 | -30.5986 | 31 | 1.132e-12 | 13251 | 13664 | 1 |
+| ref r2 2 700 | 10.571835 | -108.3060 | -108.3166 | +0.0106 | 0.0273 | | | 37 | 8.214e-13 | 18262 | 16226 | 1 |
+| r2 2 700 | 10.602767 | -107.9731 | -107.9900 | +0.0169 | 0.0196 | +0.3330 | +0.3266 | 37 | 8.214e-13 | 18262 | 16226 | 1 |
+| ref r4 2 175 | 10.575996 | -104.1453 | -104.1469 | +0.0015 | 0.0423 | | | 51 | 1.434e-13 | 104616 | 22204 | 5 |
+| r4 2 175 | 10.581917 | -104.2708 | -104.2638 | -0.0071 | 0.0197 | -0.1255 | -0.1169 | 51 | 1.434e-13 | 104616 | 22204 | 5 |
+| ref r4 2 700 | 10.581598 | -98.5438 | -98.5536 | +0.0098 | 0.0055 | | | 43 | 5.179e-13 | 28962 | 18788 | 1 |
+| r4 2 700 | 10.612206 | -98.5339 | -98.5541 | +0.0202 | 0.0307 | +0.0099 | -0.0005 | 43 | 5.179e-13 | 28962 | 18788 | 1 |
+| ref r8 2 700 | 10.566312 | -113.8298 | -113.8394 | +0.0095 | 0.0234 | | | 50 | 2.805e-13 | 53478 | 21777 | 3 |
+| r8 2 700 | 10.595730 | -115.0101 | -115.0258 | +0.0157 | 0.0221 | -1.1803 | -1.1865 | 50 | 2.805e-13 | 53478 | 21777 | 3 |
+| ref p4 2 700 | 10.640372 | -39.7698 | -39.7986 | +0.0288 | 0.0632 | | | 43 | 5.179e-13 | 28962 | 18788 | 1 |
+| p4 2 700 | 10.663498 | -47.2425 | -47.2632 | +0.0206 | 0.0521 | -7.4727 | -7.4646 | 43 | 5.179e-13 | 28962 | 18788 | 1 |
+
+### Gates and falsifiers (measured vs window)
+
+- **E2-O / E2-S HELD**: oracle 2.7e-16 / 3.4e-16 / 3.9e-16 <= 1e-12; every
+  mesh, node, column, model number and interface table of the note
+  reproduced by the selfcheck before every call.
+- **E2-G3 HELD on all 49**: worst residual **0.041 MHz** (`ref u 0.5`) on
+  the subpixel / dual rule, 0.029 MHz (`ref p4 2 700`) on production;
+  window 0.15 MHz. The measured `e_shift` agrees with the exact model on
+  every layer unit to **<= 0.040 MHz** (worst `s0 0.5 175`; the S1 units
+  <= 0.022 MHz).
+- **E2-V HELD on all 49**: worst invariance 0.087 MHz (`s1b 2 700`),
+  0.086 (`ref r4 1 350`); window 0.1 MHz. No unit INCONCLUSIVE.
+- **E2-F1 HELD**: S1 fixed-fill `e_shift` order **p_S1 = 1.930** (model
+  1.902), window [1.8, 2.2]; points 0.5571 / 2.3450 / 8.0920 MHz at
+  h = 0.35 / 0.7 / 1.4 mm, all above the 0.3 MHz floor.
+- **E2-F2 HELD**: `|err_S1| / |err_R4|` = **1.006 / 1.078 / 1.340** at
+  s = 0.5 / 1 / 2 (model 1.005 / 1.078 / 1.340) and **1.111 / 1.078 /
+  1.057** at s = 1, t = 0.175 / 0.35 / 0.7 mm (model 1.111 / 1.078 /
+  1.057); fitted-line rho at h1 = 0.7 mm **1.133** (model 1.132); window
+  2.0.
+- **E2-F3 HELD on all six law units**: `e_shift` vs `K_pert t (h - t)`
+  with K_pert = 17.608 MHz/mm^2: **+3.3 / +5.8 / +8.7 / -5.4 / -5.5 /
+  -6.2 %** (`s1 0.5 175`, `1 175`, `1 350`, `2 175`, `2 350`, `2 700`;
+  model +7.4 / +6.1 / +9.0 / -5.3 / -5.5 / -6.3 %); window 25 % or
+  0.3 MHz. Worst absolute deviation 0.536 MHz at s = 2, t = 0.7 mm
+  against a tolerance of 2.157 MHz.
+- **E2-F4 HELD**: `|e_shift(S1b)| / |e_shift(S1)|` = **0.081 / 0.202 /
+  0.402** (model 0.108 / 0.204 / 0.402); window 1.0. The s = 0.5 S1b
+  point is 0.045 MHz, below the fit floor (its model value is 0.062 MHz
+  and the measured-minus-model 0.017 MHz is within the 2 x G3
+  scatter), which is why no S1b order is fitted (2 points above the
+  floor; their two-point slope is 2.78, model 2.85).
+- **E2-R (reported)**:
+  - S0 staircase `e_shift` order **1.050** (model 1.046): +7.138 /
+    +17.808 / -30.599 MHz — the layer doubled at s = 0.5 (the cell
+    midpoint landed inside the layer by an ulp), dropped entirely at s = 2
+    (`-shift_true` exactly, -30.599 vs +30.599); the sign is the ulp of
+    the midpoint, lane F 1a on a cell.
+  - S1 fixed-t (0.175 mm) ladder: 0.5571 / 1.7109 / 3.5697 MHz, LS slope
+    **1.340** (model 1.313) — not a power law; the same three numbers
+    divided by `t (h - t)` give K = 18.2 / 18.6 / 16.7 MHz/mm^2 against
+    K_pert 17.6 (the law of 1b, measured on both ladders).
+  - S1 total-error order 2.016 (model 2.015), R4 total 1.810 (1.807): the
+    total is coarse-mesh dispersion and fits 2 for any representation
+    (6, second bullet).
+  - R2 / R4 / R8 `e_shift`: 0.0245 / 0.0235 / 0.0211 (s = 0.5), 0.130 /
+    0.100 / 0.055 (s = 1, t = 0.35), 0.333 / 0.010 / -1.180 MHz (s = 2,
+    t = 0.7) — model 0.0226 / 0.0209 / 0.0186, 0.134 / 0.102 / 0.061,
+    0.327 / -0.0005 / -1.187; the s = 0.5 and most s = 1 values are
+    below the 0.3 MHz floor (resolved to the extraction limit), the
+    R8 s = 2 value is the dispersion-of-the-shift of 1b (-1.2 MHz
+    predicted), not a representation error.
+  - P4 (production column on the R4 mesh): `e_shift` **+0.164 / -0.176 /
+    -7.473 MHz** (model +0.168 / -0.178 / -7.465), total error +7.71 /
+    -61.05 / -47.24 MHz (model +7.69 / -61.07 / -47.26); the interface
+    tables re-recorded by the instrument match 2.3 at every scale
+    (15.4 -> 3.0 / 3.0 / **4.3**, layer top -> 4.3 / 4.3 / **4.3**, 29.4 ->
+    1.0 / **4.3** / 1.0 at s = 0.5 / 1 / 2). At s = 2 both layer-face nodes
+    take the core and the 4-cell band keeps only its three interior
+    nodes: -7.5 MHz on a +30.6 MHz layer, 24 % of the layer's effect,
+    against S1's 8.1 MHz (26 %) on ONE coarse cell at dt x2.19, and R4
+    dual's 0.01 MHz. The production total error changes sign along the
+    ladder (+7.7 -> -61 -> -47 MHz) because the 29.4 mm node flips
+    between air and core with the ulp: it is not an order of anything,
+    as lane F recorded.
+  - Thickness sweep at s = 1 (h = 0.7 mm), `e_shift / shift_true`:
+
+| t / h | shift_true | S1 | S1b (centred) | R4 | dt(S1)/dt(R4) | z-only | wall R4/S1 |
+|---|---|---|---|---|---|---|---|
+| 1/4 | +6.046 MHz | 1.711 MHz = **28.3 %** | 0.230 = 4.2 % | 0.042 = 0.69 % | 4.04 | 16 | 4.92 |
+| 1/2 | +13.162 | 2.345 = **17.8 %** | 0.474 = 4.3 % | 0.100 = 0.76 % | 2.19 | 8 | 2.36 |
+| 1 | +30.599 | 0.371 = **1.2 %** | 0.927 = 4.2 % (t = h split 1/2 + 1/2) | 0.205 = 0.67 % | 1.38 | 4 | 1.73 |
+
+  - dt price at the other scales: s = 0.5, t = h/2: 2.19 (z-only 8,
+    wall 1.86); s = 2, t = h/8: **7.90** (z-only 32, wall 10.0); s = 2,
+    t = h/2: 2.19 (wall 2.43). Wallclock 1619 s of FDTD for the 49 units
+    (the s = 0.5 R8 pair 511 s of it); throughput ~7e8 cell-steps/s.
+
+### Reading
+
+On every one of the 49 columns the solver did what its operators say to
+<= 0.041 MHz (4e-6 relative); the shift errors agree with the exact
+discrete model to <= 0.04 MHz, so what follows is measured, not
+modelled. The fill-fraction cell with dual nodes represents a thin
+tangential-E layer with an error that is the error of MOVING the layer
+to the centre of its cell: `e = K t (h - t)` with K = 17.6 MHz/mm^2 on
+this mode, measured to +3 / -6 % over t/h = 1/8 to 1/2 and h = 0.35 to
+1.4 mm. That is second order in h at fixed fill (1.93 measured), first
+order in h at fixed physical thickness once h >> t (slope K t), and zero
+at t = h. The worst position (layer at a cell face, S1) costs 18-28 % of
+the layer's own effect at t/h = 1/2 to 1/4; a layer centred on a node
+(S1b) costs 4 % at every thickness. Resolving with 4 cells (R4, dual
+nodes) costs 0.7 %, at dt x2.2 (t = h/2) to x4.0 (t = h/4) on this
+transverse mesh and x8-16 z-only. The staircase (S0) and the production
+node sampling (P4) are first order with an ulp-decided sign: S0 loses or
+doubles the layer outright; P4 at s = 2 loses both face nodes and 24 % of
+the layer. So "average instead of resolve" is a 4-28 % error on the
+layer's effect (never on the cavity's frequency directly: 0.2-2.3 MHz
+against a 13 MHz layer effect at s = 1), position-dependent through
+`(z_c - z_l)`, and it buys the dt of the coarse cell; the honest
+alternative on the production path today is neither — it is the first-
+order staircase.
+
+### Replay test
+
+`tests/unit/nonuniform/test_e2_thin_layer_subpixel_replay.py`: **9
+passed** (4 JSON-free, 5 replay) against the committed JSON, 5.3 s.
+
+### Validity domain (what this lane measured, and where)
+
+| claim | inside (measured) | outside / not measured |
+|---|---|---|
+| Fill-fraction cell + dual nodes: `e_shift = K t (h - t)`, K = f |Delta| (psi^2)' / (4 N), within +9 / -6 % | Ey (tangential) layer, contrast 3.0 in 4.3 (|Delta| = 1.3), t/h = 1/8, 1/4, 1/2, h = 0.35 / 0.7 / 1.4 mm (10-40 cells per dielectric wavelength), layer at a cell face or centred on a node, PEC z-stratified cavity 10.7 GHz, dual-cell node average | Ez / normal-E layers (harmonic rule, 1c); contrast > 4.3 or eps_t > eps_c; t/h < 1/8; h coarser than 10 cells per wavelength; lossy / dispersive / PML; the Kottke SDF path (`compute_smoothed_eps_nonuniform`), not called |
+| Second order at fixed fill | p = 1.930 over h = 0.35-1.4 mm at f = 1/2 | fills other than 1/2 (the law gives f (1 - f) h^2; measured through the fixed-t ladder only at 1/8, 1/4) |
+| First order at fixed thickness | t = 0.175 mm, h = 0.35-1.4 mm: 0.56 / 1.71 / 3.57 MHz, K t (h - t) to 8 % | h >> 10 t |
+| Position robustness | centred-on-node error 0.08-0.40 x the face-position error; both follow the same first-moment law | intermediate offsets (the law says linear in `z_c - z_l`, not measured between) |
+| S1 vs R4 total error at matched coarse cell | 1.006-1.340 (<= 2.0), the excess being the R meshes' 0.5-2.5 % smaller free cores and the layer term | — |
+| dt price | dt(S1)/dt(R4) 1.38-7.90 with a 0.25 s mm transverse cell; z-only 4-32 | other transverse proportions (the z-only figure transfers, the realised one does not) |
+| Production sampling (P4) on a 4-cell band | first order, ulp-decided sign: 0.16 / 0.18 / 7.5 MHz on 6 / 13 / 31 MHz layer effects | — (#931, recorded not gated) |
