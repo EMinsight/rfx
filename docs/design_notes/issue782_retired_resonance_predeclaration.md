@@ -443,6 +443,17 @@ that arm by name rather than reporting `main`'s numbers under the `retired`
 label; the committed `patch_edgefed_s11_band_repin_retired.json` stays as
 dated evidence and is not regenerable.
 
+**The question the arm pair asked has no object left.** It asked what the #702
+own-cell re-sample changes on this board. Under the contract a foil is declared as
+a SHEET, a sheet owns no cell, and the three lock boards are redrawn with each foil
+ON the laminate face it bounds — so there is no own cell to re-sample and both arms
+would be the same build. The honest successor is a DRAWING A/B (the board as drawn
+now against a board that reserves a vacuum cell for each foil), i.e. the same
+physics question asked in the declaration instead of in a monkeypatch. Its expected
+size is already on the record: preflight's #703 check read `+84.5 %` on `sum(d/eps)`
+for the reserved-cell board (Board H) and `+45.9 %` (Board S), and Leg A measured
+`+10.365 %` against a window centred on `-6.17`.
+
 **What the reserved cell was worth.** Preflight's own #703 cavity check reads
 it directly on the pre-redraw boards:
 
@@ -508,6 +519,14 @@ not (2b), carries the discrimination — is what that replay still shows.
 
 **F2 and F3 are unaffected**: they are about the retired 9.32 / 9.21 GHz
 numbers not being quoted as current, and nothing in #931 re-introduces them.
+
+Two figures the docs group read from the same runs and this section did not
+list: Board H Leg A `-1.871 %` at 120 periods (the `-1.886 %` above is the
+200-period settled re-run); Board S `Z0` median `60.87 ohm` with `Re(Zin)`
+positive across the band (369367259226).
+
+Nothing in §§1–8 above is rewritten: they are the dated record of a pre-declaration
+that was made, run and scored under the pre-2.0 realization.
 
 Ledger: `docs/design_notes/931_migration/T6-RECOMPUTE.md` (rounds 2 and 3
 carry the pre-declarations these runs answered).

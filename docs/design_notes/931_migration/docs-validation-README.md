@@ -11,6 +11,14 @@ these as text once each owner's numbers land.
 
 ## cv06b row (`crossval/06b_msl_notch_filter_uniform.py`) — owner: crossval-B
 
+**APPLIED 2026-09-07 (ingest).** The wording below landed with the merge; the
+numbers landed after it, from crossval-B's run 369367259191 — 2.16 % / −39.4 dB
+/ 48.2 Ω, with the run log committed as
+`_06b_notch_uniform_logs/20260907T124851Z_run.log`. The width convention is NOT
+settled by that run (Z0 median 48.2 Ω against a pre-declared 46.48 ± 1.0 Ω) and
+the carriers say so; the regenerated falsifier summary and estimator fixture are
+still crossval-B's to commit.
+
 Current text contains:
 
 > it shipped at dx=80 µm through 2026-08, where the declared 254 µm substrate
@@ -42,6 +50,11 @@ with the same sentence plus:
 
 ## cv18 row (`crossval/18_wr90_iris_modematch.py`) — owner: crossval-D
 
+**WORDING APPLIED, DIGITS PENDING (2026-09-07 ingest).** cv18/cv19 pass 2 has not
+run, so every gate constant in the row is still the pre-2.0 one; the row now says
+that and states the re-derivation rule — round-UP(envelope × 1.5), the only
+arithmetic allowed to move those digits.
+
 Current text contains:
 
 > Three setup defects (parasitic wall-slot, half-ulp node-plane corners, an
@@ -63,6 +76,11 @@ runs on the old realization.
 ---
 
 ## cv20 row (`crossval/20_msl_phase_referee.py`) — owner: crossval-E
+
+**APPLIED 2026-09-07 (ingest).** Both carriers — `validation/README.md` and
+`docs/guides/sparameter_support_matrix.md` — now label 0.94 % / 0.31 % as a
+pre-2.0 realization re-measured under #931. The new digits wait on cv20's Stage B
+re-run.
 
 The row quotes `beta` residuals measured with the trace as a one-cell PEC Box
 ("the realized board"). crossval-E migrates that trace to a sheet, which moves

@@ -326,9 +326,9 @@ merged tree, and each artifact it names is re-solved or it does not ship.
   same, so the lane applies sheets. cv11, the validation battery's
   `test_pec_short_s11_magnitude` (same slot on its 2.14 mm auto mesh) and
   the broad-E5 live anchor now draw their shorts to the grid's realized
-  walls and assert a full-cross-section front wall at build time. A
-  preflight finding for "conductor face rounds away from a domain wall it
-  was drawn to" is owed by the preflight stage.
+  walls and assert a full-cross-section front wall at build time. The
+  preflight finding this adjudication owed — "conductor face rounds away
+  from a domain wall it was drawn to" — LANDED, see the next block.
 - Microstrip trace width (BREAKING for quoted numbers): a trace declared as
   foil is a sheet, and a sheet's footprint is the closed node rectangle. On the
   canonical dx = 63.5 µm / 254 µm board the realized GEOMETRIC width (node
@@ -353,6 +353,42 @@ merged tree, and each artifact it names is re-solved or it does not ship.
   re-pinned from confirm runs: Board H Leg A −6.17 → −1.886 % (`NUM_PERIODS`
   120 → 200), Board S crossing 8.8189 → 7.7620 GHz, sheet-cavity pair
   (25.1741, 30.2153) GHz, Leontovich endpoint 0.87333.
+
+**Known issues fixed after the phase-2a merge (2026-09-07).** Two defects the
+migration surfaced are closed on this branch, both with the measurement that
+closed them:
+
+- Fixed — distributed non-uniform lane: a body whose cell was a rank's FIRST
+  real cell reached its neighbour un-zeroed. The scan body exchanged the E ghost
+  rows BEFORE the PEC mask and soft-occupancy stages, and those stages act on
+  real cells only (ghost rows forced False by design, one owner per cell), so
+  rank 0's ghost copy of the seam plane was taken before rank 1 zeroed it and
+  rank 0's next H update read a stale, non-zero plane. Hard mask and soft
+  occupancy failed identically, because the stale value came from the exchange
+  rather than from either rule. The E ghost exchange is now the LAST stage of
+  the E half-step, so a ghost row is a copy of the owner's finished real row —
+  the placement the H half already gives the PMC face. Measured (Class B
+  final-step relative error, gate `5e-5`, 16x8x8, 2 ranks, 30 steps): one cell
+  AT the seam `2.107e-01` → `7.773e-08`; one cell 3 inside rank 0
+  `4.897e-06` unchanged; three cells straddling the seam `2.131e-06` unchanged;
+  no body at all `9.437e-06`. The three-cell fixtures never saw it: with body
+  cells on both sides of the seam the H that reads the stale ghost sits inside
+  the body and feeds only PEC edges. The T3 group's two seam fixtures lose their
+  `xfail(strict=True)` markers and pass
+  (`tests/unit/runners/test_distributed_nu_kernel.py`).
+- Added / fixed — preflight finding `pec_face_short_of_domain_wall` (WARNING):
+  a PEC VOLUME whose own realized wall plane sits exactly one node inside a
+  NON-absorbing domain face. `Grid` realizes a declared domain by
+  `ceil(extent/dx)` while a volume's face rounds to the NEAREST node, and the
+  cell left between them is a parallel-plate line along that wall, open at both
+  ends — the cv11 pec-short slot above, worth the whole `0.0146 → 0.0560`
+  step. The check reads the entry's own `realized_wall_planes` against the
+  grid's `interior` slices, per volume, per axis, per side: on cv11's drawing at
+  `dx = 1 mm` it fires once on `z_hi` (10.16 mm rounds DOWN off the 11 mm wall)
+  and not on `y_hi` (22.86 mm rounds UP onto the 23 mm wall). Silent on a patch
+  in a CPML box, on a post inside a PEC cavity and on a slab drawn wall to wall.
+  Before 2.0 the node-half-open sampler happened to include the top node, so
+  nothing had ever had to say it.
 
 **Recomputed artifacts.** No number in this repository was translated,
 re-tuned or hand-edited for this release: a crossval case, example, fixture or
