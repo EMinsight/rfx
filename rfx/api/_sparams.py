@@ -3949,7 +3949,8 @@ class _SparamMixin:
                 or _msl_pec_wires):
             _msl_pec_edge_masks = _rpem_msl(
                 _msl_assembled[3], sheets=tuple(_msl_pec_sheets),
-                wires=tuple(_msl_pec_wires))
+                wires=tuple(_msl_pec_wires),
+                periodic=self._periodic_flags())
         beta0_per_port: list[np.ndarray] = []
         z0_hj_per_port: list[float] = []
         for p_idx, pe in enumerate(entries):
@@ -3985,7 +3986,8 @@ class _SparamMixin:
                 for c in range(3) if c != meta["normal_idx"]
             )
             _k_lo_tr, _k_hi_tr = _trace_planes(
-                _msl_pec_edge_masks, meta["normal_idx"], _ij, meta["k_top"])
+                _msl_pec_edge_masks, meta["normal_idx"], _ij, meta["k_top"],
+                periodic=self._periodic_flags())
             if _k_lo_tr is None:
                 raise RuntimeError(
                     "compute_msl_s_matrix: no realized PEC trace conductor "
@@ -5191,7 +5193,8 @@ class _SparamMixin:
         if pec_mask is not None or _mx_pec_sheets or _mx_pec_wires:
             _mx_pec_edge_masks = _rpem_mx(
                 pec_mask, sheets=tuple(_mx_pec_sheets),
-                wires=tuple(_mx_pec_wires))
+                wires=tuple(_mx_pec_wires),
+                periodic=self._periodic_flags())
 
         # Analytic Hammerstad-Jensen anchor per MSL port (eps precedence
         # mirrors compute_msl_s_matrix: explicit eps_r_sub > rasterised
@@ -5227,7 +5230,7 @@ class _SparamMixin:
             i_feed_p = _msl_yz_cells(grid, msl_ports[p_idx])[0][0]
             _k_lo_tr, _k_hi_tr = _trace_planes_mx(
                 _mx_pec_edge_masks, 2, (i_feed_p, meta["j_centre"]),
-                meta["k_top"])
+                meta["k_top"], periodic=self._periodic_flags())
             if _k_lo_tr is None:
                 raise RuntimeError(
                     "compute_mixed_s_matrix: no realized PEC trace "
@@ -7580,7 +7583,8 @@ class _SparamMixin:
         if pec_mask is not None or _cx_pec_sheets or _cx_pec_wires:
             _cx_pec_edge_masks = _rpem_cx(
                 pec_mask, sheets=tuple(_cx_pec_sheets),
-                wires=tuple(_cx_pec_wires))
+                wires=tuple(_cx_pec_wires),
+                periodic=self._periodic_flags())
 
         if freqs is None:
             freqs_arr = np.asarray(
@@ -7828,7 +7832,8 @@ class _SparamMixin:
             realized_trace_planes_on_column as _trace_planes_cx,
         )
         k_trace_lo, _ = _trace_planes_cx(
-            _cx_pec_edge_masks, 2, (i_feed_msl, j_centre_msl), k_hi_msl)
+            _cx_pec_edge_masks, 2, (i_feed_msl, j_centre_msl), k_hi_msl,
+            periodic=self._periodic_flags())
         if k_trace_lo is None:
             raise RuntimeError(
                 "compute_coax_msl_transition(): no realized PEC trace "

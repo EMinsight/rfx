@@ -377,20 +377,24 @@ def register_msl_plane_probes(
     )
 
 
-def realized_trace_planes_on_column(pec_edge_masks, normal_idx, ij, k_from):
+def realized_trace_planes_on_column(pec_edge_masks, normal_idx, ij, k_from,
+                                    periodic=(False, False, False)):
     """Lowest and highest realized PEC wall plane on one column, at or
     above ``k_from`` along ``normal_idx`` (#931 §1.9).
 
     Replaces the ``pec_mask`` CELL scan every MSL trace detector used.  A
     volume trace answers with its LOWER wall plane and its far face; a
     sheet trace answers with its single plane.  ``(None, None)`` when the
-    column carries no realized PEC above ``k_from``.
+    column carries no realized PEC above ``k_from``.  ``periodic`` is the
+    run's #689 flags, forwarded so a column on the seam node of a periodic
+    in-plane axis finds its backward incident edge.
     """
     from rfx.boundaries.pec import realized_wall_planes
     if pec_edge_masks is None:
         return None, None
     planes = [k for k in realized_wall_planes(
-        pec_edge_masks, normal_idx, ij=ij) if k >= int(k_from)]
+        pec_edge_masks, normal_idx, ij=ij, periodic=periodic)
+        if k >= int(k_from)]
     if not planes:
         return None, None
     return int(min(planes)), int(max(planes))
@@ -406,14 +410,16 @@ def _realized_trace_planes(sim, grid, span, j_centre):
     _pec_mask = _assembled[3]
     if _pec_mask is None and not _pec_sheets and not _pec_wires:
         return None, None
+    _periodic = sim._periodic_flags()
     masks = realized_pec_edge_masks(
-        _pec_mask, sheets=tuple(_pec_sheets), wires=tuple(_pec_wires))
+        _pec_mask, sheets=tuple(_pec_sheets), wires=tuple(_pec_wires),
+        periodic=_periodic)
     ij = tuple(
         span["i_feed"] if c == span["prop_idx"] else int(j_centre)
         for c in range(3) if c != span["normal_idx"]
     )
     return realized_trace_planes_on_column(
-        masks, span["normal_idx"], ij, span["n_hi"])
+        masks, span["normal_idx"], ij, span["n_hi"], periodic=_periodic)
 
 
 def _v_from_plane(fr, plane_name: str, p: MSLPlaneProbeSet) -> jnp.ndarray:
