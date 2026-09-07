@@ -156,16 +156,29 @@ def test_periodic_all_true_reproduces_the_pre_689_rule_exactly():
 
 
 def test_apply_pec_mask_forwards_the_periodic_flags():
+    """#931: a 1-cell plate on cell ``n-1`` of an axis has its far face on
+    plane ``n`` — owned by the domain BC when the axis is non-periodic
+    (no array entry), and plane ``0`` (≡ ``n``) when it is periodic.  The
+    x-tangential ``Ey`` count doubles iff the x flag reaches the rule.
+    (The pre-#931 version of this test pinned a 1-cell plate as a sheet
+    with a live normal edge; under the volume rule a 1-cell Box shorts
+    its normal edge on every axis and no flag changes that.)"""
     shape = (6, 6, 10)
     st = init_state(shape)
     st = st._replace(ex=jnp.ones(shape), ey=jnp.ones(shape),
                      ez=jnp.ones(shape))
-    pm = _plates([0, 9])
-    zeroed_non = float(jnp.sum(1.0 - apply_pec_mask(st, pm).ez))
-    zeroed_per = float(jnp.sum(
-        1.0 - apply_pec_mask(st, pm, (False, False, True)).ez))
-    assert zeroed_non == 0.0, zeroed_non
-    assert zeroed_per == 32.0, zeroed_per
+    pm = np.zeros(shape, bool)
+    pm[5, 1:5, 1:5] = True          # one cell thick along x, on face n-1
+    pm = jnp.asarray(pm)
+    ey_non = np.asarray(apply_pec_mask(st, pm).ey) == 0.0
+    ey_per = np.asarray(apply_pec_mask(st, pm, (True, False, False)).ey) == 0.0
+    assert int(ey_non.sum()) == 20 and ey_non[5].sum() == 20, int(ey_non.sum())
+    assert int(ey_per.sum()) == 40, int(ey_per.sum())
+    assert ey_per[0].sum() == 20 and ey_per[5].sum() == 20
+    # the normal component is shorted inside the cell under both flags
+    for per in [(False, False, False), (True, False, False)]:
+        ex = np.asarray(apply_pec_mask(st, pm, per).ex) == 0.0
+        assert int(ex.sum()) == 25 and ex[5].sum() == 25
 
 
 def test_sheet_ctx_and_pec_mask_share_one_neighbour_rule():
