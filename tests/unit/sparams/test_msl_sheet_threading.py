@@ -526,9 +526,18 @@ def test_probe0_clears_the_sheet():
     sim = build_msl_thru(sheet=("f0", _sigma_bulk_for_rs0(1.0)))
     grid = sim._build_grid()
 
+    # Two collectors, because this board carries two KINDS of sheet and the
+    # assembler keeps them apart (#931 §1.3 + #677): ``sheet_specs`` takes
+    # the lossy f0 thin conductor this fixture is about, ``pec_sheets``
+    # takes the PEC trace, which owns no cell and is dropped with a warning
+    # if nobody asks for it. Passing only the first is what makes the
+    # sheets-dropped UserWarning fire on a test that has no reason to see it.
     specs: list = []
-    sim._assemble_materials(grid, sheet_specs=specs)
-    assert len(specs) == 1, f"expected one sheet spec, got {len(specs)}"
+    pec_sheets: list = []
+    sim._assemble_materials(grid, sheet_specs=specs, pec_sheets=pec_sheets)
+    assert len(specs) == 1, f"expected one f0 sheet spec, got {len(specs)}"
+    assert len(pec_sheets) == 1, (
+        f"expected the PEC trace as one sheet, got {len(pec_sheets)}")
     mask = np.asarray(specs[0].mask)
     sheet_ix = np.where(mask.any(axis=(1, 2)))[0]
     assert sheet_ix.size, "sheet rasterized to zero cells"
