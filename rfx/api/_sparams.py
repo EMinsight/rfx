@@ -2980,41 +2980,48 @@ class _SparamMixin:
 
         grid = self._build_grid()
         _wg_sheet_specs: list = []
+        _wg_pec_sheets: list = []
+        _wg_pec_wires: list = []
         base_materials, debye_spec, lorentz_spec, pec_mask_wg, pec_shapes, boundary_pec_shapes, _ = self._assemble_materials(
-            grid, sheet_specs=_wg_sheet_specs)
-        # #677: node-thin sheet ctx for the DEVICE runs of this lane. The
-        # PEC here is folded to sigma=1e10 below rather than run as a
-        # mask, but the edge exclusion still uses the assembled pec_mask
-        # so sheet and PEC never contend for one edge; the vacuum
-        # REFERENCE runs never receive the ctx (explicit strip at the
-        # extractor call sites).
-        from rfx.materials.thin_conductor import build_sheet_impedance_ctx as _build_sheet_ctx
+            grid, sheet_specs=_wg_sheet_specs, pec_sheets=_wg_pec_sheets,
+            pec_wires=_wg_pec_wires)
+        _wg_pec_sheets = tuple(_wg_pec_sheets)
+        _wg_pec_wires = tuple(_wg_pec_wires)
+        # #931 §1.7: the realized PEC edges of this device — volumes,
+        # sheets and wires — built ONCE and handed to every device run of
+        # the extractors below.  This replaces the sigma=1e10 CELL fold
+        # this lane used to do (see the note at the old fold site).
         from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+        _wg_pec_edge_masks = None
+        if pec_mask_wg is not None or _wg_pec_sheets or _wg_pec_wires:
+            _wg_pec_edge_masks = _rpem(
+                pec_mask_wg, sheets=_wg_pec_sheets, wires=_wg_pec_wires)
+        # #677: node-thin sheet ctx for the DEVICE runs of this lane; the
+        # edge exclusion uses the same realized edges so sheet and PEC
+        # never contend for one edge.  The vacuum REFERENCE runs never
+        # receive the ctx (explicit strip at the extractor call sites).
+        from rfx.materials.thin_conductor import build_sheet_impedance_ctx as _build_sheet_ctx
         _wg_sheet_ctx = _build_sheet_ctx(
-            _wg_sheet_specs,
-            pec_edge_masks=None if pec_mask_wg is None else _rpem(pec_mask_wg))
+            _wg_sheet_specs, pec_edge_masks=_wg_pec_edge_masks)
         if _wg_sheet_ctx is not None and subpixel_smoothing:
             raise ValueError(
                 "surface-impedance (surface_impedance_f0) sheets are not "
                 "supported with subpixel_smoothing / conformal on the "
                 "waveguide S-matrix lane (#677 v1): the sheet operator "
                 "assumes the plain isotropic E update at its edges.")
-        # Waveguide S-matrix runner doesn't support pec_mask yet.
-        # Fold PEC mask back into high sigma for compatibility.
-        # **Stage 2 caveat**: when ``subpixel_smoothing="kottke_pec"`` is
-        # active (use_kottke_pec, computed below), the inverse-eps
-        # tensor encodes the PEC zero directly (inv = 0 freezes the
-        # field). Folding pec_mask to sigma=1e10 then would conflict
-        # with the Yee-stagger offsets in inv_xx/yy/zz: pec_mask is
-        # per-cell-center, but inv_xx is at Ex(i+0.5, j, k) offsets,
-        # so PEC boundary cells can have sigma=1e10 AND a fractional
-        # inv > 0 — that combo blows up Ca ≈ -1 and field NaNs.
-        # Skipped for Stage 2; the Kottke union (inv=0 inside PEC,
-        # fractional at boundary) is the single source of truth.
+        # #931 §1.7: the interior PEC of this lane is the realized edge
+        # set, applied per step by the shared ``apply_pec_edges``.  The
+        # sigma=1e10 CELL fold that stood here was a fourth realization of
+        # the same geometry and damped only the components indexed by the
+        # occupied cell, so a one-cell iris or wall got its lower face and
+        # never its far one.
+        # **Stage 2 caveat, unchanged**: under ``subpixel_smoothing=
+        # "kottke_pec"`` the inverse-eps tensor already encodes the PEC
+        # zero (inv = 0 freezes the field) and is the single source of
+        # truth; that lane takes no edge masks.
         _use_kottke_pec_early = (subpixel_smoothing == "kottke_pec")
-        if pec_mask_wg is not None and not _use_kottke_pec_early:
-            base_materials = base_materials._replace(
-                sigma=jnp.where(pec_mask_wg, 1e10, base_materials.sigma))
+        if _use_kottke_pec_early:
+            _wg_pec_edge_masks = None
         materials = base_materials
         # G-AD-WIRE-WG2: public eps_override / sigma_override channel.
         # Mirror the MSL pattern: replace eps_r / sigma on the assembled
@@ -3030,8 +3037,10 @@ class _SparamMixin:
         # interior PEC into sigma IDENTICALLY to the device path above (only
         # the plain path — no subpixel/conformal handling for references).
         ref_materials_per_port = None
+        ref_pec_edge_masks_per_port = None
         if port_reference_sims is not None:
             ref_materials_per_port = []
+            ref_pec_edge_masks_per_port = []
             for _i, _ref_sim in enumerate(port_reference_sims):
                 _ref_grid = _ref_sim._build_grid()
                 if _ref_grid.shape != grid.shape or float(_ref_grid.dx) != float(grid.dx):
@@ -3041,11 +3050,19 @@ class _SparamMixin:
                         f"match the device grid (shape={grid.shape}, "
                         f"dx={grid.dx})"
                     )
-                _ref_base, _, _, _ref_pec_mask, _, _, _ = _ref_sim._assemble_materials(_ref_grid)
-                if _ref_pec_mask is not None:
-                    _ref_base = _ref_base._replace(
-                        sigma=jnp.where(_ref_pec_mask, 1e10, _ref_base.sigma))
+                _ref_pec_sheets: list = []
+                _ref_pec_wires: list = []
+                _ref_base, _, _, _ref_pec_mask, _, _, _ = _ref_sim._assemble_materials(
+                    _ref_grid, pec_sheets=_ref_pec_sheets,
+                    pec_wires=_ref_pec_wires)
                 ref_materials_per_port.append(_ref_base)
+                _ref_edges_i = None
+                if (_ref_pec_mask is not None or _ref_pec_sheets
+                        or _ref_pec_wires):
+                    _ref_edges_i = _rpem(
+                        _ref_pec_mask, sheets=tuple(_ref_pec_sheets),
+                        wires=tuple(_ref_pec_wires))
+                ref_pec_edge_masks_per_port.append(_ref_edges_i)
 
         if n_steps is None:
             n_steps = grid.num_timesteps(num_periods=num_periods)
@@ -3271,6 +3288,7 @@ class _SparamMixin:
                     aniso_eps=aniso_eps,
                     conformal_weights=conformal_weights,
                     aniso_inv_eps=aniso_inv_eps,
+                    pec_edge_masks=_wg_pec_edge_masks,
                 )
             elif normalize:
                 # The two-run normalized extractor divides each receiving
@@ -3303,6 +3321,7 @@ class _SparamMixin:
                     aniso_eps=aniso_eps,
                     conformal_weights=conformal_weights,
                     aniso_inv_eps=aniso_inv_eps,
+                    pec_edge_masks=_wg_pec_edge_masks,
                 )
             # Report the ABSOLUTE de-embed target plane (matches the single-mode + coax paths and
             # the WaveguideSMatrixResult schema), NOT the relative shift ref_shifts_mm — that is the
@@ -3442,6 +3461,8 @@ class _SparamMixin:
                 aniso_inv_eps=aniso_inv_eps,
                 ref_aniso_inv_eps=ref_aniso_inv_eps,
                 ref_materials_per_port=ref_materials_per_port,
+                pec_edge_masks=_wg_pec_edge_masks,
+                ref_pec_edge_masks_per_port=ref_pec_edge_masks_per_port,
                 checkpoint_segments=checkpoint_segments,
                 return_settling=True,
                 sheet_impedance=_wg_sheet_ctx,
@@ -3469,6 +3490,7 @@ class _SparamMixin:
                 conformal_weights=conformal_weights,
                 aniso_inv_eps=aniso_inv_eps,
                 ref_aniso_inv_eps=ref_aniso_inv_eps,
+                pec_edge_masks=_wg_pec_edge_masks,
                 checkpoint_segments=checkpoint_segments,
                 return_settling=True,
                 sheet_impedance=_wg_sheet_ctx,
@@ -3489,6 +3511,7 @@ class _SparamMixin:
                 aniso_eps=aniso_eps,
                 conformal_weights=conformal_weights,
                 aniso_inv_eps=aniso_inv_eps,
+                pec_edge_masks=_wg_pec_edge_masks,
                 checkpoint_segments=checkpoint_segments,
                 return_settling=True,
                 sheet_impedance=_wg_sheet_ctx,

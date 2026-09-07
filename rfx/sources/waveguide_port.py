@@ -2077,8 +2077,20 @@ def extract_waveguide_s_matrix(
     checkpoint_segments: int | None = None,
     return_settling: bool = False,
     sheet_impedance: object | None = None,
+    pec_edge_masks: tuple | None = None,
 ) -> "jnp.ndarray | tuple[jnp.ndarray, np.ndarray]":
     """Assemble an x-directed waveguide S-matrix via one-driven-port-at-a-time runs.
+
+    PEC realization (#931 §1.7): interior ``Box(material='pec')`` walls
+    reach this lane as the realized edge masks ``pec_edge_masks``
+    (``rfx.boundaries.pec.realized_pec_edge_masks``), applied per step by
+    the shared ``apply_pec_edges``.  Until #931 the caller folded the PEC
+    CELL mask into ``sigma = 1e10`` instead — a fourth realization of the
+    same geometry, and one that damped only the components indexed by the
+    occupied cell, so a one-cell-thick wall or iris got its lower face and
+    never its far one.  An empty-guide REFERENCE run gets no interior edge
+    masks; per-port reference geometry supplies its own.
+
 
     ``return_settling=True`` (issue #538) additionally returns the
     per-driven-run energy ring-down witness: ``(S, settling_db)`` with
@@ -2148,6 +2160,7 @@ def extract_waveguide_s_matrix(
             aniso_eps=aniso_eps,
             conformal_weights=conformal_weights,
             aniso_inv_eps=aniso_inv_eps,
+            pec_edge_masks=pec_edge_masks,
             checkpoint=_wg_checkpoint,
             checkpoint_segments=checkpoint_segments,
             sheet_impedance=sheet_impedance,
@@ -2208,10 +2221,23 @@ def extract_waveguide_s_matrix_flux(
     ref_aniso_inv_eps: tuple | None = None,
     ref_materials_per_port: "list | None" = None,
     sheet_impedance: object | None = None,
+    pec_edge_masks: tuple | None = None,
+    ref_pec_edge_masks_per_port: "list | None" = None,
     checkpoint_segments: int | None = None,
     return_settling: bool = False,
 ) -> "jnp.ndarray | tuple[jnp.ndarray, np.ndarray]":
     """Hybrid power-flux magnitude + modal phase waveguide S-matrix.
+
+    PEC realization (#931 §1.7): interior ``Box(material='pec')`` walls
+    reach this lane as the realized edge masks ``pec_edge_masks``
+    (``rfx.boundaries.pec.realized_pec_edge_masks``), applied per step by
+    the shared ``apply_pec_edges``.  Until #931 the caller folded the PEC
+    CELL mask into ``sigma = 1e10`` instead — a fourth realization of the
+    same geometry, and one that damped only the components indexed by the
+    occupied cell, so a one-cell-thick wall or iris got its lower face and
+    never its far one.  An empty-guide REFERENCE run gets no interior edge
+    masks; per-port reference geometry supplies its own.
+
 
     ``return_settling=True`` (issue #538): returns ``(S, settling_db)``;
     the witness per drive is the WORST of the device and reference runs'
@@ -2340,6 +2366,9 @@ def extract_waveguide_s_matrix_flux(
         # #677: the vacuum/straight-guide REFERENCE deliberately runs with
         # NO sheet ctx (explicit strip — the sheet no longer rides
         # materials.sigma, so vacuum materials alone do not strip it).
+        _ref_edges = (
+            None if ref_pec_edge_masks_per_port is None
+            else ref_pec_edge_masks_per_port[drive_idx])
         ref_result = run_simulation(
             grid, ref_mat_drive, n_steps,
             debye=ref_debye, lorentz=ref_lorentz,
@@ -2347,6 +2376,7 @@ def extract_waveguide_s_matrix_flux(
             flux_monitors=_make_flux_monitors(),
             aniso_eps=ref_aniso_eps,
             aniso_inv_eps=ref_aniso_inv_eps,
+            pec_edge_masks=_ref_edges,
             checkpoint=_flux_checkpoint,
             checkpoint_segments=checkpoint_segments,
             **common_run_kw,
@@ -2383,6 +2413,7 @@ def extract_waveguide_s_matrix_flux(
             aniso_eps=aniso_eps,
             conformal_weights=conformal_weights,
             aniso_inv_eps=aniso_inv_eps,
+            pec_edge_masks=pec_edge_masks,
             checkpoint=_flux_checkpoint,
             checkpoint_segments=checkpoint_segments,
             sheet_impedance=sheet_impedance,
@@ -2476,8 +2507,20 @@ def extract_waveguide_s_params_normalized(
     checkpoint_segments: int | None = None,
     return_settling: bool = False,
     sheet_impedance: object | None = None,
+    pec_edge_masks: tuple | None = None,
 ) -> "jnp.ndarray | tuple[jnp.ndarray, np.ndarray]":
     """Two-run normalized waveguide S-matrix.
+
+    PEC realization (#931 §1.7): interior ``Box(material='pec')`` walls
+    reach this lane as the realized edge masks ``pec_edge_masks``
+    (``rfx.boundaries.pec.realized_pec_edge_masks``), applied per step by
+    the shared ``apply_pec_edges``.  Until #931 the caller folded the PEC
+    CELL mask into ``sigma = 1e10`` instead — a fourth realization of the
+    same geometry, and one that damped only the components indexed by the
+    occupied cell, so a one-cell-thick wall or iris got its lower face and
+    never its far one.  An empty-guide REFERENCE run gets no interior edge
+    masks; per-port reference geometry supplies its own.
+
 
     Cancels Yee-grid numerical dispersion for **transmission** (off-diagonal)
     terms by normalizing device outgoing waves against reference-run waves
@@ -2633,6 +2676,7 @@ def extract_waveguide_s_params_normalized(
             waveguide_ports=dev_cfgs, aniso_eps=aniso_eps,
             conformal_weights=conformal_weights,
             aniso_inv_eps=aniso_inv_eps,
+            pec_edge_masks=pec_edge_masks,
             checkpoint=_norm_checkpoint,
             checkpoint_segments=checkpoint_segments,
             sheet_impedance=sheet_impedance,
@@ -2948,6 +2992,7 @@ def extract_multimode_s_matrix(
     aniso_eps: tuple | None = None,
     conformal_weights: tuple | None = None,
     aniso_inv_eps: tuple | None = None,
+    pec_edge_masks: tuple | None = None,
 ) -> tuple[jnp.ndarray, list[tuple[int, int, str, tuple[int, int]]]]:
     """Assemble a multi-mode waveguide S-matrix.
 
@@ -3041,6 +3086,7 @@ def extract_multimode_s_matrix(
             aniso_eps=aniso_eps,
             conformal_weights=conformal_weights,
             aniso_inv_eps=aniso_inv_eps,
+            pec_edge_masks=pec_edge_masks,
         )
         final_cfgs = result.waveguide_ports or ()
         if len(final_cfgs) != n_total:
@@ -3109,6 +3155,7 @@ def extract_multimode_s_matrix_flux(
     ref_aniso_eps: tuple | None = None,
     aniso_inv_eps: tuple | None = None,
     ref_aniso_inv_eps: tuple | None = None,
+    pec_edge_masks: tuple | None = None,
 ) -> tuple[jnp.ndarray, list[tuple[int, int, str, tuple[int, int]]]]:
     """Power-flux multi-mode waveguide S-matrix.
 
@@ -3238,6 +3285,7 @@ def extract_multimode_s_matrix_flux(
             aniso_eps=aniso_eps,
             conformal_weights=conformal_weights,
             aniso_inv_eps=aniso_inv_eps,
+            pec_edge_masks=pec_edge_masks,
             **common_run_kw,
         )
         dev_final_cfgs = dev_result.waveguide_ports or ()
