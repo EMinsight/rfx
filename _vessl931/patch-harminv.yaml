@@ -1,5 +1,5 @@
 name: rfx-931-post-patch-harminv
-description: "#931 phase 2 T6 post-change re-measure: foils declared as sheets; realization measured IDENTICAL to pre-#931 - confirmation run Runs the module's full lane (slow / slow_physics / gpu markers enabled) against the T6 worktree. Submit: vessl run create -f patch-harminv.yaml"
+description: "#931 phase 2 T6 RE-MEASURE after the laminate-face redraw: the first run measured Leg A +10.365 % (the #702 vacuum-slot signature); the foils now sit on the laminate faces and the cavity is four dielectric cells. Pre-declared: Leg A moves UP from -6.17 % toward -4.4 % and stays NEGATIVE; Leg B moves < 1 pp. Submit: vessl run create -f patch-harminv.yaml"
 tags: [rfx, issue-931, post, t6, patch-harminv]
 resources:
   cluster: remilab-c0

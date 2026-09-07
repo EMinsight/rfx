@@ -1,5 +1,5 @@
 name: rfx-931-post-msl-nu-gate
-description: "#931 phase 2 T6 post-change re-measure: uniform and NU lanes must realize the identical raster (#834) Runs the module's full lane (slow / slow_physics / gpu markers enabled) against the T6 worktree. Submit: vessl run create -f msl-nu-gate.yaml"
+description: "#931 phase 2 T6 RE-MEASURE after the laminate-face redraw: NU twin of Board S, same pre-declaration, and the two lanes must agree within one DFT bin. Submit: vessl run create -f msl-nu-gate.yaml"
 tags: [rfx, issue-931, post, t6, msl-nu-gate]
 resources:
   cluster: remilab-c0

@@ -1,5 +1,5 @@
 name: rfx-931-post-refplane-thru
-description: "#931 phase 2 T6 post-change re-measure: trace is a sheet now and realizes the drawn 5.0 mm width (was 4.5); Zc/beta bands re-derived Runs the module's full lane (slow / slow_physics / gpu markers enabled) against the T6 worktree. Submit: vessl run create -f refplane-thru.yaml"
+description: "#931 phase 2 T6 RE-RUN at HEAD: the first run staged b884b83f, before the merge and before the refplane helper collected its own sheet; its 6 errors + 2 fast-lane failures are fixed (27 passed locally at HEAD). This run is for the 6 physics legs. Submit: vessl run create -f refplane-thru.yaml"
 tags: [rfx, issue-931, post, t6, refplane-thru]
 resources:
   cluster: remilab-c0
