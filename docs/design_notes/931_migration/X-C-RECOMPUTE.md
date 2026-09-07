@@ -64,3 +64,38 @@ Each case was accidentally submitted twice (a foreground submit loop was killed
 by a tool timeout after it had already created runs). No VESSL run was deleted;
 the `.latest` pointers name the second of each pair, and the two cv15 runs
 agree to the last digit.
+
+
+---
+
+## INGEST (2026-09-07) — cv15 re-solved on the merged base; cv14/16/17 unchanged
+
+The ingest brief ordered one more cv15 solve after the phase-2a merge, so the
+committed leg's embedded preflight text would be the migrated one rather than
+the three lines that were wrong for a sheet-declared board.
+
+| leg | run | verdict |
+|---|---|---|
+| cv15 production `rfx.json` | `369367259275` | re-solved, all six gates PASS, preflight text clean |
+| cv15 decomposition `rfx_decomposition_feed_pre931.json` | `369367259279` | re-run so both decomposition points sit on one code state |
+
+Outputs `/root/workspace/claude-workspace/rfx/runs/issue931-post-cv15-20260907T191128Z/`
+and `.../issue931-post-cv15-feeddecomp-20260907T192042Z/`. Full before/after,
+the driven-edge measurement and the re-read decomposition are in
+`validation/crossval/_15_patch_results/RECOMPUTE.md`, section "INGEST".
+
+Headline: the preflight fix landed as intended, and the re-solve ALSO moved the
+physics — `f_primary` 2.436612 → 2.423039 GHz and `max|S11|` 0.856 → 0.991 —
+because `6d66ac65` took the wire-port extent half-open in edges and cv15's feed
+went from 5 driven Ez edges to the 4 it declares. Every number in this file's
+earlier RESULTS table for cv15, and in the first-pass result section of
+`_15_patch_results/RECOMPUTE.md`, is superseded.
+
+**cv14, cv16, cv17 were NOT re-run and commit nothing.** Their post-change runs
+`369367259152` / `369367259153` / `369367259154` each harvested zero files
+(`produced_files.txt` empty in all three run directories, exit code 0), which is
+what a control run should do: cv14 has no results directory by design, and cv16
+and cv17 were deliberately run without `--write-fixture`. Their verdicts in the
+RESULTS table above stand as written. Nothing in the merged base touches a
+dielectric-only raster or a fenced sigma fill, so the controls were not re-solved
+for the preflight text either — no committed artifact of theirs embeds it.
