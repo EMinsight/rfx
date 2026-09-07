@@ -54,4 +54,15 @@ live in docstrings and are pre-#931. Nothing is hand-edited from either.
 
 ## Run ids
 
-Filled in on submission; see the report and `submitted.txt` beside this file.
+Submitted 2026-09-07 11:10 UTC from commit 8e223a34, preset `gpu-rtx4090`,
+cluster `remilab-c0`, `JAX_PLATFORMS=cpu` inside the job.
+
+| run | id | link |
+|---|---|---|
+| `rfx-931-post-t3-pytest` | 369367259208 | https://app.vessl.ai/remilab/runs/byungkwan/369367259208 |
+| `rfx-931-post-t3-measure` | 369367259209 | https://app.vessl.ai/remilab/runs/byungkwan/369367259209 |
+
+Both read this worktree
+(`/root/workspace/byungkwan-workspace/research/rfx-931-T3-nu-runners-grid-subgrid`)
+as it stands on disk, so a later commit on this branch is NOT in them — check
+`commit.txt` in the run's output directory before reading a verdict.
