@@ -1,6 +1,6 @@
 # post-#931 recompute — cv23
 
-VESSL run id **369367259176**, submitted from branch `feat/931-crossval-E`
+VESSL run id **369367259202**, submitted from branch `feat/931-crossval-E`
 (worktree `/root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE`).
 
 Run block, command, preset, expected runtime, the pre-recorded prediction for
@@ -17,3 +17,5 @@ Submit with:
 Artifacts land in
 `/root/workspace/claude-workspace/rfx/runs/issue931-post-cv23-<ts>/`.
 Nothing is written back into this branch; the ingest phase commits.
+
+An earlier submission of this same case is SUPERSEDED (see the single source above for its id and why); do not ingest its artifacts.

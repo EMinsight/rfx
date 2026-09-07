@@ -19,13 +19,28 @@ for the ingest phase to commit. No fixture is committed on this branch.
 
 | case | run id | preset | timeout | expected | what it decides |
 |---|---|---|---|---|---|
-| cv20-producer | 369367259171 | gpu-rtx4090 (JAX_PLATFORMS=cpu) | 3 h | ~26 min (baseline elapsed_s 1543.7) | the rfx-side MSL fixture, re-solved under the volume rule |
-| cv22 | 369367259173 | gpu-rtx4090 | 3 h | ~1 h | dielectric control: must be BIT-IDENTICAL |
-| cv23 | 369367259176 | gpu-rtx4090 | 3 h | ~1 h | dielectric control: must be BIT-IDENTICAL |
-| cv24 | 369367259180 | gpu-rtx4090 | 2 h | ~1 h | boundary-PEC control: must be BIT-IDENTICAL |
-| thru-feedpost | 369367259183 | gpu-rtx4090 | 4 h | ~1-2 h | the trace-as-sheet research lane, `--verify` arm |
-| tmtt-msl-stub | 369367259187 | gpu-rtx4090 | 6 h | ~2-4 h | sheet feed line + volume stub, AD arm + cross-solver gate |
-| tmtt-beam-steer | 369367259188 | **gpu-a6000-1** | 8 h | ~4-6 h | reflector as a declared sheet, SMOKE=0 |
+| cv20-producer | **369367259200** | gpu-rtx4090 (JAX_PLATFORMS=cpu) | 3 h | ~26 min (baseline elapsed_s 1543.7) | the rfx-side MSL fixture, re-solved under the volume rule |
+| cv22 | **369367259201** | gpu-rtx4090 | 3 h | ~1 h | dielectric control: must be BIT-IDENTICAL |
+| cv23 | **369367259202** | gpu-rtx4090 | 3 h | ~1 h | dielectric control: must be BIT-IDENTICAL |
+| cv24 | **369367259203** | gpu-rtx4090 | 2 h | ~1 h | boundary-PEC control: must be BIT-IDENTICAL |
+| thru-feedpost | **369367259204** | gpu-rtx4090 | 4 h | ~1-2 h | the trace-as-sheet research lane, `--verify` arm |
+| tmtt-msl-stub | **369367259205** | gpu-rtx4090 | 6 h | ~2-4 h | sheet feed line + volume stub, AD arm + cross-solver gate |
+| tmtt-beam-steer | **369367259206** | **gpu-a6000-1** | 8 h | ~4-6 h | reflector as a declared sheet, SMOKE=0 |
+
+### Superseded first submission — ignore, do not delete
+
+An earlier set of the same seven runs was submitted at 10:30 UTC and is
+SUPERSEDED: 369367259171 (cv20-producer), 369367259173 (cv22), 369367259176
+(cv23), 369367259180 (cv24), 369367259183 (thru-feedpost), 369367259187
+(tmtt-msl-stub), 369367259188 (tmtt-beam-steer). They were submitted before
+this branch was rebased onto four new commits on `feat/931-lattice-ownership`
+(including a rasterizer fix and the shared `tests/_realized_geometry.py`
+helper this group's gate now delegates to), and the jobs copy the worktree at
+container start, so which tree they actually read is not knowable from the
+outside. Provenance that cannot be pinned is not provenance. The run ids in
+the table above are the definitive set; the superseded ones are left running
+rather than deleted (VESSL runs are not deleted here), and their artifacts
+must not be ingested.
 
 `tmtt-beam-steer` is the one case that is NOT on a 4090: the full-resolution
 forward plus `value_and_grad` OOMs on 24 GB (recorded in the baseline set;
