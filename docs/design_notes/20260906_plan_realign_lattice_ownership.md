@@ -78,8 +78,12 @@ a length-1 axis. Consequences that follow, and that the contract test pins:
 A sheet is `(normal_axis a, plane index k, footprint F)` where `k` is a **static integer**
 and `F` is a boolean node mask on the plane. For a Box shape the footprint is sampled
 **closed** `[lo, hi]` on the two in-plane axes (so the drawn rectangle is realized exactly,
-including its `hi` row); for any other shape `F = shape.mask_on_coords(...)` restricted to
-plane `k`. Realized edges: for `a = z`,
+including its `hi` row); for any other shape (a patterned `MeshShape`, a `Cylinder` pad,
+an imported outline) the footprint is the shape's **cross-section at its own mid-plane**
+along `a` — `F = shape.mask_on_coords(x, y, [z_mid])` — and `k` is the node plane nearest
+that mid-plane (tie → lower). The footprint never depends on how many node planes the
+shape's thickness happens to straddle, so a 17 µm foil declared on a mesh with nodes at
+both its faces still realizes as ONE plane. Realized edges: for `a = z`,
 
 ```
 Mx[i,j,k] = F[i,j] & F[i+1,j]      (edge from node i to i+1 at row j)
