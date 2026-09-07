@@ -1035,6 +1035,9 @@ class _ExecuteMixin:
             freq_range=(self._freq_max / 10, self._freq_max),
             materials=materials_dict,
             boundary=self._boundary,
+            # #931 §1.9: a sheet's PLANE is a z feature even though its zero
+            # thickness is not — the profile must leave a mesh line there.
+            thin_conductors=self._thin_conductors,
         )
 
         self._dx = config.dx

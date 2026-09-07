@@ -77,7 +77,7 @@ import jax
 import jax.numpy as jnp
 
 from rfx import Box, DebyePole, GaussianPulse, Simulation
-from rfx.boundaries.pec import apply_pec_mask, tangential_edge_masks
+from rfx.boundaries.pec import apply_pec_mask
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.core.yee import EPS_0, init_state, init_materials
 from rfx.geometry.csg import Cylinder, Sphere
@@ -1425,7 +1425,7 @@ def test_gap_between_stacked_films_rings_instead_of_being_clamped():
 # ``mode="2d_tmz"`` Ez is the only live E component, so the sheet became
 # bit-identically inert: an f0 copper patch behaved exactly like vacuum.
 #
-# ``tangential_edge_masks`` already keeps the wrap on a length-1 axis for
+# The realization rule already keeps the wrap on a length-1 axis for
 # exactly this reason (#689) — the veto ran after it and threw the result
 # away. Measured on the fixture below (20x20x1, dx = 1 mm, 6x6-cell copper
 # patch, 400 steps):

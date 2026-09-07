@@ -223,6 +223,9 @@
     "Result": {
       "kind": "class"
     },
+    "SheetSpec": {
+      "kind": "class"
+    },
     "SimConfig": {
       "kind": "class"
     },
@@ -283,6 +286,9 @@
     "WaveguideSParamResult": {
       "kind": "class"
     },
+    "WireSpec": {
+      "kind": "class"
+    },
     "adi_step_2d": {
       "kind": "function",
       "params": [
@@ -294,7 +300,7 @@
         "dt",
         "dx",
         "dy",
-        "pec_mask"
+        "ez_pec_mask"
       ]
     },
     "adi_step_3d": {
@@ -312,7 +318,7 @@
         "dx",
         "dy",
         "dz",
-        "pec_mask"
+        "pec_edge_masks"
       ]
     },
     "analyze_features": {
@@ -320,7 +326,8 @@
       "params": [
         "geometry",
         "materials",
-        "pec_threshold"
+        "pec_threshold",
+        "thin_conductors"
       ]
     },
     "antenna_bandwidth": {
@@ -424,7 +431,8 @@
         "margin_override",
         "n_steps_override",
         "max_memory_mb",
-        "waveform"
+        "waveform",
+        "thin_conductors"
       ]
     },
     "auto_refine": {
@@ -795,6 +803,16 @@
         "gamma"
       ]
     },
+    "edge_is_pec": {
+      "kind": "function",
+      "params": [
+        "edge_masks",
+        "component",
+        "i",
+        "j",
+        "k"
+      ]
+    },
     "epsilon_constraint_mask": {
       "kind": "function",
       "params": [
@@ -907,7 +925,8 @@
         "ref_shifts",
         "aniso_eps",
         "conformal_weights",
-        "aniso_inv_eps"
+        "aniso_inv_eps",
+        "pec_edge_masks"
       ]
     },
     "extract_s_matrix_wire": {
@@ -922,7 +941,7 @@
         "cpml_axes",
         "debye_spec",
         "lorentz_spec",
-        "pec_mask",
+        "pec_edge_masks",
         "return_vi_dump"
       ]
     },
@@ -968,7 +987,8 @@
         "aniso_inv_eps",
         "checkpoint_segments",
         "return_settling",
-        "sheet_impedance"
+        "sheet_impedance",
+        "pec_edge_masks"
       ]
     },
     "extract_waveguide_sparams": {
@@ -1170,7 +1190,7 @@
         "dft_total_steps",
         "dft_window",
         "dft_window_alpha",
-        "pec_mask"
+        "pec_edge_masks"
       ]
     },
     "inject_floquet_source": {
@@ -1685,6 +1705,24 @@
         "layout"
       ]
     },
+    "realized_pec_edge_masks": {
+      "kind": "function",
+      "params": [
+        "cell_mask",
+        "sheets",
+        "wires",
+        "periodic"
+      ]
+    },
+    "realized_wall_planes": {
+      "kind": "function",
+      "params": [
+        "edge_masks",
+        "axis",
+        "ij",
+        "region"
+      ]
+    },
     "render_artifact_markdown": {
       "kind": "function",
       "params": [
@@ -1746,7 +1784,9 @@
         "aniso_inv_eps",
         "aniso_inv_eps_smooth",
         "pec_mask",
-        "pec_two_plane_mask",
+        "pec_sheets",
+        "pec_wires",
+        "pec_edge_masks",
         "pec_occupancy",
         "conformal_weights",
         "wire_port_sparams",
@@ -1777,7 +1817,7 @@
         "n_steps",
         "sources",
         "probes",
-        "pec_mask",
+        "ez_pec_mask",
         "cpml_params",
         "cpml_state"
       ]
@@ -1800,7 +1840,7 @@
         "n_steps",
         "sources",
         "probes",
-        "pec_mask"
+        "pec_edge_masks"
       ]
     },
     "run_batch": {
@@ -1834,7 +1874,9 @@
         "materials",
         "n_steps",
         "pec_mask",
-        "pec_two_plane_mask",
+        "pec_sheets",
+        "pec_wires",
+        "pec_edge_masks",
         "pec_occupancy",
         "sources",
         "probes",
@@ -1893,7 +1935,9 @@
         "aniso_inv_eps",
         "aniso_inv_eps_smooth",
         "pec_mask",
-        "pec_two_plane_mask",
+        "pec_sheets",
+        "pec_wires",
+        "pec_edge_masks",
         "pec_occupancy",
         "conformal_weights",
         "wire_port_sparams",
@@ -2175,7 +2219,7 @@
         "port",
         "dt",
         "n_live",
-        "pec_mask"
+        "pec_edge_masks"
       ]
     },
     "validate_artifact_report": {
@@ -2236,7 +2280,7 @@
         "grid",
         "port",
         "periodic",
-        "pec_mask"
+        "pec_edge_masks"
       ]
     },
     "wire_port_voltage": {
@@ -2245,7 +2289,7 @@
         "state",
         "grid",
         "port",
-        "pec_mask"
+        "pec_edge_masks"
       ]
     },
     "write_touchstone": {

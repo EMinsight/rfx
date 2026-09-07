@@ -37,8 +37,13 @@ REQUIRED_KEYS = (
 )
 
 #: Deleting every lock module would make this gate vacuously green, so require
-#: the population it was written for (the 2026-09-02 tier-1 move) to be there.
-MIN_LOCK_MODULES = 12
+#: the population it was written for (the 2026-09-02 tier-1 move) to be there,
+#: less the one module the lattice ownership contract retired:
+#: ``test_two_plane_pec_slab.py`` pinned the ``two_plane`` extension masks,
+#: a mechanic #931 deleted rather than changed, so its number has no artifact
+#: left to guard (#931; ``test_sheet_refactor_bit_identity.py`` was rewritten
+#: on the new rule and stays).
+MIN_LOCK_MODULES = 11
 
 _NO_FIXTURE = "none"
 

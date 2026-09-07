@@ -131,32 +131,6 @@ def _shift(arr, ax, periodic, direction):
     return _shift_bwd(arr, ax) if direction > 0 else _shift_fwd(arr, ax)
 
 
-def _axis_neighbors(cell_mask, ax, periodic):
-    """Per-axis (backward, forward) neighbour occupancy under #689."""
-    return _shift(cell_mask, ax, periodic, +1), _shift(cell_mask, ax, periodic, -1)
-
-
-def tangential_edge_masks(cell_mask, periodic=(False, False, False)):
-    """Pre-#931 thin-sheet neighbour classification of a CELL mask (#677).
-
-    A component is selected at cell ``c`` iff ``c`` is masked and a
-    neighbour of ``c`` along that component's axis is masked.  This is a
-    CLASSIFICATION (which components are tangential to a one-layer cell
-    mask), not a PEC realization: it never realizes a body's far face and
-    is no longer what :func:`apply_pec_mask` applies.
-
-    TODO(stage C, #931): the only remaining in-package consumer is the
-    distributed-NU shmap twin (``rfx.runners.distributed_nu``), which
-    moves to :func:`realized_pec_edge_masks`; after that this function
-    is deleted together with the tests that pin it.
-    """
-    masks = []
-    for ax in range(3):
-        bwd, fwd = _axis_neighbors(cell_mask, ax, periodic)
-        masks.append(cell_mask & (bwd | fwd))
-    return tuple(masks)
-
-
 @dataclass(frozen=True)
 class SheetSpec:
     """One PEC sheet: a node footprint on ONE plane, zero thickness (§1.3).

@@ -71,6 +71,10 @@ from rfx.sources.waveguide_port import (
 from rfx.materials.debye import DebyePole
 from rfx.materials.lorentz import LorentzPole, drude_pole, lorentz_pole
 from rfx.materials.thin_conductor import ThinConductor, apply_thin_conductor
+from rfx.boundaries.pec import (
+    SheetSpec, WireSpec, edge_is_pec, realized_pec_edge_masks,
+    realized_wall_planes,
+)
 from rfx.farfield import (
     NTFFBox, NTFFData, FarFieldResult,
     make_ntff_box, compute_far_field, compute_far_field_jax,
@@ -275,6 +279,10 @@ __all__ = [
     # materials / dispersion / fitting
     "DebyePole", "LorentzPole", "drude_pole", "lorentz_pole",
     "ThinConductor", "MATERIAL_LIBRARY",
+    # lattice ownership contract (#931): the one realization of conductor
+    # geometry as PEC E edges, and the two helpers every consumer reads.
+    "SheetSpec", "WireSpec", "realized_pec_edge_masks", "realized_wall_planes",
+    "edge_is_pec",
     "load_material_csv", "fit_debye", "fit_lorentz", "eval_debye", "eval_lorentz",
     "plot_material_fit", "DebyeFitResult", "LorentzFitResult",
     "differentiable_material_fit", "MaterialFitResult", "sparam_loss",
