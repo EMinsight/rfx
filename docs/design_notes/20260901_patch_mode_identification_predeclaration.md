@@ -1,5 +1,16 @@
 # cv05 + cv15: replacing the self-confirming resonance selector with mode-resolved identification
 
+> **SUPERSEDED IN PART by #931 (the lattice ownership contract), 2026-09-07.**
+> Kept as dated history and deliberately NOT rewritten.
+> Its `build_rfx_sim(two_plane=False/True)` arms and the `two_plane_ground`
+> fixture key describe a keyword that no longer exists. Under the contract
+> cv15's ground and patch are declared sheets and there is no A/B to run; the
+> fixtures this note defines were regenerated from the migrated declaration.
+> The current rule is
+> `docs/design_notes/20260906_plan_realign_lattice_ownership.md` §1, and for
+> users `docs/public/guide/materials-geometry.mdx` ("How conductors land on
+> the lattice").
+
 **Status:** PRE-DECLARATION (this note and the gate code it describes are
 committed BEFORE the measurements that judge them).
 **Opened:** 2026-09-01 · **Issue:** #812, cv05 + cv15 lane · **Author:** implementation agent

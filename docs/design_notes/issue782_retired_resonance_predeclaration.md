@@ -1,5 +1,17 @@
 # Issue #782 — retiring the 9.32/9.21 GHz patch numbers: predeclaration
 
+> **SUPERSEDED IN PART by #931 (the lattice ownership contract), 2026-09-07.**
+> Kept as dated history and deliberately NOT rewritten.
+> Its statement that "#702 gave a node-thin conductor's cell the material at
+> its live edge", and the reproduction leg built on
+> `resample_sheet_node_materials`, refer to a mechanism deleted by #931. The
+> one physical case #702 served — a stack-up drawn with a slot for the foil —
+> is now a preflight finding (`sheet_slot_vacuum`), not a silent re-sample.
+> The current rule is
+> `docs/design_notes/20260906_plan_realign_lattice_ownership.md` §1, and for
+> users `docs/public/guide/materials-geometry.mdx` ("How conductors land on
+> the lattice").
+
 Date 2026-09-01. Baseline tree `635ab2e3` (origin/main, verified same-day). Written
 BEFORE any verification arm ran; the measurement plan, expected values and falsifiers
 below are pre-declared. Implementer worktree `wf_b56f9a1c-177-4`.
