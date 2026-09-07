@@ -30,6 +30,16 @@ What this tutorial teaches, in order:
 4. A settling witness (end-of-run envelope vs post-source peak, -40 dB bar) is
    printed BEFORE any frequency is quoted.
 
+5. FOIL IS A SHEET, A PLATE IS A VOLUME.  The ground and the patch are
+   declared with ``add_thin_conductor`` on zero-thickness Boxes, so each is a
+   footprint on ONE node plane with no cell of its own: the two in-plane E
+   components on that plane are zeroed and the E through it stays live.  A
+   ``Box`` with ``material="pec"`` would be a VOLUME instead — walls on both
+   of its faces with the cells between them shorted, which is right for a
+   plate and wrong for 35 um of copper.  The rule is the lattice ownership
+   contract (#931): an E component is PEC iff its own location is inside the
+   closed conductor region.
+
 Error budget at this deliberately coarse resolution (dx = 2 mm):
 
 - The resonance reads HIGH against openEMS-with-thirds: +11.3 % at dx = 2 mm,
@@ -37,16 +47,21 @@ Error budget at this deliberately coarse resolution (dx = 2 mm):
   design mode; the 40 mm cross mode is a separate entry in the printed mode
   list (2.2157 GHz here).  (Mode pairing repinned 2026-08-27, #693.)  The
   committed lock ``tests/crossval/test_patch_canonical_farfield_e4.py`` gates
-  the [+6 %, +16 %] magnitude envelope and the sign.
+  the [+6 %, +16 %] magnitude envelope and the sign on the cv05 fixture.
 - The sign is not a settled coarse-grid bias that finer cells remove.  Two
   discretization errors push opposite ways: the substrate under-resolved in z
-  reads high, the staircased PEC patch edge reads low.  Which one wins depends
-  on how the one-cell PEC sheets are realized — the same canonical patch reads
-  +11.3 % with single-plane sheets and -1.5 % at dx = 1 mm with the two-plane
-  realization (issue #720).  The substrate-permittivity half is addressable
-  with the opt-in interface treatment ``sim.run(..., subpixel_smoothing=True)``
+  reads high, the staircased PEC patch edge reads low, and they are not
+  separated here.  The substrate-permittivity half is addressable with the
+  opt-in interface treatment ``sim.run(..., subpixel_smoothing=True)``
   (cavity-oracle evidence in ``tests/oracle/test_patch_cavity_eps_oracle.py``).
   Measure "finer dx recovers it" on this fixture before assuming it.
+- Until the lattice ownership contract this model carried a third error that
+  had nothing to do with either: the mesh reserved one fine cell for the
+  ground foil, the old realization put a wall only on that cell's lower face,
+  and the cell itself stayed vacuum INSIDE the cavity.  The board solved
+  1.905 mm thick against the declared 1.524 mm.  The foils are sheets now, so
+  the realized cavity is the declared one and the run asserts it at build
+  time.
 - The far field is the observable that agrees.  This configuration prints
   D = 7.39 dBi at its radiating bin against openEMS 6.79 dBi, +0.60 dB, inside
   the committed envelope lock (``D_ABS_TOL_DB = 1.0``).  The demo trims the air
@@ -84,6 +99,8 @@ from rfx import (
     compute_far_field_jax,
     directivity,
     harminv,
+    realized_pec_edge_masks,
+    realized_wall_planes,
     smooth_grading,
 )
 
@@ -140,6 +157,30 @@ NTFF_FREQS = np.array([2.0e9, 2.1e9, 2.2e9, 2.3e9, 2.4e9, 2.5e9, 2.8e9])
 OUTPUT_PATH = Path(__file__).with_name("output") / "patch_antenna_cuts.png"
 
 
+def realized_z_wall_planes(sim):
+    """Node planes along z where THIS run will zero tangential E.
+
+    Read from the contract's own realization — ``realized_pec_edge_masks``
+    then ``realized_wall_planes`` (#931 §1.7) — applied to the very arrays
+    the assembly hands the stepper, so what this reports and what the solve
+    applies cannot drift apart.  Build only: no field is stepped.
+
+    ``_assemble_materials_nu`` is private because the realized edge set has
+    no public accessor yet; the two functions it feeds are public
+    (``from rfx import realized_pec_edge_masks, realized_wall_planes``).
+    """
+    from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid
+
+    grid = sim._build_nonuniform_grid()
+    sheets: list = []
+    _materials, _debye, _lorentz, pec_mask = sim._assemble_materials_nu(
+        grid, pec_sheets=sheets)
+    edges = realized_pec_edge_masks(pec_mask, sheets=sheets,
+                                    periodic=sim._periodic_flags())
+    z_nodes = np.asarray(coords_from_nonuniform_grid(grid).z, dtype=float)
+    return z_nodes, sheets, realized_wall_planes(edges, 2)
+
+
 def build_simulation():
     """Build the patch on a graded z-mesh, registering the stack to the mesh."""
     n_below = int(math.ceil(AIR_BELOW / DX))
@@ -148,10 +189,18 @@ def build_simulation():
     dom_y = GP_SIZE + 2 * MARGIN_XY
     cx, cy = dom_x / 2, dom_y / 2
 
-    # Fine band: 1 ground cell + N_SUB substrate cells + 1 patch cell.
+    # Fine band: N_SUB substrate cells and nothing else.  The ground and the
+    # patch are FOIL — zero thickness — so under the lattice ownership
+    # contract (#931) they are declared as SHEETS on the substrate's two node
+    # planes and own no cell.  Before the contract this band reserved one cell
+    # for each foil (1 + N_SUB + 1) so that the old single-wall rule would put
+    # a wall on the substrate face; that reserved ground cell then sat INSIDE
+    # the realized cavity carrying vacuum, and the cavity read 1.905 mm
+    # instead of the declared 1.524 mm.  A sheet has no cell to fill, so the
+    # reservation is gone and the realized cavity is the declared one.
     raw_dz = np.concatenate([
         np.full(n_below, DX),
-        np.full(1 + N_SUB + 1, DZ_SUB),
+        np.full(N_SUB, DZ_SUB),
         np.full(n_above, DX),
     ])
     dz_profile = smooth_grading(raw_dz, max_ratio=1.3)
@@ -163,15 +212,17 @@ def build_simulation():
     # the band upward, and a stack placed at the pre-smoothing coordinate can
     # land on coarse cells.  (nonuniform_patch_demo.py shows the mesh anatomy.)
     fine = np.where(np.isclose(dz_profile, DZ_SUB, rtol=1e-6))[0]
-    if len(fine) < 2 + N_SUB:
+    if len(fine) < N_SUB:
         raise RuntimeError(
-            f"graded mesh lost the fine band: expected >= {2 + N_SUB} fine "
+            f"graded mesh lost the fine band: expected >= {N_SUB} fine "
             f"cells, found {len(fine)}"
         )
     f0 = int(fine[0])
-    z_gnd_lo, z_gnd_hi = edges[f0], edges[f0 + 1]
-    z_sub_lo, z_sub_hi = edges[f0 + 1], edges[f0 + 1 + N_SUB]
-    z_patch_lo, z_patch_hi = z_sub_hi, edges[f0 + 1 + N_SUB + 1]
+    # The two foils sit ON the substrate's faces, which are exact node planes
+    # of the built mesh.  A sheet is declared as a zero-thickness Box, so
+    # these two numbers are both the declaration and the realization.
+    z_sub_lo, z_sub_hi = float(edges[f0]), float(edges[f0 + N_SUB])
+    z_gnd, z_patch = z_sub_lo, z_sub_hi
 
     # Verify the realized rasterization, then fail loudly on a mismatch: a
     # substrate on the wrong cells produces a wrong resonance, not a crash.
@@ -200,19 +251,25 @@ def build_simulation():
 
     gx_lo, gx_hi = cx - GP_SIZE / 2, cx + GP_SIZE / 2
     gy_lo, gy_hi = cy - GP_SIZE / 2, cy + GP_SIZE / 2
-    # Ground plane and patch are each exactly one fine cell thick, snapped to
-    # cell edges.  Preflight prints its sub-cell PEC advisory (quoted in the run
-    # output) because a 381 um sheet sits at the 1-cell floor; that thickness is
-    # deliberate and edge-aligned here.
-    sim.add(Box((gx_lo, gy_lo, z_gnd_lo), (gx_hi, gy_hi, z_gnd_hi)), material="pec")
+    px_lo, px_hi = cx - PATCH_W / 2, cx + PATCH_W / 2
+    py_lo, py_hi = cy - PATCH_L / 2, cy + PATCH_L / 2
+    # Ground plane and patch are FOIL: 35 um of copper on a 1524 um board is
+    # below any cell this model can afford, and the openEMS reference draws
+    # them as zero-thickness metal too.  Declare them as SHEETS
+    # (add_thin_conductor with a zero-thickness Box).  A sheet is a footprint
+    # on ONE node plane: it owns no cell, writes no permittivity, and zeroes
+    # the two in-plane E components on its plane while the normal E through it
+    # stays live.  The declared plane IS the realized plane here because both
+    # faces of the substrate are exact nodes of the built mesh.
+    #
+    # Declaring the same foil as a Box (a VOLUME) would be a different model:
+    # a volume shorts every edge incident to its cells, so a one-cell Box
+    # realizes walls on BOTH its faces with the cell between them shorted —
+    # correct for a plate, wrong for foil, and it would put 381 um of metal
+    # into a 1524 um board.
+    sim.add_thin_conductor(Box((gx_lo, gy_lo, z_gnd), (gx_hi, gy_hi, z_gnd)))
     sim.add(Box((gx_lo, gy_lo, z_sub_lo), (gx_hi, gy_hi, z_sub_hi)), material="sub")
-    sim.add(
-        Box(
-            (cx - PATCH_W / 2, cy - PATCH_L / 2, z_patch_lo),
-            (cx + PATCH_W / 2, cy + PATCH_L / 2, z_patch_hi),
-        ),
-        material="pec",
-    )
+    sim.add_thin_conductor(Box((px_lo, py_lo, z_patch), (px_hi, py_hi, z_patch)))
 
     # Soft Ez source through the substrate at the feed point; once the patch
     # resonates, the radiated field is patch-dominated, not feed-dominated.
@@ -234,17 +291,44 @@ def build_simulation():
     # at the design-mode bin: +0.60 dB in directivity, inside the committed
     # 1.0 dB envelope lock.
     pad = (N_CPML + 3) * DX
-    box_lo = (pad, pad, max(pad, z_gnd_lo - 3 * DX))
+    box_lo = (pad, pad, max(pad, z_gnd - 3 * DX))
     box_hi = (dom_x - pad, dom_y - pad, z_total - pad)
     sim.add_ntff_box(corner_lo=box_lo, corner_hi=box_hi, freqs=NTFF_FREQS)
+
+    # ---- Build-time realization check (no solve) ----
+    # The declared conductor planes must BE the realized ones.  Two sheets,
+    # so exactly two tangential-wall planes along z, at the substrate's two
+    # faces and nowhere else — in particular no wall one plane above the
+    # patch, which is what the reserved patch cell used to add.
+    z_nodes, sheets, wall_planes = realized_z_wall_planes(sim)
+    k_gnd = int(np.argmin(np.abs(z_nodes - z_gnd)))
+    k_patch = int(np.argmin(np.abs(z_nodes - z_patch)))
+    print(
+        f"realized PEC: sheets at z-node {[sp.plane for sp in sheets]} "
+        f"= {[f'{float(z_nodes[sp.plane]) * 1e3:.3f}' for sp in sheets]} mm | "
+        f"tangential wall planes along z {wall_planes} "
+        f"(declared ground {k_gnd}, patch {k_patch})"
+    )
+    if wall_planes != sorted({k_gnd, k_patch}):
+        raise RuntimeError(
+            f"realized z wall planes {wall_planes} != declared "
+            f"{sorted({k_gnd, k_patch})} — the foils did not land on the "
+            "substrate faces"
+        )
+    if abs(float(z_nodes[k_patch] - z_nodes[k_gnd]) - SUB_THICK) > 1e-9:
+        raise RuntimeError(
+            "realized cavity "
+            f"{float(z_nodes[k_patch] - z_nodes[k_gnd]) * 1e3:.4f} mm != "
+            f"declared {SUB_THICK * 1e3:.4f} mm"
+        )
 
     lam_design = C0 / F_DESIGN
     lam_fmax = C0 / float(NTFF_FREQS.max())
     print(
         f"NTFF clearances: ground-plane edge -> side face "
         f"{(gx_lo - box_lo[0]) * 1e3:.1f} mm | patch top -> top face "
-        f"{(box_hi[2] - z_patch_hi) * 1e3:.1f} mm | ground -> bottom face "
-        f"{(z_gnd_lo - box_lo[2]) * 1e3:.1f} mm"
+        f"{(box_hi[2] - z_patch) * 1e3:.1f} mm | ground -> bottom face "
+        f"{(z_gnd - box_lo[2]) * 1e3:.1f} mm"
     )
     print(
         f"  (lambda/2 = {lam_design / 2 * 1e3:.1f} mm at {F_DESIGN / 1e9:.1f} GHz, "
@@ -305,12 +389,26 @@ def main():
 
     sim = build_simulation()
 
-    # Preflight prints each advisory verbatim.  Expected on this fixture: two
-    # sub-cell PEC sheet advisories (the deliberate 1-cell ground and patch),
-    # the close bottom NTFF face (see build_simulation), and the small ground
-    # plane (0.56 lambda across, so edge diffraction shapes the pattern —
-    # physics shared with the openEMS reference, not a solver defect).  All
-    # four are conditions to interpret, not to suppress.
+    # Preflight prints each advisory verbatim.  Expected on this fixture:
+    #
+    #   * the close bottom NTFF face (see build_simulation) — a condition to
+    #     interpret, not to suppress;
+    #   * a "PEC sheets/wires were classified but the caller passed no
+    #     pec_sheets collector" warning.  That one is rfx's, not this model's:
+    #     preflight still assembles without a sheet collector, so a
+    #     sheet-declared conductor is invisible to it (#931 §6, owned by the
+    #     preflight stage that follows the contract branch).  Two checks this
+    #     fixture used to draw go silent for the same reason — the small-ground
+    #     -plane pattern advisory (60 mm = 0.56 lambda at f_max, so edge
+    #     diffraction shapes the pattern; physics shared with the openEMS
+    #     reference, not a solver defect) and the off-lattice conductor-face
+    #     residual on the patch and ground outlines (1 mm on a 2 mm cell).
+    #     Both still hold for this model; preflight simply cannot see a sheet
+    #     yet.  Do not read their absence as an improvement.
+    #
+    # The sub-cell PEC advisories that used to head this list are gone for a
+    # real reason: nothing here is a sub-cell conductor any more.  The foils
+    # are sheets, which is what they physically are.
     report = sim.preflight()
     print(f"preflight advisories: {len(list(report))}")
 

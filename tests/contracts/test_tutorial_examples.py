@@ -69,8 +69,23 @@ def test_ports_and_sparams_101_tutorial_runs():
     """Every port family preflights and the live RLC load changes S11."""
     output = _run_tutorial("ports_and_sparams_101.py")
 
-    assert output.count("[PREFLIGHT] All checks passed") >= 4
+    # Three empty general reports: the two generic-port models and the
+    # waveguide.  The microstrip's general report is NOT empty since the
+    # lattice ownership contract (#931) made its ground and trace SHEETS:
+    # preflight assembles without a PEC-sheet collector, so it says the sheets
+    # are absent from the cell mask it reads instead of dropping them quietly
+    # (#931 §6, owned by the preflight stage).  Readiness is report.ok there,
+    # the same rule the waveguide leg already used.
+    assert output.count("[PREFLIGHT] All checks passed") >= 3
     assert "Microstrip port setup ready: True" in output
+    assert "PEC sheets/wires were classified but the caller passed no" in output
+    # The declared foils must BE the realized wall planes, and the gap between
+    # them the height the MSL ports were told.  build_microstrip_ports() raises
+    # if not; this pins the measured line so a silent plane move is visible.
+    assert (
+        "Microstrip realized conductor planes along z: [8, 12] "
+        "(ground 1.25 mm, trace 2.25 mm, strip-to-ground 1.00 mm"
+    ) in output
     assert "Waveguide port setup ready: True" in output
     # The waveguide setup audits are part of what this tutorial teaches, and
     # this small model draws both of them (2.4 far-boundary round trips at the

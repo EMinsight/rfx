@@ -525,10 +525,14 @@ CLASSIFICATION: dict[str, Entry] = {
         "function"),
     "validation/crossval/15_patch_antenna_rt5880.py": Entry(
         "audited",
-        "`build_rfx_sim(do_gain=, two_plane=)` returns (sim, patch_shape, "
-        "geom) with no solve call (separated from run_rfx() for the #740 "
-        "review so the wall-plane tests exercise the production toggle); "
-        "run_rfx() consumes it and solves",
+        "`build_rfx_sim(...)` returns (sim, patch_shape, geom) with no solve "
+        "call (separated from run_rfx() for the #740 review so the wall-plane "
+        "tests build the production geometry without solving); run_rfx() "
+        "consumes it and solves. The separable builder is still worth having "
+        "after the lattice ownership contract (#931) removed the two_plane "
+        "toggle it used to exercise: what the wall-plane tests read now is "
+        "the realized edge set itself, through realized_pec_edge_masks / "
+        "realized_wall_planes",
         (Builder("build_rfx_sim", 0, (_v("default", do_gain=False),)),)),
     "validation/crossval/18_wr90_iris_modematch.py": Entry(
         "builder_fused_with_solve",
@@ -838,7 +842,13 @@ CLASSIFICATION: dict[str, Entry] = {
         "audited",
         "`build_sim(scale, dz_profile, antisym=True)` returns Simulation "
         "with no solve call (W4R redesign: mode-selective anti-symmetric "
-        "port pair, knife-edge-free PEC drawing)",
+        "port pair). Its trace is drawn with the half-cell midpoint recipe "
+        "(corners +/- dx/2), NOT on node planes as its sibling "
+        "w4_supraconvergence.py draws the same trace — under the lattice "
+        "ownership contract's centre sampling (#931 §1.1) the two realize "
+        "different traces. Neither script is migrated yet; re-verify this "
+        "reason when they are, and do not read the old 'knife-edge-free' "
+        "label as still true",
         (Builder("build_sim", None, (
             _v_from("s1.5_multiband", lambda m: dict(
                 scale=1.5, dz_profile=m.fx.pc_dz_profile_sym(1.5))),
@@ -875,6 +885,17 @@ def _entity_key(item: dict, seen: dict[str, int]) -> str:
         return "domain"
     lo, hi = item.get("declared_lo"), item.get("declared_hi")
     if lo is not None and hi is not None:
+        # The prefix names the DECLARATION ROUTE, not the realization class:
+        # under the lattice ownership contract (#931) a sheet can be declared
+        # either as a zero-thickness Box through ``add()`` (entity name
+        # "geometry[i]") or through ``add_thin_conductor`` (entity name
+        # "thin_conductor[i]"), and the two realize identically. Migrating a
+        # foil from the first spelling to the second therefore moves its row
+        # from ``geometry|...`` to ``thin_conductor|...`` in the snapshot —
+        # that is the intended, reviewable diff, not a key regression. A sheet
+        # still reports declared_lo/declared_hi (its drawn corners, with
+        # lo == hi on the normal axis), so it stays on this
+        # position-independent branch.
         kind = "thin_conductor" if name.startswith("thin_conductor") else "geometry"
         mat = item.get("material") or {}
         tag = mat.get("name", mat.get("kind", "?"))
