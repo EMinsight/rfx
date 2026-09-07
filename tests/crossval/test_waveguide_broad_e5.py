@@ -80,6 +80,9 @@ from build_waveguide_band_broad_e5_phase_envelope import (  # type: ignore  # no
 )
 
 from tests._gate_policy import ENVELOPE_GATE_MULTIPLIER, gate_from_envelope  # noqa: E402
+from tests._realized_pec import (  # noqa: E402
+    assert_no_wall_at, assert_walls_at, realize, wall_positions,
+)
 
 FIXTURES = REPO / "tests" / "fixtures" / "waveguide_broad_e5"
 EXPECTED_BANDS = {
@@ -561,6 +564,24 @@ PORT_RIGHT_X = 0.09
 BAND_HZ = (5.0e9, 7.0e9)
 N_FREQS = 6
 
+# #931: the anchor's mesh is DECLARED, not auto-derived. The short below is a
+# metal block — a total reflector, so a VOLUME (design note §1.5) — and a
+# volume has to be an integer number of cells thick or the contract refuses it.
+# With the auto-derived dx (0.00214137 m at freq_max = 7 GHz) the old 2 mm
+# thickness was 0.93 of a cell and the drawn faces sat nowhere near a node, so
+# the realized reflector depended on where 0.085 m happened to fall between two
+# cell centres. LIVE_DX = 2 mm divides the domain (60 x 20 x 10 cells), both
+# port planes (5, 45) and the short's faces (42, 43) exactly, and is within 7 %
+# of the mesh the auto rule chose, so the anchor's gates keep their scale.
+LIVE_DX = 0.002
+# Short at 42 cells; one cell thick, i.e. a filled slab with walls on BOTH
+# drawn faces (§1.2). It was 0.085 m against the old mesh, which is 42.5 cells
+# — half a cell off the node line, and the half-cell that made the drawing
+# ambiguous. The reflecting (near) face moves 1 mm; |S11| for a total
+# reflector is a magnitude, so the gates below are unchanged quantities.
+PEC_SHORT_X = 0.084
+PEC_SHORT_THICKNESS = LIVE_DX
+
 
 def _live_build_sim(freqs_hz, *, pec_short_x=None):
     """Two-port WR-style guide; optional full-cross-section PEC short.
@@ -574,14 +595,14 @@ def _live_build_sim(freqs_hz, *, pec_short_x=None):
     sim = Simulation(
         freq_max=max(float(freqs[-1]), f0),
         domain=DOMAIN,
+        dx=LIVE_DX,
         boundary="cpml",
         cpml_layers=10,
     )
     if pec_short_x is not None:
-        thickness = 0.002
         sim.add(
             Box((pec_short_x, 0.0, 0.0),
-                (pec_short_x + thickness, DOMAIN[1], DOMAIN[2])),
+                (pec_short_x + PEC_SHORT_THICKNESS, DOMAIN[1], DOMAIN[2])),
             material="pec",
         )
     port_freqs = jnp.asarray(freqs)
@@ -614,6 +635,31 @@ def _assert_cpml(sim):
     )
 
 
+def test_live_pec_short_realizes_the_block_it_declares():
+    """BUILD-TIME (no solve) witness for the live anchor's reflector (#931).
+
+    The short is a metal BLOCK, so a volume: the contract realizes tangential
+    walls on BOTH drawn faces and shorts the normal edge between them. Read
+    back through the one realized-edge reader — a check that only asked for
+    the near face would not notice the far one going missing, which is what
+    the pre-#931 rule did at every thickness.
+    """
+    freqs = np.linspace(*BAND_HZ, N_FREQS)
+    sim = _live_build_sim(freqs, pec_short_x=PEC_SHORT_X)
+    realized = realize(sim)
+    footprint = np.asarray(realized.cells).any(axis=0)
+    assert_walls_at(realized, 0, [PEC_SHORT_X, PEC_SHORT_X + PEC_SHORT_THICKNESS],
+                    footprint=footprint, what="live-anchor PEC short")
+    assert wall_positions(realized, 0) == pytest.approx(
+        [PEC_SHORT_X, PEC_SHORT_X + PEC_SHORT_THICKNESS], abs=1e-9), (
+        "the reflector realizes wall planes it did not declare: "
+        f"{wall_positions(realized, 0)}")
+    # Falsifier arm: no wall one cell in front of the reflecting face, so a
+    # body that grew a cell would be caught rather than absorbed by |S11| ~ 1.
+    assert_no_wall_at(realized, 0, [PEC_SHORT_X - LIVE_DX],
+                      what="live-anchor PEC short")
+
+
 def test_live_pec_short_s11_anchor():
     """LIVE compute_waveguide_s_matrix: PEC-short total reflection, |S11|≈1.
 
@@ -623,7 +669,7 @@ def test_live_pec_short_s11_anchor():
     cannot see.
     """
     freqs = np.linspace(*BAND_HZ, N_FREQS)
-    sim = _live_build_sim(freqs, pec_short_x=0.085)
+    sim = _live_build_sim(freqs, pec_short_x=PEC_SHORT_X)
     _assert_cpml(sim)
     s, _, idx = _s_matrix(sim, normalize=False)
     s11 = np.abs(s[idx["left"], idx["left"], :])
