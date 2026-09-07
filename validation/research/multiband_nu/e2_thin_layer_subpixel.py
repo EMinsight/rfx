@@ -687,7 +687,7 @@ def selfcheck(verbose: bool = True) -> dict:
             zn = np.concatenate([[0.0], np.cumsum(prof)])
             nodes_ok = all(np.min(np.abs(zn - z)) <= CELL_TOL for z in (Z1, Z_AIR, Z_SRC, Z_PRB))
             if spec["mesh"] != "u":
-                nodes_ok = nodes_ok and np.min(np.abs(zn - (Z1 + t_mesh))) <= CELL_TOL
+                nodes_ok = bool(nodes_ok and np.min(np.abs(zn - (Z1 + t_mesh))) <= CELL_TOL)
             air = prof[zn[:-1] >= Z_AIR - 1e-12]
             nz_key = ("u", s) if spec["mesh"] == "u" else (spec["mesh"] if spec["mesh"] != "p4" else "r4", s, spec["t_mesh_um"])
             sc["meshes"][mk] = {**{k: v for k, v in rep.items() if k != "cells_m"}, "nodes_ok": nodes_ok,
