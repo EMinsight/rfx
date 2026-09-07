@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from rfx import Box, Simulation
-from tests.unit._nu_lane_shim import wall_planes_m
+from tests.unit._wall_planes_m import wall_planes_m
 
 
 

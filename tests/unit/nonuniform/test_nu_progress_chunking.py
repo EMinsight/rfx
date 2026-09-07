@@ -49,7 +49,7 @@ def test_the_declared_scatterer_realizes_the_walls_it_is_drawn_with():
     an error now (§1.5) and the box is drawn on nodes, so drawn extent ==
     realized extent: walls at z = 1.2 mm and z = 1.4 mm.
     """
-    from tests.unit._nu_lane_shim import wall_planes_m
+    from tests.unit._wall_planes_m import wall_planes_m
 
     # dz_profile => the NU lane; assemble on the lane the run uses.
     rz, zs = wall_planes_m(_build(), 2, nonuniform=True)

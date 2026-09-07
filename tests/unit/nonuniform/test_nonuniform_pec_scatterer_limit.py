@@ -61,7 +61,7 @@ from rfx.api import Simulation
 from rfx.auto_config import smooth_grading
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
-from tests.unit._nu_lane_shim import wall_planes_m
+from tests.unit._wall_planes_m import wall_planes_m
 
 
 

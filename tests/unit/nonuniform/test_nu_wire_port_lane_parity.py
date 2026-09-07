@@ -221,7 +221,7 @@ def test_the_pec_plates_load_realizes_two_solid_plates(nu):
     Gamma = -1" described an object rfx did not build. This says what is
     built, without solving.
     """
-    from tests.unit._nu_lane_shim import wall_planes_m
+    from tests.unit._wall_planes_m import wall_planes_m
 
     extent = 5e-3
     rz, zs = wall_planes_m(_build(nu, extent=extent, load="pec_plates"), 2,
