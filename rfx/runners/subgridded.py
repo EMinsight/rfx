@@ -202,6 +202,11 @@ def _run_subgridded_once(
     coords_f = coords_from_fine_grid(nx_f, ny_f, nz_f, dx_f, x_off, y_off, z_off)
     # #931: the fine-region coordinates are already cell CENTRES
     # (coords_from_fine_grid), so they double as the PEC centre samples.
+    # Sheets and wires are deliberately NOT collected here: this lane
+    # applies PEC from a cell mask on two grids and has no carrier for a
+    # zero-cell conductor, so ``run()`` refuses a declared sheet or wire
+    # before it reaches this function (rfx/api/_execute.py, run_subgridded
+    # lane). Collecting them here would only hide the refusal.
     mats_f, _, _, pec_mask_f, _, _ = rasterize_geometry(
         sim._geometry,
         sim._resolve_material,
