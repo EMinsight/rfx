@@ -42,7 +42,7 @@ kind / no such code); the negative tests pass trivially there, so their
 value is only in combination with the positive ones.
 
 STATE UNDER #931 (lattice ownership contract) — READ BEFORE EDITING.
-Five tests in this file are RED and the cause is the FIXTURE, not the two
+Six tests in this file are RED and the cause is the FIXTURE, not the two
 rules. ``_half_cell(n, n)`` puts the Box faces on cell MIDPOINTS to select
 node ``n`` under the pre-#931 NODE sampler. PEC volumes are now sampled at
 cell CENTRES (design note §1.1), and a Box drawn ``(n-0.5)dx -> (n+0.5)dx``
@@ -58,6 +58,18 @@ Red, and each one's owner (measured 2026-09-07, VESSL 369367259135):
   test_rule_ii_is_silent_on_a_correctly_built_hole...    pin footprint 10, want 11
   test_rule_ii_ring_is_lattice_based_not_r_gt_pin_radius 0 of 16, want 16
   test_rule_ii_message_names_the_first_registered_pec... no advisory row
+  test_rule_i_is_silent_when_the_hole_is_built_into...  10 shared cells, want 0
+
+The sixth joined on 2026-09-07 when ``fidelity_report`` moved its PEC
+VOLUME rows onto the centre sampler the solve uses (20a8ccfc, §1.1). The
+``open_annulus`` ground boxes are ``_half_cell`` draws, so each lands one
+cell LOW on x, y and z (cell 24, and the lattice-disk hole shifted by one
+cell in x and y), while the PTFE Cylinder is a dielectric and stays
+node-sampled: 10 PTFE cells now sit inside 7 of the 20 ground boxes
+(entities [1, 11, 13, 15, 17, 18, 19]) and rule (i) reports them, which is
+what the solve builds. Before 20a8ccfc the report read the NODE sampler
+and this control was green by the same accident that left the solve's
+ground one cell off; the report is honest now and the fixture is not.
 
 THREE things have to happen before they go green, and none of them is this
 file's own subject:
@@ -85,8 +97,9 @@ file's own subject:
      the very case it was written for. That file is fidelity's owner's;
      see docs/design_notes/931_migration/T1-fidelity-sheet-overlap.md.
 
-Rule (i)'s tests still pass TODAY only because the ground is still a
-volume. ``test_junction_plane_metal_under_a_sheet_ground`` below is the
+Rule (i)'s positive test still passes TODAY only because the ground is
+still a volume; its silent control on the open copy is red for the fixture
+reason above. ``test_junction_plane_metal_under_a_sheet_ground`` below is the
 green half: it declares the same ground as a sheet and shows, through the
 one realization function, that the historic annulus and ring counts (36
 and 16) come back exactly — so when the migration lands, the numbers the
@@ -541,10 +554,12 @@ def _failing_entity_mask(monkeypatch, shape_cls, exc):
     import rfx.fidelity as fid
     real = fid._entity_mask
 
-    def patched(entry, sim, grid, nonuniform):
+    def patched(entry, sim, grid, nonuniform, **kw):
+        # ``pec_volume=`` (20a8ccfc, §1.1) is forwarded untouched: the
+        # double decides WHETHER to raise, never how a row is sampled.
         if isinstance(entry.shape, shape_cls):
             raise exc
-        return real(entry, sim, grid, nonuniform)
+        return real(entry, sim, grid, nonuniform, **kw)
 
     monkeypatch.setattr(fid, "_entity_mask", patched)
 
@@ -594,17 +609,26 @@ def test_rule_i_control_the_same_pair_with_a_working_mask_fires_normally():
 
 
 def test_rule_i_rasterizes_each_conductor_once(monkeypatch):
-    """Twelve PEC strips at one node, then a dielectric slab over all of
-    them: every conductor is named as a contributor, and the audit
-    rasterized each entity exactly once (the earlier implementation
-    re-rasterized every earlier conductor per overlapping dielectric)."""
+    """Twelve one-cell PEC strips (cell ``s`` on x, cell 4 on z), then a
+    dielectric slab over all of them: every conductor is named as a
+    contributor, and the audit rasterized each entity exactly once (the
+    earlier implementation re-rasterized every earlier conductor per
+    overlapping dielectric).
+
+    Drawn ON-LATTICE (``s*dx .. (s+1)*dx``) since 2026-09-07: as
+    ``_half_cell`` draws the strips are centre-sampled one cell low
+    (§1.1), which put strip 0 at cell -1 — outside a domain with no
+    padding, where the assembly refuses it as a zero-cell volume while
+    the report lists it as a refused, node-sampled row. Same counts
+    either way (13 rasterizations, 12 contributors, 120 shared cells,
+    measured); the fixture is now a model the solve accepts."""
     import rfx.fidelity as fid
     real = fid._entity_mask
     calls = []
 
-    def counting(entry, sim, grid, nonuniform):
+    def counting(entry, sim, grid, nonuniform, **kw):
         calls.append(id(entry))
-        return real(entry, sim, grid, nonuniform)
+        return real(entry, sim, grid, nonuniform, **kw)
 
     monkeypatch.setattr(fid, "_entity_mask", counting)
 
@@ -613,10 +637,10 @@ def test_rule_i_rasterizes_each_conductor_once(monkeypatch):
                      cpml_layers=4,
                      boundary=BoundarySpec(x="pec", y="pec", z="pec"))
     sim.add_material("d", eps_r=2.0)
-    z_lo, z_hi = _half_cell(4, 4)
+    z_lo, z_hi = 4 * DX, 5 * DX
     for s in range(n_strips):
-        x_lo, x_hi = _half_cell(s, s)
-        sim.add(Box((x_lo, 0.0, z_lo), (x_hi, 1.0e-3, z_hi)), material="pec")
+        sim.add(Box((s * DX, 0.0, z_lo), ((s + 1) * DX, 1.0e-3, z_hi)),
+                material="pec")
     sim.add(Box((0.0, 0.0, _half_cell(3, 5)[0]), (1.2e-3, 1.0e-3, _half_cell(3, 5)[1])),
             material="d")
     report = sim.fidelity_report(print_report=False)
