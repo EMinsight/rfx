@@ -108,10 +108,12 @@ beside the new one.
 
 ## What ingest still has to do
 
-1. Place the new cv05 run record beside the old one (do not delete
+1. Place the new cv05 run record beside the old one — copy
+   `/root/workspace/claude-workspace/rfx/runs/issue931-post-cv05-20260907T095630Z/cv05_run.json`
+   in as `cv05_run_openems_369367259142.json`, and do NOT delete
    `cv05_run_openems_369367257743.json`; it is the "before" half of the
-   evidence) and update `manifest.json` from
-   `docs/design_notes/931_migration/XA-manifest.md`.
+   evidence. Then update `manifest.json` from
+   `docs/design_notes/931_migration/XA-manifest.json.md`.
 2. Commit the rebuilt `cv05_ringdown_spectra.json` — this phase deliberately
    does not.
 3. Re-derive the farfield envelope band from the new run per the rule stated in
