@@ -321,3 +321,53 @@ def test_stack_check_ok_ignores_realization_label():
     sc["patch_realization"] = "some_future_mechanism"
     ok, detail = cv15._stack_check_ok(sc)
     assert ok, detail
+
+
+def test_cv15_declaring_the_sheets_changes_no_material(capsys):
+    """#931 §1.3: a sheet owns no cell and writes no material. Asserted the
+    strong way -- the assembled ``eps_r`` array with both sheets declared must
+    be BIT-IDENTICAL to the same build with the conductors removed, not merely
+    "still two distinct values".
+
+    This is cv17's G17-B pattern (``17_dielectric_sphere_mie.py``:
+    ``check_realized_material``, exactly two eps values or the run is not about
+    the declared material) carried onto the sheet side, and it is the witness
+    for the DELETED #702 family -- "re-sample a 1-node sheet's own cell at its
+    live edge", which existed precisely because the old ground conductor DID
+    own a cell whose material had to be patched afterwards.
+
+    The conductor-free build here is a deliberate test-local control: it is the
+    thing WITHOUT the declarations, so it cannot go stale when the script's
+    declarations change (the #740 review's objection was to mirroring the thing
+    UNDER TEST, which this file does not do -- every other test drives
+    ``build_rfx_sim``).
+    """
+    import numpy as np
+
+    from rfx import Box, Simulation
+    from rfx.boundaries.spec import BoundarySpec
+
+    cv15 = _load_cv15()
+    sim, grid, _ = _build_test_sim(cv15)
+    mats, *_ = sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])
+
+    cx, cy = cv15.DOM_X / 2, cv15.DOM_Y / 2
+    z_sub_lo = cv15.AIR_BELOW
+    z_sub_hi = (10 + cv15.N_SUB) * cv15.DX
+    bare = Simulation(
+        freq_max=4e9, domain=(cv15.DOM_X, cv15.DOM_Y, cv15.DOM_Z), dx=cv15.DX,
+        boundary=BoundarySpec.uniform("cpml"), cpml_layers=cv15.N_CPML,
+    )
+    bare.add_material("sub", eps_r=cv15.EPS_R, sigma=cv15.SIGMA_SUB)
+    bare.add(Box((cx - cv15.GP_X / 2, cy - cv15.GP_Y / 2, z_sub_lo),
+                 (cx + cv15.GP_X / 2, cy + cv15.GP_Y / 2, z_sub_hi)),
+             material="sub")
+    bare_mats, *_ = bare._assemble_materials(
+        bare._build_grid(), pec_sheets=[], pec_wires=[])
+    capsys.readouterr()
+
+    assert np.array_equal(np.asarray(mats.eps_r), np.asarray(bare_mats.eps_r)), (
+        "declaring the two PEC sheets changed the permittivity array -- a "
+        "sheet owns no cell and writes no material (#931 §1.3)")
+    assert np.array_equal(np.asarray(mats.sigma), np.asarray(bare_mats.sigma)), (
+        "declaring the two PEC sheets changed the conductivity array")
