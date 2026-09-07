@@ -54,6 +54,34 @@ scoring: ``docs/design_notes/issue782_retired_resonance_predeclaration.md``. Mea
     min|S11| over (8.4, 9.2) GHz = 0.8794
     global dip 10.100 GHz, |S11| = 0.4426 (the off-resonance match point)
 
+RE-PINNED 2026-09-07 FOR #931 (VESSL 369367259226, same builder, same freqs,
+same num_periods = 280, both arms settled, cavity advisory silent)
+------------------------------------------------------------------------------
+The board above was drawn with a CELL RESERVED for each foil, and rfx used to
+re-sample a sheet's own cell material onto its live edge (#702), so the reserved
+cell silently became laminate and the electrical cavity was 983.75 um where the
+board declares 787. The ownership contract deletes that re-sample, so this
+fixture now draws each foil ON the laminate face it bounds and the cavity is
+four cells of laminate and nothing else (asserted at build time, no solve).
+
+The structure of the gate is unchanged and so is every threshold; the BOARD
+moved, so the band that brackets its antiresonance moved with it:
+
+    max|S11| = 0.9837
+    port-plane antiresonance: Im(Zin) zero-crossing at 7.7620 GHz, Re(Zin) peak
+        4157 ohm at the 7.7 GHz bin (1119 ohm at 7.8)
+    min|S11| over (7.4, 8.2) GHz = 0.9096
+    dip 8.800 GHz, |S11| = 0.6418 (the off-resonance match point, still OUTSIDE
+        the resonance band — the assertion (2) thesis is intact)
+
+WHY IT MOVED DOWN while the isolated patch moved UP (Board H's Leg A went
+-6.17 -> -1.871 % on the same redraw): they are different features. The patch
+mode rises because a thinner cavity fringes less. THIS number is the port-plane
+antiresonance of a patch loaded by a 13.18 mm open feed stub, and a thinner
+substrate RAISES eps_eff, so the stub is electrically longer and its resonance
+falls. The two directions are the reason the fed and unfed terms are pinned
+separately in the harminv companion.
+
   (1) PASSIVITY:          max|S11| <= 1.05      (the #80 fix; 0.9921 measured settled)
   (2) EDGE-FED SIGNATURE: |S11| > 0.70 across RES_BAND_GHZ = (8.4, 9.2)
       => the patch is poorly matched at its resonance => the dip is NOT the resonance.
@@ -62,8 +90,10 @@ scoring: ``docs/design_notes/issue782_retired_resonance_predeclaration.md``. Mea
       falsifiable: without it the band gate would pass over any dead spectral region
       (that is exactly how the retired (9.0, 9.42) band failed, #782).
   (2c) the in-band max Re(Zin) exceeds 500 ohm — the high-impedance antiresonance
-      that MAKES "poorly matched at resonance" the right physics (measured 4326).
-  (3) (soft) the global |S11| minimum lies ABOVE the band (measured 10.100 > 9.2).
+      that MAKES "poorly matched at resonance" the right physics (measured 4157 on
+      the #931 redraw; 4326 on the board this gate was first written for).
+  (3) (soft) the global |S11| minimum lies ABOVE the band (measured 8.800 > 8.2;
+      10.100 > 9.2 on the pre-#931 board).
 
 The crossing is a PORT-PLANE observable — the antiresonance seen through the feed
 line, reference-plane dependent — so it is an existence witness inside a band, never a
@@ -155,11 +185,17 @@ DOM_Z = 12.787e-3
 Y_C = DOM_Y / 2.0
 
 PASSIVE_TOL = 1.05           # |S11| <= 1 + numerical slack (the #80 passivity fix)
-RES_BAND_GHZ = (8.4, 9.2)    # measured antiresonance neighbourhood on THIS board
-#                              (crossing 8.8189 GHz, 2026-09-01 provenance run; the
-#                              pre-#702 band (9.0, 9.42) is retired — issue #782)
-RES_BAND_S11_MIN = 0.70      # poorly matched there (measured in-band min 0.8794)
-RES_BAND_RE_ZIN_MIN_OHM = 500.0  # in-band antiresonance Re peak (measured 4326 ohm)
+RES_BAND_GHZ = (7.4, 8.2)    # measured antiresonance neighbourhood on THIS board
+#                              (crossing 7.7620 GHz, VESSL 369367259226 on the
+#                              #931 redraw; SAME +-0.4 GHz half-width as the
+#                              8.8189 GHz band it replaces, re-centred on the
+#                              measured crossing and rounded to the 0.1 GHz DFT
+#                              bins. The pre-#931 band (8.4, 9.2) and the
+#                              pre-#702 band (9.0, 9.42) are both retired —
+#                              issue #782, then #931's laminate-face redraw)
+RES_BAND_S11_MIN = 0.70      # UNCHANGED threshold (in-band min measured 0.9096)
+RES_BAND_RE_ZIN_MIN_OHM = 500.0  # UNCHANGED threshold (in-band antiresonance Re
+#                              peak measured 4157 ohm; 4326 on the old board)
 
 # Realized patch raster this band was pinned on: 44 x 51 cells = 8.668 x 10.047 mm at
 # dx = 197 um ("Board S"). NOT the harminv companion's 43 x 51 at h/4 (issue #782).
@@ -439,8 +475,9 @@ def test_patch_edgefed_s11_passive_and_match():
     assert g["band_max_re_zin"] > RES_BAND_RE_ZIN_MIN_OHM, (
         f"in-band max Re(Zin) = {g['band_max_re_zin']:.0f} ohm <= "
         f"{RES_BAND_RE_ZIN_MIN_OHM:.0f} — the band's crossing is not the edge-fed "
-        "patch antiresonance (measured 4326 ohm on the 2026-09-01 provenance run; "
-        "pre-#702 witness class saw > 1.5 kohm)."
+        "patch antiresonance (measured 4157 ohm on VESSL 369367259226, the #931 "
+        "redraw; 4326 ohm on the 2026-09-01 provenance run before it; pre-#702 "
+        "witness class saw > 1.5 kohm)."
     )
 
     # --- (3) soft: the |S11| minimum (match point) lies ABOVE the resonance band ---
