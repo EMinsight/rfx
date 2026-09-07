@@ -142,11 +142,24 @@ W = 10.129e-3
 L = 8.595e-3
 W_MSL = 1.8e-3
 PORT_MARGIN = 5.0e-3
-Z_GND = 4e-3
 FEED_LEN = 8.0e-3
 DOM_X, DOM_Y, DOM_Z = 29.747e-3, 18.130e-3, 12.787e-3
 N_SUB_CELLS = 4
 DX = H_SUB / N_SUB_CELLS
+
+# Board height, SNAPPED TO THE NODE LINE (#931 §1.3 "off-lattice interfaces").
+# The z origin used to be a bare 4 mm, which on this mesh (dx = H_SUB/4 =
+# 196.75 um, node i at (i - cpml_pad)*dx) sits 0.33 of a cell above node 28.
+# Nothing in the board is off-lattice by intent — the laminate is an exact four
+# cells thick — so the 0.33-cell offset was pure registration noise, and under
+# the ownership contract it is not harmless: a foil declared on an off-node
+# interface snaps to the NEAREST node, which need not be the node the
+# dielectric's own half-open sampling starts at, and the cavity then carries a
+# vacuum cell in series (measured below).  Snapping the origin puts both
+# laminate faces exactly on node planes, so the two foils and the four
+# dielectric cells are the same five node planes.  The board moves 65 um in
+# free space; nothing else about it changes.
+Z_GND = round(4e-3 / DX) * DX
 
 # The realized patch raster at this mesh: 43 x 51 cells = 8.46025 x 10.03425 mm on a
 # 787.00 um substrate (design 8.595 x 10.129 mm; the x/y faces sit 47.5/65.5 um
@@ -271,43 +284,51 @@ def _build(fed: bool):
     """
     sim = Simulation(freq_max=15e9, domain=(DOM_X, DOM_Y, DOM_Z),
                      dx=DX, cpml_layers=8, boundary="cpml")
-    z_gnd_hi = Z_GND + DX
-    z_sub_lo, z_sub_hi = z_gnd_hi, z_gnd_hi + H_SUB
-    z_tr_lo, z_tr_hi = z_sub_hi, z_sub_hi + DX
+    # The stack, in the words the contract reads (#931 §1.3, §6): the laminate
+    # is the only body with a thickness, and each foil is a ZERO-THICKNESS sheet
+    # ON the laminate face it bounds.  Both faces are node planes (Z_GND is
+    # snapped and H_SUB is exactly four cells), so declared and realized are the
+    # same five planes and the cavity is four dielectric cells, nothing else.
+    z_sub_lo, z_sub_hi = Z_GND, Z_GND + H_SUB
     x_patch0 = PORT_MARGIN + FEED_LEN
     y_c = DOM_Y / 2.0
     z_mid = 0.5 * (z_sub_lo + z_sub_hi)
 
     substrate = Box((0, 0, z_sub_lo), (DOM_X, DOM_Y, z_sub_hi))
-    patch = Box((x_patch0, y_c - W / 2, z_tr_lo), (x_patch0 + L, y_c + W / 2, z_tr_hi))
+    patch = Box((x_patch0, y_c - W / 2, z_sub_hi), (x_patch0 + L, y_c + W / 2, z_sub_hi))
 
     sim.add_material("ro4003c", eps_r=EPS_R, sigma=0.0)
-    # The three metallizations are FOILS, declared as sheets (lattice
-    # ownership contract #931 §1.3). They used to be one-cell PEC Boxes,
-    # which the contract reads as VOLUMES — a wall on both bounding planes
-    # and the interior shorted — so the board would gain a wall it never
-    # had and the cavity would lose a cell.
+    # The three metallizations are FOILS, declared as zero-thickness sheets on
+    # the laminate faces (lattice ownership contract #931 §1.3, amendment §6
+    # "a foil sheet goes on the dielectric INTERFACE it bounds").
     #
-    # Measured at build time on this grid before the change, unfed leg:
-    #   as one-cell Boxes (volume)  z walls {28, 29, 33, 34}; patch 44 Ex
-    #                               and 52 Ey edges — one cell wider each
-    #                               way than the declared rectangle
-    #   as declared sheets          z walls {29, 34}; patch 42 Ex and 50
-    #                               Ey edges = the 43x51 node census this
-    #                               module already asserts, minus one edge
-    #                               per axis
-    # The sheet realization is the SAME edge set the pre-#931 rule gave
-    # these declarations (mid-plane of a face-registered one-cell Box is
-    # the half-cell tie, tie resolves LOWER; the in-plane faces are
-    # off-lattice, so closed and half-open footprints coincide). The pinned
-    # numbers are therefore NOT re-measured — they are the same
-    # measurement, now declared in the words that produce it.
-    sim.add_thin_conductor(Box((0, 0, Z_GND), (DOM_X, DOM_Y, z_gnd_hi)),
+    # They used to be one-cell PEC Boxes drawn in cells RESERVED for them: the
+    # ground in [4.000, 4.197] mm with the laminate starting only at 4.197. That
+    # reserved cell is the #702 geometry. Before this branch, rfx re-sampled the
+    # sheet's own cell material onto its live edge and the cell silently became
+    # dielectric; the contract deletes that re-sample (a sheet owns no cell), so
+    # the cell is what the drawing says it is — vacuum — and the cavity carries
+    # it in series. Measured at build time on the unreDRAWn board, walls at node
+    # 29 and 34 with eps_r = [1.0, 3.38, 3.38, 3.38, 3.38] across the five cells
+    # between them: preflight's #703 cavity check reads sum(d/eps) 429.6 um mesh
+    # vs 232.8 um physical, +84.5 %. That is the whole of the +10.365 % Leg A
+    # excursion the first post-contract run measured (VESSL 369367259172) — the
+    # pre-#702 signature this module's docstring names at +7.430 %.
+    #
+    # The contract's remedy is the drawing, not a re-sample: put each foil on
+    # the laminate face it bounds and let the laminate own every cell of the
+    # cavity. Realized now, and asserted below with no solve:
+    #   walls at nodes 28 and 32, four cells between them, all eps_r = 3.38,
+    #   node-to-node 787.00 um = the declared H_SUB to the micron.
+    # The patch footprint (43 x 51 nodes, 42 x 50 edges) is untouched by this —
+    # only z moved — so RASTER_CELLS still holds and Leg A's ratio still divides
+    # by the Balanis value of the same rectangle.
+    sim.add_thin_conductor(Box((0, 0, z_sub_lo), (DOM_X, DOM_Y, z_sub_lo)),
                            sigma_bulk=5.8e7)                                # ground
     sim.add(substrate, material="ro4003c")
     if fed:
-        sim.add_thin_conductor(Box((0, y_c - W_MSL / 2, z_tr_lo),
-                                   (x_patch0, y_c + W_MSL / 2, z_tr_hi)),
+        sim.add_thin_conductor(Box((0, y_c - W_MSL / 2, z_sub_hi),
+                                   (x_patch0, y_c + W_MSL / 2, z_sub_hi)),
                                sigma_bulk=5.8e7)                            # feed trace
     sim.add_thin_conductor(patch, sigma_bulk=5.8e7)
 
@@ -527,7 +548,7 @@ def test_the_board_realizes_three_sheets_and_no_conductor_volume():
     absorbs as a constant. This test states both numbers so the next reader
     does not have to re-derive which one the solve sees.
     """
-    from tests._realized_geometry import realized
+    from tests._realized_geometry import node_index, realized
 
     for fed in (False, True):
         sim, patch, _sub = _build(fed)
@@ -541,12 +562,14 @@ def test_the_board_realizes_three_sheets_and_no_conductor_volume():
         # UNIONED before the edge rule, so the join carries no slit
         # (#931 §1.3).
         planes = sorted(set(p for v in rz.sheet_planes.values() for p in v))
-        assert planes == [29, 34], (fed, planes)
+        k_gnd, k_top = node_index(rz.grid, 2, Z_GND), node_index(
+            rz.grid, 2, Z_GND + H_SUB)
+        assert planes == [k_gnd, k_top], (fed, planes, [k_gnd, k_top])
         assert len(rz.sheets) == (3 if fed else 2), len(rz.sheets)
-        assert rz.wall_planes(2) == [29, 34], (fed, rz.wall_planes(2))
+        assert rz.wall_planes(2) == planes, (fed, rz.wall_planes(2))
 
         mx, my, _mz = (np.asarray(m) for m in rz.edge_masks)
-        kp = 34
+        kp = k_top
         occ = np.argwhere(np.asarray(patch.mask(rz.grid), dtype=bool))
         x0, x1 = int(occ[:, 0].min()), int(occ[:, 0].max())
         y0, y1 = int(occ[:, 1].min()), int(occ[:, 1].max())
@@ -558,6 +581,58 @@ def test_the_board_realizes_three_sheets_and_no_conductor_volume():
                                                   kp])[:, 1]})
         assert (n_ex, n_ey) == (RASTER_CELLS[0] - 1, RASTER_CELLS[1] - 1), (
             fed, n_ex, n_ey)
+
+
+def test_the_cavity_between_the_two_foils_is_all_laminate():
+    """Build-time (no solve): every cell between the two foil planes is the
+    laminate, and the node-to-node gap is the declared H_SUB.
+
+    This is the assertion the #702 repair used to stand in for. rfx re-sampled
+    a sheet's own cell material onto its live edge, so a board drawn with a
+    RESERVED cell for the ground foil (this fixture, until #931) got its
+    dielectric back silently and nobody had to look. The ownership contract
+    deletes the re-sample — a sheet owns no cell — so the drawing is the whole
+    statement, and a reserved cell is a vacuum cell in series with the cavity.
+    Measured on this board before it was redrawn: five cells between the walls,
+    eps_r [1.0, 3.38, 3.38, 3.38, 3.38], preflight #703 reading sum(d/eps)
+    429.6 um mesh vs 232.8 um physical (+84.5 %), and Leg A at +10.365 %
+    instead of -6.17 % (VESSL 369367259172).
+
+    The gate is on the cavity, not on a plane index, because that is what the
+    physics reads: Balanis is evaluated at h = H_SUB, so any cell of the wrong
+    medium between the walls is a bias Leg A would absorb silently.
+    """
+    from tests._realized_geometry import node_index, realized
+
+    for fed in (False, True):
+        sim, _patch, _sub = _build(fed)
+        rz = realized(sim)
+        grid = rz.grid
+        k_lo, k_hi = rz.wall_planes(2)
+        zline = _node_line_z(grid)
+        gap = float(zline[k_hi] - zline[k_lo])
+        assert abs(gap - H_SUB) < 0.5e-6, (
+            f"[{'FED' if fed else 'UNFED'}] realized cavity {gap * 1e6:.3f} um "
+            f"between the foil planes != declared H_SUB {H_SUB * 1e6:.3f} um")
+        assert k_lo == node_index(grid, 2, Z_GND)
+        assert k_hi == node_index(grid, 2, Z_GND + H_SUB)
+
+        eps = sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])[0].eps_r
+        col = np.asarray(eps)[int(rz.pec_mask.shape[0] // 2) if rz.pec_mask
+                              is not None else eps.shape[0] // 2,
+                              eps.shape[1] // 2, k_lo:k_hi]
+        assert col.shape[0] == N_SUB_CELLS, (col.shape, N_SUB_CELLS)
+        assert np.allclose(col, EPS_R), (
+            f"[{'FED' if fed else 'UNFED'}] the cavity carries a cell that is "
+            f"not the laminate: eps_r = {[round(float(v), 3) for v in col]}. A "
+            "vacuum cell here is the #702 slot geometry — draw the laminate to "
+            "the foil plane; nothing is re-sampled.")
+
+
+def _node_line_z(grid):
+    from tests._realized_geometry import _node_line
+
+    return _node_line(grid, 2)
 
 
 def test_realized_raster_is_the_board_this_gate_was_measured_on():

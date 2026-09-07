@@ -139,6 +139,16 @@ W_MSL = 1.8e-3
 L_MSL = 8.0e-3
 PORT_MARGIN = 5.0e-3
 DX = 0.197e-3
+# Board height SNAPPED TO THE NODE LINE (#931 §1.3 off-lattice interfaces): the
+# stack used to start at a bare 4 mm, which on this mesh sits 0.33 of a cell off
+# the node line, so a foil declared on a laminate face snapped to a node the
+# laminate's own half-open sampling did not start at. dx = 197 um is not an exact
+# divisor of H_SUB (3.995 cells), so the laminate's top face still lands 0.005 of
+# a cell off its node — 1.0 um, which the realized-cavity assertion below reads
+# and preflight's 1 % cavity check passes.
+Z_GND = round(4e-3 / DX) * DX
+Z_SUB_LO = Z_GND
+Z_SUB_HI = Z_GND + H_SUB
 DOM_X = 29.747e-3
 DOM_Y = 18.130e-3
 DOM_Z = 12.787e-3
@@ -157,9 +167,8 @@ RASTER_CELLS = (44, 51)
 
 
 def _patch_box() -> Box:
-    return Box((PORT_MARGIN + L_MSL, Y_C - W / 2, 4e-3 + DX + H_SUB + DX),
-               (PORT_MARGIN + L_MSL + L, Y_C + W / 2,
-                4e-3 + DX + H_SUB + 2 * DX))
+    return Box((PORT_MARGIN + L_MSL, Y_C - W / 2, Z_SUB_HI),
+               (PORT_MARGIN + L_MSL + L, Y_C + W / 2, Z_SUB_HI))
 
 
 def _build_patch_sim() -> Simulation:
@@ -168,30 +177,37 @@ def _build_patch_sim() -> Simulation:
         dx=DX, cpml_layers=8, boundary="cpml",
     )
     sim.add_material("ro4003c", eps_r=EPS_R, sigma=0.0)
-    # Ground, feed trace and patch are FOILS, declared as sheets (#931
-    # §1.3). As one-cell PEC Boxes the contract reads them as volumes —
-    # a wall on both bounding planes and the interior shorted. The sheet
-    # declaration reproduces the pre-#931 edge set for this board: the
-    # mid-plane of a face-registered one-cell Box is the half-cell tie and
-    # a tie resolves to the LOWER plane, and this board's in-plane faces
-    # are off-lattice (the docstring records the x/y registration), so the
-    # closed footprint and the old half-open one are the same node set.
-    # Verified on the sibling Board H, same stack-up and dx: volume gives
-    # z walls {28,29,33,34} and a patch one cell wider each way, sheets
-    # give {29,34} and exactly the asserted node census minus one edge per
-    # axis. The pinned readings are therefore not re-measured.
-    sim.add_thin_conductor(Box((0, 0, 4e-3), (DOM_X, DOM_Y, 4e-3 + DX)),
+    # Ground, feed trace and patch are FOILS: zero-thickness sheets ON the two
+    # laminate faces (#931 §1.3, and amendment §6 "a foil sheet goes on the
+    # dielectric INTERFACE it bounds").
+    #
+    # The board used to reserve a CELL for each foil — the ground in
+    # [4.000, 4.197] mm below a laminate that only started at 4.197, and the
+    # trace a further cell ABOVE the laminate top. Under the old rule that cost
+    # nothing visible, because rfx re-sampled a sheet's own cell material onto
+    # its live edge (#702). The contract deletes that re-sample: a sheet owns no
+    # cell, so a reserved cell is a vacuum cell and it sits in series with the
+    # cavity. Measured on the un-redrawn board (VESSL 369367259174): walls at
+    # nodes 29 and 34 with preflight #703 reading sum(d/eps) 627.1 um mesh vs
+    # 429.8 um physical (+45.9 %), the Im(Zin) antiresonance at 9.3453 GHz
+    # instead of 8.8189, and Re(Zin) NEGATIVE across most of the band.
+    #
+    # Redrawn: laminate H_SUB thick between two node planes, a foil on each,
+    # every cell of the cavity the laminate. The MSL port already declares
+    # exactly this stack (its foot is at the laminate bottom and its height is
+    # H_SUB), which is the second reason the reserved cells were wrong: the
+    # port's ground reference and the realized ground wall were one cell apart.
+    sim.add_thin_conductor(Box((0, 0, Z_SUB_LO), (DOM_X, DOM_Y, Z_SUB_LO)),
                            sigma_bulk=5.8e7)
-    sim.add(Box((0, 0, 4e-3 + DX), (DOM_X, DOM_Y, 4e-3 + DX + H_SUB)),
+    sim.add(Box((0, 0, Z_SUB_LO), (DOM_X, DOM_Y, Z_SUB_HI)),
             material="ro4003c")
     sim.add_thin_conductor(
-        Box((0, Y_C - W_MSL / 2, 4e-3 + DX + H_SUB + DX),
-            (PORT_MARGIN + L_MSL, Y_C + W_MSL / 2,
-             4e-3 + DX + H_SUB + 2 * DX)),
+        Box((0, Y_C - W_MSL / 2, Z_SUB_HI),
+            (PORT_MARGIN + L_MSL, Y_C + W_MSL / 2, Z_SUB_HI)),
         sigma_bulk=5.8e7)
     sim.add_thin_conductor(_patch_box(), sigma_bulk=5.8e7)
     sim.add_msl_port(
-        position=(PORT_MARGIN, Y_C, 4e-3 + DX),
+        position=(PORT_MARGIN, Y_C, Z_SUB_LO),
         width=W_MSL, height=H_SUB, direction="+x", impedance=50.0,
         waveform=GaussianPulse(f0=8.5e9, bandwidth=1.6),
     )
@@ -204,7 +220,7 @@ def _build_patch_sim() -> Simulation:
     # present, so removing it fails loudly rather than silently disarming #332.)
     x_patch0 = PORT_MARGIN + L_MSL
     sim.add_probe(
-        position=(x_patch0 + 0.7 * L, Y_C - 0.2 * W, 4e-3 + DX + H_SUB * 0.5),
+        position=(x_patch0 + 0.7 * L, Y_C - 0.2 * W, Z_SUB_LO + H_SUB * 0.5),
         component="ez",
     )
     return sim
@@ -259,7 +275,7 @@ def test_the_board_realizes_three_foils_and_no_conductor_volume():
     patch is the 43 x 50 edges between those nodes. Both are stated, for
     the same reason as in the Board H twin.
     """
-    from tests._realized_geometry import realized
+    from tests._realized_geometry import node_index, realized
 
     sim = _build_patch_sim()
     rz = realized(sim)
@@ -267,9 +283,24 @@ def test_the_board_realizes_three_foils_and_no_conductor_volume():
         "a foil owns no cell")
     assert rz.sheet_planes.keys() == {2}, rz.sheet_planes
     planes = sorted(set(p for v in rz.sheet_planes.values() for p in v))
-    assert len(planes) == 2, planes            # ground plane, metal plane
+    assert planes == [node_index(rz.grid, 2, Z_SUB_LO),
+                      node_index(rz.grid, 2, Z_SUB_HI)], planes
     assert len(rz.sheets) == 3, len(rz.sheets)  # ground, feed trace, patch
     assert rz.wall_planes(2) == planes, (rz.wall_planes(2), planes)
+
+    # The cavity between the two foils is the laminate and nothing else. The
+    # board used to reserve a vacuum cell for each foil and get its dielectric
+    # back through the #702 re-sample, which the contract deletes; a reserved
+    # cell is now what the drawing says it is. Measured before the redraw
+    # (VESSL 369367259174): five cells between the walls, one of them vacuum,
+    # preflight #703 reading +45.9 % on sum(d/eps).
+    eps = sim._assemble_materials(rz.grid, pec_sheets=[], pec_wires=[])[0].eps_r
+    col = np.asarray(eps)[np.asarray(eps).shape[0] // 2,
+                          np.asarray(eps).shape[1] // 2, planes[0]:planes[1]]
+    assert np.allclose(col, EPS_R), (
+        f"the cavity carries a cell that is not the laminate: "
+        f"{[round(float(v), 3) for v in col]} — the #702 slot geometry. Draw "
+        "the laminate to the foil plane; nothing is re-sampled.")
 
     grid = rz.grid
     occ = np.where(np.asarray(_patch_box().mask(grid), dtype=bool))
