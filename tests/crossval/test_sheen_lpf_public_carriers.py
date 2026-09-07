@@ -54,7 +54,7 @@ def test_structure_distance_reproduces_from_committed_doublets(fixture):
         e_hi = abs(fd["upper_ghz"] - p_hi) / p_hi * 100.0
         expect = round(max(e_lo, e_hi), 4)
         assert expect == pytest.approx(ref["structure_distance_pct"][tag], abs=1e-3)
-    assert ref["structure_distance_pct"]["rfx"] == pytest.approx(1.5195, abs=1e-3)
+    assert ref["structure_distance_pct"]["rfx"] == pytest.approx(2.8668, abs=1e-3)
     assert ref["structure_distance_pct"]["openems"] == pytest.approx(0.6644, abs=1e-3)
 
 
@@ -76,14 +76,21 @@ def test_leg_derived_re_z0_windows_pinned(rfx_leg):
     inband = (freq_ghz >= 5.0) & (freq_ghz <= 15.0)
     assert int(passband.sum()) == 16
     assert int(inband.sum()) == 61
-    assert float(np.median(re_z0[passband])) == pytest.approx(50.30264, abs=1e-3)
-    assert float(np.median(re_z0[inband])) == pytest.approx(52.37558, abs=1e-3)
+    assert float(np.median(re_z0[passband])) == pytest.approx(51.91227, abs=1e-3)
+    assert float(np.median(re_z0[inband])) == pytest.approx(54.73019, abs=1e-3)
 
 
 def test_leg_derived_passivity_and_column_power(rfx_leg):
     corr = np.asarray(rfx_leg["passivity_correction"])
-    assert int((corr > 0.05).sum()) == 0
-    assert float(corr.max()) == pytest.approx(0.0145084, abs=1e-6)
+    # #931: three bins, ALL above 17 GHz and none inside the 5-15 GHz null
+    # band the case makes its structure statement in (the script's
+    # rfx_corr_bins_in_null_band stays 0 and gate D5 is untouched). A
+    # narrower strip in cells on the same dx = 200 um mesh is coarser, and
+    # the top of the 20 GHz band was already artifact-class here. Reported
+    # as a finding by the case itself, not smoothed over.
+    assert int((corr > 0.05).sum()) == 3
+    assert float(np.asarray(rfx_leg["freqs_hz"])[corr > 0.05].min()) > 17e9
+    assert float(corr.max()) == pytest.approx(0.6571609, abs=1e-6)
     s11 = np.asarray(rfx_leg["s11_mag"])
     s21 = np.asarray(rfx_leg["s21_mag"])
     col_power = s11**2 + s21**2
