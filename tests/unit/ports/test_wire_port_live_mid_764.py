@@ -97,7 +97,12 @@ def test_nu_spec_mid_is_live_run_midpoint():
 
 def test_probe_helpers_use_live_run_midpoint():
     """wire_port_voltage / wire_port_current / init_wire_sparam_probe pin
-    to the live-run midpoint when given the assembled pec mask."""
+    to the live-run midpoint when given the assembled PEC realization.
+
+    #931 §1.9: the helpers take the REALIZED edge masks (a cell is dead
+    iff the port component's own edge is PEC), not a primal-cell mask.
+    The fixture still states the geometry as cells and realizes it
+    through the single owner."""
     from rfx.grid import Grid
     from rfx.probes.probes import _wire_port_live_mid, init_wire_sparam_probe
     from rfx.sources.sources import WirePort
@@ -108,11 +113,13 @@ def test_probe_helpers_use_live_run_midpoint():
     wp = WirePort(start=(PORT_X, PORT_Y, Z0_PORT),
                   end=(PORT_X, PORT_Y, Z0_PORT + EXTENT),
                   component="ez", impedance=50.0, excitation=PULSE)
-    mid = _wire_port_live_mid(grid, wp, jnp.asarray(pec_mask))
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    edges = realized_pec_edge_masks(jnp.asarray(pec_mask))
+    mid = _wire_port_live_mid(grid, wp, edges)
     assert tuple(mid) == (6, 6, 6), mid
     probe = init_wire_sparam_probe(grid, wp, np.asarray(FREQS),
-                                   pec_mask=jnp.asarray(pec_mask))
+                                   pec_edge_masks=edges)
     assert tuple(probe.port_index) == (6, 6, 6), probe.port_index
-    # pec_mask=None (or no dead cells) stays bit-identical to the
-    # historical all-extent midpoint.
+    # None (or no dead cells) stays bit-identical to the historical
+    # all-extent midpoint.
     assert tuple(_wire_port_live_mid(grid, wp, None)) == (6, 6, 5)
