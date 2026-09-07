@@ -272,8 +272,31 @@ def _enumerate_emission_sites():
 # to the AST walk above and impossible as a preflight check either way, since
 # it is measured on the extracted S-matrix -- the same boundary the #854 block
 # above records for the reciprocity advisory.
-_FROZEN_TOTAL_SITES = 99
-_FROZEN_LITERAL_CODE_COUNT = 66
+#
+# 99 -> 105 sites / 66 -> 71 literal codes, issue #931 (the lattice ownership
+# contract, preflight stage; design note
+# docs/design_notes/20260906_plan_realign_lattice_ownership.md §3). Re-derived
+# with the AST walk above against the core branch feat/931-lattice-ownership:
+#   + pec_box_subcell, pec_zero_cells, pec_realization_refused — three literal
+#     ERROR sites in _validate_cfg_pec_realization (the §1.5 refusals, reported
+#     before run() raises them; three explicit constructions rather than one
+#     computed slug, so none registers as a dynamic site);
+#   + pec_box_one_cell (1 site, warning) — a PEC volume one cell thick is a
+#     slab with walls on both faces;
+#   + sheet_plane_realized (2 sites: info per run, warning on a half-cell tie);
+#   + sheet_slot_vacuum (1 site, error-grade warning) — the #702 slot, now
+#     reported instead of re-sampled;
+#   - sheet_live_edge_material_mismatch (1 site) and its own
+#     campaign_statics_unavailable site: #703 check 2 guarded the #702
+#     resample, which the contract deleted (a sheet owns no cell);
+#   + 1 campaign_statics_unavailable site in the umbrella (the assembly-failed
+#     branch, silent when a refusal already explains it) — same slug, no new
+#     code.
+# Net: +6 sites, +6 -1 = +5 literal codes. _FROZEN_DYNAMIC_SITES_BY_FUNCTION
+# is unchanged. EMISSION_CLASSIFICATION is unchanged: no entry point gained or
+# lost a preflight call.
+_FROZEN_TOTAL_SITES = 105
+_FROZEN_LITERAL_CODE_COUNT = 71
 # Dynamic sites are frozen by ENCLOSING FUNCTION and count, not by line
 # number. What this test exists to catch is a new bare ``except`` path
 # emitting PreflightIssue(code=getattr(exc, "code", "uncoded")) — a site
