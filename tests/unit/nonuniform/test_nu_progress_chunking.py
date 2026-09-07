@@ -38,6 +38,27 @@ def _build() -> Simulation:
     return sim
 
 
+def test_the_declared_scatterer_realizes_the_walls_it_is_drawn_with():
+    """Build-time gate (no solve): the PEC block is where it is drawn.
+
+    Before #931 this fixture's box was ``z 1.3 -> 1.4 mm``, half a cell of
+    the 200 um coarse block. The node coordinates in that band are 1.2,
+    1.4 and 1.6 mm and the half-open node window ``[1.3, 1.4)`` contains
+    NO node, so the scatterer realized nothing at all and every assertion
+    in this file passed with the conductor absent. A sub-cell PEC Box is
+    an error now (§1.5) and the box is drawn on nodes, so drawn extent ==
+    realized extent: walls at z = 1.2 mm and z = 1.4 mm.
+    """
+    from tests.unit._wall_planes_m import wall_planes_m
+
+    # dz_profile => the NU lane; assemble on the lane the run uses.
+    rz, zs = wall_planes_m(_build(), 2, nonuniform=True)
+    assert not rz.sheets, "the block is a VOLUME; nothing here declares a sheet"
+    assert [round(z, 9) for z in zs] == [1.2e-3, 1.4e-3], (
+        f"realized z wall planes {zs}; drawn 1.2 -> 1.4 mm. A declared "
+        "conductor that realizes no wall plane is a silent no-op.")
+
+
 def test_chunked_progress_is_bit_identical_and_reports(capsys):
     r_plain = _build().run(n_steps=N_STEPS)
     ts_plain = np.asarray(r_plain.time_series)
