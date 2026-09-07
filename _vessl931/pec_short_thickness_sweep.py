@@ -57,13 +57,32 @@ def main() -> int:
     print("\n[pec-short-sweep] SUMMARY  min|S11| by SHORT_CELLS: "
           + ", ".join(f"{r[0]}->{r[3].min():.5f}" for r in rows))
     print(f"[pec-short-sweep] spread across thickness = {spread:.5f}")
-    print("[pec-short-sweep] VERDICT: "
-          + ("GEOMETRY — |S11| tracks thickness; the module re-pins from the "
-             "declared thickness"
-             if spread > 0.005 else
-             "OPERATOR — |S11| is flat in thickness (spread <= 0.005), so the "
-             "deficit is stage C's realized-edge lane, not the redraw; it "
-             "belongs with the chain-battery re-measure"))
+    if spread <= 0.005:
+        print("[pec-short-sweep] VERDICT: OPERATOR — |S11| is flat in "
+              "thickness, so the deficit is not the redraw; it belongs with "
+              "the chain-battery re-measure.")
+        return 0
+
+    # It tracks thickness — and that is NOT the benign reading the
+    # pre-declaration hoped for. Everything behind a total reflector's
+    # leading face is dark, so |S11| CANNOT depend on how many cells of PEC
+    # sit behind it. A monotone rise toward 1 with thickness means the
+    # realized wall is not opaque: the thicker the stack, the less gets
+    # through. So the thickness dependence is a defect signature, not a
+    # licence to re-pin at whatever thickness the fixture happens to
+    # declare. Say both things.
+    print("[pec-short-sweep] VERDICT: |S11| TRACKS THICKNESS "
+          f"(spread {spread:.5f} > 0.005). A total reflector's |S11| cannot "
+          "depend on its thickness — everything past the leading face is "
+          "dark — so this is not 'the redraw moved the number by half a "
+          "cell'; it says the realized short is not opaque and leaks less "
+          "the thicker it is.")
+    if mins.max() < 0.99:
+        print("[pec-short-sweep] AND the deficit does not close: even the "
+              f"thickest arm reaches only {mins.max():.5f} against the 0.99 "
+              "gate. Re-pinning this module at any thickness would pin a "
+              "leak. Do NOT re-pin; this is the same class as the chain "
+              "battery's pec_short DUT and belongs with that re-measure.")
     return 0
 
 

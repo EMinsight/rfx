@@ -77,3 +77,43 @@ say "PEC" therefore mean different operators, and which one you get depends on
 whether the conductivity arrived through a material or through a rasterize call.
 That distinction is real and deliberate, but nothing states it where a fixture
 author would read it. Worth one sentence in the design note's §1.8.
+
+## The pre-declared thickness separation ran (2026-09-07, VESSL 369367259233)
+
+`_vessl931/pec_short_thickness_sweep.py` re-solved
+`test_pec_short_s11_magnitude`'s fixture at SHORT_CELLS = 1, 2 and 4. Leading
+face at 85.655 mm in all three arms; only the thickness changes.
+
+```
+SHORT_CELLS=1  thickness 2.1414 mm  min|S11| 0.95721  mean 0.97479
+SHORT_CELLS=2  thickness 4.2827 mm  min|S11| 0.96705  mean 0.98188   <- the module's own
+SHORT_CELLS=4  thickness 8.5655 mm  min|S11| 0.97607  mean 0.98637
+spread across thickness = 0.01886
+```
+
+The 2-cell arm reproduces the earlier standalone measurement (0.9670) exactly,
+so the sweep and the gate are reading the same thing.
+
+**Read it as physics, not as a curve.** Everything behind a total reflector's
+leading face is dark, so |S11| CANNOT depend on how many cells of PEC sit
+behind that face. It does, monotonically, and it rises toward 1 as the stack
+gets thicker. That is not "the redraw moved the reflector by half a cell" — it
+says the realized short is **not opaque**, and leaks less the more of it there
+is. The deficit also does not close: 8.57 mm of solid PEC still reads 0.97607
+against the 0.99 gate, and the thickest arm's first bin reads |S11| = 1.00467,
+which is not passive either.
+
+So the pre-declared separation did not come out as a clean either/or, and the
+honest conclusion is the one it rules OUT: re-pinning this module at the
+thickness it happens to declare would pin a leak. The gate stays red and
+un-widened.
+
+**What this leaves for the core/ingest pass.** Same class as the `pec_short`
+DUT above (max|dS| 0.938 coarse / 0.498 mid while the empty guide reproduced to
+2.5e-6). The cheap next witness, not run here because it is a core-side
+question rather than a fixture one: put the same short in as a domain-boundary
+PEC face (`BoundarySpec`), which design note §1.8 fences OUT of the ownership
+contract and leaves unchanged. If the BoundarySpec wall closes the guide to
+|S11| >= 0.99 while the body-realized wall does not, the leak is in the
+body-realization or in the S-matrix lane that reads it, and the guide, the
+port and the extraction are all cleared in one measurement.
