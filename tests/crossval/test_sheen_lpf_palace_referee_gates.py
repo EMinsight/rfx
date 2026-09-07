@@ -29,6 +29,19 @@ THE REFEREE LOCK (``test_referee_sides_with_structure``) reads the rfx and openE
 doublet zeros from their sibling committed cv07 fixtures
 (``validation/crossval/_07_sheen_results/{rfx,openems}.json``), so tampering with either
 FDTD side (or with the Palace doublet) fails the gate.
+
+
+#931 (lattice ownership contract): cv07 is a microstrip structure, so its trace
+is the same one-cell PEC foil class as cv06b's. Declared as a SHEET — the
+contract's answer for foil (design note §1.3) — the electrical z-plane the
+board has today is unchanged and only the realized in-plane width moves
+(measured on the sibling cv06b board at dx=63.5um: 635.0 -> 571.5um). Declared
+as a VOLUME the foil becomes a full cell of solid metal with a second wall,
+which moves the doublet. The Palace referee meshes the DECLARED board, so a
+realization change also opens a declared-vs-realized gap on the referee side.
+Classified with cv05, cv06b and cv15 in one decision: foil is a sheet. The
+rfx leg is re-solved by the crossval-B migration (VESSL rfx-931-post-cv07)
+and every committed number here is re-derived from that run, never translated.
 """
 from __future__ import annotations
 
