@@ -640,4 +640,178 @@ No locked value moved (F6). The #931 question stands as written in
 section 5, with the measured cost now on record: the prepreg's thirds
 sub-cell (8.333 um) sets dt for the whole PCB column and, under the ratio
 law, forces 25-cell cores — nz 45 -> 115 — for a dielectric | dielectric
-seam that has no conductor to justify the split.
+seam that has no conductor to justify the split. The cost is larger on
+ordinary stacks than the PCB fixture suggests (reviewer notes below): a
+42.5 um dielectric between a 2.5 mm and a 2.4 mm one at dx 0.255 mm goes
+nz 40 -> 391 (x9.8) at an unchanged dz_min of 3.543 um, because the thin
+layer's thirds sub-cell pulls both thick neighbours down to <= 1.3 x 3 x
+3.543 um cells.
+
+### Reviewer notes (second pass, 2026-09-07; no window above changed)
+
+Fifteen findings on `e65542c8`. Each was reproduced on this tree before
+any code moved (command and OLD number per item); dispositions and NEW
+numbers below. Commit `af54b501` (code, tests, CLASSIFICATION); the docs
+commit that carries this section follows it. **No frozen window in
+section 3 was found wrong** — every F1-F8 result above stands as
+measured, and none of the fixes moved a pinned number (four-file lock
+battery 67 passed; `test_band_profile_builder.py` + the example-fidelity
+and forward-docstring contracts 219 passed). `stopped = false`.
+
+**Blocking**
+
+- *Pin invisible when an end segment's span equals `boundary_cell`.*
+  Reproduced: `make_band_profile([0, 1, 5] mm, [1, 0.1] mm, boundary_cell
+  = 1 mm)` -> `[1.0, 0.0993, ...]`, ratio 10.066 at index 0, 16 cells, no
+  error; both-ends form `[0, 1, 5, 6] mm` ratio 10.0 at both ends. Cause
+  as the reviewer read it: `_hi_cell(0)` / `_lo_cell(n-1)` returned the
+  pin from the outside only, so the neighbour got no anchor and the seam
+  audit skipped the pin seam. Fixed: an empty end segment's seam cell is
+  the pin on both sides; the neighbour ramps from it as kind `"pin"`.
+  NEW on the two repros: the first RAISES `cannot hold its ramps` — and
+  that is the right answer: `boundary_cell` pins BOTH ends, so segment 1
+  (4 mm) holds the 1 mm hi pin and must descend 1 -> 0.1 mm twice
+  (2 x 2.25 mm at 1.4) in 3 mm of free span, which no compliant profile
+  can do; `[0, 1, 9] mm` (8 mm free) realizes 40 cells, max ratio
+  1.3905, pins exact. The protected-middle form raises `no room for a
+  ramp` (ratio 10.000 > 1.4), as the docstring promised.
+- *`w6_band_builder.py` had no CLASSIFICATION entry.* Reproduced (the
+  contract test failed on the full battery). Added as `no_simulation`
+  (zero `Simulation()` calls, the W2 functional path); the first-pass
+  "tests/contracts 1008 passed / 1 failed" was measured before the W6
+  script existed on the tree, so that report line was wrong for the
+  final tree — recorded here.
+
+**Major**
+
+- *Unbounded cell count on a protected sliver.* Reproduced at bounded
+  scale: 1e-9 m sliver -> 1,428,573 cells in 0.23 s. NEW: two edges
+  closer than 1e-12 m (the I1 node tolerance) raise `ValueError`; a
+  profile past `_MAX_PROFILE_CELLS = 1,000,000` raises naming the sliver
+  (the 1e-9 case raises at 1,428,573). A 10 um layer between 1 mm blocks
+  still realizes (145 cells). A free 2e-12 m sliver realizes a 2e-12 m
+  cell with I1-I4 intact — the caller's input, documented.
+- *`max_ratio` close to 1.* Reproduced: 1.0001 on a 40-cell profile
+  8.61 s, 1.0002 2.19 s; NaN passed `cap <= 1.0`, inf was accepted. NEW:
+  ramp sums are closed-form geometric series (O(1) per evaluation
+  whatever the step count) with the step count held fixed per piece;
+  1.0001 -> 0.03 s, a 1 um pin descending into 10 mm of 100 um cells
+  (8110 cells) 0.42 s, `make_z_profile` at 1.0001 0.21 s. Floor
+  `_RATIO_FLOOR = 1.0001` (a 2x transition already needs 6932 cells
+  there) and finiteness are enforced; 1.00009 / 1.0 / NaN / inf raise.
+- *Exact-fit knife edge on long columns.* Reproduced: F8-shaped stack,
+  n = 17000 / 20000 (33 / 39 m columns) raised `cannot hold its ramps`;
+  n = 100000 at cap 1.3 returned 200018 cells (plateau 1.96 mm) on this
+  tree — the reviewer's 338,025 was not reproduced in that form, the
+  n >= 17000 false raise was. Cause confirmed: the band cell carries
+  5.5e-13 relative noise and the 1e-12 step slack flipped 2 -> 3 steps.
+  NEW: slack `_STEP_TOL = 1e-10` (excess ratio at most cap ln(cap) 1e-10
+  / m = 4.7e-11 at 1.4, inside the 1e-9 I2 tolerance); pieces are closed
+  intervals with per-piece step counts, so a root at a threshold is
+  found without inset or snap. n = 10000 / 17000 / 20000 / 24000 return
+  2n + 16 cells matching the declared vector to 1e-11 relative; the
+  19.6 um variant at n = 16000 likewise.
+- *`_make_dz_profile` assembly (pre-existing on main).* Reproduced on
+  the OLD source (`git show d990e18c`): gap-50-um stack column 3.9500 mm
+  (nz 30), overlap stack 4.2000 mm (nz 32), dx 10 mm on a 4 mm domain
+  0.8000 mm (nz 4). NEW: 4.0000 mm on all three (nz 32 / 54 / 19),
+  interfaces on nodes to <= 4.3e-19 m, every non-thirds ratio <= 1.3.
+  This is a deviation from section 2 ("thirds rule kept as-is, before
+  the smoothing step, exactly like today"): the thirds rule IS
+  unchanged, but the block/air assembly that feeds it now partitions the
+  column at every distinct boundary (features are bounding boxes of any
+  non-PEC shape and overlap legitimately — a sphere inside a substrate),
+  realizes every gap as an air run, and raises for a feature outside
+  `[0, domain_z]`. Reason: the rewired docstring promises an exact column
+  and exact interfaces, and the engine handles thin free runs (R5), so
+  the dx/2 drop had no remaining purpose. For disjoint stacks with gaps
+  wider than dx/2 the pre-thirds cells and boundary indices are
+  identical to before (the (c) locks and the PCB fixture are
+  unchanged). Consequence worth knowing: a genuine narrow gap is now
+  meshed — `[(0.5, 1.5), (1.51, 2.51)] mm` at dx 0.2 mm (a 10 um air gap
+  between two dielectrics) OLD nz 30, dz_min 45.333 um, column short by
+  10 um -> NEW nz 81, dz_min 10.000 um (the gap cell), column exact.
+- *Guide claim "keep the end segments wide".* Reproduced: plateau
+  beside the 1 mm pin 0.9606 / 0.9774 / 0.9853 / 0.9913 / 0.9957 mm for
+  end segments of 12 / 20 / 30 / 50 / 100 mm (ratio 1.3), deviation
+  3.9e-2 down to 4.3e-3, never the advisory's 1e-6. The sentence is
+  replaced by these numbers and "close the face"; R7 stands.
+- *dt cost of the protected-seam refinement.* Measured here (rng 1,
+  3000 stacks, 2-6 segments, spans 20 um-3 mm, targets 0.05-2x the span,
+  70 % protected, caps {1.2, 1.3, 1.4}; "declared minimum" = the minimum
+  over each segment's initial realization): **410 of 3000** stacks
+  realize a cell below their declared minimum, worst factor **0.308**
+  (two single-cell protected blocks 369.8 / 455.7 um at cap 1.2). The
+  reviewer's 1103 / 0.3008 came from a different draw; the direction
+  and the worst case agree. Hand case `[0, 0.1, 0.1355] mm, [25, 100]
+  um, both protected, 1.4`: 5 x 20 um + 2 x 17.75 um, minimum 0.71x the
+  declared 25 um. Docstring, CHANGELOG and this note now say "cells and,
+  when the refined block held the coarsest declared cell, a smaller
+  minimum cell (dt)". Auto-z path, 400 PCB-like contiguous stacks (rng
+  3) OLD vs NEW dz_min: lower in 17, higher in 241, equal in 142; every
+  one of the 17 is the gap fix above, not seam refinement — on those
+  stacks main had dropped the sub-dx/2 air runs, so its column was short
+  and its block never received a thirds split (factors 0.333 x16, 0.302
+  x1). nz ratio NEW/OLD median 1.70, max 26.27 on that family.
+
+**Minor**
+
+- *`make_z_profile` features outside the domain / near-duplicates.*
+  Reproduced (sum 5 mm for domain 4 mm; a 5.4e-20 m cell). NEW: outside
+  -> `ValueError`; planes closer than 1e-12 m merge (the 5.4e-20 case
+  realizes 34 cells, minimum 50 um).
+- *I1 not scale-invariant.* Reproduced: `[0, 10 m]` at 100 um -> 100,000
+  cells, running-sum end node off by 9.97e-12 m (np.sum: 0). The
+  docstring now states the running-sum figure and its range (about 1 m
+  / 1e4 cells for 1e-12 m); the long-column test asserts I1 relative to
+  the column (1e-12 x column) and each cell to 1e-11 relative.
+- *`make_z_profile` raised on `grading <= 1`.* Reproduced (main:
+  30 uniform 0.1 mm cells). Restored: `grading <= 1` means no grading
+  (uniform `dx_fine`; the seams between the uniform segments are held at
+  the default 1.4). Declared in the CHANGELOG.
+- *F6 side-by-side not printed for the (c) fixtures.* Printed here (um,
+  OLD = d990e18c `_make_dz_profile`, NEW = this tree):
+  - generic two-layer (0.2-0.5 / 1.1-1.35 mm, column 3.0 mm, dx 0.3 mm):
+    OLD nz 49, dz_min 10.711 -> NEW nz 39, dz_min 20.833.
+    OLD: 53.06, 40.82, 31.40, 26.53, 20.41, 15.70, 12.08, [25.00, 50.00,
+    75.00, 75.00, 50.00, 25.00], 12.93, 16.80, 21.84, 28.40, 36.92, 39.77,
+    51.70, 67.21, 79.54, 61.19, 47.07, 39.77, 30.59, 23.53, 18.10, 13.92,
+    10.71, [20.83, 41.67, 62.50, 62.50, 41.67, 20.83], 24.06, 31.28,
+    40.66, 52.86, 68.72, 81.43, 105.86, 137.62, 162.87, 211.73, 244.30 x3.
+    NEW: 70.86, 54.61, 42.09, 32.44, [25.00, 50.00, 75.00, 75.00, 50.00,
+    25.00], 32.19, 41.45, 53.37, 68.71, 88.47, 88.47, 69.52, 54.63, 42.93,
+    33.74, 26.51, [20.83, 41.67, 62.50, 62.50, 41.67, 20.83], 26.93,
+    34.81, 45.00, 58.18, 75.21, 97.22, 125.68, 162.46, 210.02, 271.49 x3.
+    Both blocks (bracketed) bit-identical; the OLD 10.71 um and 12.08 um
+    cells were smooth_grading-plus-rescale artefacts of the air run.
+  - #763 demo: OLD nz 19: [63.50, 63.50, 63.50, 42.33, 21.17], 25.10,
+    32.63, 42.41, 55.14, 57.00, 74.11, 96.34, 114.01, 148.21, 171.01 x5
+    -> NEW nz 18: [same block], 26.92, 34.24, 43.54, 55.37, 70.42, 89.56,
+    113.91, 144.86, 184.23 x5. dz_min 21.167 um both.
+  - `[(0.5, 1.5), (1.51, 2.51)] mm`, dx 0.2 mm: see the assembly item
+    above (OLD 30 / 45.333 um with the 10 um gap deleted -> NEW 81 /
+    10.000 um with the gap meshed).
+- *R1 / #931 cost on ordinary stacks.* Reproduced: `[(0.41851, 2.96435),
+  (2.96435, 3.00687), (3.00687, 5.40470)] mm`, domain 5.62563 mm, dx
+  0.254968 mm: OLD nz 40 -> NEW nz 391 (x9.8), dz_min 3.543 um both (the
+  42.5 um layer's thirds sub-cell). Added to the #931 hand-off: the
+  thirds split at a dielectric | dielectric seam sets this cost, and
+  under the ratio law it propagates into both thick neighbours.
+- *W6 row: L_eff dropped, 5.79e-3 labelled as measured.* Measured on the
+  chain model (`scattering` on `a_profile_expected(n_b)`, n_b = 0..80,
+  dt 2.402765e-12 s, dy 1.5 mm, b 30 mm): single ramp 5.7907e-3;
+  discrete k_g(1.0 mm) = 0.18163 /mm (lambda_g 34.593 mm); with L alone
+  the rows read 4.12e-3 / 7.69e-3 / 1.15e-2 / 2.70e-3 / 5.26e-3 /
+  9.37e-3 against 7.49e-3 / 1.014e-2 / 1.130e-2 / 1.21e-3 / 1.51e-3 /
+  6.56e-3 (off up to 3.5x in the null rows); with L_eff = L + **1.87 mm**
+  every row is within 0.5 %. Chain nulls at 15 / 33 / 50 / 67 cells,
+  peaks at 7 / 24 / 41 / 59 / 76, maximum 1.1581e-2 = 2 x 5.7907e-3 x
+  0.9999; n_b = 1 (unwitnessed) 5.77e-3, n_b = 0 3.87e-3. The matrix
+  row now carries L_eff and labels the single-ramp value as modelled.
+  The reviewer's own FDTD check of the single ramp (5.768e-3, -0.4 %)
+  is theirs, not this lane's, and is not quoted in the row.
+
+Constants introduced (`rfx/nonuniform.py`): `_RATIO_FLOOR = 1.0001`,
+`_MAX_PROFILE_CELLS = 1_000_000`, `_STEP_TOL = 1e-10`, `_EDGE_TOL =
+1e-12`. None is a measurement gate; each is an input-validity bound
+stated in the `make_band_profile` docstring.
