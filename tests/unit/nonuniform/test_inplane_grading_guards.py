@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from rfx import Box, Simulation
+from tests.unit._realized_geometry import assert_volume_spans
 
 
 def _profile_with_jump(n_total=40, d=250e-6):
@@ -62,9 +63,16 @@ def test_under_resolution_uses_the_local_cell_not_the_global_minimum():
     sim = Simulation(freq_max=20e9, domain=(L, L, L), dx=d,
                      boundary="cpml", cpml_layers=6,
                      dx_profile=prof, dy_profile=prof)
-    # a PEC volume 3 coarse cells wide, sitting inside the coarse band
-    sim.add(Box((3.2e-3, 3.2e-3, 3.2e-3), (4.7e-3, 4.7e-3, 4.7e-3)),
+    # A PEC volume 3 coarse cells wide, sitting inside the coarse band.
+    # #931: drawn ON the coarse node planes (3.0 -> 4.5 mm), so the drawn
+    # extent IS the realized extent — walls at 3.0/3.5/4.0/4.5 mm. The old
+    # corners (3.2 -> 4.7 mm) sat mid-cell and left the realized body's
+    # position dependent on where the box fell between two cell centres.
+    sim.add(Box((3.0e-3, 3.0e-3, 3.0e-3), (4.5e-3, 4.5e-3, 4.5e-3)),
             material="pec")
+    # Build-time (no solve): what preflight is about to score is what
+    # the lattice realizes — walls at BOTH drawn planes (#931 §1.2).
+    assert_volume_spans(sim, 3.0e-3, 4.5e-3)
     msgs = [str(a) for a in sim.preflight()]
     under = [m for m in msgs if "under-resolved" in m or "under-resolution" in m]
     assert under, (

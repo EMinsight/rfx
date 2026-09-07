@@ -111,19 +111,55 @@ def _low_level_run(report_every=None, *, perturb=False, n_steps=_N_STEPS):
 
 
 def _msl_thru():
-    """The committed thru-line fixture (see tests/unit/sparams/test_settling_witness.py)."""
+    """The committed thru-line fixture (see tests/unit/sparams/test_settling_witness.py).
+
+    #931: the trace is a FOIL and is declared as a sheet on the substrate
+    top node plane (z = 0.8 mm = k 4 at dx = 0.2 mm). It used to be drawn as
+    a one-cell PEC Box, ``z 0.0008 -> 0.0010`` — the "give the metal its own
+    cell" compensation. Under the ownership contract that Box is a VOLUME:
+    it would realize walls at BOTH z = 0.8 mm and z = 1.0 mm and short Ez
+    between them, i.e. a 0.2 mm-tall solid bar where the board has 35 um of
+    copper. The sheet realizes the one plane the old rule realized, without
+    the #702 material backfill at that node.
+
+    Every assertion in this file compares two runs of the SAME fixture
+    (report_every on vs off), so no pinned number here moves with the
+    declaration; the physical Z0/beta of the fixture do move (the trace no
+    longer owns cell k=4's material) and are re-measured wherever they are
+    quoted. ``tests/unit/sparams/test_settling_witness.py`` keeps its own
+    copy of this geometry and is migrated by its own owner.
+    """
     domain_y, y_c = 0.008, 0.004
     sim = Simulation(freq_max=20e9, domain=(0.012, domain_y, 0.0032),
                      dx=2e-4, boundary="cpml", cpml_layers=8)
     sim.add_material("sub", eps_r=2.2)
     sim.add(Box((0, 0, 0), (0.012, domain_y, 0.0008)), material="sub")
-    sim.add(Box((0.0, y_c - 0.0006, 0.0008),
-                (0.012, y_c + 0.0006, 0.0010)), material="pec")
+    sim.add_thin_conductor(Box((0.0, y_c - 0.0006, 0.0008),
+                               (0.012, y_c + 0.0006, 0.0008)))
     sim.add_msl_port(position=(0.002, y_c, 0.0), width=0.0012, height=0.0008,
                      direction="+x", impedance=50.0, eps_r_sub=2.2, name="p1")
     sim.add_msl_port(position=(0.010, y_c, 0.0), width=0.0012, height=0.0008,
                      direction="-x", impedance=50.0, eps_r_sub=2.2, name="p2")
     return sim
+
+
+def test_msl_thru_realizes_the_trace_where_it_is_drawn():
+    """Build-time (no solve) gate on the migrated fixture: the sheet lands on
+    the substrate top node plane, owns no cell, and leaves Ez live there."""
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    sim = _msl_thru()
+    grid = sim._build_grid()
+    sheets: list = []
+    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
+    k = grid.position_to_index((0.006, 0.004, 0.0008))[2]
+    assert len(sheets) == 1 and sheets[0].normal_axis == 2
+    assert sheets[0].plane == k
+    assert pec_mask is None or not bool(np.any(np.asarray(pec_mask)))
+    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
+    assert realized_wall_planes(edges, 2) == [k]
+    # a sheet leaves the normal component live (#690); a one-cell VOLUME
+    # would short it — that is what the old drawing realized.
+    assert not bool(np.any(np.asarray(edges[2])))
 
 
 _MSL_FREQS = jnp.linspace(2e9, 18e9, 12)

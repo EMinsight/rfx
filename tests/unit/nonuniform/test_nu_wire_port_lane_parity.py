@@ -35,11 +35,23 @@ oracle for ``S11``.
 The reason is that the passive reading is a property of the port CELL, not of
 what is attached across it. From the discrete Ampere law at the port edge with
 no impressed current, ``-V/I = 1/(G + jwC)`` identically, where G and C are the
-port cell's own conductance and capacitance. Measured on this branch, three
-fixtures that differ only in what fills the gap — vacuum, PEC plates across the
-gap (which should read ``Gamma = -1``), and an ``eps_r = 10`` slab filling it —
-all return ``S11(0.2 GHz) = -0.600000`` at ``n_live = 4``. The load does not
-move the reading at all. A convention test is exactly what that supports.
+port cell's own conductance and capacitance. Measured, three fixtures that
+differ only in what sits at the gap — vacuum, PEC plates bracketing the gap,
+and an ``eps_r = 10`` slab filling it — all return the SAME
+``S11(0.2 GHz)`` at ``n_live = 4``. The load does not move the reading at
+all. A convention test is exactly what that supports.
+
+#931 NOTE ON THE THREE-LOAD WITNESS. The numbers quoted throughout this
+module were measured before the lattice ownership contract, when a one-cell
+PEC body realized a single wall plane and left its normal E live — so the
+"PEC plates" arm was two films and could not short anything even in
+principle. Under the contract each plate realizes both of its drawn faces
+and shorts Ez between them. That makes the arm a stronger witness, not a
+weaker one: the plates are now genuinely conducting bodies one cell from
+the port and the reading STILL does not move. The parity and passivity
+gates below are load-independent by construction; the literal S11 values in
+this docstring are pre-#931 and are re-measured with the fixture (see
+docs/design_notes/931_migration/, T3 row for this file).
 
 The step from the raw ratio to ``S11`` additionally runs through the
 extractor's own mixed normalization (V and I are sampled at ONE cell in
@@ -122,6 +134,16 @@ def _build(nu, *, extent=3e-3, excite=False, z0=50.0, port_x=8e-3,
     sim = Simulation(freq_max=10e9, domain=DOMAIN, dx=DX,
                      boundary="cpml", cpml_layers=6, **kw)
     if load == "pec_plates":
+        # Two one-cell PEC plates, one below the port and one above it,
+        # each separated from the port edge by one cell of vacuum. They
+        # are VOLUMES (#931 §1.2), drawn on node planes, so each realizes
+        # walls at BOTH of its drawn faces and shorts the normal E between
+        # them — the object the name "plate" always meant. Before #931 a
+        # one-cell body realized ONE wall and left its normal E live, so
+        # the plates were films, not plates. Neither realization shorts the
+        # PORT: the vacuum cell on each side is what makes this a "load
+        # near the port", and the module docstring's point is that the
+        # passive reading does not move for ANY of the three loads.
         w = 2e-3
         sim.add(Box((port_x - w, PORT_Y - w, PORT_Z - 2 * DX),
                     (port_x + w, PORT_Y + w, PORT_Z - DX)), material="pec")
@@ -170,6 +192,36 @@ def _analytic_s11(extent):
 # --------------------------------------------------------------------------
 # Independent oracle: the RAW V/I ratio, no wave decomposition involved.
 # --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("nu", [False, True])
+def test_the_pec_plates_load_realizes_two_solid_plates(nu):
+    """Build-time gate (no solve): each plate realizes walls at BOTH of its
+    drawn faces, on both lanes, and the port gap stays clear (#931 §1.2).
+
+    The plates are one cell thick. Before the contract that meant ONE wall
+    plane with the normal E live between the two drawn faces — a film, not
+    a plate — so the fixture's name and the docstring's "should read
+    Gamma = -1" described an object rfx did not build. This says what is
+    built, without solving.
+    """
+    from tests.unit._realized_geometry import realized, wall_positions
+
+    extent = 5e-3
+    _, coords, edges, sheets, _ = realized(_build(nu, extent=extent,
+                                                  load="pec_plates"))
+    assert not sheets, "the plates are volumes"
+    zs = wall_positions(edges, coords, 2)
+    lower = [PORT_Z - 2 * DX, PORT_Z - DX]
+    upper = [PORT_Z + extent + DX, PORT_Z + extent + 2 * DX]
+    want = lower + upper
+    assert len(zs) == len(want), f"realized z wall planes {zs}, want {want}"
+    for got, exp in zip(zs, want):
+        assert abs(got - exp) < 1e-9, (zs, want)
+    # the port edge itself is not inside either plate: the load sits one
+    # cell away on each side, which is what makes it a LOAD and not a short.
+    assert all(not (PORT_Z - 1e-12 <= z <= PORT_Z + extent + 1e-12)
+               for z in zs)
+
 
 @pytest.mark.parametrize("extent", [1e-3, 3e-3, 5e-3])
 def test_raw_port_ratio_matches_the_analytic_admittance(extent):
@@ -258,8 +310,9 @@ def test_passive_s11_regression_lock_on_the_known_wrong_normalization(extent):
 
     Witness that it is an artifact and not the structure's reflection: with
     ``n_live = 4`` this asserts ``S11 = -0.6`` for a vacuum gap, for PEC
-    plates shorting the gap (physically ``Gamma = -1``) and for an
-    ``eps_r = 10`` slab filling it — measured -0.600000 for all three.
+    plates bracketing the gap and for an ``eps_r = 10`` slab filling it.
+    (#931: the plates realize both faces now and short their own interior;
+    the reading is unchanged by the load either way — that IS the finding.)
     """
     expected = _analytic_s11(extent)
     s_uni = _s11(_build(False, extent=extent))

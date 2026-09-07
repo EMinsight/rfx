@@ -196,6 +196,37 @@ class TestExportGeometrySDF:
         # A corner far from the box should be positive
         assert sdf[0, 0, 0] > 0, "SDF at domain corner should be positive"
 
+    def test_export_geometry_sdf_sees_a_sheet_declared_conductor(self):
+        """A sheet must not vanish from the exported training data (#931).
+
+        A sheet is a footprint on ONE node plane with zero thickness, so it
+        has no interior and a naive "inside the shape" SDF is degenerate
+        for it. ``export_geometry_sdf`` evaluates each entry's analytic
+        containment CLOSED (``lo <= x <= hi``), so a zero-thickness Box —
+        which is the sheet declaration, design note §1.5 — does register on
+        the sample plane it lies on. This test pins that, because a silent
+        drop would take every sheet-declared conductor out of the surrogate
+        training set with no error anywhere.
+
+        KNOWN GAP, recorded rather than pinned: a sheet declared through
+        ``add_thin_conductor`` is not in ``sim._geometry`` at all and never
+        reaches this exporter. That is a defect in ``rfx/surrogate.py``,
+        not in the fixture, and it is not this test's to fix.
+        """
+        sim = Simulation(freq_max=5e9, domain=(0.03, 0.03, 0.03),
+                         boundary="pec")
+        # The exporter samples on ``linspace(0, L, ceil(L/resolution))``,
+        # so pick a sheet plane that IS a sample point.
+        z_sheet = float(np.linspace(0, 0.03, 30)[15])
+        sim.add(Box((0.010, 0.010, z_sheet), (0.020, 0.020, z_sheet)),
+                material="pec")
+
+        sdf = export_geometry_sdf(sim, resolution=1e-3)
+
+        assert np.any(sdf < 0), (
+            "a sheet-declared conductor vanished from the exported SDF")
+        assert sdf[15, 15, 15] < 0, "the sheet's own plane must read inside"
+
     def test_sdf_shape_matches_resolution(self):
         """SDF grid shape should match domain/resolution."""
         sim = Simulation(freq_max=5e9, domain=(0.02, 0.03, 0.01), boundary="pec")

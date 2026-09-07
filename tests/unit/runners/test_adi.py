@@ -170,6 +170,17 @@ def test_adi_cavity_resonance():
     # consuming most of the 2% gate budget (measured peak 2.1552 GHz was
     # 1.67% from the biased analytic but only 0.37% from the honest one).
     # Same gate, honest reference.
+    #
+    # #931 SCOPE: this is a DOMAIN-BOUNDARY wall, not a body, and the
+    # lattice ownership contract fences domain-boundary PEC out
+    # explicitly (design note §1.8: BoundarySpec faces / apply_pec /
+    # apply_pec_faces keep their convention, E_tan = 0 on the face plane
+    # at index 0 / N). So a_eff below is NOT the body-rule "drawn extent
+    # is never realized" compensation the contract abolishes — a body
+    # drawn z_a -> z_b now realizes walls at both z_a and z_b, while a
+    # domain of N nodes still has its two walls N-1 spacings apart. Two
+    # different mechanisms, said out loud so the next reader does not
+    # mistake this line for one the contract should have removed.
     a_eff = (Nx - 1) * dx
     b_eff = (Ny - 1) * dy
     f_analytical = (C0 / 2.0) * np.sqrt((1.0/a_eff)**2 + (1.0/b_eff)**2)
@@ -284,17 +295,40 @@ def test_simulation_adi_forward_contract():
 
 
 def test_simulation_adi_internal_pec_geometry_masks_ez():
-    """Internal PEC geometry should be enforced through the ADI path."""
+    """Internal PEC geometry must be enforced through the 2-D ADI path.
+
+    #931: the 2-D lane is the one place where the realization rule could
+    silently lose an interior body. The domain has ``nz == 1``, so a
+    z-normal region has no thickness direction; the shared rule handles
+    that by wrapping on a length-1 axis (``_shift``), which makes a body
+    self-adjacent along z. Get that wrong — an unconditional zero pad —
+    and every 2-D run with interior PEC keeps its metal in the mask and
+    loses it in the field, with no error anywhere. This test is the
+    regression gate for that case, so it passes an explicit ``dx``: the
+    body's realized extent must be determinate, not a function of whatever
+    ``auto_configure`` picks.
+    """
+    dx = 1e-3
     sim = Simulation(
         freq_max=10e9,
         domain=(0.02, 0.02, 0.01),
         boundary="pec",
         mode="2d_tmz",
         solver="adi",
+        dx=dx,
     )
     sim.add(Box((0.008, 0.008, 0.0), (0.012, 0.012, 0.01)), material="pec")
     sim.add_source((0.01, 0.01, 0.0), "ez")
     sim.add_probe((0.01, 0.01, 0.0), "ez")
+
+    # Build-time (no solve): drawn extent == realized extent in x and y.
+    from tests.unit._realized_geometry import realized, wall_positions
+    _, coords, edges, sheets, _ = realized(sim)
+    assert not sheets
+    for axis in (0, 1):
+        pos = wall_positions(edges, coords, axis)
+        assert abs(min(pos) - 0.008) < 1e-9 and abs(max(pos) - 0.012) < 1e-9, (
+            f"axis {'xy'[axis]}: realized walls {pos}, drawn [0.008, 0.012]")
 
     result = sim.run(n_steps=20)
 
@@ -459,15 +493,23 @@ class TestADI3DCavityPhysics:
         assert float(jnp.max(jnp.abs(ez_f[0, :, :]))) < 1e-10, "PEC violated at x=0"
 
     def test_internal_pec_post_solve_projection_3d(self):
-        """3D ADI's internal pec_mask is a post-solve projection, not an exact
-        Dirichlet row (rfx/adi.py:748-750 docstring caveat) — previously only
+        """3D ADI's internal PEC is a post-solve projection, not an exact
+        Dirichlet row (rfx/adi.py docstring caveat) — previously only
         exercised in 2D (test_simulation_adi_internal_pec_geometry_masks_ez,
         mode='2d_tmz'). This adds the missing 3D coverage: an interior PEC
         post inside a 3D ADI cavity must (a) stay exactly zero at every probe
-        location the mask covers, and (b) measurably perturb the field
+        location the conductor covers, and (b) measurably perturb the field
         elsewhere versus the same cavity without the post — proving the
         projection is both applied and physically consequential in 3D, not a
         silent no-op.
+
+        #931: the projection zeroes the REALIZED edge set
+        (``realized_pec_edge_masks``), not the occupied cell indices. The
+        cell-index form was this lane's own fourth spelling of "conductor";
+        under one owner the post realizes the same edges here as on the
+        Yee lanes. Both assertions below are one-sided thresholds and the
+        realized post is now the drawn one, so the perturbation can only
+        grow.
         """
         def _run(with_post: bool):
             sim = Simulation(
@@ -475,6 +517,13 @@ class TestADI3DCavityPhysics:
                 mode="3d", solver="adi", adi_cfl_factor=2.0, dx=2e-3,
             )
             if with_post:
+                # #931: a VOLUME, drawn on node planes, so its realized
+                # cross-section is the drawn 4 x 4 mm — walls at 0.008,
+                # 0.010 and 0.012 on both in-plane axes, with the normal E
+                # shorted through the post. Before the contract the far
+                # faces at 0.012 were never walls and the post's normal E
+                # stayed live, i.e. the obstacle was one plane short on
+                # each side of the drawing.
                 sim.add(Box((0.008, 0.008, 0.0), (0.012, 0.012, 0.02)),
                         material="pec")
             sim.add_source(

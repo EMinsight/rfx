@@ -513,6 +513,11 @@ class TestVmapMaterialSweepCpmlPad:
         # shows the drop -- by design. Read the precondition off the box's
         # own rasterized mask instead, which is where the drop actually
         # happens and is what this guard always meant.
+        # #931 scope: the ownership contract changes how a CONDUCTOR is
+        # realized. DIELECTRIC sampling stays node-based and half-open
+        # (design note §1.8), so this box still drops its hi-face node and
+        # the #627 pad fallback / #655 node repair stay live. Do not read
+        # the contract as making this assert obsolete — it is fenced.
         probe_shape = probe_sim._geometry[0].shape
         raw = np.asarray(probe_shape.mask(probe_grid))
         naive_src = raw[-phx - 1, cy, cz]
@@ -786,6 +791,15 @@ class TestVmapBatchedPadByteIdentity:
         the vacuous-fixture failure mode #643's own matrix needed a
         control for.
 
+        #931 SCOPE: ``sigma_bulk = 1e4`` with no ``surface_impedance_f0``
+        is the DC fold -- a lossy VOLUME model that stamps
+        ``sigma_eff = sigma_bulk * thickness / dx`` into the material
+        arrays. Design note §1.8 fences it out of the ownership contract,
+        so the 175 S/m assertion below stays as written: a SHEET owns no
+        cell and writes no material, but this is not a sheet. The PEC row
+        of the matrix above is, and it writes nothing at all -- which is
+        why the two rows need separate controls.
+
         Asserts the two halves separately so a future failure says which
         one moved: the conductor IS at the x-lo interior edge (so the old
         code had something to replicate), and the x-lo pad is NOT the
@@ -994,7 +1008,12 @@ class TestVmapPortFamilyEligibility:
         patch_w = 0.008
         x0 = (Lx - patch_w) / 2
         y0 = (Ly - patch_w) / 2
-        sim.add(Box((x0, y0, Lz / 2), (x0 + patch_w, y0 + patch_w, Lz / 2 + 0.001)),
+        # #931: the patch is a FOIL on the substrate top face, so it is a
+        # sheet (zero-thickness Box = the sheet declaration, §1.5). Drawn
+        # one cell thick it is a VOLUME and realizes walls at BOTH
+        # z = Lz/2 and z = Lz/2 + dx with Ez shorted between — a 1 mm
+        # solid slab where the antenna has copper foil.
+        sim.add(Box((x0, y0, Lz / 2), (x0 + patch_w, y0 + patch_w, Lz / 2)),
                 material="pec")
         sim.add_floquet_port(Lz * 0.25, axis="z", scan_theta=0.0, scan_phi=0.0,
                               polarization="te", n_freqs=10)
@@ -1011,7 +1030,8 @@ class TestVmapPortFamilyEligibility:
                           boundary="cpml", cpml_layers=6, dx=0.001)
         sim.add_material("sub", eps_r=4.0)
         sim.add(Box((0, 0, 0), (0.02, 0.01, 0.002)), material="sub")
-        sim.add(Box((0, 0.004, 0.002), (0.02, 0.006, 0.003)), material="pec")
+        # #931: foil trace on the substrate top node plane -> a sheet.
+        sim.add(Box((0, 0.004, 0.002), (0.02, 0.006, 0.002)), material="pec")
         sim.add_msl_port(position=(0.003, 0.005, 0.0), width=0.002,
                           height=0.002, direction="+x", impedance=50.0)
 

@@ -1,5 +1,7 @@
 """Tests for auto_configure: source auto-selection, memory estimation."""
 
+import numpy as np
+
 from rfx.auto_config import auto_configure, SimConfig
 
 
@@ -306,6 +308,14 @@ def test_make_dz_profile_applies_thirds_rule():
 
 # ---------------------------------------------------------------------------
 # P4: Thin PEC sheet
+#
+# #931: ``ThinConductor`` IS the sheet declaration type (design note §1.3) —
+# a footprint, a normal implied by the flat box, and a physical thickness
+# that never enters the mesh. ``is_pec`` and ``sheet_resistance`` are
+# properties of the DECLARATION and do not move under the contract; what
+# moved is what the assembler does with it (a PEC one becomes a SheetSpec
+# on one node plane and owns no cell, instead of OR-ing a half-open node
+# mask into the primal-cell PEC mask).
 # ---------------------------------------------------------------------------
 
 def test_thin_conductor_pec_detection():
@@ -337,10 +347,26 @@ def test_thin_conductor_sheet_resistance():
     assert abs(tc.sheet_resistance - expected) / expected < 1e-10
 
 
-def test_thin_pec_adds_to_pec_mask():
-    """PEC thin conductor should add cells to PEC mask, not modify sigma."""
+def test_thin_pec_is_a_sheet_that_owns_no_cell_and_changes_no_material():
+    """A PEC thin conductor contributes tangential EDGES on ONE node plane
+    and changes no material (#931 §1.3).
+
+    The old name of this test was ``test_thin_pec_adds_to_pec_mask`` and it
+    asserted only ``result is not None`` — the 35 µm copper trace could have
+    vanished entirely and the test would still have passed. Under the
+    ownership contract the same declaration is a SHEET: it adds nothing to
+    the primal-cell mask, writes no ``eps_r``/``sigma``, and realizes one
+    tangential wall plane. The #702 "re-sample the sheet's own cell"
+    backfill is deleted with it, so ``eps_r`` at the sheet node stays
+    whatever the substrate Box gave it (vacuum here — the substrate Box
+    ``[0, 0.002)`` centre-samples cell k=0 only).
+
+    Geometry: dx = 2 mm, substrate ``[0, 0.002)``, trace on the substrate
+    top face z = 0.002 = node plane k = 1.
+    """
     import warnings
     from rfx import Simulation, Box, GaussianPulse
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
 
     sim = Simulation(freq_max=5e9, domain=(0.03, 0.03, 0.02),
                      boundary="pec", dx=2e-3)
@@ -356,18 +382,43 @@ def test_thin_pec_adds_to_pec_mask():
                     waveform=GaussianPulse(f0=3e9, bandwidth=0.5))
     sim.add_probe((0.015, 0.015, 0.01), "ez")
 
+    # Build-time (no solve): declared plane == realized plane.
+    grid = sim._build_grid()
+    sheets: list = []
+    mats, *rest = sim._assemble_materials(grid, pec_sheets=sheets)
+    pec_mask = rest[2]
+    k_declared = grid.position_to_index((0.005, 0.005, 0.002))[2]
+    assert len(sheets) == 1, "the PEC thin conductor must be ONE sheet"
+    assert sheets[0].normal_axis == 2 and sheets[0].plane == k_declared
+    assert pec_mask is None or not bool(np.any(np.asarray(pec_mask))), (
+        "a sheet owns no cell")
+    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
+    assert realized_wall_planes(edges, 2) == [k_declared]
+    # ... and it wrote no material at its own node plane.
+    assert float(np.asarray(mats.eps_r)[8, 8, k_declared]) == 1.0
+    assert float(np.asarray(mats.sigma)[8, 8, k_declared]) == 0.0
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = sim.run(n_steps=10)
 
-    # Should complete without error — PEC sheet handled via mask
     assert result is not None
 
 
 def test_auto_mesh_thin_conductor_only_configures_dx():
     """#371 Bug 2(a): a sim whose ONLY PEC content is a thin conductor (no dx=,
-    empty self._geometry) must auto-configure dx from the sheet's in-plane size."""
+    empty self._geometry) must auto-configure dx from the sheet's in-plane size.
+
+    #931: the Box is drawn with ZERO extent in z, which is the sheet
+    declaration (§1.3/§1.5). Before the contract that spelling realized
+    NOTHING — ``apply_thin_conductor`` OR'd a half-open ``[lo, hi)`` node
+    mask into a cell mask and ``lo == hi`` masks no node — so this test and
+    its sibling below passed with the conductor absent. The realized-plane
+    assertion at the bottom is the gate the group was missing: a declared
+    conductor realizes at least one wall plane.
+    """
     from rfx.api import Simulation
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
     from rfx.geometry.csg import Box
     sim = Simulation(freq_max=10e9, domain=(0.02, 0.02, 0.002), boundary="pec")
     w = 2.0e-3
@@ -379,6 +430,17 @@ def test_auto_mesh_thin_conductor_only_configures_dx():
     # Bug 2(b): feature-driven, not the empty-geometry lambda/10 fallback.
     assert sim._dx <= w, f"dx={sim._dx} not resolving the {w*1e3:.1f} mm feature"
     assert sim._dx < 0.02 / 10, "dx must be finer than the empty-geometry fallback"
+
+    # The declared conductor realizes a wall plane, and it is the one drawn.
+    grid = sim._build_grid()
+    sheets: list = []
+    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
+    assert len(sheets) == 1 and sheets[0].normal_axis == 2
+    k = grid.position_to_index((0.005, 0.005, 0.001))[2]
+    assert sheets[0].plane == k
+    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
+    assert realized_wall_planes(edges, 2) == [k], (
+        "a declared conductor that realizes no wall plane is a silent no-op")
 
 
 def test_auto_mesh_trigger_fires_thin_only_end_to_end():
@@ -399,6 +461,18 @@ def test_auto_mesh_trigger_fires_thin_only_end_to_end():
         warnings.simplefilter("ignore")
         sim.run(n_steps=5, skip_preflight=True)
     assert sim._dx is not None, "run() trigger must auto-configure a thin-only sim"
+
+    # #931: the same zero-thickness declaration must reach the run as ONE
+    # sheet on a real node plane (the pre-contract spelling realized no
+    # node at all — see the sibling test above).
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    grid = sim._build_grid()
+    sheets: list = []
+    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
+    assert len(sheets) == 1
+    k = grid.position_to_index((0.006, 0.006, 0.001))[2]
+    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
+    assert realized_wall_planes(edges, 2) == [k]
 
 
 # ---------------------------------------------------------------------------

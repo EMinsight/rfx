@@ -75,8 +75,20 @@ def _iris_sim(*, nonuniform: bool):
     sim.add_material("metal", eps_r=1.0, sigma=1e7)  # sigma > 1e6 -> PEC
     xc = 0.5 * nx * dx
     fin = 0.30 * _A
-    sim.add(Box((xc - 1e-3, 0.0, 0.0), (xc + 1e-3, fin, _B)), material="metal")
-    sim.add(Box((xc - 1e-3, _A - fin, 0.0), (xc + 1e-3, _A, _B)), material="metal")
+    # #931: the fins are a VOLUME (a metal block through the guide), and
+    # they are drawn ON node planes so drawn thickness == realized
+    # thickness: one cell, walls at xc -/+ dx/2. The old corners
+    # (xc -/+ 1 mm at dx = 1.5 mm) sat mid-cell, so the realized fin was
+    # 1.5 mm wide between two node planes the drawing never named and the
+    # realized position depended on where the box fell between two cell
+    # centres. Nothing in this file is about the fin's thickness — it is a
+    # strong-reflector witness — but an ambiguous drawing is what the
+    # contract exists to remove.
+    half_t = 0.5 * dx
+    sim.add(Box((xc - half_t, 0.0, 0.0), (xc + half_t, fin, _B)),
+            material="metal")
+    sim.add(Box((xc - half_t, _A - fin, 0.0), (xc + half_t, _A, _B)),
+            material="metal")
     for x0, d, nm in ((0.015, "+x", "left"), (nx * dx - 0.015, "-x", "right")):
         sim.add_waveguide_port(
             x0, direction=d, mode=(1, 0), mode_type="TE",
@@ -93,6 +105,30 @@ def _iris_s11_max(*, nonuniform: bool) -> float:
             num_periods=_NP, normalize="flux",
         )
     return float(np.abs(np.asarray(res.s_params)[0, 0, :]).max())
+
+
+@pytest.mark.parametrize("nonuniform", [False, True])
+def test_the_iris_realizes_the_fins_where_they_are_drawn(nonuniform):
+    """Build-time gate (no solve) on both lanes: the fins realize walls at
+    BOTH drawn x planes and nowhere else (#931 §1.2).
+
+    The gates below are loose ratios and would survive a fin realized one
+    plane off; this is what says the two lanes rasterize the same obstacle
+    before either of them is asked to reflect off it.
+    """
+    from tests.unit._realized_geometry import realized, wall_positions
+
+    dx = 1.5e-3
+    nx = int(round(0.100 / dx))
+    xc = 0.5 * nx * dx
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, coords, edges, sheets, _ = realized(_iris_sim(nonuniform=nonuniform))
+    assert not sheets, "the fins are volumes, not sheets"
+    xs = wall_positions(edges, coords, 0)
+    assert len(xs) == 2, f"expected two fin wall planes, got {xs}"
+    assert abs(min(xs) - (xc - 0.5 * dx)) < 1e-9
+    assert abs(max(xs) - (xc + 0.5 * dx)) < 1e-9
 
 
 @pytest.mark.slow
