@@ -226,6 +226,217 @@ The 120-period and 200-period Board H runs put Leg A at -1.871 % and -1.886 %,
 is the check that the re-pin is a measurement of the board and not of the run
 length.
 
+## Round 4 — phase 2b ingest (2026-09-07, after the phase-2a merge)
+
+Base `feat/931-lattice-ownership` fast-forwarded into this branch: every T6
+commit through `fdc08b53` is already on it, so this round is the work the
+merge unblocked.
+
+### The PEC-short red is closed, and the sweep's answer changed with it
+
+`pec-short-postfix` **369367259278** (the module whole, plus
+`_vessl931/pec_short_thickness_sweep.py`, one job):
+
+```
+tests/oracle/test_waveguide_port_validation_battery.py   9 passed
+|S11| range [0.99822, 1.02670], mean 1.00376   (gate 0.99 / 1.03 / 2 %, untouched)
+
+sweep SHORT_CELLS = 1 / 2 / 4   min|S11| 0.99822 / 0.99822 / 0.99822
+                                spread 0.00000, six per-bin values identical
+before the cv11 fix (369367259233)  0.95721 / 0.96705 / 0.97607, spread 0.01886
+```
+
+Round 2 read the thickness trend and refused to re-pin, saying a total
+reflector's |S11| cannot depend on its thickness. cv11 then found the
+mechanism on its identical case (`a8d59e86`): the plug was drawn to the
+DECLARED cross-section, the grid realizes the guide one cell taller by ceil,
+a volume face rounds to the NEAREST node, and the leftover one-cell vacuum
+slot ran along the top broad wall as a parallel-plate line for Ez. The
+thicker the plug, the longer the slot, the less it leaked — which is exactly
+the trend the sweep measured. `_build_sim` draws the plug to
+`domain_wall_positions` now, and the sweep is flat AT unity. Nothing is
+re-pinned: the gate is green at its own untouched threshold.
+
+The sweep script had a blind spot this exposed — both of its verdict branches
+assumed a deficit EXISTS and only asked who owned it, so a flat-at-unity
+result printed "OPERATOR ... belongs with the chain-battery re-measure". A
+third branch is added ahead of them. The committed 369367259278 log carries
+the old text because it ran first.
+
+The chain battery's `pec_short` DUT is a SEPARATE case and stays open
+(`T6-waveguide-chain-battery.md`): with the slot closed there is no deficit
+here for an operator to own, so this run says nothing about that one.
+
+### refplane-thru: the advisory list is re-derived, the physics legs re-run
+
+Phase 2a deliberately left the exact-code-list fixture alone while preflight
+was half-migrated. Preflight has landed (`1e457c94`, `ab56f5b2`), so the list
+is re-derived — build-time, no solve:
+
+```
+was   pec_faces_finite_pec, wire_port_dead_extent_cells x2   (#319, 2026-07-11)
+now   sheet_plane_realized                                    (INFO)
+```
+
+Both losses are accounted for rather than accepted:
+
+* `wire_port_dead_extent_cells` has nothing to fire on. The realization is
+  374 Ex + 350 Ey tangential edges on node plane 2 and ZERO Ez edges — a foil
+  leaves its normal E live (§1.3) — so neither of each port's two extent
+  edges is metal. Post-#318 the dead cell was already excluded from the
+  sigma/drive/Z0 fold, so the 50-ohm termination the module's gates were
+  measured through is unchanged.
+* `pec_faces_finite_pec` is silent for a reason that is NOT about this
+  fixture, and it is **a finding for the preflight owner**: z_lo is `pec` and
+  the trace is a finite conductor, so the advisory's premise holds, but
+  `_validate_cfg_pec_faces_with_finite_pec` looks for
+  `material_name == "pec"` among `_geometry` entries only, and a foil
+  declared with `add_thin_conductor` is a `SheetSpec`. **Under the contract a
+  finite PEC conductor can be declared where that check does not look.** Not
+  worked around in the fixture.
+
+### leontovich-alpha: what the four pytest=1 runs actually say
+
+`369367259169` (stale, pre-merge), `369367259232`, `369367259243`,
+`369367259244` all returned rc = 1, and the last one is the one to read:
+
+```
+369367259244 (HEAD 8cb1060d)  2 failed, 11 passed, 1 xfailed, 14.9 s
+  FAILED test_o3_model_fits_measured_field
+  FAILED test_alpha_oracle_o3
+  both:  "model fit ... at 8 GHz: rel rms 0.010770 > 0.01"
+```
+
+Classification, in the order that matters:
+
+1. **It is ONE assertion at ONE bin, not two failures.** Both tests trip on
+   the same model-fit TRUST precondition
+   (`O3_FIELD_FIT_RMS_GATE = 0.01`) at 8 GHz. `test_alpha_oracle_o3` never
+   reaches its own `O3_MODEL_GATE`, so "the O3 contract gate is red" is not
+   what these runs say — the gate did not get to run.
+2. **It is not stale and it is not the pod.** 369367259232 and the pod
+   reproduce it; 369367259243 reproduced it again after the endpoint-ratio
+   re-pin; the envelope lock next to it went GREEN in the same run.
+3. **The physics-side witnesses are green in the same run**: `alpha_fit`
+   inside its own +-5 % pin (0.71565 vs 0.69823), the free-standing-sheet
+   transmission oracle, the PEC control, thickness invariance, and the
+   model's limit reduction to the closed form. The one red quantity is the
+   COMPARATOR's own goodness of fit.
+4. **The move is real and small**: the same run's envelope extractor puts the
+   ln-RMS residual at 0.00866 against 0.00245 before, an independent fit on
+   the same record. The plates realize their last node row in x and y under
+   the closed footprint, the two-mode beat is stronger, and a three-supermode
+   expansion fits a beatier profile worse. That is a statement about the
+   model.
+
+**Not widened, and not xfailed on the strength of one printed number.**
+Widening a comparator's trust gate is the comparator marking its own
+homework. So this pass added the instrument instead — `_print_model_fit_census`
+dumps all five bins before either test asserts — and pre-declared the two
+readings: only the 8 GHz bin over the gate would mean a strict-xfail plus a
+green regression lock on the profile; all five bins quadrupling would mean
+the attribution above is wrong and the fixture has a second effect to find.
+
+### The census ran (369367259292) and it took the second branch
+
+```
+f (GHz)              8         9        10        11        12
+fit rel rms      0.01077   0.01125   0.01242   0.01283   0.01275
+  pre-#931       0.0056    0.0026    0.0033    0.0034    0.0038
+alpha_model      0.21850   0.44064   0.66558   0.85048   0.99253
+  pre-#931       0.21865   0.44116   0.66653   0.85158   0.99350
+alpha_Ez (err)   0.24582   0.49739   0.71565   0.86871   1.00285
+                 (12.50%)  (12.88%)  ( 7.52%)  ( 2.14%)  ( 1.04%)
+  pre-#931       0.23106   0.46383   0.69823   0.87370   1.01433
+                 ( 5.68%)  ( 5.14%)  ( 4.76%)  ( 2.60%)  ( 2.10%)
+alpha_Hy (err)   0.21631   0.42279   0.66187   0.87077   1.01482
+                 ( 1.00%)  ( 4.05%)  ( 0.56%)  ( 2.39%)  ( 2.25%)
+  pre-#931       0.23103   0.45586   0.67940   0.86829   1.00813
+                 ( 5.66%)  ( 3.33%)  ( 1.93%)  ( 1.96%)  ( 1.47%)
+```
+
+1. **Every bin is over the gate**, x1.9 to x4.3. "A marginal 8 GHz bin" was
+   an artefact of which assertion fires first. My round-4 attribution — one
+   bin's beat — is **FALSIFIED by the instrument I added to test it**.
+2. **The model did not move** (<= 0.1 % at every bin). It is analytic from
+   the declared stack and cannot see a realization change, so the
+   disagreement is between measurement and model, not inside the model.
+3. **The two extraction routes split.** Pre-#931 the Ez-midplane and
+   Hy-midplane fits agreed to four decimal places at 8 GHz (0.23106 vs
+   0.23103). They now read 0.24582 and 0.21631 — 13 % apart, moving in
+   OPPOSITE directions (Ez +6.4 %, Hy -6.4 %). The Hy route moved TOWARD the
+   model, to its best error ever recorded here (1.00 %); the Ez route moved
+   away, past the 9 % O3 gate it would have been scored against. Note also
+   that the Ez route's move is frequency-dependent (+6.4 % at 8 GHz, +7.2 %
+   at 9, +2.5 % at 10 — the last being exactly the envelope lock's re-pin),
+   so "the fixture moved" is not one scalar.
+
+Two extractors reading one run can only split like that if the field's
+spatial structure changed. That is a statement about this FIXTURE, and the
+comparator-first rule says find which route moved before touching anything.
+
+**R2 accounting: this is where the hypothesis stops.** One mechanism
+hypothesis (a stronger beat), one instrument, one run, falsified. The next
+action is not a third attempt at a pin — it is the named check:
+
+> Dump both fitted profiles at 8 GHz — the Ez midplane series and the Hy
+> midplane series the model is fitted on — against the pre-#931 record, and
+> say which one changed shape. The plates gained a node row in x (380 ->
+> 381) and in y (4 -> 5) under the closed footprint; the y guide is 2 mm
+> across, so a row there is a large fraction of the cross-section, and a
+> midplane extractor is exactly the thing a changed row count moves.
+
+Until that is done: both tests stay RED, `O3_FIELD_FIT_RMS_GATE` and
+`O3_MODEL_GATE` stay untouched, nothing in the module is re-pinned on the
+strength of this run, and the census table lives in the module beside the
+constant so the next reader starts from the measurement.
+
+The envelope re-pin from round 3 (`MEASURED_ALPHA_TWO_PLANE` 0.72494 ->
+0.87333, VESSL 369367259243) stands — it is a recorded measurement with its
+own green lock — but it should be read with point 3 above: it is the same
+fixture change seen through a two-sample extractor.
+
+### Still open for other owners after this round
+
+* **preflight**: `_validate_cfg_pec_faces_with_finite_pec` cannot see a foil
+  (see the refplane entry above). A finite PEC conductor declared with
+  `add_thin_conductor` does not trip the infinite-boundary advisory.
+* **design note §1.8 / §6**: the two sentences proposed in
+  `T6-changelog-and-docs.md` §4 (which DOOR a conductivity comes through; the
+  measured size of the waveguide lane's operator change) are still not in
+  `20260906_plan_realign_lattice_ownership.md`. Core-owned file, not written
+  from here.
+* **chain battery**: unchanged by this round — `T6-waveguide-chain-battery.md`
+  still owns the fourth pre-declared measurement run.
+
+### Test-lane state at the end of phase 2b, and what could not be measured
+
+Per module, at HEAD, on this pod:
+
+```
+tests/locks/test_refplane_port_waves.py            27 passed, 6 deselected
+tests/locks/test_patch_edgefed_s11_passivity.py     2 passed, 1 deselected
+  + test_patch_edgefed_resonance_harminv.py         6 passed, 5 deselected
+tests/contracts/test_lattice_ownership_contract.py 114 passed (with the
+  + test_two_plane_gone_from_docs_and_scripts.py     two_plane grep gate)
+tests/oracle/test_waveguide_port_validation_battery.py  9 passed (VESSL 369367259278)
+tests/oracle/test_leontovich_alpha_oracle.py       11 passed, 2 failed,
+                                                    1 xfailed (VESSL 369367259292)
+```
+
+**The whole-directory lane could not be measured here.** `pytest -n 4
+tests/locks tests/oracle` and the `-m "not slow_physics"` subset each hit the
+1200 s cap at 82-90 % on a pod carrying four other agents' suites; a
+`tests/locks`-only fast lane reached 55 % in the same 20 minutes. The
+unfiltered runs showed ZERO failures in everything they reached. The
+marker-filtered subset showed **3 failures in `tests/oracle`** that the
+unfiltered run did not reach or did not have — most likely fast tests whose
+module-level cache is built by a `slow_physics` sibling that the filter
+deselects, but that is a guess and it is written here as one. **Not
+investigated further, and not claimed green.** The merge agent's VESSL fast
+lane is the authority; if those three appear there, they are real and this
+paragraph is where the trail starts.
+
 ## Fast-lane state of the four T6 directories at the end of this pass
 
 ```

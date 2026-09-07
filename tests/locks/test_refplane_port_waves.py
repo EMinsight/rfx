@@ -87,6 +87,9 @@ _Y_MID = _DOMAIN[1] / 2
 _L = _X2 - _X1
 _FREQS = np.linspace(3e9, 7e9, 9)
 _N_STEPS = 4000
+# Kept as the name of the advisory this fixture USED to pin, so a reader
+# grepping for it lands on the re-derivation note in the module fixture
+# below rather than on nothing (#931 phase 2b).
 _PEC_FACES_ADVISORY_SNIPPET = "INFINITE PEC boundary"
 
 
@@ -779,6 +782,13 @@ _REFEREE_S21 = np.array([1.0066, 1.0052, 1.0033, 1.0007, 0.99775,
 #   |S21| = 0.98251..0.99840; |S21|/referee - 1 = -0.82%..-0.18% per bin
 #   reciprocity rel <= 0.38%; Zc Re 47.94..48.62 ohm (both ports),
 #   Im/Re <= 1.2%; beta/(w/c) = 1.0465..1.0589;
+# RE-MEASURED 2026-09-07 for #931 (VESSL 369367259283), same config, the
+# trace declared a FOIL and realizing the drawn 5.0 mm instead of 4.5:
+#   |S21| = 0.98179..0.99846; |S21|/referee = 0.99192..0.99744 (still the
+#   Phase-0 arch class); Zc Re 46.5691..47.0366 (port 0) and
+#   46.6389..46.9445 (port 1), Im/Re <= 1.06%; beta/(w/c) =
+#   1.01115..1.02432 (port 0). Five of the six physics legs pass on the
+#   UNCHANGED gates — only the beta band moved, below.
 #   |arg(S21) + beta_meas*L| <= 8.4e-4 rad; max singular value of the
 #   mixed matrix 1.0663 max (post-#318 rerun 2026-07-11; was 1.0299 —
 #   see the SV gate note); |S11|^2+|S21|^2 <= 0.99995 (post-#318).
@@ -792,7 +802,38 @@ _ZC_RE_BAND = (46.0, 50.5)     # measured 47.9-48.6; Phase-0 mid-line
                                # 47.85-48.63; Phase-0 pair-dependence
                                # spread across plane pairs 44.5-51.0
 _ZC_IM_OVER_RE_MAX = 0.03      # measured <= 0.012
-_BETA_OVER_WC_BAND = (1.03, 1.08)   # measured 1.0465-1.0589. Mechanism
+# RE-DERIVED 2026-09-07 for #931 from VESSL 369367259283, and the
+# pre-declaration it answers was WRONG about the direction: it said beta
+# would RISE above the old band because the strip got wider. It fell.
+#
+# The reason was already written in this file before the run. The paragraph
+# below attributes the slow-wave excess to the FINITE-THICKNESS trace and
+# its non-TEM fringing, and rules out discretization with a dx/2 check
+# (excess 0.0781 -> 0.0756, ratio 0.97). The contract removes the finite
+# thickness — the trace is a foil, one node plane with its normal E live —
+# so the named cause is mostly gone and the excess falls with it:
+#     mean excess over the vacuum limit   0.0527  ->  0.0201   (x0.38)
+# The width change (4.5 -> 5.0 mm) pulls the same way on Zc, which fell
+# 47.94-48.62 -> 46.57-47.04 and stayed INSIDE its unchanged band. Two
+# constants moved in the directions one redraw predicts; only one of them
+# left its band.
+#
+# The band, by this module's own margin rule (the retired band sat 0.0165
+# below the measured min and 0.0211 above the measured max):
+#   floor   1.01115 - 0.0165 = 0.9947, which is BELOW the vacuum limit. An
+#           air line over ground cannot carry a wave faster than c, so the
+#           floor is set at the physical limit 1.00 — TIGHTER than the rule
+#           would give, and a statement rather than a fitted number.
+#   ceiling 1.02432 + 0.0211 = 1.0454, rounded up to the 0.01 grid -> 1.05.
+#   width   0.05, IDENTICAL to the retired band's.
+# Port 1's beta was not reached in 369367259283 (port 0's assertion failed
+# first). PRE-DECLARED before the confirm run 369367259299: port 1 lands
+# inside [1.00, 1.05] as port 0 does, and within 0.005 of it — the two Zc
+# arrays agree to 0.3 ohm, so a port asymmetry that large would be a
+# separate finding.
+_BETA_OVER_WC_BAND = (1.00, 1.05)   # #931: measured 1.01115-1.02432 (port
+# 0, VESSL 369367259283). Retired band (1.03, 1.08), measured 1.0465-1.0589
+# on the 0.5 mm-thick trace. Mechanism
 # check (2026-07-10, one dx/2 rerun at fixed physical geometry and
 # identical physical plane locations on a shortened 12 mm line): the
 # slow-wave excess is dx-STABLE — 0.0781 (dx=0.5mm) -> 0.0756 (dx=0.25mm),
@@ -831,22 +872,50 @@ def refplane_thru():
     issues = [str(i) for i in report]
     for msg in issues:
         print(f"\n[refplane thru] preflight (verbatim): {msg}")
-    # Exact known advisory set (re-pinned 2026-07-11 for issue #319):
-    # pec_faces (the infinite ground plane IS the microstrip return)
-    # PLUS one wire_port_dead_extent_cells advisory per port — the
-    # canonical thru's top extent cell GENUINELY sits inside the PEC
-    # trace. Post-#318 the dead cell is excluded from the sigma/drive/Z0
-    # fold, so each port terminates at 50 ohm across its 2 live cells
-    # (the pre-#318 33.3-ohm Z0*(n_live/n) reading is the historical
-    # issue #313 finding). Every gate in this module was measured on this
-    # exact fixture, dead cell included, so the gates stay valid as-is.
+    # Exact known advisory set. RE-DERIVED 2026-09-07 (#931 phase 2b),
+    # after the preflight group's migration landed on the base branch and
+    # not before it — pinning this list while preflight was half-migrated
+    # would have pinned a state that was about to move again.
+    #
+    # It was, from 2026-07-11 (#319) to #931:
+    #     pec_faces_finite_pec, wire_port_dead_extent_cells x2
+    # and it is now one INFO, `sheet_plane_realized`. Both losses are
+    # accounted for, because an advisory that stops firing is exactly how
+    # a fixture stops being watched:
+    #
+    #   * wire_port_dead_extent_cells (one per port) said the thru's top
+    #     extent cell sat INSIDE the trace. It does not any more, and the
+    #     realization says so with no solve: the trace is a SHEET on node
+    #     plane 2, realizing 374 Ex and 350 Ey tangential edges and ZERO
+    #     Ez edges (contract §1.3 — the normal E through a foil stays
+    #     live). Each port's 1 mm extent spans two Ez edges below that
+    #     plane and neither is metal, so there is no dead cell left to
+    #     report. Post-#318 the dead cell was already excluded from the
+    #     sigma/drive/Z0 fold, so the 50-ohm termination the gates below
+    #     were measured through is unchanged; what changed is that there
+    #     is nothing to exclude.
+    #
+    #   * pec_faces_finite_pec said "you have an INFINITE PEC boundary
+    #     face AND finite PEC objects". Both are still true here — z_lo is
+    #     `pec` and the trace is a finite conductor — but the check reads
+    #     `material_name == "pec"` over `_geometry` entries only, and a
+    #     foil declared with add_thin_conductor is a SheetSpec, not a
+    #     geometry entry. So the advisory is silent for a reason that has
+    #     nothing to do with this fixture: under the contract a finite PEC
+    #     conductor can be declared in a place that check does not look.
+    #     Handed to the preflight owner (T6-RECOMPUTE.md, "the advisory
+    #     the contract made blind"); NOT worked around here, because this
+    #     fixture's job is to notice drift, not to hide it.
+    #
     # Anything else = fixture drift, stop.
     codes = sorted(getattr(i, "code", None) for i in report)
-    assert codes == ["pec_faces_finite_pec",
-                     "wire_port_dead_extent_cells",
-                     "wire_port_dead_extent_cells"], (
+    assert codes == ["sheet_plane_realized"], (
         f"refplane thru preflight drifted from the baseline: {issues}")
-    assert any(_PEC_FACES_ADVISORY_SNIPPET in m for m in issues)
+    # The one advisory that does fire is the load-bearing one for this
+    # module: every constant below is measured THROUGH this strip, so the
+    # strip has to be on the plane it was drawn on.
+    assert any("realized node plane 2" in m and "offset +0.000 cell" in m
+               for m in issues), issues
     S, freqs, diag = compute_lumped_wire_s_matrix_via_scan(
         sim, _FREQS, n_steps=_N_STEPS, return_refplane_diagnostics=True)
     S = np.asarray(S).astype(np.complex128)
@@ -859,6 +928,10 @@ def refplane_thru():
         print(f"[refplane thru] Zc1={diag['zc'][1]}")
         w = 2 * np.pi * _FREQS
         print(f"[refplane thru] beta0/(w/c)={diag['beta'][0] / (w / C0)}")
+        # Port 1 too (#931): the band re-derivation had only port 0 to read
+        # because port 0's assertion failed first, and a two-port fixture
+        # should print both before anything asserts.
+        print(f"[refplane thru] beta1/(w/c)={diag['beta'][1] / (w / C0)}")
     return S, diag
 
 
@@ -910,11 +983,16 @@ def test_refplane_thru_measured_line_constants(refplane_thru):
     pair-to-pair spread across plane pairs is 44.5-51.0 ohm (the open
     radiating microstrip is not a perfect two-wave line), so the band is
     a placement-sensitive consistency gate, not a universal constant.
-    beta/(w/c) gate [1.03, 1.08]: measured 1.0465-1.0589; Phase-0
-    1.048-1.061 — the slow wave is attributed PHYSICAL for this open
-    line by the one dx/2 mechanism check (excess dx-stable, ratio 0.97;
-    see the band comment above), so this gate locks a physical measured
-    class, not a discretization artefact."""
+    beta/(w/c) gate [1.00, 1.05] since #931: measured 1.01115-1.02432
+    (VESSL 369367259283) with the trace declared a foil. The retired band
+    was [1.03, 1.08] on 1.0465-1.0589, measured through a 0.5 mm-THICK
+    trace; Phase-0 read 1.048-1.061 on the same thick geometry. The slow
+    wave is attributed PHYSICAL for this open line by the one dx/2
+    mechanism check (excess dx-stable, ratio 0.97) — and the excess
+    dropped x0.38 when the thickness it was attributed to went away, which
+    is that attribution being tested rather than restated. The floor is the
+    vacuum limit, not a fitted number: this gate cannot be satisfied by a
+    wave faster than c."""
     _, diag = refplane_thru
     w = 2 * np.pi * _FREQS
     for p in (0, 1):

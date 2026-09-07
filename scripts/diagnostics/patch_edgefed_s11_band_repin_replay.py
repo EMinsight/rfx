@@ -1,31 +1,44 @@
 """Falsifier F1 replay for the #782 S11-gate re-pin — RETIRED BY #931, no FDTD.
 
+DISCHARGED BY #931 (2026-09-07). This script refuses to run against the
+committed gate constants, and the refusal is the point: a dated record is not
+a gate, and the live discrimination evidence is the re-pin runs (VESSL
+369367259225 Board H / 369367259226 Board S), not this file.
+
 WHAT IT WAS. It loaded the two saved arms from
 ``docs/design_notes/patch_edgefed_s11_band_repin_results.json`` (written by
-``patch_edgefed_s11_band_repin.py``) and evaluated the COMMITTED gate's own
-``_gate_readings`` + assertion conditions — imported from
-``tests/locks/test_patch_edgefed_s11_passivity.py``, never re-implemented — on
-each arm: the main arm had to pass every condition, and the retired arm had to
-FAIL the in-band crossing (2b) and/or the antiresonance Re(Zin) floor (2c),
-which is what showed the gate discriminated the bit-exact pre-#702 physics.
+``patch_edgefed_s11_band_repin.py``) and evaluates the COMMITTED gate's own
+``_gate_readings`` + assertion conditions (imported from
+``tests/locks/test_patch_edgefed_s11_passivity.py``, not re-implemented) on each
+arm:
 
-WHY IT NO LONGER RENDERS THAT VERDICT. The import is the point of the design and
-also what retires it. Under the lattice ownership contract the gate's board was
-redrawn with each foil on the laminate face it bounds, and its band was re-pinned
-on the new board from VESSL 369367259226: ``RES_BAND_GHZ`` went (8.4, 9.2) ->
-(7.4, 8.2). The frozen JSON is the OLD board, whose main-arm antiresonance
-crossing is 8.8189 GHz. Evaluating today's band against that trace asks whether a
-board that no longer exists resonates where a different board does; the answer is
-no, and the honest reading of that "no" is that the question is void — the ~2-point
-error class issue #782 documents, in its cross-board form.
+  * main arm    -> every gate condition must PASS;
+  * retired arm -> the in-band-crossing witness (2b) and/or the antiresonance
+                   Re(Zin) floor (2c) must FAIL — the gate discriminates the
+                   bit-exact pre-#702 physics.
 
-So this script now DUMPS the frozen readings and says what they are, and does not
-convert them into a pass/fail. It exits 0: a dated record is not a gate.
+Both arms were measured on a board that RESERVED a cell for each foil, which
+rfx then re-sampled to laminate (#702), so its electrical cavity was 983.75 um
+against a declared 787. The lattice ownership contract deletes that re-sample,
+the gate's board is redrawn with each foil ON the laminate face it bounds, and
+``RES_BAND_GHZ`` moved (8.4, 9.2) -> (7.4, 8.2) with the antiresonance it
+brackets: crossing 8.8189 -> 7.7620 GHz (VESSL 369367259226, confirmed
+369367259239).
 
-The predeclaration F1 stood for is DISCHARGED, not unmet — the #702 re-sample it
-tested is deleted (design note #931 §2) and the geometry it compensated for is
-drawn away. The live discrimination evidence is the re-pin runs (369367259225
-Board H / 369367259226 Board S), not this file.
+So evaluating the saved arms against the imported constants now compares two
+different boards, and it would report "F1 NOT SATISFIED" — a sentence about
+arithmetic, not about physics. Freezing the old constants inside this script
+instead would keep it green and keep it meaningless: the mechanism F1
+discriminated (the #702 own-cell re-sample) does not exist to be discriminated
+any more. The discharge is recorded in
+``docs/design_notes/issue782_retired_resonance_predeclaration.md`` Section 4.
+
+The evidence JSONs stay committed as dated evidence for the pre-#931 board, and
+this script stays as the reader that knows how to open them: pass
+``--historical-band`` to replay F1 against the constants it was written for,
+which is the only reading of it that means anything.
+
+Exit 0 = F1 satisfied (historical replay), 1 = not, 2 = refused.
 """
 from __future__ import annotations
 
@@ -45,17 +58,27 @@ from tests.locks.test_patch_edgefed_s11_passivity import (  # noqa: E402
 )
 
 
-def evaluate(arm: dict) -> dict:
+def evaluate(arm: dict, band: tuple) -> dict:
     fr = np.asarray(arm["freqs_ghz"], dtype=float)
     s = np.asarray(arm["s11_re"], dtype=float) + 1j * np.asarray(arm["s11_im"], dtype=float)
     z0 = np.asarray(arm["z0_re"], dtype=float) + 1j * np.asarray(arm["z0_im"], dtype=float)
     g = _gate_readings(fr, s, z0)
+    # _gate_readings brackets with the CURRENT RES_BAND_GHZ; the band-scoped
+    # readings are re-taken here against the band this replay was scored with,
+    # so nothing silently mixes the two boards' constants.
+    zin = z0 * (1.0 + s) / (1.0 - s)
+    in_band = (fr >= band[0]) & (fr <= band[1])
+    g = dict(g)
+    g["band_min_s11"] = float(np.min(np.abs(s)[in_band]))
+    g["band_max_re_zin"] = float(np.max(zin.real[in_band]))
+    g["band_crossings_ghz"] = [c for c in g["crossings_ghz"]
+                               if band[0] <= c <= band[1]]
     return dict(
         passivity=g["max_s11"] <= PASSIVE_TOL,
         band_floor=g["band_min_s11"] > RES_BAND_S11_MIN,
         band_crossing=bool(g["band_crossings_ghz"]),
         band_re_zin=g["band_max_re_zin"] > RES_BAND_RE_ZIN_MIN_OHM,
-        dip_above_band=g["f_dip_ghz"] > RES_BAND_GHZ[1],
+        dip_above_band=g["f_dip_ghz"] > band[1],
         readings=dict(
             max_s11=round(g["max_s11"], 4),
             band_min_s11=round(g["band_min_s11"], 4),
@@ -67,18 +90,40 @@ def evaluate(arm: dict) -> dict:
     )
 
 
+# The band F1 was scored against, frozen here as HISTORY: it is the value
+# RES_BAND_GHZ held from the #782 re-pin until #931 redrew the board. It is not
+# a gate constant and nothing imports it — it exists so the historical replay
+# reads the saved arms with the constants they were measured under.
+HISTORICAL_RES_BAND_GHZ = (8.4, 9.2)
+
+
 def main() -> int:
+    historical = "--historical-band" in sys.argv[1:]
+    if not historical:
+        print("[F1] REFUSED. This replay is DISCHARGED by #931 — see the module "
+              "docstring. The saved arms are the pre-#931 board (reserved foil "
+              "cells, 983.75 um electrical cavity); the imported gate constants "
+              f"are the redrawn board's (RES_BAND_GHZ = {RES_BAND_GHZ}, "
+              f"was {HISTORICAL_RES_BAND_GHZ}). Scoring one against the other "
+              "compares two boards. Re-run with --historical-band to replay F1 "
+              "as it was scored, or read the discharge in "
+              "docs/design_notes/issue782_retired_resonance_predeclaration.md "
+              "Section 4.")
+        return 2
+
+    band = HISTORICAL_RES_BAND_GHZ
     path = os.path.join(_REPO, "docs", "design_notes",
                         "patch_edgefed_s11_band_repin_results.json")
     with open(path) as f:
         results = json.load(f)
+    print(f"[F1] HISTORICAL replay (band {band} GHz, the #782 value)")
     print(f"[F1] evidence: {path}\n[F1] measured on tree {results['git_head']}\n"
-          f"[F1] gate constants: band {RES_BAND_GHZ} GHz, floor {RES_BAND_S11_MIN}, "
+          f"[F1] gate constants: band {band} GHz, floor {RES_BAND_S11_MIN}, "
           f"Re(Zin) > {RES_BAND_RE_ZIN_MIN_OHM} ohm, passivity {PASSIVE_TOL}")
 
     verdicts = {}
     for tag in ("main", "retired"):
-        v = evaluate(results[tag])
+        v = evaluate(results[tag], band)
         verdicts[tag] = v
         print(f"\n[F1] arm {tag} (bypass_resample={results[tag]['bypass_resample']}):")
         for k in ("passivity", "band_floor", "band_crossing", "band_re_zin",
@@ -86,17 +131,14 @@ def main() -> int:
             print(f"    {k:15s} {'PASS' if v[k] else 'FAIL'}")
         print(f"    readings: {v['readings']}")
 
-    print(f"\n[F1] VERDICT: RETIRED (#931) — not computed.")
-    print("[F1] The PASS/FAIL column above is today's committed band "
-          f"{RES_BAND_GHZ} GHz read against a trace measured on the pre-#931 "
-          "board, whose main-arm antiresonance crossing is 8.8189 GHz. The two "
-          "describe different realized boards, so neither column is a verdict "
-          "about either one; the readings are printed because they are dated "
-          "evidence, not because they were checked.")
-    print("[F1] The predeclaration is DISCHARGED: the #702 re-sample is deleted "
-          "and the reserved-cell geometry is drawn away. Live discrimination "
-          "evidence: VESSL 369367259225 (Board H) / 369367259226 (Board S).")
-    return 0
+    main_ok = all(v for k, v in verdicts["main"].items() if k != "readings")
+    retired_red = (not verdicts["retired"]["band_crossing"]
+                   or not verdicts["retired"]["band_re_zin"])
+    print(f"\n[F1] main arm all-PASS: {main_ok}")
+    print(f"[F1] retired arm goes RED on the discriminating assertions: {retired_red}")
+    ok = main_ok and retired_red
+    print(f"[F1] VERDICT: {'SATISFIED' if ok else 'NOT SATISFIED'}")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

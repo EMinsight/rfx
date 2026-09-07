@@ -287,6 +287,53 @@ O3_MODEL_GATE = gate_from_envelope(O3_MODEL_ENVELOPE, quantum=100)
 assert O3_MODEL_GATE == 0.09, O3_MODEL_GATE
 # model-fit trust gate: scout measured 0.26-0.56% rel rms across bins;
 # committed at ~2x margin. The O3 gate refuses to run on a worse fit.
+#
+# RED SINCE #931, NOT WIDENED, and the census says why the first reading of
+# it was wrong (VESSL 369367259292, the whole table printed before either
+# test asserts; the two before it, 369367259243/244, printed only the bin
+# they tripped on and made this look like an 8 GHz problem):
+#
+#   f (GHz)              8         9        10        11        12
+#   fit rel rms      0.01077   0.01125   0.01242   0.01283   0.01275
+#     pre-#931       0.0056    0.0026    0.0033    0.0034    0.0038
+#   alpha_model      0.21850   0.44064   0.66558   0.85048   0.99253
+#     pre-#931       0.21865   0.44116   0.66653   0.85158   0.99350
+#   alpha_Ez (err)   0.24582   0.49739   0.71565   0.86871   1.00285
+#                    (12.50%)  (12.88%)  ( 7.52%)  ( 2.14%)  ( 1.04%)
+#     pre-#931       0.23106   0.46383   0.69823   0.87370   1.01433
+#                    ( 5.68%)  ( 5.14%)  ( 4.76%)  ( 2.60%)  ( 2.10%)
+#   alpha_Hy (err)   0.21631   0.42279   0.66187   0.87077   1.01482
+#                    ( 1.00%)  ( 4.05%)  ( 0.56%)  ( 2.39%)  ( 2.25%)
+#     pre-#931       0.23103   0.45586   0.67940   0.86829   1.00813
+#                    ( 5.66%)  ( 3.33%)  ( 1.93%)  ( 1.96%)  ( 1.47%)
+#
+# Three readings, in the order they matter:
+#
+#  1. EVERY bin is above the gate, x1.9 to x4.3. "One marginal bin at 8 GHz"
+#     was an artefact of which assertion fires first. The trust gate is red
+#     band-wide.
+#  2. The MODEL did not move (<= 0.1 % at every bin): it is analytic from the
+#     declared stack and cannot see a realization change. So the disagreement
+#     is between the measurement and the model, not inside the model.
+#  3. The two extraction routes SPLIT. Pre-#931 the Ez-midplane fit and the
+#     Hy-midplane fit agreed to 4 decimal places at 8 GHz (0.23106 vs
+#     0.23103). They now read 0.24582 and 0.21631 — 13 % apart, and they
+#     moved in OPPOSITE directions (Ez +6.4 %, Hy -6.4 %). The Hy route moved
+#     TOWARD the model (1.00 % error, its best bin ever) while the Ez route
+#     moved away past the 9 % O3 gate. Two extractors of one run can only
+#     split like that if the field's spatial structure changed, which is a
+#     statement about this FIXTURE and not about the sheet operator.
+#
+# Not widened, not xfailed, not re-pinned. Widening a comparator's trust gate
+# is the comparator marking its own homework, and an xfail here would hide a
+# 13 % route split behind an expected-failure marker. The next step is named
+# in docs/design_notes/931_migration/T6-RECOMPUTE.md (round 4): dump both
+# fitted profiles at 8 GHz against the pre-#931 record and find which route
+# moved, before anything in this module is re-pinned. The physics-side
+# witnesses in this file are all GREEN in the same run (alpha_fit inside its
+# +-5 % pin, the free-standing-sheet transmission oracle, the PEC control,
+# thickness invariance, the limit reduction), which is why the operator is
+# not the suspect.
 O3_FIELD_FIT_RMS_GATE = 0.01
 
 # O4a band: Leontovich predicts alpha ~ sqrt(1/sigma), so a x4 in
@@ -628,6 +675,33 @@ def _model_fits(out):
     return _cache["model_fits"]
 
 
+def _print_model_fit_census(out):
+    """R5 census for the O3 pair — every bin, both routes, printed BEFORE
+    any assertion (2026-09-07, #931).
+
+    The two O3 tests both trip on the trust precondition at ONE bin and
+    say so with one number, which is not enough to tell "the model got
+    worse everywhere" from "one bin moved". This prints the whole table
+    so the next reader classifies by inspection instead of by argument.
+    Printed once per session; the fits themselves are cached."""
+    if _cache.get("census_printed"):
+        return
+    _cache["census_printed"] = True
+    fits = _model_fits(out)
+    print(f"\n[LEONTOVICH/O3-CENSUS] gate: fit trust <= "
+          f"{O3_FIELD_FIT_RMS_GATE}, model err <= {O3_MODEL_GATE}; "
+          f"settle {out['settle_db']:.1f} dB")
+    print("[LEONTOVICH/O3-CENSUS]  f(GHz)  fit_rel_rms  alpha_model  "
+          "alpha_Ez  err_Ez   alpha_Hy  err_Hy")
+    for fi, (f, ft) in enumerate(zip(O3_FREQS, fits)):
+        a_model = ft["alpha_model"]
+        a_ez = out["alpha"][fi]
+        a_hy = ft["alpha_meas"]
+        print(f"[LEONTOVICH/O3-CENSUS]  {f/1e9:5.1f}   {ft['rel_resid']:10.5f}  "
+              f"{a_model:10.5f}  {a_ez:8.5f}  {abs(a_ez/a_model-1):6.2%}  "
+              f"{a_hy:8.5f}  {abs(a_hy/a_model-1):6.2%}")
+
+
 @pytest.mark.slow_physics
 def test_o3_model_fits_measured_field():
     """FIELD-FIT self-check for the #700 model comparator (house rule,
@@ -639,6 +713,7 @@ def test_o3_model_fits_measured_field():
     supermode} IS the mechanism statement of #700: the fitted alpha is a
     two-mode transient, not an eigenvalue."""
     out = _base()
+    _print_model_fit_census(out)
     for f, ft in zip(O3_FREQS, _model_fits(out)):
         assert ft["rel_resid"] <= O3_FIELD_FIT_RMS_GATE, (
             f"model fit degraded at {f/1e9:.0f} GHz: rel rms "
@@ -664,6 +739,7 @@ def test_alpha_oracle_o3():
     Envelope provenance for O3_MODEL_GATE: see O3 MODEL RE-PAIR in the
     module docstring."""
     out = _base()
+    _print_model_fit_census(out)
     assert not any("PreflightError" in w for w in out["warnings"])
     assert out["settle_db"] < -40.0, out["settle_db"]
     for fi, (f, ft) in enumerate(zip(O3_FREQS, _model_fits(out))):

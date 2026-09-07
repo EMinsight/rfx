@@ -82,8 +82,10 @@ substrate RAISES eps_eff, so the stub is electrically longer and its resonance
 falls. The two directions are the reason the fed and unfed terms are pinned
 separately in the harminv companion.
 
-  (1) PASSIVITY:          max|S11| <= 1.05      (the #80 fix; 0.9921 measured settled)
-  (2) EDGE-FED SIGNATURE: |S11| > 0.70 across RES_BAND_GHZ = (8.4, 9.2)
+  (1) PASSIVITY:          max|S11| <= 1.05      (the #80 fix; 0.9837 measured
+      settled on the redrawn board, 0.9921 on the pre-#931 one)
+  (2) EDGE-FED SIGNATURE: |S11| > 0.70 across RES_BAND_GHZ = (7.4, 8.2)
+      (the pre-#931 board's band was (8.4, 9.2))
       => the patch is poorly matched at its resonance => the dip is NOT the resonance.
   (2b) IN-BAND RESONANCE WITNESS: an Im(Zin) = 0 crossing exists inside the band —
       the resonance the band names is actually there. This is what makes (2)
@@ -95,19 +97,37 @@ separately in the harminv companion.
   (3) (soft) the global |S11| minimum lies ABOVE the band (measured 8.800 > 8.2;
       10.100 > 9.2 on the pre-#931 board).
 
+  Every reading in (1)-(3) above is from VESSL 369367259239, the confirm run
+  on the re-pinned band; 369367259226 is the evidence run they were pinned
+  from and reproduces them.
+
 The crossing is a PORT-PLANE observable — the antiresonance seen through the feed
 line, reference-plane dependent — so it is an existence witness inside a band, never a
 frequency gate, and it must not be quoted as "the TM010 modal frequency" (the
 companion's modal numbers live on Board H). Identity of the in-band feature — never
-amplitude rank: the y-centred feed parity-suppresses TM001 (Board-S realized-raster
-Balanis 8.0016 GHz shows only as a non-crossing Re(Zin) ~ 30 ohm wiggle at
-7.9-8.1 GHz, below the band), and the 4.3-kohm Re peak is the edge-fed patch
-antiresonance class the pre-#702 witness also saw (Re peaks > 1.5 kohm); the modal
+amplitude rank: the y-centred feed parity-suppresses TM001. On the pre-#931 board
+that mode (Board-S realized-raster Balanis 8.0016 GHz) sat BELOW the band and showed
+only as a non-crossing Re(Zin) ~ 30 ohm wiggle at 7.9-8.1 GHz. On the redrawn 787 um
+board it sits INSIDE the band — the companion reads Balanis TM001 8.0188 GHz for its
+own raster on the same redrawn stack (VESSL 369367259250; 787.0 um on Board H, 788.0
+on Board S, the 0.005-cell mesh incommensurability), and the axis that sets TM001 is
+51 cells on BOTH boards at a dx 0.13 % apart, so Board S's TM001 lands within a tenth
+of a percent of that — and it shows neither a crossing nor a bump: 7.9 / 8.0 /
+8.1 GHz read Re(Zin) 352 / 159 / 89 ohm on the monotone skirt of the antiresonance,
+and the only in-band crossing is 7.7620 (all crossings 7.762 / 9.3154 / 11.5136, VESSL
+369367259239). So the in-band feature is still identified by CROSSING EXISTENCE, and
+the reason has changed: the suppressed mode is no longer out of the band, it is inside
+it and silent. The 4.2-kohm Re peak is the edge-fed patch antiresonance class the pre-#702 witness also saw (Re peaks > 1.5 kohm); the modal
 labelling chain (spatial parity across a probe cross, windowed-DFT nodal check,
 single-dimension perturbation, Balanis both modes per realized raster) lives in the
 companion gate and the #782 ledger record.
 
-DISCRIMINATION (#702 falsifier, scored in the predeclaration note): with
+DISCRIMINATION (#702 falsifier, scored in the predeclaration note) — HISTORY as of
+#931: the arm below is no longer buildable, because the contract deletes
+``resample_sheet_node_materials`` AND this board no longer reserves a cell for the
+re-sample to act on. The discharge is recorded in
+``docs/design_notes/issue782_retired_resonance_predeclaration.md`` Section 4; the
+paragraph stays because it is what the gate's assertions were shaped by. With
 ``resample_sheet_node_materials`` disabled — the bit-exact pre-#702 physics — the same
 config puts the antiresonance at 9.5-9.6 GHz (Re(Zin) peak 5255 ohm at 9.6, OUT of
 band; crossings 9.108 / 9.325 / 9.629 / 11.366, dip 11.400). (2c) FAILS on that
