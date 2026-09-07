@@ -238,7 +238,7 @@ geometry change: N masked nodes have always carried N−1 tangential edges, and
 the realized conductor is the edges. The rows that hold are the ones where the
 old node count already equalled the edge count.
 
-## Still open at the time of writing
+## Still open at the time of writing (closed in phase 2b — see below)
 
 The ring-down fixture rebuild (`cv05_ringdown_spectra.json`, 5 lengths × 2
 solves) was still running inside run 369367259142 when this section was
@@ -248,3 +248,89 @@ the spectrum above, and the manifest's three cited fixture values must be
 re-read from it per `docs/design_notes/931_migration/XA-manifest.json.md` §3 —
 including re-checking that the 22.0 mm build is still assigned TM110, which is
 what makes criterion B a demonstration rather than a claim.
+
+# Phase 2b — ingest (2026-09-07, after the phase-2a merge)
+
+The branch was merged onto `feat/931-lattice-ownership` at `770c4e6c`, so
+everything below is measured on the tree that carries every group's changes,
+not on X-A alone.
+
+## Committed from run 369367259142
+
+| file | source |
+|---|---|
+| `cv05_run_openems_369367259142.json` | `$OUT/cv05_run.json`, rc 0 |
+| `cv05_run_openems_369367259142.log` | `$OUT/cv05_run.log` |
+| `cv05_ringdown_fixture_rebuild_369367259142.log` | `$OUT/cv05_fixture_build.log`, rc 0 |
+| `tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json` | written into this worktree by the producer during the run; md5 `b9ff9a20520ffcaba19a38e741878abe`, identical to the harvested `$OUT/cv05_ringdown_spectra.json` |
+
+`$OUT = /root/workspace/claude-workspace/rfx/runs/issue931-post-cv05-20260907T095630Z`.
+The 369367257743 record stays beside them as the before half.
+
+Three tests in `tests/crossval/test_patch_mode_identification.py` were pinned to
+the old fixture and were repinned from the new one (commit `efc9d2b1`); the
+verdicts they assert are unchanged, only which pole carries them. The sheet
+board resolves TM010 in every mis-realized leg, so `modes[0]` is now a correctly
+identified TM010 and the drifted a-axis mode is `modes[1]`.
+
+## The two open questions the manifest note demanded, answered from the rebuild
+
+* **22.0 mm still assigned TM110.** `identify_patch_modes` returns
+  `[1.9216 GHz → TM010, 3.0432 GHz → TM110]`, refuses to name a resonance and
+  reports TM100 missing. Criterion (B) is demonstrated by the same length; no
+  length was swapped, no tolerance moved.
+* **The 38.0 mm falsifier still fires**, same mechanism: a weak third pole
+  (amplitude 3.10e4 against 3.67e5) inside the identification window is named
+  TM100 and that length passes there. No amplitude floor was added.
+
+One new fact the census forces: 22.5 mm and 22.0 mm now realize the SAME 22
+edges, so those two legs are one board with one ring-down and the
+parametrization carries two identical rows.
+`test_cv05_22p5_and_22p0_are_one_realization_since_931` asserts that identity
+from the fixture's own `realized_stack` and fails if a future change separates
+them again.
+
+## Controls, re-measured on the MERGED tree
+
+`scripts/diagnostics/cv0104_dielectric_control_witness.py` run twice —
+`rfx-931-XA-crossval-a` at `b4961b56` against the pre-#931 checkout
+`rfx-baseline-d990e18c` at `d990e18c` — build-time only, no solve. Digests are
+sha256 of the assembled arrays as raw bytes. Both records are committed under
+`control_witness_2b/` and each carries its own `repo_commit` / `repo_dirty`, so
+the filename is not the provenance claim; both sides ran with a clean worktree.
+
+| case | grid | eps_r sha256[:16] | sigma sha256[:16] | pec cells / sheets / wires | verdict |
+|---|---|---|---|---|---|
+| `01_waveguide_bend` | 181×181×1 | `a693e67131469a9d` | `81205f6f74a3487c` | 0 / 0 / 0 | IDENTICAL |
+| `02_ring_resonator` | 162×162×1 | `40dbec5bbf922728` | `e006234d0697ae9c` | 0 / 0 / 0 | IDENTICAL |
+| `03_straight_waveguide_flux` | 201×131×1 | `f12b4af1ea61604e` | `309d6171b688ed09` | 0 / 0 / 0 | IDENTICAL |
+
+Both sides report the same digest for every array, and both report the case as
+conductor-free — which is the second half of the control: a dielectric-only case
+that grew a sheet or a wire would be a defect whichever side it appeared on.
+This is the design note §5 pre-declaration "Dielectric-only cases: bit-identical
+results before/after — the change must not touch them", checked against the
+merged tree rather than against one branch.
+
+cv02 has no committed artifact and no baseline job, so the digest IS its whole
+control; that was true in phase 2a and stays true.
+
+cv04 has no geometry layer to digest — it is a hand-written Fresnel loop — so
+its control is end-to-end: re-run and `git diff --exit-code` on the two
+committed JSONs. On the X-A branch (run 369367259144) that diff came back rc 0
+and EMPTY. Re-submitted on the merged tree as run **369367259290**; if that rc
+is not 0, a dielectric-only case moved and the contract's own pre-declared
+control has fired.
+
+## Submitted in phase 2b, not yet returned
+
+| run | yaml | what it decides |
+|---|---|---|
+| **369367259288** | `scripts/vessl_931/cv05_fixture_check.yaml` | `build_cv05_ringdown_spectra.py --check`: rebuilds all five lengths and compares against the COMMITTED fixture at 1e-6 relative. This is the falsifier for `efc9d2b1`; a MISMATCH means the fixture is not reproducible from the repo and the manifest citations resting on it are not safe to apply. ~20 min. |
+| **369367259289** | `scripts/vessl_931/cv05_farfield_envelope.yaml` | Re-derives `D_ABS_TOL_DB`, `F_RES_REL_LO`/`HI` and the mode-pair band for `tests/crossval/test_patch_canonical_farfield_e4.py` by calling that file's own `rfx_run` fixture function on the sheet-declared canonical patch, and writes the arithmetic beside the measurement. Until it returns, `_ENVELOPES_REDERIVED_FOR_931` stays `False` and the three slow gates stay skipped. ~15 min. |
+| **369367259290** | `scripts/vessl_931/cv04.yaml` | cv04's byte-level control, re-run on the merged tree. ~10-30 min. |
+
+Nothing in those three is a re-solve of a question already answered: the first
+is a reproducibility check on a file just committed, the second is the first
+measurement of a quantity that has never existed on this board, the third is the
+contract's own dielectric control moved from one branch to the merged tree.
