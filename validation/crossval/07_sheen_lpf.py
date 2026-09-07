@@ -393,20 +393,46 @@ COMMITTED = dict(
     # History: the earlier num_periods=20 leg FAILED the settling witness
     # at -24.7/-24.3 dB and its argmin (7.2185 GHz) sat on a probe-
     # contamination dip, not a doublet member (PR #468).
-    rfx_null_ghz=7.8739,        # argmin |S21| over 5-15 GHz
+    # RE-PIN 2026-09-07 (#931 lattice ownership, VESSL run 369367259192).
+    # The three conductors are now SHEETS on the laminate face instead of
+    # one-cell PEC Boxes, so every in-plane extent lost one cell (feeds
+    # 2400 -> 2200 um, patch 20400 -> 20200 x 2600 -> 2400 um) and the
+    # 200 um metal slab is gone. That is a different board; every rfx-leg
+    # number below had to be re-measured, not translated. NO GATE WINDOW
+    # MOVES: null_tol_pct 1.0, doublet_tol_pct 0.50, corner_tol_pct 0.25,
+    # half_grid_witness_bins 1.0 and every D-gate tolerance are the
+    # pre-#931 ones. What moved, and by how much:
+    #   - argmin null      7.8739 -> 8.2017 GHz (+4.16 %)
+    #   - doublet          (6.943990, 7.925928) -> (7.233338, 8.244069) GHz
+    #                      (+4.17 % / +4.01 %); taken from the referee
+    #                      fixture, which gate C4b cross-checks
+    #   - -3 dB corner     5.5036 -> 5.7071 GHz (+3.70 %)
+    #   - passband mean    0.9378 -> 0.9471 (+0.99 %)
+    #   - settling witness (-70.17, -71.26) -> (-64.80, -64.78) dB
+    #   - max column power 0.9995 -> 0.9995 (unchanged)
+    # THE ONE THAT IS A FINDING, NOT A RE-PIN, AND IS REPORTED AS SUCH:
+    # the raw passivity excess got WORSE. Bins with correction > 0.05 went
+    # 0 -> 3 and the worst went 0.0145 @ 17.378 GHz -> 0.6572 @ 17.870 GHz,
+    # all three above 17 GHz and none inside the 5-15 GHz null band
+    # (rfx_corr_bins_in_null_band stays 0, gate D5 untouched). A narrower
+    # strip on the same dx = 200 um mesh is a coarser strip in cells, and
+    # the top of the 20 GHz band is where this mesh was already
+    # artifact-class. The quotability scope line the case prints says so;
+    # NO magnitude claim is made above 15 GHz and none is now allowed.
+    rfx_null_ghz=8.2017,        # argmin |S21| over 5-15 GHz
     oems_null_ghz=7.9831,
     null_tol_pct=1.0,           # regression tolerance on the locked numbers
     rfx_nbins=120,
     oems_nbins=801,
     # Evidence-chain locks (gate D): witness, strict bound, correction footprint
-    rfx_settling_db=(-70.17, -71.26),   # per driven run; rule is < -40
-    rfx_corr_bins_over_005=0,           # passivity_correction > 0.05
+    rfx_settling_db=(-64.80, -64.78),   # per driven run; rule is < -40
+    rfx_corr_bins_over_005=3,           # passivity_correction > 0.05
     rfx_corr_bins_in_null_band=0,       # of those, inside 5-15 GHz
-    rfx_worst_corr=0.0145,
-    rfx_worst_corr_ghz=17.378,
+    rfx_worst_corr=0.6572,
+    rfx_worst_corr_ghz=17.870,
     # S-data locks (falsifier coverage: a tampered s11/s21 array must go red
     # even where the argmin and the stored side-channel fields survive)
-    rfx_passband_mean_s21=0.9378,   # over the CLI passband window, linear
+    rfx_passband_mean_s21=0.9471,   # over the CLI passband window, linear
     rfx_max_column_power=0.9995,
     referee_sides_with="openems",
     # --- #812 P3 sub-bin estimator locks (see the docstring section
@@ -415,7 +441,7 @@ COMMITTED = dict(
     # committed referee producer's own output
     # (tests/fixtures/sheen_lpf_e4/sheen_lpf_palace_referee.json ->
     # referee.fdtd_doublet_ghz), and gate C4b checks this file against it.
-    doublet_ghz={"rfx": (6.943990, 7.925928),
+    doublet_ghz={"rfx": (7.233338, 8.244069),
                  "openEMS": (7.030670, 7.994749)},
     doublet_tol_pct=0.50,       # one dx=200um cell on the 20.320mm patch
                                 # transverse extent = 0.984%; the estimator
@@ -428,7 +454,7 @@ COMMITTED = dict(
                                 # this comment read "12% in |S21|"; 0.5 dB is
                                 # 12% in power and 5.9% in amplitude. Window
                                 # unchanged -- only the description was wrong.)
-    corner_ghz={"rfx": 5.5036, "openEMS": 5.5185},
+    corner_ghz={"rfx": 5.7071, "openEMS": 5.5185},
     corner_tol_pct=0.25,        # one-cell transverse error moves fc 0.49%
     half_grid_witness_bins=1.0,  # structural: a bin-quantised estimator scores
                                  # exactly 1.0000 here, so < 1.0 is unpassable
@@ -1436,7 +1462,8 @@ def _gates(R, O, fr, fnull_r, fnull_o, pm_o, oems_null_db, null_lo, null_hi,
     print("Scope: stopband STRUCTURE characterization only. This case makes NO "
           "rfx accuracy claim.\nQuoted |S| is passivity-enforced (strict <= 1); "
           "any bin with passivity_correction > 0.05\n(footprint locked by gates "
-          "D3-D5; 0 bins on the 2026-08-09 corrected-extractor leg) is\n"
+          "D3-D5; 3 bins on the post-#931 sheet leg, all above 17 GHz,\n"
+          "0 inside the 5-15 GHz null band) is\n"
           "artifact-class for magnitude claims at dx=200um.")
     return ok
 

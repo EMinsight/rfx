@@ -366,6 +366,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--artifacts-dir", default=str(_ARTIFACTS))
     p.add_argument("--from-artifacts", action="store_true",
                    help="rebuild the committed fixture JSON from the four Palace port-S.csv files")
+    p.add_argument("--refresh-referee", action="store_true",
+                   help="re-derive ONLY the 'referee' block from the committed Palace "
+                        "arrays plus the current _07_sheen_results/{rfx,openems}.json and "
+                        "write it back. Use when an FDTD leg was re-solved but Palace was "
+                        "not: the Palace port-S.csv files are external prerequisites and "
+                        "are not committed, so --from-artifacts cannot run from a clean "
+                        "checkout, while every referee number is a pure function of what "
+                        "IS committed.")
     p.add_argument("--vessl-coarse", default=None)
     p.add_argument("--vessl-mid", default=None)
     args = p.parse_args(argv)
@@ -383,6 +391,14 @@ def main(argv: list[str] | None = None) -> int:
             vessl_runs = {"coarse": args.vessl_coarse, "mid": args.vessl_mid}
         build_fixture_from_artifacts(artifacts_dir, fixtures_dir, vessl_runs)
         print(f"rebuilt {fixtures_dir / _REFEREE_FIXTURE} from {artifacts_dir}")
+
+    if args.refresh_referee:
+        out = fixtures_dir / _REFEREE_FIXTURE
+        fixture = json.loads(out.read_text())
+        fixture["referee"] = build_referee(fixtures_dir)["referee"]
+        out.write_text(json.dumps(fixture, indent=2) + "\n")
+        print(f"refreshed the referee block of {out} "
+              f"(Palace mesh blocks untouched)")
 
     ref = build_referee(fixtures_dir)["referee"]
     pd = ref["palace_doublet_mid_ghz"]
