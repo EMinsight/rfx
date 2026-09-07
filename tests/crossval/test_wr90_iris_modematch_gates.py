@@ -319,6 +319,41 @@ def test_setup_defects_and_scope_fence_are_content_pinned(fixture):
     assert "ONE symmetric inductive iris" in scope
     assert "EXPERIMENTAL" in scope
     assert "never gated" in fixture["gates"]["posture"]
+    # #931: the corner recipe INVERTED (cell-centre sampling makes a
+    # node-plane corner the well-defined one) and the oracle's thickness
+    # input became correct for the first time. Both are load-bearing history
+    # and must stay in the record.
+    assert "#931" in scope and "cell CENTRES" in scope
+    assert "thickness deficit" in scope
+
+
+def test_one_cell_volume_witness_is_recorded_and_passing(fixture):
+    """#931 design note section 5: a one-cell PEC volume stands TWO walls.
+
+    The contract's own claim at t = 1 cell had no independent witness before
+    this: the thin-limit anchor is a t -> 0 statement, and every assert in the
+    case counted masked planes, which agree with the drawing by construction.
+    Here the lattice-blind mode-matching oracle is run against rfx across
+    t = 1..8 cells; the t = 1 residual must lie inside the range the t = 2..8
+    rungs span, and every row's realized thickness must equal its drawn one.
+    """
+    w = fixture["one_cell_volume_witness"]
+    rows = w["rows"]
+    assert [r["t_cells"] for r in rows] == [1, 2, 3, 4, 5, 6, 8]
+    for r in rows:
+        assert r["realized_thickness_cells"] == r["t_cells"], r
+        lo, hi = r["iris_wall_nodes"]
+        assert hi - lo == r["t_cells"], r
+        assert r["t_mm"] == pytest.approx(
+            r["t_cells"] * 22.86 / w["cells_per_a"], abs=1e-3), r
+    one = next(r["max_gap_abs"] for r in rows if r["t_cells"] == 1)
+    multi = [r["max_gap_abs"] for r in rows if r["t_cells"] >= 2]
+    assert min(multi) <= one <= max(multi), (
+        "the one-cell rung is an outlier against t = 2..8, so a one-cell PEC "
+        "volume is not realizing a dx-thick iris", one, multi)
+    assert w["passed"] is True
+    assert w["one_cell_gap_abs"] == one
+    assert list(w["multi_cell_gap_range_abs"]) == [min(multi), max(multi)]
 
 
 def test_diagnostics_and_witnesses_are_recorded(fixture):
@@ -346,9 +381,20 @@ def test_operating_point_is_grid_exact_on_every_row(fixture):
         assert cells in (cfg["coarse_cells_per_a"], cfg["fine_cells_per_a"])
         assert r["dx_mm"] == pytest.approx(22.86 / cells, abs=1e-3)
         d_c = round(r["d_mm"] / r["dx_mm"])
-        # fins cover nodes 0..fin_c so the electrical aperture equals nominal d
-        assert r["aperture_cells"] == d_c - 1, r
-        assert r["thickness_cells"] == round(1.524 / r["dx_mm"]), r
+        # #931 lattice ownership contract: the fins stand their inner walls at
+        # y-nodes fin_c and cells - fin_c, so the REALIZED aperture is d_c
+        # cells, and the iris stands walls at BOTH its faces, so the realized
+        # thickness is the drawn cell count. Until #931 the committed fields
+        # were an OPEN-NODE count (d_c - 1) and a MASKED-PLANE count; the
+        # aperture one changed value, which is why the keys were renamed
+        # rather than reused.
+        assert r["realized_aperture_cells"] == d_c, r
+        assert r["realized_thickness_cells"] == round(
+            r["t_mm"] / r["dx_mm"]), r
+        lo, hi = r["iris_wall_nodes"]
+        assert hi - lo == r["realized_thickness_cells"], r
+        ylo, yhi = r["aperture_wall_nodes"]
+        assert yhi - ylo == r["realized_aperture_cells"], r
         assert len(r["s11"]) == len(cfg["freqs_hz"]) == 29
 
 

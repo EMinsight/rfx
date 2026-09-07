@@ -34,16 +34,22 @@ WHAT IS GATED vs WHAT IS REPORTED
 GATED (exit-1), gate = round-UP(measured envelope x 1.5) over a NINE-config
 population, enforced as EXACT equality by the --write-fixture self-check:
   * centre frequency f0 of the -10 dB |S11| span, rfx vs oracle@as-realized,
-    at the gated mesh a/90.  f0 is the least convention-sensitive continuous
-    observable (~2.4 MHz per cell of the unsettled iris-thickness leg, vs
-    ~40 MHz for bandwidth and 22-30 MHz for individual edges), which is why
-    it carries the gate and the edges/bandwidth do not.
+    at the gated mesh a/90.  f0 is the least length-sensitive continuous
+    observable (~2.4 MHz per cell of iris thickness, vs ~40 MHz for bandwidth
+    and 22-30 MHz for individual edges), which is why it carries the gate.
   * structural reflection-zero COUNT inside the passband (a depth-independent
     local-minimum count).  This is the topology check.
 REPORTED, NOT GATED:
-  * band edges and bandwidth: their comparator-input uncertainty from the
-    iris-thickness convention (about half a cell) exceeds any defensible gate
-    on them, and d_bw is identically d_hi - d_lo, so they are one fact.
+  * band edges and bandwidth.  Until #931 the stated reason was a comparator
+    INPUT uncertainty: the iris-thickness leg had no settled value, and a
+    half-cell input ambiguity is worth 22-40 MHz on these observables, more
+    than any defensible gate.  The lattice ownership contract removes that
+    ambiguity — the realized thickness is the drawn one, exactly — so the
+    reason no longer holds and the posture is due a re-argument on the
+    regenerated witness population (round-UP(envelope x 1.5), the repo rule).
+    They stay REPORTED in this revision because a gate must come from a
+    measured envelope, not from the removal of an excuse; d_bw is identically
+    d_hi - d_lo, so they remain one fact whichever way that lands.
   * worst in-band return loss.  The reference is NOT self-consistent here:
     HFSS ripple peaks are -19.3/-14.9/-18.4 dB and CST's are
     -24.9/-18.7/-14.2 dB, and the two tools disagree on WHICH peak is worst.
@@ -70,8 +76,13 @@ GEOMETRY DISCIPLINE (inherited from S1, extended)
     recorded, not glossed: the rasterized geometry is a SNAPPED version of the
     Aghanim filter — its centre frequency is the paper's to within the
     reference's solver scatter, but its ripple structure is perturbed.
-    Both snap figures are quoted for the COMPENSATED cell counts (see
-    rasterized_geometry); the uncompensated counts move f0 -101.4 MHz at a/90.
+    Both snap figures are for the plain roundings t_c = round(t/dx),
+    L_c = round(L/dx), which under the #931 contract are also what gets
+    realized.  Until #931 the same built structure needed COMPENSATED counts
+    (+1 iris, -1 cavity) to reach it, because the far face of a body was
+    never a wall; those counts and this note's earlier "-101.4 MHz for the
+    uncompensated counts" figure describe a realization that no longer
+    exists.
   * At a/90 every aperture lands on an EVEN cell count (40/26/24/26/40), so
     symmetric fins are realizable with zero offset.  That is luck of this
     geometry, not a rule: the realizable electrical aperture is
@@ -87,12 +98,16 @@ GEOMETRY DISCIPLINE (inherited from S1, extended)
     it is contradicted by the committed a/60 rung (2 zeros in BOTH rfx and its
     oracle), and no symmetric-a/60 variant is committed anywhere.  It is
     withdrawn rather than restated.
-  * Fin corners sit half a cell off the node planes (the S1 midpoint recipe).
-    Drawing to the nominal dimension instead leaves the electrical aperture
-    one to two cells too wide, and WHICH is not predictable from the nominal
-    dimensions: node coordinates are built in float32 as f32(f32(i)*f32(dx))
-    while box corners arrive as an f64 value cast once, so algebraically equal
-    values land on opposite sides of the comparison (issue #493).
+  * Every corner sits ON a node plane.  This INVERTS the S1 midpoint recipe,
+    and the reason is the #931 contract: a PEC volume is sampled at cell
+    CENTRES, so a corner on a node plane selects whole cells and is the
+    well-defined position, while a corner half a cell off lands exactly on a
+    centre — the tie the old recipe was invented to avoid, moved.  The
+    float32 argument behind the recipe (node coordinates built as
+    f32(f32(i)*f32(dx)) against an f64 corner cast once, issue #493) is
+    unchanged as a fact; what changed is which position it endangers.  The
+    per-iris asserts in raster_assert are exact either way, and they now read
+    the realized edge set rather than a rasterized sigma mask.
   * Guide height is REDUCED to 4 cells.  For TE10 with y-invariant inductive
     fins the S-matrix is b-independent, and this is a measured witness, not an
     assumption: b = 13/8/4/2 cells give |S11| identical to 0.00000 (bit-level)
@@ -145,7 +160,11 @@ if _RFX_ROOT != _REPO_ROOT:
 
 from rfx.api import Simulation  # noqa: E402
 from rfx.boundaries.spec import Boundary, BoundarySpec  # noqa: E402
-from rfx.geometry.csg import Box, rasterize  # noqa: E402
+from rfx.geometry.csg import Box  # noqa: E402
+
+sys.path.insert(0, _SCRIPT_DIR)
+from _wr90_iris_realized import (  # noqa: E402
+    aperture_walls, grid_plane, realized_edge_masks, wall_plane_runs)
 
 sys.path.insert(0, os.path.join(_SCRIPT_DIR, "comparators"))
 import fdfd_hplane  # noqa: E402  (numpy/scipy only, zero rfx dependency)
@@ -414,38 +433,47 @@ def validate_oracle() -> dict:
 def rasterized_geometry(cells: int, allow_asymmetric: bool):
     """Return the geometry rfx will actually build at this mesh.
 
-    Cell counts are chosen so the ELECTRICAL dimensions land on the nominal
-    ones, because the electrical length of a region is the distance between its
-    bounding zeroed node planes (see raster_assert): a cavity drawn with L_c
-    cells of clear space is electrically (L_c + 1)*dx and an iris drawn t_c
-    cells thick is electrically (t_c - 1)*dx.  Hence the -1 / +1 below.  The
-    aperture needs no correction: d_c*dx already IS the electrical aperture.
+    Under the #931 lattice ownership contract a PEC volume drawn on node
+    planes realizes walls at BOTH its faces and shorts every normal edge
+    between them, so REALIZED == DRAWN: an iris drawn t_c cells thick stands
+    t_c + 1 wall planes t_c*dx apart, and a cavity drawn with L_c cells of
+    clear space between two irises is L_c*dx of guide.  The cell counts are
+    therefore the plain roundings, with no compensation:
 
-    This is a statement of intent, not a fit to the reference. Its residual is
-    the sub-cell rounding error, and that residual is NOT monotone in the mesh:
-    at a/90 it puts f0 +3.3 MHz from the paper's exact design (inside the
-    reference's own 21.9 MHz solver spread) while at a/60 it lands +120.2 MHz,
-    worse than the uncompensated -35.8 MHz there. Compensation chooses which
-    side of the rounding you land on; only measurement says where.
+        t_c = round(t/dx),  L_c = round(L/dx),  d_c = round(d/dx)
+
+    Until #931 this function carried ``+1`` on the iris and ``-1`` on the
+    cavity.  Those existed only to cancel the old half-open node rule, under
+    which a body's far face was never a wall: the drawn box realized one
+    plane fewer than it was drawn, so the drawn counts had to be inflated to
+    land the ELECTRICAL dimensions on nominal.  The compensation and the
+    realization it compensated are deleted together; the built structure is
+    unchanged (same wall planes, same 56/62/62/56 cavities at a/90), which is
+    what ``electrical_geometry`` now checks by reading the realized edges.
+
+    Snapping is still a rounding, and its residual is NOT monotone in the
+    mesh: at a/90 it puts f0 +3.3 MHz from the paper's exact design (inside
+    the reference's own 21.9 MHz solver spread) while at a/60 it lands
+    +120.2 MHz.  Only measurement says where a mesh lands.
     """
     dx = A_WR90 / cells
     d_c = np.round(APERTURES_NOM / dx).astype(int)
-    t_c = int(round(T_IRIS_NOM / dx)) + 1
-    L_c = np.round(CAVITIES_NOM / dx).astype(int) - 1
+    t_c = int(round(T_IRIS_NOM / dx))
+    L_c = np.round(CAVITIES_NOM / dx).astype(int)
     if not allow_asymmetric:
         # symmetric fins can only realize apertures with the parity of `cells`
         d_c = d_c + ((cells - d_c) % 2)
     fin_l = np.floor((cells - d_c) / 2).astype(int)
     aps = d_c * dx
     offs = fin_l * dx
-    # `thicknesses` / `cavities` are the ELECTRICAL targets, i.e. what the drawn
-    # cell counts will realize. electrical_geometry() re-reads them off the
-    # rasterized metal and asserts they match, so these are a target and the
-    # measurement is the authority — never two independent sources of truth.
+    # `thicknesses` / `cavities` are the drawn dimensions.  Under the contract
+    # they are also the realized ones; electrical_geometry() re-reads them off
+    # the realized edge set and asserts the identity, so the measurement stays
+    # the authority — never two independent sources of truth.
     return dict(dx=dx, d_cells=d_c, t_cells=t_c, L_cells=L_c,
                 apertures=aps, offsets=offs,
-                thicknesses=np.full(5, (t_c - 1) * dx),
-                cavities=(L_c + 1) * dx,
+                thicknesses=np.full(5, t_c * dx),
+                cavities=L_c * dx,
                 offset_from_centre=offs - (A_WR90 - aps) / 2)
 
 
@@ -456,6 +484,11 @@ def build(geo, b_cells=B_CELLS, freqs=FREQS, f0=11.0e9, bandwidth=0.14,
     lam_g_lo = C0 / float(freqs[0]) / np.sqrt(
         1.0 - (C0 / (2 * A_WR90) / float(freqs[0])) ** 2)
     cpml_c = int(np.ceil(cpml_fraction * lam_g_lo / dx))
+    # Under the contract this IS the metal extent in cells, from the first
+    # iris's near face to the last iris's far face: five irises of t_c cells
+    # and four cavities of L_c cells.  With the pre-#931 compensated counts it
+    # over-counted by one, which left the trailing feed one cell longer than
+    # the leading one.
     span = int(geo["t_cells"] * 5 + geo["L_cells"].sum())
     glen_c = 2 * feed_cells + span
     sim = Simulation(
@@ -466,14 +499,21 @@ def build(geo, b_cells=B_CELLS, freqs=FREQS, f0=11.0e9, bandwidth=0.14,
                               z=Boundary(lo="pec", hi="pec")),
         cpml_layers=cpml_c)
     big, cur = 1.0, feed_cells
+    # Every corner sits ON a node plane.  Until #931 they sat half a cell off
+    # it ("the S1 midpoint recipe"), because the old volume mask was half-open
+    # over NODE coordinates and a corner landing on a node was half-ulp
+    # fragile.  A PEC volume is now sampled at cell CENTRES, so a node-plane
+    # corner is the well-defined position — it selects whole cells — and the
+    # half-cell offset is the knife edge, landing exactly on a centre.  The
+    # recipe inverts; see the module docstring.
     for i in range(5):
         fin_c = int(np.floor((int(round(A_WR90 / dx)) - geo["d_cells"][i]) / 2))
-        fy_lo = (fin_c + 0.5) * dx                      # midpoint recipe
-        fy_hi = A_WR90 - (int(round(A_WR90 / dx)) - fin_c - geo["d_cells"][i] + 0.5) * dx
-        sim.add(Box(((cur - 0.5) * dx, -big, -big),
-                    ((cur + geo["t_cells"] - 0.5) * dx, fy_lo, big)), material="pec")
-        sim.add(Box(((cur - 0.5) * dx, fy_hi, -big),
-                    ((cur + geo["t_cells"] - 0.5) * dx, big, big)), material="pec")
+        fy_lo = fin_c * dx
+        fy_hi = (fin_c + geo["d_cells"][i]) * dx
+        sim.add(Box((cur * dx, -big, -big),
+                    ((cur + geo["t_cells"]) * dx, fy_lo, big)), material="pec")
+        sim.add(Box((cur * dx, fy_hi, -big),
+                    ((cur + geo["t_cells"]) * dx, big, big)), material="pec")
         cur += geo["t_cells"] + (geo["L_cells"][i] if i < 4 else 0)
     for x, dr, nm in ((port_cells * dx, "+x", "P1"),
                       ((glen_c - port_cells) * dx, "-x", "P2")):
@@ -483,77 +523,127 @@ def build(geo, b_cells=B_CELLS, freqs=FREQS, f0=11.0e9, bandwidth=0.14,
     return sim, cpml_c, glen_c
 
 
-def raster_assert(sim, geo):
-    """Exact-footprint asserts per iris (the S1 discipline, extended to N).
+def raster_assert(sim, geo, feed_cells=FEED_CELLS):
+    """Per-iris realized-geometry asserts, read from the ONE edge-set function.
 
-    Also returns the LONGITUDINAL node runs, because the oracle must be fed the
-    structure rfx actually built.  S1 established transversely that the
-    electrical aperture is the distance between the two bounding zeroed node
-    planes, i.e. (n_open + 1)*dx.  The same rule along x makes each cavity
-    (L_c + 1)*dx and each iris (t_c - 1)*dx.  Total electrical length is a
-    face-continuity CHECK across region types, not a uniqueness argument (an
-    interface at sigma*dx beyond the outermost metal node conserves it for
-    EVERY sigma); what the check does catch is MIXING sigma between region
-    types, which overshoots by 4 or undershoots by 5 cells here.
+    Build-time (no solve).  Under the #931 lattice ownership contract a PEC
+    volume drawn on node planes realizes tangential walls at BOTH faces and
+    shorts every normal edge between them, so the realized geometry is the
+    drawn geometry and this function asserts exactly that identity:
 
-    Feeding the oracle the DRAWN cell counts instead is worth +107.5 MHz of f0 at
-    the shipped geometry (measured 2026-07-29: drawn t=9/L=55,61,61,55 fed as if
-    electrical gives 10.9054-11.2267 GHz, the realized t=8/L=56,62,62,56 gives
-    10.7833-11.1337), i.e. FIVE times the paper's own 21.9 MHz CST-vs-HFSS
-    spread. The defect was first found as +90.0 MHz on the uncompensated cell
-    counts; compensation changes the pair being confused, not the class. Either
-    way it would have had to be absorbed by a gate of ~162 MHz -- 46% of the
-    passband -- which pins nothing.
+      * five irises, each standing t_c + 1 contiguous x wall planes, i.e. a
+        realized thickness of t_c cells with BOTH faces present.  Until #931
+        the far face was never a wall and the case compensated for it in the
+        drawn counts; nothing here compensates now, so a regression shows up
+        as a thickness of t_c - 1 rather than as a silent 107 MHz;
+      * cavities of exactly L_c cells between consecutive irises;
+      * one CONTIGUOUS aperture per iris (the S1 parasitic wall-slot fence),
+        bounded by the two innermost y wall planes d_c cells apart.
+
+    It also returns the realized planes, because the oracle must be fed the
+    structure rfx actually built.  Feeding it the pre-#931 pairing instead —
+    drawn t = 9 / L = 55,61,61,55 read as electrical — was worth +107.5 MHz of
+    f0 (measured 2026-07-29: 10.9054-11.2267 GHz against 10.7833-11.1337 GHz),
+    five times the paper's own 21.9 MHz CST-vs-HFSS spread.  That confusion is
+    what the contract removes: there is no longer a drawn and a realized pair
+    to mix up.
     """
-    grid = sim._build_grid()
+    grid, edges = realized_edge_masks(sim)
     cells = grid.shape[1] - 1
-    sig = np.asarray(rasterize(grid, [(e.shape, 1.0, 1e7)
-                                      for e in sim._geometry])[1])
-    xs = np.where(sig.max(axis=(1, 2)) > 1e6)[0]
-    runs = np.split(xs, np.where(np.diff(xs) != 1)[0] + 1)
-    assert len(runs) == 5, ("iris count", len(runs))
+    x_runs = wall_plane_runs(edges, 0)
+    assert len(x_runs) == 5, ("iris count", len(x_runs), x_runs)
+
+    # DECLARED wall planes, from the same arithmetic build() draws with,
+    # shifted into the padded array's index space.  Comparing the realized
+    # planes against these ABSOLUTE positions — not only against each other's
+    # spacing — is what makes this a declared-vs-realized check rather than a
+    # self-consistency one.
+    drawn, cur = [], feed_cells
+    for i in range(5):
+        drawn.append((grid_plane(grid, 0, cur),
+                      grid_plane(grid, 0, cur + geo["t_cells"])))
+        cur += geo["t_cells"] + (int(geo["L_cells"][i]) if i < 4 else 0)
+    assert x_runs == drawn, ("realized iris walls != declared", x_runs, drawn)
+
     realized = []
-    for run, d_c in zip(runs, geo["d_cells"]):
-        assert len(run) == geo["t_cells"], ("thickness", len(run), geo["t_cells"])
-        open_y = np.where(sig[run[0]].max(axis=1) < 1e6)[0]
-        assert bool(np.all(np.diff(open_y) == 1)), "aperture not contiguous"
-        # electrical aperture = distance between the bounding zeroed planes
-        assert len(open_y) == d_c - 1, ("aperture nodes", len(open_y), d_c - 1)
-        realized.append((int(open_y[0]), int(open_y[-1])))
-    x_runs = [(int(r[0]), int(r[-1])) for r in runs]
+    for (lo, hi), d_c in zip(x_runs, geo["d_cells"]):
+        assert hi - lo == geo["t_cells"], (
+            "realized iris thickness != drawn", hi - lo, geo["t_cells"])
+        y_lo, y_hi = aperture_walls(
+            edges, 1, (slice(lo, lo + 1), slice(None), slice(None)))
+        fin_c = int(np.floor((cells - int(d_c)) / 2))
+        assert (y_lo, y_hi) == (grid_plane(grid, 1, fin_c),
+                                grid_plane(grid, 1, fin_c + int(d_c))), (
+            "realized aperture walls != declared", (y_lo, y_hi), fin_c, int(d_c))
+        assert y_hi - y_lo == d_c, ("realized aperture != drawn",
+                                    y_hi - y_lo, int(d_c))
+        realized.append((int(y_lo), int(y_hi)))
+    for i in range(4):
+        cav = x_runs[i + 1][0] - x_runs[i][1]
+        assert cav == int(geo["L_cells"][i]), (
+            "realized cavity != drawn", cav, int(geo["L_cells"][i]))
     return cells, realized, x_runs
 
 
-def electrical_geometry(geo, x_runs):
-    """The oracle's inputs, MEASURED from the rasterized metal (not assumed).
+def electrical_geometry(geo, x_runs, ap_walls=None):
+    """The oracle's inputs, MEASURED from the realized edge set (not assumed).
 
-    Raises if the measured lengths disagree with the (L_c + 1, t_c - 1) rule, so
-    a future layout change cannot silently re-introduce the 90 MHz mismatch.
+    Under the contract the measurement and the drawing agree by construction;
+    ``raster_assert`` has already asserted the identity per iris and per
+    cavity, and this function re-states it once more over the whole span so a
+    layout change cannot re-introduce a drawn-vs-realized pair.  The total
+    length identity is now plain addition — five irises plus four cavities
+    equals the outer extent — where under the retired rule it carried a
+    ``span - 1`` from the missing far face.
     """
     dx = geo["dx"]
-    # Node indices are integers, so the electrical lengths are integer cell
+    # Node indices are integers, so the realized lengths are integer cell
     # counts EXACTLY; deriving the counts back from a float length instead lets
     # 62 arrive as 61.99999999999999 and int() truncate it to 61.
     th_cells = [hi - lo for lo, hi in x_runs]
     cav_cells = [x_runs[i + 1][0] - x_runs[i][1] for i in range(4)]
-    assert all(c == geo["t_cells"] - 1 for c in th_cells), ("thickness", th_cells)
-    assert cav_cells == [int(v) + 1 for v in geo["L_cells"]], ("cavities", cav_cells)
+    assert all(c == geo["t_cells"] for c in th_cells), ("thickness", th_cells)
+    assert cav_cells == [int(v) for v in geo["L_cells"]], ("cavities", cav_cells)
     span = geo["t_cells"] * 5 + int(geo["L_cells"].sum())
-    assert sum(th_cells) + sum(cav_cells) == span - 1, (
-        "total electrical length", sum(th_cells) + sum(cav_cells), span - 1)
+    assert sum(th_cells) + sum(cav_cells) == span, (
+        "total realized length", sum(th_cells) + sum(cav_cells), span)
+    assert x_runs[-1][1] - x_runs[0][0] == span, (
+        "outer extent", x_runs[-1][1] - x_runs[0][0], span)
     out = dict(geo)
     out.update(thicknesses=np.array([c * dx for c in th_cells]),
                cavities=np.array([c * dx for c in cav_cells]),
                electrical_thickness_cells=int(th_cells[0]),
                electrical_cavity_cells=[int(c) for c in cav_cells])
+    if ap_walls is not None:
+        # The apertures come off the SAME realized edge set as the lengths, so
+        # the comparator and the oracle are fed one measurement of one built
+        # structure — not a measured length beside a drawn width.
+        ap_cells = [hi - lo for lo, hi in ap_walls]
+        assert ap_cells == [int(v) for v in geo["d_cells"]], (
+            "realized aperture != drawn", ap_cells,
+            [int(v) for v in geo["d_cells"]])
+        out.update(apertures=np.array([c * dx for c in ap_cells]),
+                   offsets=np.array([lo * dx for lo, _ in ap_walls]),
+                   electrical_aperture_cells=ap_cells,
+                   aperture_wall_nodes=[[int(lo), int(hi)]
+                                        for lo, hi in ap_walls],
+                   iris_wall_nodes=[[int(lo), int(hi)] for lo, hi in x_runs])
+        out["offset_from_centre"] = out["offsets"] - (
+            A_WR90 - out["apertures"]) / 2
     return out
 
 
 def measured_electrical_geometry(geo, freqs=FREQS):
-    """Build (no time stepping) and read back the structure rfx will simulate."""
+    """Build (no time stepping) and read back the structure rfx will simulate.
+
+    Build-time only: ``raster_assert`` reads ``realized_pec_edge_masks`` and
+    asserts the realized wall planes ARE the declared ones, so every number
+    handed downstream (oracle, FDFD comparator, fixture) is a measurement of
+    the structure the solver will step.
+    """
     sim, _, _ = build(geo, freqs=freqs)
-    _, _, x_runs = raster_assert(sim, geo)
-    return electrical_geometry(geo, x_runs)
+    _, ap_walls, x_runs = raster_assert(sim, geo, feed_cells=FEED_CELLS)
+    return electrical_geometry(geo, x_runs, ap_walls=ap_walls)
 
 
 def measure(geo, num_periods, b_cells=B_CELLS, freqs=FREQS,
@@ -562,7 +652,10 @@ def measure(geo, num_periods, b_cells=B_CELLS, freqs=FREQS,
     sim, cpml_c, glen_c = build(geo, b_cells=b_cells, freqs=freqs,
                                 feed_cells=feed_cells, port_cells=port_cells,
                                 cpml_fraction=cpml_fraction)
-    cells, realized, x_runs = raster_assert(sim, geo)
+    # feed_cells is threaded because the declared-vs-realized assert compares
+    # ABSOLUTE plane indices, and the feed-clearance witness moves the whole
+    # iris stack (40 / 70 / 100 cells of feed).
+    cells, realized, x_runs = raster_assert(sim, geo, feed_cells=feed_cells)
     grid = sim._build_grid()
     t0 = time.time()
     # Extractor warnings ARE part of the record (CLAUDE.md: quote every preflight
@@ -590,7 +683,14 @@ def measure(geo, num_periods, b_cells=B_CELLS, freqs=FREQS,
                 glen_cells=glen_c, num_periods=num_periods,
                 feed_cells=feed_cells, port_cells=port_cells,
                 cpml_fraction=cpml_fraction,
-                aperture_nodes=realized, iris_x_nodes=x_runs,
+                # RENAMED for #931 (was aperture_nodes / iris_x_nodes,
+                # which held OPEN-node bounds and MASKED-plane runs).
+                # These are realized WALL planes from
+                # realized_pec_edge_masks: aperture = hi - lo cells,
+                # iris thickness = hi - lo cells. The rename is the
+                # point — the old keys would have been silently
+                # reinterpreted.
+                aperture_wall_nodes=realized, iris_wall_nodes=x_runs,
                 s11=[round(float(v), 6) for v in s11],
                 s21=[round(float(v), 6) for v in s21],
                 max_colpow=round(float(np.max(colpow)), 4),
@@ -688,19 +788,30 @@ def oracle_curve(geo=None, nominal=False, freqs=FREQS, n_a=90):
                                      list(cav), f, n_a=n_a)[0])) for f in freqs]
 
 
-def iris_thickness_zero_count_sweep(geo, lo_cells=8.0, hi_cells=8.5,
-                                    step_cells=0.05, n_a=90):
+def iris_thickness_zero_count_sweep(geo, lo_cells=None, hi_cells=None,
+                                    step_cells=0.1, n_a=90):
     """Oracle-side robustness witness for the ZERO-COUNT gate (joint review N3).
 
-    The iris-thickness electrical leg is the one unsettled convention input
-    (measured ~(t_c - 0.68)*dx against the built (t_c - 1)*dx rule), and the
-    zero count is a gated integer -- so it must be invariant across that
-    acknowledged ambiguity band or the gate is an artifact of picking a
-    convention. Oracle evaluations only, no FDTD; runs at --write-fixture time
-    (roughly a minute per point) and is committed so the test suite can assert
-    the invariance without re-solving the sweep.
+    The zero count is a gated integer, so it has to survive a perturbation of
+    the comparator's most length-sensitive input rather than sit on one exact
+    value. The window is a FULL CELL wide and CENTRED on the realized iris
+    thickness: t_realized +/- 0.5 cell, eleven points at 0.1-cell steps.
+
+    Until #931 the same sweep ran 8.00-8.50 cells, one-sided, because the
+    iris-thickness leg had no settled value: 8.00 was this case's built
+    (t_c - 1)*dx rule and 8.32 the measured (t_c - 0.68)*dx offset, and the
+    sweep spanned the disagreement. Under the lattice ownership contract the
+    realized thickness IS the drawn thickness, so there is no ambiguity band
+    to span; what remains worth measuring is sensitivity, which is symmetric,
+    so the window is too. Oracle evaluations only, no FDTD; runs at
+    --write-fixture time (roughly a minute per point) and is committed so the
+    test suite can assert the invariance without re-solving the sweep.
     """
     dx = A_WR90 / GATED_CELLS
+    if lo_cells is None or hi_cells is None:
+        t_realized = float(geo["thicknesses"][0]) / dx
+        lo_cells = t_realized - 0.5 if lo_cells is None else lo_cells
+        hi_cells = t_realized + 0.5 if hi_cells is None else hi_cells
     rows = []
     n = int(round((hi_cells - lo_cells) / step_cells)) + 1
     for i in range(n):
@@ -737,14 +848,18 @@ def main(argv):
               f"(solver spread {PAPER['solver_spread_f0_hz']/1e6:.1f} MHz)")
 
     geo_g = rasterized_geometry(GATED_CELLS, allow_asymmetric=False)
-    # The oracle is fed the geometry read back off the rasterized metal, not the
-    # drawn cell counts: the difference is +107.5 MHz of f0 (see raster_assert).
+    # The oracle is fed the geometry read back off the REALIZED edge set, never
+    # the drawn counts. Under the #931 contract the two agree, and feeding the
+    # measurement is how they are kept agreeing: the pre-#931 pairing of the two
+    # was worth +107.5 MHz of f0 (see raster_assert).
     geo_g_e = measured_electrical_geometry(geo_g)
-    print(f"[electrical] iris {geo_g_e['electrical_thickness_cells']} cells "
+    print(f"[realized] iris {geo_g_e['electrical_thickness_cells']} cells "
           f"(drawn {geo_g['t_cells']}), cavities "
           f"{geo_g_e['electrical_cavity_cells']} cells "
-          f"(drawn {[int(v) for v in geo_g['L_cells']]}) — the S1 "
-          f"bounding-zeroed-plane rule along x")
+          f"(drawn {[int(v) for v in geo_g['L_cells']]}), apertures "
+          f"{geo_g_e['electrical_aperture_cells']} cells "
+          f"(drawn {[int(v) for v in geo_g['d_cells']]}) — realized == drawn, "
+          f"read from realized_pec_edge_masks")
     ras_curve = oracle_curve(geo_g_e)
     ras = band_analysis(ras_curve)
     print(f"[snap]   oracle @ a/{GATED_CELLS} rasterized: f0={ras['f0']/1e9:.4f} "
@@ -752,21 +867,29 @@ def main(argv):
           f"-> snap df0={(ras['f0']-nom['f0'])/1e6:+.1f} MHz "
           f"({(ras['f0']-nom['f0'])/nom['bw']*100:+.0f}% of the passband)")
 
-    # --- GATED: rfx vs oracle @ as-rasterized -----------------------------
-    # WHAT IS GATED AND WHY THIS AND NOT THAT (revised after the #499 cold
-    # review). The iris-thickness leg of the node-plane convention is NOT
-    # settled: four independent FDTD runs at drawn t_c = 2/4/6/8 give a flat
-    # offset of -0.66/-0.68/-0.68/-0.70 cell, i.e. t_elec ~ (t_c - 0.68)*dx,
-    # matching neither (t_c - 1)*dx nor case 18's t_c*dx. That leaves an
-    # irreducible comparator-input uncertainty of order half a cell, and the
-    # gated observable therefore has to be chosen by its SENSITIVITY to that
-    # uncertainty rather than by convenience. Measured, per cell of convention
-    # error: f0 ~2.4 MHz, bandwidth ~40 MHz, individual band edges ~22-30 MHz.
-    # So f0 (17x less sensitive than BW) and the zero COUNT (an integer) are
-    # gated; edges and bandwidth are REPORTED with the ambiguity stated, since
-    # a +/-20 MHz input uncertainty cannot sit under a 15 MHz gate.
-    # Adopting the fitted -0.68 instead would absorb the disagreement into a
-    # free parameter, after which the residual measures nothing.
+    # --- GATED: rfx vs oracle @ as-realized --------------------------------
+    # WHAT IS GATED AND WHY THIS AND NOT THAT.
+    # History, because the posture was built on it: before #931 the
+    # iris-thickness leg had no settled value. Four independent FDTD runs at
+    # drawn t_c = 2/4/6/8 gave a flat offset of -0.66/-0.68/-0.68/-0.70 cell,
+    # t_elec ~ (t_c - 0.68)*dx, matching neither this case's (t_c - 1)*dx rule
+    # nor case 18's t_c*dx. That was read as an irreducible half-cell
+    # comparator-input uncertainty, and the gated observable was chosen by its
+    # SENSITIVITY to it: f0 ~2.4 MHz per cell, bandwidth ~40 MHz, individual
+    # edges ~22-30 MHz. f0 and the zero COUNT (an integer) were gated; edges
+    # and bandwidth were reported, because a +/-20 MHz input uncertainty
+    # cannot sit under a 15 MHz gate.
+    # Under the #931 lattice ownership contract that uncertainty is GONE: a
+    # PEC volume realizes both faces, realized thickness == drawn thickness,
+    # and the -0.68 fit is best read as what a missing far face plus a
+    # half-cell corner recipe produced, not as a residual physical property.
+    # The sweep below is re-centred on the exact realized value and now
+    # measures a hypothetical perturbation, not an input ambiguity.
+    # f0 and the zero count stay gated, unchanged. Edges and bandwidth stay
+    # REPORTED in this revision — the reason for not gating them is removed,
+    # but a gate is set from a measured envelope, and that envelope has to
+    # come from the regenerated nine-configuration population, not from the
+    # disappearance of an excuse.
     print(f"\n== GATED rfx a/{GATED_CELLS} vs oracle@as-rasterized "
           f"(f0 {GATE_F0_MHZ} MHz + zero count; edges/BW reported) ==")
     row = measure(geo_g, 400.0)
@@ -982,7 +1105,10 @@ def main(argv):
         # levels, two Richardson estimates, and their agreement committed as the
         # extrapolation's own consistency witness before either is trusted.
         print("\n== formulation-independent FDFD check (2-D H-plane) ==")
-        d_e = [int(v) for v in geo_g["d_cells"]]
+        # Every input is read off the realized edge set (geo_g_e), never off
+        # the drawn counts: under the contract they are equal, and the way to
+        # keep them equal is to feed the measurement, not the intent.
+        d_e = [int(v) for v in geo_g_e["electrical_aperture_cells"]]
         cav_e = [int(v) for v in geo_g_e["electrical_cavity_cells"]]
         th_e = int(geo_g_e["electrical_thickness_cells"])
         gate_w = fdfd_hplane.self_test(A_WR90, 11.0e9, GATED_CELLS, 1,
@@ -1123,7 +1249,7 @@ def main(argv):
 
         payload = {
             "schema": "rfx.wr90_iris_filter_aghanim",
-            "schema_version": 1,
+            "schema_version": 2,
             "campaign": ("cross-solver validation campaign, item 3 stage S3: a "
                          "published 4th-order WR-90 inductive-iris bandpass "
                          "filter vs a TEn0 mode-matching cascade oracle"),
@@ -1164,12 +1290,15 @@ def main(argv):
                            "could have shipped green with its bridged midpoint inside the f0 gate. "
                            "All against the oracle evaluated on the AS-REALIZED geometry. Measured "
                            "d_f0 = +12.08 MHz, zeros 3 vs 3, one interior hole bin. The zero-count "
-                           "gate is additionally witnessed ROBUST to the unsettled iris-thickness "
-                           "convention: an oracle-side sweep of t_elec across 8.00-8.50 cells "
-                           "(covering both candidate conventions; committed as "
-                           "iris_thickness_zero_count_sweep) holds the count at 3 throughout while "
-                           "bandwidth moves 20 MHz across the same band, so the gated integer does "
-                           "not depend on which convention the comparator picks. The envelope is a "
+                           "gate is additionally witnessed ROBUST to a perturbation of the "
+                           "comparator's most length-sensitive input: an oracle-side sweep of t_elec "
+                           "across one full cell CENTRED on the realized iris thickness (committed as "
+                           "iris_thickness_zero_count_sweep) holds the count throughout while "
+                           "bandwidth moves across the same band, so the gated integer does not sit "
+                           "on one exact value. Before #931 that window was one-sided, 8.00-8.50 "
+                           "cells, spanning a genuine disagreement about what the iris thickness "
+                           "realized as; the lattice ownership contract removed the disagreement, so "
+                           "the sweep now measures sensitivity rather than ambiguity. The envelope is a "
                            "population of NINE configurations over four setup axes, not a single "
                            "run, and each axis carries an INTERIOR sample as well as an endpoint: "
                            "guide height b = 4/6/8 cells, run length num_periods 400/600/800, port "
@@ -1200,50 +1329,55 @@ def main(argv):
                            "in, because it fails the settling criterion at column power 1.207; it "
                            "stays committed as the evidence that the settling gate can fire. WHY f0 "
                            "AND NOT BANDWIDTH, which is the correction this case exists to record: "
-                           "the oracle must be fed the geometry that was BUILT, not the geometry "
-                           "that was DRAWN, and the three legs of that convention are not equally "
-                           "settled. The transverse aperture leg d_c*dx is confirmed to better than "
-                           "0.05 cell by an independent refit of 16 committed case-18 "
-                           "configurations during the #499 review -- a session measurement; the "
-                           "committed corroboration is the per-run raster assert on the open-node "
-                           "count and the exact-mask FDFD agreement. The cavity leg (L_c + 1)*dx - "
-                           "the distance between the bounding zeroed node planes - is confirmed to "
-                           "0.04-0.17 cell and carries about 105 of the 107.5 MHz that separates a "
-                           "drawn-count oracle from a realized-geometry one. But the IRIS-THICKNESS "
-                           "leg is NOT (t_c - 1)*dx: four independent FDTD runs at drawn t_c = "
-                           "2/4/6/8 give a flat offset of -0.66/-0.68/-0.68/-0.70 cell, i.e. t_elec "
-                           "is about (t_c - 0.68)*dx, matching neither this case's earlier rule nor "
-                           "the merged case 18's t_c*dx, with a residual 10-33x below both. That "
-                           "leaves an irreducible comparator-input uncertainty of order half a "
-                           "cell, and the gated observable is therefore chosen by SENSITIVITY to "
-                           "it: per cell of convention error, f0 moves about 2.4 MHz, bandwidth "
-                           "about 40 MHz, and individual band edges 22-30 MHz. So f0 and the zero "
-                           "count are gated; band edges and bandwidth are REPORTED, because a +/-20 "
-                           "MHz input uncertainty cannot honestly sit under a 15 MHz gate. Adopting "
-                           "the fitted -0.68 cell would absorb the disagreement into a free "
-                           "parameter, after which the residual would measure nothing - the "
-                           "tautological-validation failure this campaign has hit repeatedly - so "
-                           "the offset is recorded as an uncertainty and NOT adopted. Handing the "
-                           "oracle the drawn cell counts instead of the realized ones biases f0 by "
-                           "+107.5 MHz, five times the reference's own 21.9 MHz CST-vs-HFSS spread, "
-                           "and the envelope-times-1.5 rule does NOT catch that class because the "
-                           "rule bounds SCATTER and this is BIAS. The realized lengths are read "
-                           "back off the rasterized metal and re-derived again from the committed "
-                           "node indices in the frozen gate test. Total electrical length is a "
-                           "face-continuity CHECK across region types, NOT a uniqueness argument: "
-                           "putting the metal/open interface at sigma*dx beyond the outermost metal "
-                           "node gives total = span - 1 + 2*sigma = the outer extent measured at "
-                           "the same sigma, conserved for EVERY sigma, and sigma = 0.5 is the drawn "
-                           "pairing itself. An earlier revision claimed this was \"the only pairing "
-                           "that conserves total electrical length\"; that is false and is "
-                           "withdrawn. Drawn counts are COMPENSATED (t_c = round(t/dx) + 1, L_c = "
-                           "round(L/dx) - 1) so the stated electrical dimensions land on nominal, "
-                           "which is nearest-representable rounding with zero free parameters and "
-                           "no reference number entering - that, not any mesh comparison, is why it "
-                           "is a statement of intent rather than a fit. It is NOT a monotone "
-                           "improvement: at a/60 it moves f0 from -35.8 to +120.2 MHz, because it "
-                           "converts a uniformly-signed set of per-cavity errors into a mixed-sign "
-                           "one. REPORTED, NEVER GATED: individual band edges (+17.08 / +7.09 MHz) "
+                           "the oracle must be fed the geometry that was BUILT, not the geometry that "
+                           "was DRAWN. Under the #931 lattice ownership contract those are the same "
+                           "geometry -- a PEC volume drawn on node planes realizes tangential walls at "
+                           "BOTH faces and shorts every normal edge between them, so realized == drawn "
+                           "on all three legs -- and this case reads all three off "
+                           "realized_pec_edge_masks instead of asserting a locally written rule. "
+                           "HISTORY, kept because the posture was built on it and the numbers are still "
+                           "in the record: until #931 a body's far face was never a wall, so the three "
+                           "legs disagreed with the drawing and with each other. The transverse "
+                           "aperture leg d_c*dx was confirmed to better than 0.05 cell by an "
+                           "independent refit of 16 committed case-18 configurations during the #499 "
+                           "review. The cavity leg was (L_c + 1)*dx -- the distance between the "
+                           "bounding zeroed node planes -- confirmed to 0.04-0.17 cell, and carried "
+                           "about 105 of the 107.5 MHz that separated a drawn-count oracle from a "
+                           "realized-geometry one. The IRIS-THICKNESS leg fitted neither rule: four "
+                           "independent FDTD runs at drawn t_c = 2/4/6/8 gave a flat offset of "
+                           "-0.66/-0.68/-0.68/-0.70 cell, t_elec about (t_c - 0.68)*dx, matching "
+                           "neither this case's (t_c - 1)*dx nor the merged case 18's t_c*dx, with a "
+                           "residual 10-33x below both. That was recorded as an irreducible half-cell "
+                           "comparator-input uncertainty and never adopted as a fitted parameter, which "
+                           "was the right call: it was not a physical property but the signature of a "
+                           "missing far face plus a corner recipe that put every face half a cell off "
+                           "the node planes. Both are gone. The gated observable is still chosen by "
+                           "SENSITIVITY -- per cell of iris thickness, f0 moves about 2.4 MHz, "
+                           "bandwidth about 40 MHz, individual band edges 22-30 MHz -- so f0 and the "
+                           "zero count carry the gates. Band edges and bandwidth stay REPORTED in this "
+                           "revision, but no longer for the old reason: the input uncertainty that made "
+                           "a 15 MHz gate on them dishonest no longer exists, and whether they should "
+                           "now be gated is a question for the measured envelope of the regenerated "
+                           "population, not for the disappearance of an excuse. Handing the oracle "
+                           "drawn counts under the old realization biased f0 by +107.5 MHz, five times "
+                           "the reference's own 21.9 MHz CST-vs-HFSS spread, and the "
+                           "envelope-times-1.5 rule does NOT catch that class because the rule bounds "
+                           "SCATTER and this is BIAS. The realized lengths are read off the realized "
+                           "edge set at build time and re-derived again from the committed node indices "
+                           "in the frozen gate test. Total realized length is now plain addition -- "
+                           "five irises plus four cavities equals the outer extent between the first "
+                           "and last wall plane -- where the retired rule needed a span - 1 and a "
+                           "face-continuity argument to close. An earlier revision claimed that pairing "
+                           "was \"the only pairing that conserves total electrical length\"; that was "
+                           "false, is withdrawn, and the contract makes the question moot. Drawn counts "
+                           "are the plain roundings t_c = round(t/dx), L_c = round(L/dx), d_c = "
+                           "round(d/dx), with NO compensation: the +1 / -1 this case carried until #931 "
+                           "existed only to cancel the missing far face, and deleting it together with "
+                           "the realization it cancelled leaves the built structure unchanged -- same "
+                           "wall planes, same cavities, same apertures. Snapping is still "
+                           "nearest-representable rounding with zero free parameters and no reference "
+                           "number entering, and it is still NOT a monotone improvement across meshes: "
+                           "a/60 and a/90 land on opposite sides of the nominal design. REPORTED, NEVER GATED: individual band edges (+17.08 / +7.09 MHz) "
                            "and bandwidth (-9.99 MHz), which are ONE fact and not two - d_bw is "
                            "identically d_hi - d_lo - so the earlier framing of an \"unexplained "
                            "asymmetric edge residual\" separate from a bandwidth deficit was an "
@@ -1373,10 +1507,14 @@ def main(argv):
                            "a/90 against -0.1241 at a/60, where dispersion would have given 0.083), "
                            "so it behaves like a fixed geometric offset rather than a "
                            "frequency-dependent solver error, but attributing it to a specific "
-                           "convention leg has FAILED: propagating the independently measured iris "
-                           "thickness (t_c - 0.68)*dx through node-plane length conservation "
-                           "overshoots and flips the sign, taking a/90 from +12.08 to -30.62 MHz. "
-                           "That attribution is recorded as falsified, not as pending. _gamma at "
+                           "convention leg had FAILED under the old realization: propagating the "
+                           "independently measured iris thickness (t_c - 0.68)*dx through node-plane "
+                           "length conservation overshot and flipped the sign, taking a/90 from "
+                           "+12.08 to -30.62 MHz, and that attribution was recorded as falsified "
+                           "rather than pending. Under the #931 contract the convention legs are no "
+                           "longer free at all -- realized == drawn on every one -- so a residual "
+                           "that survives the regeneration is not a convention artifact. Whether it "
+                           "survived is stated with the regenerated numbers. _gamma at "
                            "exact cutoff (k equal to n*pi/w, where the sqrt argument vanishes) is "
                            "unreachable at these band edges and untested. FENCED: nothing here "
                            "promotes the lane beyond S1. Multi-iris filters, posts and septa remain "
@@ -1405,8 +1543,8 @@ def main(argv):
                            "snapped, not equivalent. OBSERVABLE PRIORITY for a resonant structure, "
                            "as this case measures it: the structural reflection-zero COUNT first "
                            "(an integer, depth-independent, and shown grid-robust), then centre "
-                           "frequency (least sensitive of the continuous quantities to the "
-                           "unsettled convention, ~2.4 MHz per cell), then band edges and bandwidth "
+                           "frequency (least sensitive of the continuous quantities to a length error, "
+                           "~2.4 MHz per cell of iris thickness), then band edges and bandwidth "
                            "(~22-40 MHz per cell, hence reported), then worst return loss, and last "
                            "individual ripple levels and null depths, which are not values at all. "
                            "TOPOLOGY FIRST, AND f0 IS NOT EXONERATED: the zero count is the most "
@@ -1452,15 +1590,17 @@ def main(argv):
                             "comparison against an external scale (the reference's own 21.9 MHz f0 "
                             "spread between two independent commercial codes), not the gate. GATED: "
                             "centre frequency f0; the structural zero COUNT (witnessed invariant "
-                            "across the 8.00-8.50-cell iris-thickness ambiguity band, see "
-                            "iris_thickness_zero_count_sweep); and passband contiguity as a "
+                            "across a one-cell iris-thickness band centred on the realized "
+                            "thickness, see iris_thickness_zero_count_sweep); and passband "
+                            "contiguity as a "
                             "regression lock (span_holes <= 1, the committed envelope -- the f0 gate "
                             "alone cannot see a split passband because band edges are the outermost "
                             "crossings), against the oracle on as-realized geometry. REPORTED, never "
-                            "gated: individual band edges and bandwidth (their comparator-input "
-                            "uncertainty from the unsettled iris-thickness convention, ~20 MHz, "
-                            "exceeds any defensible gate on them, and d_bw is identically d_hi - "
-                            "d_lo so they are one fact), worst-case RL, ripple levels, zero depths, "
+                            "gated: individual band edges and bandwidth (the half-cell input "
+                            "uncertainty that ruled out a gate on them is removed by #931, but a "
+                            "gate needs a measured envelope from the regenerated population, so "
+                            "they stay reported for now; d_bw is identically d_hi - d_lo so they "
+                            "are one fact), worst-case RL, ripple levels, zero depths, "
                             "contiguity detail beyond the span_holes lock, the coarse rung and phase"),
             },
             "oracle_nominal_band": nom,
@@ -1473,67 +1613,92 @@ def main(argv):
             "absorber_depth_witness": absorber,
             "fdfd_formulation_independent": fdfd,
             "electrical_geometry": {
-                "rule": ("oracle inputs are READ BACK off the rasterized metal. "
-                         "The CAVITY leg is (L_c + 1)*dx -- the distance "
-                         "between the bounding zeroed node planes -- and is "
-                         "confirmed to 0.04-0.17 cell by the committed "
-                         "residual against the measured cavity sensitivity; "
-                         "the transverse APERTURE leg d_c*dx is confirmed to "
-                         "better than 0.05 cell by an independent refit of 16 "
-                         "committed case-18 configurations. The IRIS-THICKNESS "
-                         "leg is NOT (t_c - 1)*dx: four FDTD runs at drawn "
-                         "t_c = 2/4/6/8 give a flat offset of -0.66/-0.68/"
-                         "-0.68/-0.70 cell, i.e. t_elec ~ (t_c - 0.68)*dx, "
-                         "matching neither this rule nor case 18's t_c*dx. "
-                         "That ~1/3-cell ambiguity is an irreducible "
-                         "comparator-input uncertainty here and it is why "
-                         "bandwidth and individual band edges are REPORTED "
-                         "rather than gated (they move ~40 and ~22-30 MHz per "
-                         "cell of it) while f0 and the zero count are gated "
-                         "(~2.4 MHz per cell, and an integer). Total electrical "
-                         "length is a face-continuity CHECK across region "
-                         "types, NOT a uniqueness argument: putting the "
-                         "interface at sigma*dx beyond the outermost metal "
-                         "node gives total = span - 1 + 2*sigma = the outer "
-                         "extent measured at the same sigma, conserved for "
-                         "EVERY sigma, and sigma = 0.5 is the drawn pairing "
-                         "itself."),
+                "rule": ("oracle inputs are READ BACK off the REALIZED PEC "
+                         "edge set (rfx.boundaries.pec.realized_pec_edge_masks "
+                         "through validation/crossval/_wr90_iris_realized.py), "
+                         "never off the drawn counts. Under the #931 lattice "
+                         "ownership contract a PEC volume drawn on node planes "
+                         "realizes tangential walls at BOTH faces and shorts "
+                         "every normal edge between them, so all three legs "
+                         "are the drawn ones: iris thickness t_c*dx, cavity "
+                         "L_c*dx, aperture d_c*dx. raster_assert asserts that "
+                         "identity per iris, per cavity and per aperture at "
+                         "build time, with no solve. HISTORY: before #931 a "
+                         "body's far face was never a wall, so the realized "
+                         "cavity was (L_c + 1)*dx and the realized iris "
+                         "(t_c - 1)*dx against the drawing, this case carried "
+                         "a +1/-1 compensation in the drawn counts to land the "
+                         "electrical dimensions on nominal, and the "
+                         "iris-thickness leg fitted neither rule (four FDTD "
+                         "runs at drawn t_c = 2/4/6/8 gave t_elec ~ "
+                         "(t_c - 0.68)*dx, matching neither this rule nor case "
+                         "18's t_c*dx). That ~1/3-cell offset was read as an "
+                         "irreducible comparator-input uncertainty; it is "
+                         "better read as the missing far face plus a corner "
+                         "recipe that placed every face half a cell off the "
+                         "node planes. Both are gone, and with them the "
+                         "compensation and the face-continuity argument that "
+                         "closed the old total-length identity through a "
+                         "span - 1. Total realized length is now plain "
+                         "addition: five irises plus four cavities equals the "
+                         "outer extent between the first and last wall "
+                         "plane."),
                 "iris_thickness_cells": geo_g_e["electrical_thickness_cells"],
                 "cavity_cells": geo_g_e["electrical_cavity_cells"],
+                "aperture_cells": geo_g_e["electrical_aperture_cells"],
+                "iris_wall_nodes": geo_g_e["iris_wall_nodes"],
+                "aperture_wall_nodes": geo_g_e["aperture_wall_nodes"],
                 "drawn_iris_thickness_cells": int(geo_g["t_cells"]),
                 "drawn_cavity_cells": [int(v) for v in geo_g["L_cells"]],
-                "compensation": ("drawn counts are chosen so the ELECTRICAL "
-                                 "dimensions land on nominal: t_c = "
-                                 "round(t/dx) + 1, L_c = round(L/dx) - 1. At "
-                                 "a/90 that puts f0 +3.3 MHz from the paper's "
-                                 "exact design (inside its own 21.9 MHz "
-                                 "CST-vs-HFSS spread) against -101.4 MHz "
-                                 "uncompensated. Compensation is NOT a monotone "
-                                 "improvement -- it only picks which side of the "
-                                 "sub-cell rounding you land on, and at a/60 it "
-                                 "moves f0 from -35.8 to +120.2 MHz."),
+                "drawn_aperture_cells": [int(v) for v in geo_g["d_cells"]],
+                "compensation": ("none. Drawn counts are the plain roundings "
+                                 "t_c = round(t/dx), L_c = round(L/dx), d_c = "
+                                 "round(d/dx), and under the contract they are "
+                                 "also the realized ones. Until #931 this case "
+                                 "drew t_c = round(t/dx) + 1 and L_c = "
+                                 "round(L/dx) - 1 so the ELECTRICAL dimensions "
+                                 "would land on nominal against a realization "
+                                 "that lost one plane per body; the "
+                                 "compensation and that realization are "
+                                 "deleted together and the built structure is "
+                                 "unchanged. Snapping remains a rounding and "
+                                 "is NOT a monotone improvement across meshes: "
+                                 "a/90 and a/60 land on opposite sides of the "
+                                 "nominal design."),
                 "cost_of_using_intended_counts_mhz": 107.5,
-                "cost_note": ("measured 2026-07-29: feeding the oracle the DRAWN "
-                              "cell counts puts its band at 10.9054-11.2267 GHz "
-                              "against 10.7833-11.1337 GHz for the realized "
-                              "geometry, a +107.5 MHz f0 error -- five times the "
-                              "paper's own 21.9 MHz CST-vs-HFSS spread, and it "
-                              "would have had to be absorbed by a ~162 MHz gate "
-                              "(46% of the passband) that pins nothing. First "
-                              "found as +90.0 MHz on the uncompensated counts; "
-                              "compensation changes which pair is confused, not "
-                              "the class."),
+                "cost_note": ("HISTORICAL, measured 2026-07-29 under the "
+                              "pre-#931 realization: feeding the oracle the "
+                              "DRAWN cell counts put its band at "
+                              "10.9054-11.2267 GHz against 10.7833-11.1337 GHz "
+                              "for the realized geometry, a +107.5 MHz f0 "
+                              "error -- five times the paper's own 21.9 MHz "
+                              "CST-vs-HFSS spread, and it would have had to be "
+                              "absorbed by a ~162 MHz gate (46% of the "
+                              "passband) that pins nothing. First found as "
+                              "+90.0 MHz on the uncompensated counts; "
+                              "compensation changed which pair was confused, "
+                              "not the class. The contract removes the pair: "
+                              "there is one geometry, drawn and realized, and "
+                              "this number is kept as the record of what the "
+                              "defect was worth."),
             },
             "iris_thickness_zero_count_sweep": {
                 "note": ("oracle-side robustness witness for the ZERO-COUNT "
-                         "gate (post-merge joint review, N3): the "
-                         "iris-thickness electrical leg is the one unsettled "
-                         "convention input, so the gated integer must not "
-                         "depend on which convention the comparator picks. "
-                         "t_elec swept 8.00-8.50 cells -- the built "
-                         "(t_c - 1)*dx rule at 8.00, the measured "
-                         "(t_c - 0.68)*dx offset at 8.32 -- on the committed "
-                         "frequency grid; oracle evaluations only, no FDTD."),
+                         "gate (post-merge joint review, N3; re-centred for "
+                         "#931): the gated integer must survive a "
+                         "perturbation of the comparator's most "
+                         "length-sensitive input. t_elec swept over one full "
+                         "cell CENTRED on the realized iris thickness "
+                         "(realized -0.5 .. +0.5 cell, eleven points) on the "
+                         "committed frequency grid; oracle evaluations only, "
+                         "no FDTD. Before #931 the window was one-sided, "
+                         "8.00-8.50 cells, spanning the disagreement between "
+                         "this case's built (t_c - 1)*dx rule and the "
+                         "measured (t_c - 0.68)*dx offset; the lattice "
+                         "ownership contract makes the realized thickness "
+                         "exact, so there is no ambiguity band left to span "
+                         "and the remaining question is symmetric "
+                         "sensitivity."),
                 "rows": tz,
             },
             "provenance": {
