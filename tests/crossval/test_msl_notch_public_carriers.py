@@ -50,10 +50,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CV06B = REPO_ROOT / "validation/crossval/06b_msl_notch_filter_uniform.py"
 # The CURRENT committed run: the post-#931 re-solve (VESSL 369367259191,
-# 2026-09-07), with the trace and stub declared as sheets. The 2026-08-27
-# log stays committed as the pre-2.0 record and is read by nothing here.
+# 2026-09-07), with the trace and stub declared as sheets.
 RUN_LOG = (REPO_ROOT / "validation/crossval/_06b_notch_uniform_logs"
            / "20260907T124851Z_run.log")
+# The pre-2.0 record of the SAME mesh: one-cell PEC Boxes, not sheets. The
+# #723 anchor gate reads it for the leg that compares two pre-contract boards.
 RUN_LOG_PRE931 = (REPO_ROOT / "validation/crossval/_06b_notch_uniform_logs"
                   / "20260827T131217Z_run.log")
 RUN_LOG_DX80 = (REPO_ROOT / "validation/crossval/_06b_notch_uniform_logs"
@@ -254,55 +255,74 @@ def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
     """#723 review, BLOCKING 1. What the fix buys is realized == declared on
     z, so the measured Z0 can be compared to the DESIGN's Hammerstad-Jensen.
     Evaluating HJ on each mesh's own realized board instead makes the
-    dx=80um mesh look just as good (its realized 560/320um board has
-    HJ = 57.46 ohm against a measured ~57.9), so that framing must not be
-    used to claim a port-accuracy improvement.
+    dx=80um mesh look at least as good, so that framing must not be used to
+    claim a port-accuracy improvement.
+
+    #931, 2026-09-07: this gate RUNS on the shipped sheet-declared tree
+    again. It had been skipped there on the premise that the realized trace
+    width moves 635.0 -> 571.5 um and carries the HJ anchor with it. That
+    premise names the wrong width. 571.5 um is the GEOMETRIC node span the
+    contract reports; the analytic reference is fed the ELECTRICAL width
+    ``_realized_trace_width`` returns, n_rows * dx = 635.0 um, which the
+    contract does not move -- test_realized_board_is_measured_not_assumed
+    pins both, and the pre-#931 and post-#931 run logs each print
+    ``W_realized=635.0um`` in their header. What did move is the MEASURED
+    median, 46.5 -> 48.2 ohm across the re-solve, so each leg below reads
+    the log that belongs to the board it is comparing.
     """
     from rfx.sources.msl_eigenmode import hammerstad_jensen_z0_eps_eff
 
-    if _is_sheet_declared(cv06b._build_sim()):
-        pytest.skip(
-            "cv06b's realized trace width moves 635.0 -> 571.5 um when the "
-            "foil is declared as a sheet (Hammerstad-Jensen 46.18 -> 49.39 "
-            "ohm), and the measured Z0 median moves with the re-solve. Every "
-            "number in this test is downstream of both; re-derive them from "
-            f"the new run log rather than re-typing: {_MIGRATION_RUN}")
     z0_design, _ = hammerstad_jensen_z0_eps_eff(600e-6, 254e-6, cv06b.EPS_R)
     z0_realized_63, _ = hammerstad_jensen_z0_eps_eff(635e-6, 254e-6, cv06b.EPS_R)
     z0_realized_80, _ = hammerstad_jensen_z0_eps_eff(560e-6, 320e-6, cv06b.EPS_R)
+    # The GEOMETRIC-width anchor, recorded because fidelity_report prints
+    # that width and someone will reach for it. It is deliberately NOT used
+    # in either leg: the analytic reference takes the electrical width.
+    z0_geometric_63, _ = hammerstad_jensen_z0_eps_eff(571.5e-6, 254e-6,
+                                                      cv06b.EPS_R)
 
     assert z0_design == pytest.approx(47.90, abs=0.02)
     assert z0_realized_63 == pytest.approx(46.18, abs=0.02)
     assert z0_realized_80 == pytest.approx(57.46, abs=0.02)
+    assert z0_geometric_63 == pytest.approx(49.39, abs=0.02)
 
-    # POST-#931 the same mesh realizes a 571.5um line (one edge narrower --
-    # see test_realized_board_is_measured_not_assumed), so its own anchor is
-    # 49.39 ohm, on the OTHER side of the 47.90 ohm design board. Every
-    # measured Z0 below is a PRE-#931 log and is compared only against the
-    # pre-#931 anchors; splicing a post-#931 measurement into this block
-    # would compare two boards.
-    z0_realized_931, _ = hammerstad_jensen_z0_eps_eff(571.5e-6, 254e-6,
-                                                      cv06b.EPS_R)
-    assert z0_realized_931 == pytest.approx(49.39, abs=0.02)
-
-    # The measured medians, PARSED from the two committed logs rather than
-    # retyped: the post-fix GPU run and the dx=80um re-measurement taken
-    # live on origin/main (cdc38bc8) for the #723 review.
-    z0_meas_63 = _z0_median(RUN_LOG.read_text(encoding="utf-8"))
+    # ---- Leg A: the #723 review's own comparison, on the two logs it was
+    # made from. Both are the one-cell-PEC-Box realization, so the two sides
+    # are the same kind of board and no post-contract number is spliced in.
+    z0_meas_63_pre = _z0_median(RUN_LOG_PRE931.read_text(encoding="utf-8"))
     z0_meas_80 = _z0_median(RUN_LOG_DX80.read_text(encoding="utf-8"))
-    assert z0_meas_63 == pytest.approx(46.5, abs=0.05)
+    assert z0_meas_63_pre == pytest.approx(46.5, abs=0.05)
     assert z0_meas_80 == pytest.approx(57.9, abs=0.05)
-    dev_realized_63 = abs(z0_meas_63 - z0_realized_63) / z0_realized_63 * 100
+    dev_realized_63 = abs(z0_meas_63_pre - z0_realized_63) / z0_realized_63 * 100
     dev_realized_80 = abs(z0_meas_80 - z0_realized_80) / z0_realized_80 * 100
+    assert dev_realized_63 == pytest.approx(0.69, abs=0.03)
+    assert dev_realized_80 == pytest.approx(0.76, abs=0.03)
     # Both under 1% -- i.e. the realized-board comparison does not separate
     # the two meshes, which is why no "Nx bias reduction" may be claimed.
     assert dev_realized_63 < 1.0
     assert dev_realized_80 < 1.0
     assert dev_realized_80 / dev_realized_63 < 3.0
 
-    # What IS true: on the design board the aligned mesh lands within 3%.
-    dev_design_63 = abs(z0_meas_63 - z0_design) / z0_design * 100
-    assert dev_design_63 == pytest.approx(2.9, abs=0.15)
+    # What IS true on that pair: on the design board the aligned mesh lands
+    # within 3%.
+    dev_design_63_pre = abs(z0_meas_63_pre - z0_design) / z0_design * 100
+    assert dev_design_63_pre == pytest.approx(2.9, abs=0.15)
+
+    # ---- Leg B: the board this tree actually ships, read from the current
+    # committed post-#931 run. ONE mesh: there is no post-contract dx=80um
+    # re-measurement, so nothing here compares meshes, and the leg-A verdict
+    # above is not restated on this board.
+    z0_meas_63 = _z0_median(RUN_LOG.read_text(encoding="utf-8"))
+    assert z0_meas_63 == pytest.approx(48.2, abs=0.05)
+    dev_realized_63_now = abs(z0_meas_63 - z0_realized_63) / z0_realized_63 * 100
+    dev_design_63_now = abs(z0_meas_63 - z0_design) / z0_design * 100
+    assert dev_realized_63_now == pytest.approx(4.37, abs=0.05)
+    assert dev_design_63_now == pytest.approx(0.64, abs=0.05)
+    # On the sheet board the measured median sits nearer the DESIGN board
+    # than the realized-board anchor, so the framing #723 refused does not
+    # favour this mesh under the contract either. Not an accuracy claim:
+    # one mesh, one run, no coarse-mesh counterpart to compare it with.
+    assert dev_design_63_now < dev_realized_63_now
 
 
 def test_committed_log_reports_the_numbers_the_carriers_quote(log_text, cv06b):
