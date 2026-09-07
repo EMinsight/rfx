@@ -62,3 +62,24 @@ every group-T assertion now goes through):
 
     tests/unit/{materials,api,misc,sources,farfield}
     561 passed, 15 skipped, 0 failed (991 s, -n 4, JAX_PLATFORMS=cpu)
+
+## Second pass (2026-09-07, same branch)
+
+Three sites the first pass left, none of them needing a solve:
+
+* `farfield/test_ntff_smatrix_drop_warning::_msl_thru` — the trace had been
+  migrated to a sheet with only a comment; it now carries the build-time
+  realized-plane check like every other migrated conductor in this group.
+* `misc/test_review_tier1_validation_battery` OPT-C1 — the `(N-1)*dx` cavity
+  length is DOMAIN-face PEC (§1.8), not a conductor body, so it does not move.
+  Recorded at the block comment stating the convention, which is what the
+  inventory row asked for ("record it so nobody 'fixes' it by analogy").
+* `materials/test_sheet_impedance::_mixed_probe_fed_msl` — the last one-cell
+  PEC foil in this group's directories. Now a sheet, and the board is redrawn
+  on-lattice (`dx = h_sub/3 = 84.667 um` instead of the copied 80 um) so the
+  254 um laminate face is a node: at 80 um it is 3.175 cells up and the sheet
+  would land 14 um inside the substrate. Design note §1.3 says redraw, not
+  snap. The fixture's only consumer is `test_fence_mixed_sparams`, which
+  expects a ValueError before any solve, so nothing is re-measured.
+
+VESSL runs after this pass: still NONE, for the same reason.
