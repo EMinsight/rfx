@@ -622,6 +622,15 @@ def _exchange_h_ghosts_nu(state: FDTDState, mesh, n_devices: int) -> FDTDState:
 
 
 def _exchange_e_ghosts_nu(state: FDTDState, mesh, n_devices: int) -> FDTDState:
+    """Refill the E ghost rows from the neighbour ranks' real rows.
+
+    Placement contract: this is the LAST stage of the E half-step in
+    :func:`run_nonuniform_distributed_pec` — after sources and after every
+    PEC stage — so a ghost row is a copy of the owner's FINISHED real row.
+    The H update at a rank's last real cell reads ``Ey``/``Ez`` on the
+    right ghost plane; a copy taken before the owner zeroed its PEC edges
+    there is stale (#931 seam-cell divergence).
+    """
     return state._replace(
         ex=_exchange_component_nu_shmap(state.ex, mesh, n_devices),
         ey=_exchange_component_nu_shmap(state.ey, mesh, n_devices),
@@ -786,6 +795,15 @@ def _apply_pec_mask_nu_shmap(state: FDTDState, sharded_pec_mask, mesh,
         neighbour computation, and the **first/last real cells** see the
         ghost neighbour (which carries the seam-neighbour's PEC status
         because ``shard_pec_mask_x_slab`` populated it).
+
+    The ghost rows are therefore NOT zeroed here.  They are refilled from
+    the owner rank's (already zeroed) real row by the E ghost exchange,
+    which the scan body runs AFTER this step (stage 9).  That order is
+    load-bearing: the next H update at a rank's last real cell reads
+    ``Ey``/``Ez`` on its right ghost plane, and when a body's cell is the
+    neighbour's first real cell those edges are PEC only in the
+    neighbour's copy.  Exchanging first handed this rank the un-zeroed
+    value (#931 seam-cell divergence, 2.107e-01 final-step error).
     """
     if sharded_pec_mask is None:
         return state
@@ -858,7 +876,10 @@ def _apply_pec_occupancy_nu_shmap(state: FDTDState, sharded_pec_occupancy,
     The occupancy at the first / last real cell sees the seam-neighbour's
     occupancy via the ghost row populated by
     :func:`shard_pec_occupancy_x_slab`, which keeps the shared §1.6
-    noisy-OR rule consistent with the single-device path.
+    noisy-OR rule consistent with the single-device path.  As for the
+    hard mask, the ghost E rows are not touched here; the E ghost
+    exchange that follows this step (scan body stage 9) copies the
+    owner's soft-zeroed real row into them.
     """
     if sharded_pec_occupancy is None:
         return state
@@ -1956,11 +1977,33 @@ def run_nonuniform_distributed_pec(
             (uses snapshotted ex_old/ey_old/ez_old, not post-exchange E)
         5. apply_cpml_e (Phase 2C, NU + slab-aware)  via shard_map  [if CPML]
         6. Source injection (rank-conditional)       via shard_map
-        7. Ghost exchange of E                       via lax.ppermute
-        8. apply_pec on physical domain faces        via shard_map
-        9. apply_pec_mask (geometry + override)      via shard_map
-        9b. apply_pec_occupancy (soft PEC)           via shard_map  [if occupancy]
+        7. apply_pec on physical domain faces        via shard_map
+        8. apply_pec_mask (geometry + override)      via shard_map
+        8b. apply_pec_occupancy (soft PEC)           via shard_map  [if occupancy]
+        9. Ghost exchange of E                       via lax.ppermute
        10. Probe accumulation (rank-conditional sum) via lax.psum
+
+    The E ghost exchange is the LAST E-half-step stage, after every
+    operator that writes E on real cells (sources, the domain-face PEC,
+    the PEC mask, the soft occupancy) — the same placement the H half
+    gives the PMC face (stage 2b before the H exchange, "so the zero
+    propagates to neighbours via the exchange").  A rank acts only on
+    its real cells; a ghost row is a copy of the owner's real row, and
+    that copy is only faithful if it is taken after the owner is done.
+    Measured on the #931 seam fixtures (16x8x8, 2 ranks, 30 steps, one
+    PEC cell at ``(nx_per_rank, ny//2, nz//2)`` = rank 1's first real
+    cell): with the exchange BEFORE the PEC stages, rank 0's right ghost
+    kept the un-zeroed ``Ey``/``Ez`` on the seam plane that rank 1 zeroed
+    a stage later, rank 0's next H update at its last real cell read that
+    stale plane, and the Class B final-step error was 2.107e-01 against a
+    5e-5 gate (hard mask and soft occupancy alike).  With the exchange
+    after the PEC stages the seam row reads 7.8e-08 at the final step and
+    the whole probe series agrees to 3 float32 ulp (max |diff| 1.5 on a
+    4.0e6 peak) — the same rounding-level residual the away-from-seam
+    bodies show before and after.  A body whose seam-plane edges
+    are owned by the LEFT rank (or a body straddling the seam) was never
+    visibly wrong, because the corrupted H then sat inside the body and
+    fed only PEC edges — which is why the old three-cell fixtures passed.
 
     ADE Ordering Contract (Phase 2D — V3 plan lines 679-698)
     -------------------------------------------------------
@@ -1983,8 +2026,9 @@ def run_nonuniform_distributed_pec(
          ``_update_e_nu_dispersive`` receives the snapshotted
          ``e_old`` tuple via the ``e_old=`` keyword — NOT
          ``state.ex/ey/ez`` (which would be post-exchange E from the
-         previous step's seventh stage).
-      4. Continue with CPML-E, sources, E ghost exchange, PEC.
+         previous step's ninth stage).
+      4. Continue with CPML-E, sources, PEC, and LAST the E ghost
+         exchange (see the ordering note above).
 
     The snapshot lives only as a Python local within ``step_fn``; it
     costs nothing to carry (just three ``jnp.array`` references), and
@@ -2804,7 +2848,7 @@ def run_nonuniform_distributed_pec(
         #    - no dispersion: standard NU E update (Phase 2B path)
         #    - Debye-only / Lorentz-only / mixed: dispersive NU ADE
         #      with the snapshotted ex_old/ey_old/ez_old (NEVER the
-        #      post-ghost-exchange E from the previous step's stage 7).
+        #      post-ghost-exchange E from the previous step's stage 9).
         if use_dispersion:
             st, db_st, lr_st = _update_e_dispersive_shmap(
                 st, sharded_materials, db_st, lr_st,
@@ -2820,28 +2864,35 @@ def run_nonuniform_distributed_pec(
         # 6. Source injection (rank-conditional via shard_map)
         st = _inject_sources_shmap(st, src_vals)
 
-        # 7. Ghost exchange of E so the next step's H update sees the
-        #    neighbour rank's E at the seam.
-        st = _exchange_e_ghosts_nu(st, mesh, n_devices)
-
-        # 8. PEC on physical domain faces (X-faces are rank-conditional).
+        # 7. PEC on physical domain faces (X-faces are rank-conditional).
         st = _apply_pec_face_nu_shmap(st, mesh, n_devices, nx_local, pad_x=pad_x)
 
-        # 9. PEC mask zeroing (geometry + override union).  No-op when
+        # 8. PEC mask zeroing (geometry + override union).  No-op when
         #    sharded_pec_mask is None.
         if sharded_pec_mask is not None:
             st = _apply_pec_mask_nu_shmap(
                 st, sharded_pec_mask, mesh, n_devices, nx_local)
 
-        # 9b. Phase 2E: soft-PEC occupancy (differentiable analogue of the
+        # 8b. Phase 2E: soft-PEC occupancy (differentiable analogue of the
         #     hard mask).  Mirrors single-device ordering in
         #     ``rfx.nonuniform.run_nonuniform``: applied after the hard
         #     mask and before probe accumulation.  Seam ghost rows are
-        #     zeroed inside the helper so a seam cell is applied exactly
-        #     once.
+        #     left alone inside the helper so a seam cell is applied
+        #     exactly once, by its owner.
         if sharded_pec_occupancy is not None:
             st = _apply_pec_occupancy_nu_shmap(
                 st, sharded_pec_occupancy, mesh, n_devices, nx_local)
+
+        # 9. Ghost exchange of E so the next step's H update sees the
+        #    neighbour rank's E at the seam.  LAST in the E half-step, after
+        #    the PEC stages: the H update at a rank's last real cell reads
+        #    Ey/Ez on its right ghost plane, and that plane's PEC edges are
+        #    zeroed by the OWNER rank (stages 8/8b act on real cells only).
+        #    Exchanging before the PEC stages handed the ghost the
+        #    un-zeroed value — the #931 seam-cell divergence (2.107e-01
+        #    final-step error on a one-cell body at rank 1's first real
+        #    cell; see the docstring).
+        st = _exchange_e_ghosts_nu(st, mesh, n_devices)
 
         # 10. Probe accumulation (rank-conditional sample + lax.psum).
         #     Phase 2F emit_time_series=False: skip the probe-sample
