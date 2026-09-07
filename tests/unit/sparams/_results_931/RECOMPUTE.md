@@ -220,11 +220,26 @@ is, so the branch must be committed before submitting.
   node the exact law does not have. **G4 must be restated on that identity**
   when the rungs land, not on a claimed exact quartering (the replacement doc
   said "exactly"; it is corrected there).
-* **VESSL runs 369367259285 (dx/1), 369367259286 (dx/2), 369367259287 (dx/4)**,
-  submitted 2026-09-07 19:18 UTC. GPU lane, same as the rungs' own history
-  (run 369367257803): `JAX_ENABLE_X64=0`, and each job REFUSES to start if
-  `jax.default_backend()` is not `gpu`, so a silent fall back to CPU cannot
-  produce a rung that is incomparable with its own record.
+* **VESSL runs 369367259285 (dx/1), 369367259286 (dx/2), 369367259287 (dx/4)
+  — attempt 1, DEAD AT THE LANE ASSERTION.** Forty minutes after each job
+  created its artifact directory it still held only `.tstamp` and
+  `commit.txt` — no `rung.log`, which the shell redirect creates the instant
+  the rung script starts — so all three stopped at the backend check. That is
+  the assertion working: the rungs' own record (369367257803) is a GPU-lane
+  measurement and a silent CPU fall back would have produced an
+  unreadable rung after hours of compute at dx/4. Named defect: the IMAGE.
+  Those jobs ran on `ghcr.io/bk-squared/rfx-openems`, whose CUDA jax gives no
+  gpu backend on this preset — the working recipe for that image here (run
+  369367259234) uninstalls `jax-cuda12-plugin`/`pjrt` and installs `jax[cpu]`.
+* **VESSL runs 369367259304 (dx/1), 369367259305 (dx/2), 369367259306 (dx/4)
+  — attempt 2**, submitted 2026-09-07 20:07 UTC on
+  `nvcr.io/nvidia/jax:24.10-py3`, the image run 369367257803 itself used, with
+  this phase's worktree-copy staging (the original ladder yaml fetches a
+  pushed sha, which this branch does not have). GPU lane, `JAX_ENABLE_X64=0`,
+  and the probe now writes jax version / backend / devices to `$OUT/probe.log`
+  BEFORE it asserts, with a lane refusal writing `lane` (or `probe`) into
+  `capture.rc` — so the next poll of the artifact directory answers "why did
+  this stop" without reading the job console, which attempt 1 could not.
   Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-thru-sv-ladder-dx{1,2,4}-<ts>/`
   (`rung.log`, `produced/tests/fixtures/thru_singular_value_dx_ladder/rung_dx_over_{1,2,4}.json`).
   **What to do with them:** commit the three JSONs from `produced/` as a NEW
