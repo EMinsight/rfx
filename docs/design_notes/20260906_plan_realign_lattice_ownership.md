@@ -118,9 +118,16 @@ nothing). No crossval or example uses `PolylineWire`; four tests do.
 
 ### 1.5 What `sim.add(Box, material=pec)` refuses
 
-* A PEC Box thinner than one local cell along any axis raises
-  `ValueError: ... a Box is a volume; declare a sheet with add_thin_conductor(...)`. Nothing
-  is inferred from raster thickness or drawing direction.
+* A PEC Box with **exactly one zero-extent axis** (`lo == hi` there) IS a sheet
+  declaration — zero thickness is a statement of intent, not an inference — and is realized
+  exactly as `add_thin_conductor` would realize the same Box (plane = nearest node to the
+  declared plane, tie → lower; an off-node plane is reported as a NOTICE with its offset).
+  This keeps the documented five-line patch example and `first-patch.mdx` valid. Two or
+  three zero-extent axes raise (a line or a point is not a conductor; use `PolylineWire`).
+* A PEC Box with `0 < extent < one local cell` along any axis raises
+  `ValueError: ... a Box is a volume; declare a sheet (a zero-thickness Box or
+  add_thin_conductor) or resolve the thickness`. Nothing is inferred from raster thickness
+  or drawing direction.
 * A PEC Sphere / Cylinder / Box that rasterizes to ZERO cells (a via thinner than ~0.7 cell,
   a post between cell centres) raises, naming `PolylineWire` for a filament and the minimum
   radius for a volume — the #369 silently-vaporized-metal class, now an error.
