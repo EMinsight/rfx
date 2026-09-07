@@ -112,8 +112,13 @@ def realized(sim, *, nonuniform: bool | None = None) -> Realization:
     from rfx.boundaries.pec import realized_pec_edge_masks
 
     if nonuniform is None:
-        nonuniform = getattr(sim, "dz_profile", None) is not None or \
-            getattr(sim, "_nu_axes", None) not in (None, (), "")
+        # The lane the run takes, spelled the way rfx/api/_compile.py spells
+        # it (the fields are _dx_profile / _dy_profile / _dz_profile; a
+        # Simulation has no ``dz_profile`` attribute — found by group T3,
+        # which measured the helper reading the UNIFORM grid for a graded
+        # fixture and passing for the wrong reason).
+        nonuniform = any(getattr(sim, f"_{a}_profile", None) is not None
+                         for a in ("dx", "dy", "dz"))
     sheets: list = []
     wires: list = []
     with warnings.catch_warnings():
@@ -144,15 +149,20 @@ def node_index(grid, axis: int, position: float) -> int:
 
 
 def _node_line(grid, axis: int):
-    for attr in (("x", "y", "z")[axis], f"{('x', 'y', 'z')[axis]}_nodes",
-                 f"nodes_{('x', 'y', 'z')[axis]}"):
-        line = getattr(grid, attr, None)
-        if line is not None and np.ndim(line) == 1:
-            return np.asarray(line, dtype=float)
-    d = float(getattr(grid, ("dx", "dy", "dz")[axis], getattr(grid, "dx")))
-    n = int((grid.nx, grid.ny, grid.nz)[axis])
-    pad = int(getattr(grid, "axis_pads", (0, 0, 0))[axis])
-    return (np.arange(n, dtype=float) - pad) * d
+    """The axis's E-node line, from the library's OWN spelling.
+
+    ``coords_from_nonuniform_grid`` for a NonUniformGrid (its ``dx`` is the
+    boundary cell size, not a spacing — an ``(arange - pad) * dx`` fallback
+    returns a node line that exists on no mesh; measured by group T3 on a
+    250/500/125 um graded profile), ``coords_from_uniform_grid`` otherwise.
+    """
+    from rfx.geometry.rasterize_grid import (
+        coords_from_nonuniform_grid, coords_from_uniform_grid)
+    from rfx.nonuniform import NonUniformGrid
+
+    coords = (coords_from_nonuniform_grid(grid) if isinstance(grid, NonUniformGrid)
+              else coords_from_uniform_grid(grid))
+    return np.asarray((coords.x, coords.y, coords.z)[axis], dtype=float)
 
 
 def assert_wall_planes(sim, axis, expected_m=None, *, expected_planes=None,
