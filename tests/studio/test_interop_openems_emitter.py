@@ -830,8 +830,8 @@ def test_refuses_mixed_port_families_and_undriveable_designs():
 
 def test_refuses_a_foreign_schema():
     doc = _cavity_doc()
-    doc["schema"] = "rfx-design-ir/v2"
-    with _refuses("schema 'rfx-design-ir/v2'"):
+    doc["schema"] = "rfx-design-ir/v1"
+    with _refuses("schema 'rfx-design-ir/v1'"):
         emit_openems_script(doc)
 
 
