@@ -781,33 +781,6 @@ def test_distributed_pec_only_pad_lane_final_state_matches_single_device():
     )
 
 
-_SEAM_CELL_LANE_DIVERGENCE = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "MEASURED DEFECT in rfx/runners/distributed_nu.py, exposed by #931 "
-        "and not fixed here (that file is not this group's). A PEC body "
-        "occupying EXACTLY the seam cell is realized differently by the "
-        "shard_map lane and the single-device lane. Class B final-step "
-        "relative error, 16x8x8 grid, 2 ranks, 30 steps, gate 5e-5:\n"
-        "    one cell AT the seam                    2.107e-01  <- fails\n"
-        "    one cell 3 inside rank 1                0.000e+00\n"
-        "    one cell 3 inside rank 0                1.729e-05\n"
-        "    three cells straddling the seam         2.131e-06\n"
-        "The three-cell row is what these fixtures used to draw, and it is "
-        "why the defect was invisible: with a real occupied cell on BOTH "
-        "sides of the seam every edge is owned by a rank that holds it as a "
-        "real cell, so the ghost convention is never asked the hard "
-        "question. Before #931 a one-cell body realized NOTHING at all (the "
-        "thin-sheet neighbour rule needed a masked neighbour), so this "
-        "configuration could not arise. Under §1.2 one occupied cell owns "
-        "every edge incident to it, including the two planes either side of "
-        "the seam, and the two lanes disagree about them. strict=True: when "
-        "the lane is fixed this turns red and the marker must be deleted, "
-        "not the geometry."),
-)
-
-
-@_SEAM_CELL_LANE_DIVERGENCE
 @_PHASE2B_REQUIRES_2DEV
 def test_distributed_pec_only_seam_no_double_zeroing():
     """Class D seam isolation: a PEC mask cell exactly at the slab seam
@@ -821,6 +794,13 @@ def test_distributed_pec_only_seam_no_double_zeroing():
 
     Verification: the distributed run must match the single-device
     reference (which applies the mask exactly once).
+
+    This one-cell fixture carried ``xfail(strict=True)`` under #931 (T3
+    measured 2.107e-01 against the 5e-5 gate): the runner exchanged the E
+    ghosts BEFORE the PEC stages, so rank 0's ghost copy of the seam plane
+    kept the ``Ey``/``Ez`` that rank 1 zeroed a stage later.  The exchange
+    now runs last in the E half-step; re-measured, this row reads 7.8e-08
+    (the no-body baseline of the lane is 9.4e-06, float32 rounding).
     """
     devices = jax.devices()[:2]
     n_devices = 2
@@ -1931,7 +1911,6 @@ def test_distributed_pec_occupancy_2device_matches_single_device():
                           label="phase2e_pec_occupancy_2device_parity")
 
 
-@_SEAM_CELL_LANE_DIVERGENCE
 @_PHASE2B_REQUIRES_2DEV
 def test_distributed_pec_occupancy_seam_no_double_application():
     """Class D seam isolation: a soft-PEC occupancy cell exactly at the
@@ -1950,6 +1929,10 @@ def test_distributed_pec_occupancy_seam_no_double_application():
     neighbour product ``occ * max(roll(+1), roll(-1))`` this docstring used
     to name is the pre-#931 rule and is gone. The neighbouring occupancy
     the fixture set purely to make that product non-zero goes with it.
+
+    Carried ``xfail(strict=True)`` with the hard-mask twin above (same
+    2.107e-01, same cause: E ghosts exchanged before the PEC stages); fixed
+    by moving the exchange after them.
     """
     devices = jax.devices()[:2]
     n_devices = 2
