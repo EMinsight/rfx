@@ -167,7 +167,17 @@ Z_GND = round(4e-3 / DX) * DX
 # because Leg A's ratio absorbs a raster change — see the module docstring.
 RASTER_CELLS = (43, 51)
 
-NUM_PERIODS = 120.0
+# 200, raised from 120 by the #931 redraw (2026-09-07). With the reserved
+# vacuum cell gone the cavity is 787 um of laminate instead of 983.75 um of
+# laminate-plus-vacuum, the patch radiates less, and the isolated arm drains
+# more slowly: at 120 periods the redrawn UNFED ring-down ends at -35.43 dB
+# of peak against this file's -40 dB truncation bar, while the fed arm still
+# clears it at -42.21 dB (VESSL 369367259225). That is the module's own
+# instruction taken literally — "raise NUM_PERIODS before trusting any
+# Harminv frequency" — not a widened bar: the bar is unchanged and the record
+# is longer. Leg A and Leg B are therefore re-pinned at 200 periods, and the
+# 120-period numbers are not comparable to them.
+NUM_PERIODS = 200.0
 SETTLING_BAR_DB = -40.0
 HARMINV_BAND_HZ = (6e9, 14e9)
 RINGDOWN_START_FRAC = 0.30      # skip the drive
