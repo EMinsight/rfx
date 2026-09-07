@@ -814,7 +814,7 @@ its exact model; #931 stands.
   (y: k = 10, 15, 30, 35 at 6-7 quanta; z: k = 12, 15, 16, 17, 27,
   29, 32, 35 at 3-17 quanta); every dominant cell with >= 50 quanta
   (x: 29, 30; y: 16, 29) agrees to <= 1.6 %. AD1 did not meet this
-  floor because its dominant cells carry |g_fd| 16-270 (2000-36000
+  floor because its dominant cells carry |g_fd| 16-270 (1500-25000
   quanta on 1.4 mm cells). So the fired measurement is consistent with
   a correct joint gradient read against a reference at the f32
   round-off floor of the declared FD, and it is also consistent with a
@@ -851,7 +851,7 @@ answer is a PI decision, not a tolerance edit.
 
 | claim | inside (measured) | outside / not measured |
 |---|---|---|
-| Stratified-dielectric cavity on a builder MB mesh converges at order 2 with amplitude <= 1.9x uniform (Fabry-Perot / Yee sum k_z^4 d^2 law) | eps 4.3 / 3.0 / 4.3 / 1 (contrast 4.3), 4-cell thin band at cap 1.4, fine 30 and coarse 21 cells per dielectric wavelength (s = 1), s = 0.5-2, LSE/Ey m = 1 p = 5 at 10.56 GHz, PEC, dual-cell-average eps on node-aligned interfaces | production interface sampling (first-order, #931, reported not gated); Ez/Hz families; contrast > 4.3; bands thinner than 4 cells; lossy or dispersive media; PML-terminated boxes |
+| Stratified-dielectric cavity on a builder MB mesh converges at order 2 with amplitude <= 1.9x uniform (Fabry-Perot / Yee sum k_z^4 d^2 law) | eps 4.3 / 3.0 / 4.3 / 1 (contrast 4.3), 4-cell thin band at cap 1.4, fine 27 and coarse 20 cells per dielectric wavelength in eps 4.3 (s = 1), s = 0.5-2, LSE/Ey m = 1 p = 5 at 10.56 GHz, PEC, dual-cell-average eps on node-aligned interfaces | production interface sampling (first-order, #931, reported not gated); Ez/Hz families; contrast > 4.3; bands thinner than 4 cells; lossy or dispersive media; PML-terminated boxes |
 | Absolute accuracy on the same mesh | \|err\| 0.071 % (mb 0.5 dual) to 1.15 % (mb 2 dual) over s; production 0.17-2.05 % | — |
 | Auto-z (`_make_dz_profile`) on the same fixture | err 0.070-0.23 % over s, model residual <= 0.031 MHz; no order claimed (thin cell pinned by min_cells_per_feature) | any order statement |
 | In-plane two-band grading, TM110 | caps 1.3 and 1.4, 4:1 fine/coarse, 8000 and 12000 steps, 5.79 GHz: \|err\| <= 0.024 %, excess over uniform <= 0.013 pt | caps > 1.4; more than two bands per axis; cavities with dielectric loading in-plane |
