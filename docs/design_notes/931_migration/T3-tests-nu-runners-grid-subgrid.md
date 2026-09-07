@@ -113,6 +113,60 @@ Two more the design note did not raise:
   defect and is not fixed here — `rfx/surrogate.py` is nobody's file in this
   phase.**
 
+## Findings — measured on this branch, NOT fixed here
+
+### 1. The distributed-NU lane mis-realizes a body on the seam cell
+
+**Owner: `rfx/runners/distributed_nu.py`.** Exposed by the contract, not
+caused by it.
+
+Two fixtures in `test_distributed_nu_kernel.py` drew a PEC body three cells
+wide across the slab seam, with the comment "so the tangential mask in
+apply_pec_mask sees a PEC neighbour (otherwise the thin-sheet rule preserves
+the field — no double-zeroing risk to detect)". That padding existed only to
+make the pre-#931 neighbour rule fire. Under §1.2 one occupied cell owns
+every edge incident to it, so the fixtures were reduced to the single seam
+cell they are named for — and the lanes then disagree.
+
+Class B final-step relative error, 16x8x8 grid, 2 ranks, 30 steps, gate
+`RTOL_PROBE_B = 5e-5`, one PEC cell at `(i, ny//2, nz//2)`:
+
+| body | rel. error |
+|---|---|
+| one cell AT the seam | **2.107e-01** |
+| one cell 3 inside rank 1 | 0.000e+00 |
+| one cell 3 inside rank 0 | 1.729e-05 |
+| three cells straddling the seam (the old fixture) | 2.131e-06 |
+
+Pre-declared falsifier before the measurement: *if the same one-cell body
+placed away from the seam lands inside the gate while the seam placement
+does not, the divergence is seam-specific.* It does; it is. The three-cell
+row is why the defect was invisible — with a real occupied cell on both
+sides of the seam, every edge is owned by a rank that holds it as a real
+cell, so the ghost convention is never asked the hard question.
+
+The hard-mask and soft-occupancy twins fail with the same magnitude, so it
+is one root cause, in the shard/ghost handling rather than in the rule
+(`test_distributed_nu_pec_mask_lane_parity.py`'s edge-count battery, which
+applies the masks to a static field without a halo exchange, passes on the
+same one-cell bodies).
+
+Both tests carry `pytest.mark.xfail(strict=True)` with this table as the
+reason. `strict` is the point: when the lane is fixed the marker turns red
+and has to be deleted, and nobody can quietly restore the three-cell
+padding instead.
+
+### 2. `test_runner_import_binding.py::test_coax_then_refplane_order_does_not_leak_fake_run`
+
+Red in the slow lane only (`-m ""`), not caused by #931, not fixed here.
+The nested pytest it launches PASSES (`83 passed, 7 deselected`, returncode
+0); the test then asserts `"failed" not in result.stdout`, and the substring
+appears inside a warning emitted by
+`solve_two_port_from_wave_amplitudes` — "…or one drive that **failed** to
+excite". A summary-line check instead of a whole-stdout substring check
+would fix it. Left alone because the brittleness predates this branch and
+the warning text belongs to another owner.
+
 ## Recompute
 
 See `RECOMPUTE.md` beside this file.
