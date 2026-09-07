@@ -301,6 +301,138 @@ constant) so the 400^3 hoist effect is either explained or disappears,
 re-declare the sum check with the pieces it actually tests, then rerun.
 The run did not fail, so the one-resubmission clause was not used.
 
+### G1b — pre-declared (2026-09-07, written BEFORE the G1b GPU run)
+
+Why a second instrument: the first run's sum check failed at 400^3 because
+its "disjoint pieces" model was wrong there (the hoist piece and the
+broadcast piece each recovered the whole gap; see "G1 ablation — measured").
+G1b drops the sum check and judges every arm ONLY against its own
+reference. Instrument: `validation/research/nu_cost/w8_nu_kernel_ablation.py
+--suite g1b` (`scripts/vessl_nu_cost_ablation_g1b.yaml`, RTX 4090, same
+harness: marginal-cost differencing 64 -> 1088, 3 windows, median + spread,
+fp32, one soft source, `skip_preflight=True`). No `rfx/` source changes;
+every arm is an in-process monkeypatch on the module attribute the step
+body binds. The G1 suite stays runnable unchanged (`--suite g1`, default).
+
+Part A — cpml8 at 300^3 and 400^3. Timing reference for every arm = **nu-z
+of the same run** (same fixture, same n). Identity reference = the unpatched
+arm on the same mesh.
+
+| arm | mesh | patch | identity ref | bit-identical expected | extra full-size fp32 constants |
+|---|---|---|---|---|---|
+| nu-z | 4:1 graded | — | — | — | 0 |
+| nu-z-scalar-inv | uniform-valued | six `inv_*` vectors -> scalars (repeat of G1; expected to reproduce +19.2 % / +11.5 %) | nu-uniform | yes | 0 |
+| nu-z-combo | uniform-valued | scalar-inv in both curls + the `update_e_nu` coefficient hoist (`ensure_compile_time_eval`, same expression as nu-z-hoist) | nu-uniform | yes (each half was) | 2 (ca, cb) |
+| nu-z-foldinv | 4:1 graded | `inv_*` FOLDED into the coefficients once: E uses `cb*inv_dx[:,None,None]`, `cb*inv_dy[None,:,None]`, `cb*inv_dz[None,None,:]`; H uses `(dt/mu)*inv_dx_h`, `..._h` likewise; the curls multiply the differences by those full 3-D arrays: `ex = ca*ex + (cby*dHz - cbz*dHy)` instead of `ca*ex + cb*(dHz*inv_dy - dHy*inv_dz)` | nu-z | **no** (products re-associated) -> EPSILON gate | 7: the per-component 6 E + 6 H arrays collapse to 3 + 3 DISTINCT arrays because ca/cb are isotropic (`cb_ex_y` and `cb_ez_y` are both `cb*inv_dy`), plus the hoisted `ca` |
+| nu-z-inv3d | 4:1 graded | six `inv_*` vectors pre-broadcast to MATERIALIZED full 3-D arrays once (`jnp.array(jnp.broadcast_to(...))` under `ensure_compile_time_eval`); same multiplies, same op order | nu-z | yes | 6 |
+
+Constant memory the arms embed (grid is (n+1+2L)^3: 317^3 at 300 / 417^3
+at 400, one fp32 array = 127.4 / 290.0 MB; the unpatched scan already
+closes over 3 material arrays = 0.38 / 0.87 GB): combo +255 / +580 MB;
+inv3d +0.76 / +1.74 GB (total 1.15 / 2.61 GB); foldinv +0.89 / +2.03 GB
+(total 1.27 / 2.90 GB). The first run compiled 1.45 GB of constants at
+400^3 (nu-z-hoist). A 400^3 row that fails to compile or OOMs is recorded
+`SKIPPED` with the exception text; that is a result about the design
+(a real implementation would close over the same arrays), and the arm
+then fails the both-sizes rule by construction. The JSON records
+`extra_const_bytes` and `jax.devices()[0].memory_stats()` (bytes_in_use,
+peak) per row.
+
+Epsilon gate for nu-z-foldinv (declared number: **4 ulp**): after the
+identity run (96^3, 64 steps, float32), for every component,
+`max|new − old| <= 4 * ulp(max|family field|)`, where the family maximum
+is max|E| over ex, ey, ez for an E component and max|H| over hx, hy, hz
+for an H component (`np.spacing(np.float32(max))`). The family
+normalisation is declared because hz is zero by symmetry in this fixture
+(ez point source, symmetric cube): on the CPU smoke max|hz| = 1.4e-3
+against max|hx| = 2.6e4, so its own maximum is rounding residue and a gate
+against it is ill-posed (3.1e7 "ulp"). The own-maximum ulp is recorded
+alongside. CPU smoke, 32^3 x 64 steps: worst 3.62 ulp (hy), E components
+<= 1 ulp — inside the gate with a thin margin; the GPU (different FMA
+contraction) decides, and a value above 4 makes foldinv a non-candidate
+with the number reported.
+
+Rule for part A (each arm against nu-z, no sum check): an arm PASSES if
+its delta > 2x the larger of the two spreads AND its gain >= 3 % at BOTH
+300^3 and 400^3. `nu-z-foldinv` is the only implementable design (it runs
+on the graded mesh); it becomes the implementation candidate only if it
+passes AND meets the epsilon gate. scalar-inv, combo and inv3d run on the
+uniform-valued mesh or materialize arrays nobody would ship: they are
+attribution arms, judged by the same delta rule, never candidates.
+
+Pre-declared readings (from `evaluation.readings`, both sizes):
+
+* combo vs scalar-inv (same mesh): |delta| <= 2x spread -> hoist and
+  broadcast are the SAME cost (not additive; the 400^3 hoist effect of the
+  first run is then the broadcast by another route); combo faster by
+  > 2x spread -> additive; combo slower -> the hoist costs on top.
+* inv3d vs nu-z: |delta| <= 2x spread -> removing the broadcast op buys
+  nothing, the cost is the coefficient read; inv3d faster -> the broadcast
+  op costs more than a full-array read; inv3d slower -> full-array reads
+  cost more than the broadcast, the broadcast op itself is cheap and the
+  scalar-inv gain is a fusion effect, not a traffic effect.
+
+Part B — CPML-layer cost ladder at 300^3, layers L = 0 / 4 / 8 / 16, both
+lanes. Uniform lane arm `bare-slow`: the fused fast path is FORCED OFF by
+swapping the name `jax` inside `rfx.simulation` for a proxy object whose
+`default_backend()` returns `"cpu"` and whose every other attribute
+delegates to the real module. That name is read exactly once for this
+purpose: `rfx/simulation.py:1998` `_on_gpu = jax.default_backend() !=
+"cpu"`, and `_on_gpu` feeds only `use_fast_he = _fast_eligible and
+_on_gpu and stencil_order == 2` (line 2025); no physics flag
+(`use_cpml`, `use_tfsf`, ...) is touched, so the layers-0 row runs the
+same `update_h`/`update_e` stepper as the layers-4/8/16 rows. The probe
+on `update_he_fast` must report `fast_path_seen=False` on every
+`bare-slow` row. NU lane arm: `nu-uniform` (uniform-valued profile).
+Context row: `bare` (fused) at L = 0 — its rate against `bare-slow` at
+L = 0 is the forcing effect, recorded, not judged; the two paths differ in
+coefficient op order by construction (`jnp.float32(dt/(MU_0*dx))/mu_r` vs
+`(dt/mu)*curl`), so `bare-slow` has no identity gate, only a recorded
+identity check (trivially identical on CPU, where the fast path is never
+taken).
+
+Expectation derived before the run. The absorber PADS the grid: the
+cpml8/300 rows of the first run have 31,855,013 = 317^3 cells and pec/300
+has 301^3 (JSON `cells`), so the absorbing fraction of the allocated grid
+is f(L) = 1 − ((n+1)/(n+1+2L))^3 = **0.076 / 0.144 / 0.261** at L =
+4 / 8 / 16 (the inside-the-box formula 1 − (1 − 2L/300)^3 gives
+0.078 / 0.152 / 0.287 — same picture, the padded values are the ones the
+rate metric sees). A CPML pass whose work is proportional to the cells it
+covers, at k times a plain cell's cost, gives step cost c(L) = c(0)·(1 +
+k·f(L)); with k = 2 that is 1.15x / 1.29x / 1.52x — i.e. **<= 1.3x at 8
+layers**. The first run measured ~5.6x (pec/300 10,039 vs cpml8/300 1,781
+Mcells/s on the NU lane). Reading of `apply_cpml_e` (`rfx/boundaries/
+cpml.py`): per step it forms `dt/(materials.eps_r*EPS_0)` over the FULL
+array, takes `_shift_bwd(state.hz, 0)` over the FULL array before slicing
+`[:n_x]`, and applies four `.at[slab].add()` per component per axis = 24
+dynamic-update-slices on E plus 24 on H per step, each a full-array
+operand — whole-array work independent of L if XLA does not fuse them in
+place. That is the finding the ladder looks for.
+
+Model reported (declared): cost per cell-step c(L) = 1/rate in ns, fitted
+by least squares as **c = a + b·f(L)** on the L = 4 / 8 / 16 rows (the CPML
+op present), and also c = a' + b'·L; `a` is the extrapolated cost with the
+op present at zero absorbing fraction and c(0) the measured cost with the
+op absent. Derived numbers per lane: `intercept_excess` = (a − c(0))/c(0)
+(the L-independent part of the CPML op in plain-step units), `rho_16/4`
+= (c(16) − c(0))/(c(4) − c(0)) (proportional expectation f(16)/f(4) =
+3.46; whole-array work gives ~1.0), `rho_8/4` (expectation 1.90), and
+c(L)/c(0). Declared reading: **whole-array work in the CPML op** if
+`intercept_excess` >= 1.0 OR `rho_16/4` <= 1.5; otherwise the cost scales
+with the absorbing fraction. No candidate comes out of part B; it prices
+where the step goes and whether a CPML refactor, not an NU one, is the
+lever.
+
+Smoke (CPU, `--smoke --suite g1b`, 32^3, 64-step checks, run before
+commit): nu-z-scalar-inv, nu-z-combo (`hoisted=True`), nu-z-inv3d
+(`materialized=True` x6) bit-identical to their references (0 differing
+elements); nu-z-foldinv not identical as expected, epsilon gate PASS at
+3.62 ulp worst (`folded_e`/`folded_h`/`hoisted` all True); bare-slow
+`slow_path_forced=True`, `fast_path_seen=False`; all 14 timing rows and
+both ladder fits produced. The G1 suite smoke still runs every original
+arm. GPU numbers: none yet — this section is closed to edits once the run
+starts; results go in a new "G1b — measured" section.
+
 ## Not pursued
 
 Local time stepping / domain-wise dt — excluded by the support matrix (late-
