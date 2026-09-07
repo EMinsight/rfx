@@ -125,10 +125,31 @@ script's own rc is in `cv18.rc`. Modelled on the baseline
   `aperture_resolution.json` from the new `rfx.json`. Its `--check` mode diffs
   without writing. No code change is needed in it; it reads the record and
   evaluates the oracle.
-* `scripts/diagnostics/probe_cv18_one_cell_aperture_defect.py` writes
-  `one_cell_defect_live.json` and still counts OPEN NODES from a `rasterize()`
-  sigma mask (`nominal_aperture_nodes` / `realized_aperture_nodes`). It is not
-  in this group's file list; flagged for whoever owns `scripts/diagnostics/`.
+* `scripts/diagnostics/probe_cv18_one_cell_aperture_defect.py` — MIGRATED in
+  this branch (corners on node planes tracking `run_point`; asserts read the
+  realized edge set instead of counting open nodes in a `rasterize()` sigma
+  mask; emitted keys renamed `nominal_aperture_nodes` ->
+  `nominal_aperture_cells`, `realized_aperture_nodes` ->
+  `realized_aperture_cells`, plus `realized_thickness_cells`,
+  `iris_wall_nodes`, `aperture_wall_nodes`). Verified with `--geometry-only`:
+  the defect still realizes one cell too wide (aperture 11 cells against a
+  nominal 10 at a/30).
+
+  It MUST be re-run, and only AFTER cv18 pass 2, because it reads
+  `GATE_FINE_ABS_PER_CONFIG` from the script source and the pooled/Richardson
+  gates from the regenerated `rfx.json`:
+
+  ```
+  JAX_PLATFORMS=cpu python scripts/diagnostics/probe_cv18_one_cell_aperture_defect.py \
+      --output validation/crossval/_18_wr90_iris_results/one_cell_defect_live.json
+  ```
+
+  Two FDTD runs (a/60 ~800 s, a/30 ~66 s) plus the oracle: ~15 min. Submit it
+  on VESSL as a third run rather than on the shared pod. Its output feeds
+  `test_live_one_cell_defect_is_caught_by_the_per_config_gate_and_not_the_old_ones`,
+  whose six pinned digits (0.02842, 0.00588, 0.015, 0.04, 0.01, and the model's
+  0.0265) ALL move and must be refreshed from the new artifact and the
+  rebuilt `aperture_resolution.json` in the same commit.
 
 ## Not owned by this group (replacement text is in docs/design_notes/931_migration/)
 

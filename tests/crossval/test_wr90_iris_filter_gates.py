@@ -836,12 +836,23 @@ def test_no_compensation_is_applied_anywhere_in_the_case(fixture, script_src):
         realized_mm = (hi - lo) * dx * 1e3
         assert abs(realized_mm - d_mm) <= 0.5 * dx * 1e3 + 1e-9, (realized_mm, d_mm)
 
-    # No compensating term may come back into the builder.
-    src = script_src
-    for banned in ("round(T_IRIS_NOM / dx)) + 1", "round(t/dx) + 1",
-                   "astype(int) - 1", "round(L/dx) - 1"):
-        assert banned not in src, (
-            "a drawn-count compensation reappeared in the builder", banned)
+    # No compensating term may come back into the builder. Checked on the
+    # SOURCE OF `rasterized_geometry` only — the historical prose elsewhere in
+    # the script quotes the retired rule on purpose, and a whole-file grep
+    # would refuse the history along with the mechanism.
+    tree = ast.parse(script_src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "rasterized_geometry")
+    assigned = {}
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            assigned.setdefault(node.targets[0].id, ast.unparse(node.value))
+    for name in ("t_c", "L_c", "d_c"):
+        expr = assigned.get(name)
+        assert expr is not None, name
+        assert "+ 1" not in expr and "- 1" not in expr, (
+            "a drawn-count compensation reappeared in the builder", name, expr)
 
 
 def test_the_pre_931_drawn_vs_realized_confusion_is_recorded_as_history(fixture):
