@@ -145,11 +145,10 @@ def tangential_edge_masks(cell_mask, periodic=(False, False, False)):
     mask), not a PEC realization: it never realizes a body's far face and
     is no longer what :func:`apply_pec_mask` applies.
 
-    TODO(stage B, #931): the only remaining consumers are the f0
-    surface-impedance ctx (``rfx.materials.thin_conductor.build_sheet_impedance_ctx``)
-    and ``rfx.geometry.rasterize_grid.sheet_normal_live_axis_masks`` — both
-    move to the §1.3 sheet rule via :func:`realized_pec_edge_masks` on a
-    :class:`SheetSpec` footprint, after which this function is deleted.
+    TODO(stage C, #931): the only remaining in-package consumer is the
+    distributed-NU shmap twin (``rfx.runners.distributed_nu``), which
+    moves to :func:`realized_pec_edge_masks`; after that this function
+    is deleted together with the tests that pin it.
     """
     masks = []
     for ax in range(3):
@@ -294,12 +293,15 @@ def _sheet_edge_masks(sheets, shape, periodic):
     plane) union the design note asks for, and sheets on adjacent planes
     stay two films with the normal edge between them live (#690).
 
-    On a length-1 normal axis (the 2-D lane) a sheet has no tangential
-    components; its footprint is returned separately as CELLS so the caller
-    realizes it as a 2-D volume (design note §1.3).
+    On a length-1 normal axis (the 2-D lane) the region has no thickness
+    direction, so the "normal" component is not a through-sheet edge: it
+    is PEC exactly at the footprint nodes (the closed 2-D region evaluated
+    for that component's own location), and the in-plane components take
+    the usual both-end-nodes rule. That is the same set the volume rule
+    gives the same drawn rectangle on the 2-D lane (design note §1.3:
+    "realized as a 2-D volume of its footprint").
     """
     edge = [None, None, None]
-    extra_cells = None
     per_axis = {}
     for sp in sheets:
         fp = sp.footprint
@@ -307,18 +309,17 @@ def _sheet_edge_masks(sheets, shape, periodic):
             raise ValueError(
                 f"SheetSpec footprint shape {tuple(fp.shape)} does not match the "
                 f"grid shape {tuple(shape)}")
-        if shape[sp.normal_axis] == 1:
-            extra_cells = fp if extra_cells is None else (extra_cells | fp)
-            continue
         a = sp.normal_axis
         per_axis[a] = fp if a not in per_axis else (per_axis[a] | fp)
     for a, F in per_axis.items():
         for t in range(3):
             if t == a:
+                if shape[a] == 1:
+                    edge[t] = F if edge[t] is None else (edge[t] | F)
                 continue
             m = F & _shift(F, t, periodic, -1)
             edge[t] = m if edge[t] is None else (edge[t] | m)
-    return edge, extra_cells
+    return edge
 
 
 def realized_pec_edge_masks(cell_mask, sheets=(), wires=(),
@@ -360,10 +361,8 @@ def realized_pec_edge_masks(cell_mask, sheets=(), wires=(),
         shape = tuple(src.shape)
     else:
         shape = tuple(cell_mask.shape)
-    sheet_edges, sheet_cells = _sheet_edge_masks(sheets, shape, periodic)
+    sheet_edges = _sheet_edge_masks(sheets, shape, periodic)
     cells = cell_mask
-    if sheet_cells is not None:
-        cells = sheet_cells if cells is None else (cells | sheet_cells)
     if cells is not None:
         out = list(_volume_edge_masks(cells.astype(bool), periodic))
     else:

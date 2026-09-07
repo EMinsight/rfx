@@ -8,6 +8,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from rfx.grid import C0
+from rfx.core.jax_utils import is_tracer
 from rfx.core.yee import MaterialArrays
 from rfx.materials.debye import init_debye
 from rfx.materials.lorentz import init_lorentz
@@ -67,17 +68,23 @@ def assemble_materials_nu(
     sim,
     grid: NonUniformGrid,
     sheet_specs: list | None = None,
+    pec_sheets: list | None = None,
+    pec_wires: list | None = None,
 ) -> tuple[MaterialArrays, object, object, jnp.ndarray | None]:
     """Build material arrays and dispersion specs for non-uniform grid.
 
     Delegates to the shared rasterize_geometry() with non-uniform coordinates.
-    Supports all shape types, Debye/Lorentz poles, chi3, and thin conductors:
-    PEC sheets OR into pec_mask; lossy sheets fold into sigma with the LOCAL
-    E-node DUAL spacing normal to the sheet (#373, corrected #669-review) —
-    both the DC fold (sigma_bulk*t/d_norm) and the opt-in Leontovich
-    surface-impedance mode (sigma_eff = 1/(Rs0*d_norm) when
-    surface_impedance_f0 is set, issue #669). Only non-Box LOSSY sheets on
-    the legacy DC path warn-and-skip.
+    Supports all shape types, Debye/Lorentz poles, chi3, and thin conductors.
+    Lattice ownership contract (#931): PEC volumes are centre-sampled into
+    ``pec_mask``; PEC thin conductors and zero-thickness PEC Boxes are
+    :class:`~rfx.boundaries.pec.SheetSpec` sheets (``pec_sheets``
+    out-parameter), sub-cell ``PolylineWire`` filaments are ``WireSpec``
+    (``pec_wires``); neither is in ``pec_mask``. Lossy sheets fold into
+    sigma with the LOCAL E-node DUAL spacing normal to the sheet (#373,
+    corrected #669-review) — both the DC fold (sigma_bulk*t/d_norm) and the
+    opt-in Leontovich surface-impedance mode (sigma_eff = 1/(Rs0*d_norm)
+    when surface_impedance_f0 is set, issue #669). Only non-Box LOSSY
+    sheets on the legacy DC path warn-and-skip.
 
     Returns
     -------
@@ -85,72 +92,27 @@ def assemble_materials_nu(
     """
     from rfx.geometry.rasterize_grid import (
         rasterize_geometry, coords_from_nonuniform_grid, extend_cpml_pad_materials,
-        collect_thin_conductor_sheet_inputs, periodic_flags_from_axes,
-        resample_sheet_node_materials,
+        cell_sizes_from_nonuniform_grid, centres_from_nonuniform_grid,
+        sheet_spec_from_shape,
     )
 
     coords = coords_from_nonuniform_grid(grid)
+    cell_sizes = cell_sizes_from_nonuniform_grid(grid)
+    centres = centres_from_nonuniform_grid(grid, coords)
+    _pec_sheets = pec_sheets if pec_sheets is not None else []
+    _pec_wires = pec_wires if pec_wires is not None else []
 
     result = rasterize_geometry(
         sim._geometry,
         sim._resolve_material,
         coords,
         pec_sigma_threshold=sim._PEC_SIGMA_THRESHOLD,
+        centres=centres,
+        cell_sizes=cell_sizes,
+        sheets=_pec_sheets,
+        wires=_pec_wires,
     )
     materials, debye_spec, lorentz_spec, pec_mask, _pec_shapes, _kerr_chi3 = result
-
-    # Node-thin conductors: sample the statics where the LIVE edge is.
-    # A sub-cell conductor has no volume, so nothing writes eps_r at its
-    # node (a PEC entry writes only pec_mask) and the node keeps vacuum
-    # wherever the surrounding dielectric boxes abut the metal faces
-    # instead of spanning its thickness. The one E component the sheet
-    # leaves alive is the sheet-NORMAL one, and it sits half a primal cell
-    # away, inside that dielectric. See resample_sheet_node_materials.
-    #
-    # Runs BEFORE the CPML pad extension below, deliberately: that step
-    # sources the pad from the outermost interior column and treats
-    # eps==1 & sigma==0 & mu==1 as vacuum (#627a/#655), so it must see the
-    # corrected interior, not a stale vacuum it would then replicate
-    # outward. It runs before the thin-conductor fold further down for the
-    # same reason, which is why the PEC thin-sheet masks are collected
-    # here rather than read off the later pec_mask.
-    #
-    # STRUCTURAL DEBT, named rather than left to be rediscovered. This rule
-    # sits at the two CALL SITES (here and rfx/api/_compile.py's
-    # _build_materials), not inside the shared rasterize_geometry() body
-    # both of them call, so a third caller inherits the ORIGINAL defect
-    # silently. Today that third caller is rfx/runners/subgridded.py:203
-    # (the FINE region, sampled at cell CENTRES; cv12/13-fenced
-    # experimental), and it is unfixed. Hand-copied rules drifting apart is
-    # this repo's recurring failure mode -- #689 found the neighbour rule
-    # inlined a second time in the distributed kernel, disagreeing at a
-    # domain face -- so promoting the resample INTO rasterize_geometry, and
-    # letting every caller inherit it, is the real fix. It was not taken
-    # here only because rasterize_geometry receives neither the run's
-    # periodic flags nor the lane's half-steps, both of which this rule
-    # needs; widening its signature is a separate change.
-    _pec_tc_masks, _f0_sheets = collect_thin_conductor_sheet_inputs(
-        getattr(sim, "_thin_conductors", None),
-        lambda shape: shape.mask_on_coords(coords.x, coords.y, coords.z),
-    )
-    _cond_mask = pec_mask
-    for _m in _pec_tc_masks:
-        _cond_mask = _m if _cond_mask is None else (_cond_mask | _m)
-    if _cond_mask is not None or _f0_sheets:
-        _eps_s, _sigma_s = resample_sheet_node_materials(
-            sim._geometry, sim._resolve_material, coords,
-            materials.eps_r, materials.sigma,
-            half_steps=(jnp.asarray(grid.dx_arr) * 0.5,
-                        jnp.asarray(grid.dy_arr) * 0.5,
-                        jnp.asarray(grid.dz) * 0.5),
-            conductor_cell_mask=_cond_mask,
-            declared_sheets=_f0_sheets,
-            periodic=periodic_flags_from_axes(
-                getattr(sim, "_periodic_axes", "")),
-            pec_sigma_threshold=sim._PEC_SIGMA_THRESHOLD,
-        )
-        materials = MaterialArrays(
-            eps_r=_eps_s, sigma=_sigma_s, mu_r=materials.mu_r)
 
     # Extend material properties into CPML padding so that guided modes in
     # dielectric waveguides see an impedance-matched absorber (equivalent to
@@ -191,39 +153,21 @@ def assemble_materials_nu(
         )
         materials = MaterialArrays(eps_r=eps_r_ext, sigma=sigma_ext, mu_r=mu_r_ext)
 
-    # Thin conductors (#369): a PEC thin sheet rasterizes on the coords-based
-    # mask exactly like geometry PEC — ``mask_on_coords`` resolves fine on
-    # non-uniform axes, so the earlier "needs a uniform Grid, skip for now"
-    # shortcut was wrong. Before this fix the NU (dz_profile) path silently
-    # dropped EVERY thin conductor: an ``add_thin_conductor()`` PEC sheet on a
-    # graded-z grid produced no pec_mask, so the patch neither reflected nor
-    # resonated (box-PEC rang, thin-sheet decayed). ORing a boolean mask keeps
-    # the field AD-clean (no float op enters the gradient path). Lossy
-    # (non-PEC) sheets need a grid-dependent surface-conductivity fold the
-    # coords path cannot yet express — warn rather than silently drop.
-    # #371 (resolved as not-a-placement-bug): on a graded dz_profile the sheet's
-    # cell can differ from a >=1-cell VOLUME box at the same nominal z. That is
-    # correct: a zero-thickness sheet and a one-cell-thick box are different
-    # objects. apply_pec_mask realizes the sheet's conductor at the selected
-    # E-NODE, where tangential Ex/Ey actually sit, so Box's argmin-nearest thin
-    # branch minimizes the realized-plane error |node - z0|; a genuinely
-    # matching-thickness (sub-cell) box takes the same thin branch and selects
-    # the identical layer (verified, tests/unit/materials/test_thin_conductor.py). No fix here.
-    # (This said "cell CENTRE" until #562: the NU coordinates the argmin runs
-    # over were centres then, half a cell off the fields. The #371 argument is
-    # STRENGTHENED by the correction — the minimized quantity is now the
-    # distance to the plane the conductor is actually realized on.)
+    # Thin conductors. A PEC thin conductor is a SHEET (#931 §1.3): one
+    # node plane (nearest node to its mid-plane, tie -> lower), a closed
+    # footprint, no cell. It is emitted as a SheetSpec, never OR'd into
+    # pec_mask; the run lanes realize it through
+    # rfx.boundaries.pec.realized_pec_edge_masks. A shape thicker than one
+    # local cell along its normal is refused ("not a sheet; use add()").
     if sim._thin_conductors:
         pec_tcs = [tc for tc in sim._thin_conductors
                    if getattr(tc, "is_pec", False)]
         lossy_tcs = [tc for tc in sim._thin_conductors
                      if not getattr(tc, "is_pec", False)]
-        if pec_tcs:
-            if pec_mask is None:
-                pec_mask = jnp.zeros(coords.shape, dtype=jnp.bool_)
-            for tc in pec_tcs:
-                pec_mask = pec_mask | tc.shape.mask_on_coords(
-                    coords.x, coords.y, coords.z)
+        for tc in pec_tcs:
+            _pec_sheets.append(sheet_spec_from_shape(
+                tc.shape, coords, cell_sizes, name="thin_conductor",
+                lane="non-uniform", refuse_thick=True))
         # #373: lossy (non-PEC) thin conductors fold into sigma using the LOCAL
         # spacing NORMAL to the sheet, not a uniform grid.dx. The sheet has
         # bulk conductivity sigma_bulk and physical thickness t but is realized
@@ -297,12 +241,29 @@ def assemble_materials_nu(
                 (grid.dx_arr, grid.dy_arr, grid.dz)[n_axis])
             bshape = [1, 1, 1]
             bshape[n_axis] = int(d_norm.shape[0])
-            m = tc.shape.mask_on_coords(coords.x, coords.y, coords.z)
+            _plane = None
             if _f0 is not None:
+                # #931 G4 by construction: the f0 sheet takes the SAME
+                # footprint and plane a PEC sheet on this shape gets
+                # (sheet_spec_from_shape: nearest node to the mid-plane,
+                # closed Box footprint). A traced mesh (mesh-as-design-
+                # variable) has no static plane; there the footprint keeps
+                # the shape's own traced node sampler, as before #931.
+                if any(is_tracer(c) for c in (coords.x, coords.y, coords.z)):
+                    m = tc.shape.mask_on_coords(coords.x, coords.y, coords.z)
+                else:
+                    _spec = sheet_spec_from_shape(
+                        tc.shape, coords, cell_sizes, normal_axis=n_axis,
+                        name="thin_conductor", lane="non-uniform",
+                        refuse_thick=True)
+                    m = _spec.footprint
+                    _plane = _spec.plane
                 # #674 guard: the realization normalizes ONE E node along the
                 # sheet normal, so the rasterized sheet must occupy exactly
                 # one layer there — and must not have vaporized.
                 check_sheet_occupancy(m, n_axis, lane="non-uniform")
+            else:
+                m = tc.shape.mask_on_coords(coords.x, coords.y, coords.z)
                 # Leontovich band-centre surface-impedance mode (#669/#677):
                 # since #677 the sheet does NOT fold into materials.sigma
                 # (that realized it as a full-cell slab and moved resonances
@@ -332,7 +293,7 @@ def assemble_materials_nu(
                         jnp.ones_like(materials.sigma), 0.0)
                     sheet_specs.append(SheetImpedanceSpec(
                         mask=m, normal_axis=n_axis, g_sheet=g_sheet,
-                        sigma_sheet=sigma_sheet))
+                        sigma_sheet=sigma_sheet, plane=_plane))
                 continue
             sigma_eff = tc.sigma_bulk * (tc.thickness / d_norm.reshape(bshape))
             materials = MaterialArrays(
@@ -1341,7 +1302,10 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     from rfx.materials.thin_conductor import build_sheet_impedance_ctx
     # #689: default (non-periodic) — the NU stepper installs no periodic
     # BC and NU grids are 3-D, matching its apply_pec_mask call.
-    sheet_ctx = build_sheet_impedance_ctx(_sheet_specs, pec_mask=pec_mask)
+    from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+    sheet_ctx = build_sheet_impedance_ctx(
+        _sheet_specs,
+        pec_edge_masks=None if pec_mask is None else _rpem(pec_mask))
     if sheet_ctx is not None:
         # v1 fences (loud, never silent): the sheet operator replaces the
         # standard E update at its edges, which is only correct against the
@@ -1361,23 +1325,10 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                 "isotropic E update at its edges. Disable "
                 "subpixel_smoothing or drop the f0 sheet.")
 
-    # #706: opt-in two-plane slab mask, rasterized with the SAME
-    # coords-based call assemble_materials_nu uses for geometry PEC, so
-    # the flagged cells cannot land off the pec_mask they extend. The
-    # reference-run strip (strip_interior_pec) drops it with the mask it
-    # extends.
-    pec_two_plane_mask = None
-    if not strip_interior_pec:
-        from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid
-        _tp_coords = coords_from_nonuniform_grid(grid)
-        pec_two_plane_mask = sim._two_plane_cell_mask(
-            mask_fn=lambda sh: sh.mask_on_coords(
-                _tp_coords.x, _tp_coords.y, _tp_coords.z))
     _shared_run_kwargs = dict(
         sheet_impedance=sheet_ctx,
         aniso_eps=aniso_eps,
         pec_mask=pec_mask,
-        pec_two_plane_mask=pec_two_plane_mask,
         pec_occupancy=pec_occupancy_override,
         sources=sources,
         probes=probes,

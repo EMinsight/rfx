@@ -27,10 +27,10 @@ from rfx.geometry.csg import Box, _grid_coords
 from rfx.geometry._pole_keying import _accumulate_pole_mask, _spec_from_pole_masks
 from rfx.geometry.rasterize_grid import (
     GridCoords,
-    collect_thin_conductor_sheet_inputs,
+    cell_sizes_from_uniform_grid,
+    centres_from_uniform_grid,
+    classify_pec_entry,
     extend_cpml_pad_materials,
-    periodic_flags_from_axes,
-    resample_sheet_node_materials,
 )
 from rfx.materials.debye import DebyePole, init_debye
 from rfx.materials.lorentz import LorentzPole, init_lorentz
@@ -136,11 +136,26 @@ class _CompileMixin:
         include_thin_conductors: bool = True,
         include_cpml_pad_extension: bool = True,
         sheet_specs: list | None = None,
+        pec_sheets: list | None = None,
+        pec_wires: list | None = None,
     ) -> tuple[MaterialArrays, _DebyeSpec | None, _LorentzSpec | None, jnp.ndarray | None, list, list, jnp.ndarray | None]:
         """Build material arrays plus per-pole dispersion masks.
 
+        Lattice ownership contract (#931): PEC geometry entries are
+        classified as VOLUME (centre-sampled cells, into ``pec_mask``),
+        SHEET (a zero-thickness Box, into ``pec_sheets``) or WIRE (a
+        sub-cell ``PolylineWire``, into ``pec_wires``); PEC thin
+        conductors are sheets.  Sheets and wires own no cell and are NOT
+        in ``pec_mask``; realize them with
+        ``rfx.boundaries.pec.realized_pec_edge_masks``.
+
         Parameters
         ----------
+        pec_sheets, pec_wires : list or None
+            Out-parameters (same pattern as ``sheet_specs``) so the
+            positional return tuple stays unchanged.  Sheets/wires are
+            always classified; passing no collector only means the caller
+            does not receive them.
         include_thin_conductors : bool, default True
             When False, stop one step short of the finished arrays and
             return the state as it is *before* the ``_thin_conductors``
@@ -220,15 +235,34 @@ class _CompileMixin:
         debye_masks_by_pole: dict[DebyePole | int, tuple[DebyePole, jnp.ndarray]] = {}
         lorentz_masks_by_pole: dict[LorentzPole | int, tuple[LorentzPole, jnp.ndarray]] = {}
 
+        _cx, _cy, _cz = _grid_coords(grid)
+        _coords = GridCoords(x=_cx, y=_cy, z=_cz, shape=grid.shape)
+        _centres = centres_from_uniform_grid(grid)
+        _cell_sizes = cell_sizes_from_uniform_grid(grid)
+        _pec_sheets = pec_sheets if pec_sheets is not None else []
+        _pec_wires = pec_wires if pec_wires is not None else []
+
         for entry in self._geometry:
             mat = self._resolve_material(entry.material_name)
             mask = entry.shape.mask(grid)
 
             if mat.sigma >= self._PEC_SIGMA_THRESHOLD:
-                # True PEC: mark in mask, keep eps/sigma at vacuum values
-                pec_mask = pec_mask | mask
+                # True PEC (#931): volume cells into pec_mask (centre
+                # sampled, §1.1); a zero-thickness Box is a sheet; a
+                # sub-cell PolylineWire is a filament. eps/sigma stay at
+                # vacuum values either way.
+                cells, sheet, wire = classify_pec_entry(
+                    entry.shape, _coords, _centres, _cell_sizes,
+                    name=entry.material_name)
+                if cells is not None:
+                    pec_mask = pec_mask | cells
+                    has_pec_cells = True
+                    mask = cells
+                elif sheet is not None:
+                    _pec_sheets.append(sheet)
+                else:
+                    _pec_wires.append(wire)
                 pec_shapes.append(entry.shape)
-                has_pec_cells = True
             else:
                 eps_r = jnp.where(mask, mat.eps_r, eps_r)
                 sigma = jnp.where(mask, mat.sigma, sigma)
@@ -245,63 +279,6 @@ class _CompileMixin:
             if mat.lorentz_poles:
                 for pole in mat.lorentz_poles:
                     _accumulate_pole_mask(lorentz_masks_by_pole, pole, mask)
-
-        # Node-thin conductors: sample the statics where the LIVE edge is.
-        # A sub-cell conductor has no volume, so the PEC branch above wrote
-        # only pec_mask and nothing wrote eps_r at its node — which keeps
-        # vacuum wherever the surrounding dielectric boxes abut the metal
-        # faces instead of spanning its thickness. The one E component the
-        # sheet leaves alive is the sheet-NORMAL one, half a cell away,
-        # inside that dielectric. Same rule, same function as the
-        # non-uniform lane (rfx/runners/nonuniform.py) — see
-        # resample_sheet_node_materials for the measurement and for what is
-        # deliberately NOT resampled (mu_r, dispersion poles, chi3).
-        #
-        # Position: BEFORE the pad extension below, which sources the pad
-        # from the outermost interior column under an eps==1 & sigma==0 &
-        # mu==1 vacuum test (#627a/#655) and must see the corrected
-        # interior; and before the thin-conductor loop further down, which
-        # is why the PEC thin-sheet masks are collected here directly.
-        #
-        # STRUCTURAL DEBT, named rather than left to be rediscovered. This
-        # rule sits at the two CALL SITES (here and
-        # rfx/runners/nonuniform.py's assemble_materials_nu), not inside the
-        # shared rasterize_geometry() body, so a third caller inherits the
-        # ORIGINAL defect silently -- today rfx/runners/subgridded.py:203,
-        # the FINE region (cell CENTRES, cv12/13-fenced experimental), still
-        # unfixed. Hand-copied rules drifting apart is this repo's recurring
-        # failure mode (#689: the neighbour rule inlined a second time in
-        # the distributed kernel, disagreeing at a domain face), so
-        # promoting the resample INTO rasterize_geometry is the real fix.
-        # Not taken here only because that function receives neither the
-        # run's periodic flags nor the lane's half-steps, both of which this
-        # rule needs; widening its signature is a separate change.
-        _cx, _cy, _cz = _grid_coords(grid)
-        _coords = GridCoords(x=_cx, y=_cy, z=_cz, shape=grid.shape)
-        # NOT gated on ``include_thin_conductors``. That flag exists so the
-        # batched sweep gets PRE-conductor arrays and re-applies the fold
-        # itself (#642); this reads the conductors' MASKS only and folds
-        # nothing, so gating it would give the batched lane a different
-        # material at every thin-conductor sheet node than the single-run
-        # lane -- the hand-ported-rule divergence this fix exists to avoid.
-        _pec_tc_masks, _f0_sheets = collect_thin_conductor_sheet_inputs(
-            self._thin_conductors, lambda shape: shape.mask(grid),
-        )
-        _cond_mask = pec_mask if has_pec_cells else None
-        for _m in _pec_tc_masks:
-            _cond_mask = _m if _cond_mask is None else (_cond_mask | _m)
-        if _cond_mask is not None or _f0_sheets:
-            _half = float(grid.dx) * 0.5
-            eps_r, sigma = resample_sheet_node_materials(
-                self._geometry, self._resolve_material, _coords,
-                eps_r, sigma,
-                half_steps=(_half, _half, _half),
-                conductor_cell_mask=_cond_mask,
-                declared_sheets=_f0_sheets,
-                periodic=periodic_flags_from_axes(
-                    getattr(self, "_periodic_axes", "")),
-                pec_sigma_threshold=self._PEC_SIGMA_THRESHOLD,
-            )
 
         # Extend material properties into CPML padding so that guided
         # modes in dielectric waveguides see an impedance-matched absorber
@@ -352,7 +329,8 @@ class _CompileMixin:
 
         materials = MaterialArrays(eps_r=eps_r, sigma=sigma, mu_r=mu_r)
 
-        # Apply thin conductors (P4: PEC thin sheets go to pec_mask).
+        # Apply thin conductors (#931: PEC thin sheets go to ``pec_sheets``,
+        # never to pec_mask; f0 sheets to ``sheet_specs``; DC folds to sigma).
         # NOTE the position: this runs AFTER the pad extension above, so a
         # conductor never lands in the CPML padding. rfx.vmap_sweep depends
         # on being able to observe the state just before this loop — see
@@ -361,10 +339,9 @@ class _CompileMixin:
             for tc in self._thin_conductors:
                 materials, pec_mask = apply_thin_conductor(
                     grid, tc, materials, pec_mask=pec_mask,
-                    sheet_specs=sheet_specs)
+                    sheet_specs=sheet_specs, sheets=_pec_sheets)
                 if tc.is_pec:
                     pec_shapes.append(tc.shape)
-                    has_pec_cells = True
 
         # Stage 1 conformal PEC face-shift (issue: WR-90 mesh-conv xfail).
         # When an axis is declared ``Boundary(conformal=True)`` we promote
@@ -543,16 +520,18 @@ class _CompileMixin:
             grid = (self._build_nonuniform_grid() if is_nonuniform
                     else self._build_grid())
         sheet_specs: list = []
+        pec_sheets: list = []
         if isinstance(grid, NonUniformGrid):
             materials, _, _, pec_mask = self._assemble_materials_nu(
-                grid, sheet_specs=sheet_specs)
+                grid, sheet_specs=sheet_specs, pec_sheets=pec_sheets)
         else:
             materials, _, _, pec_mask, _, _, _ = self._assemble_materials(
-                grid, sheet_specs=sheet_specs)
+                grid, sheet_specs=sheet_specs, pec_sheets=pec_sheets)
         return conductor_footprint(
             pec_mask=pec_mask,
             sigma=materials.sigma,
-            sheet_masks=[sp.mask for sp in sheet_specs],
+            sheet_masks=[sp.mask for sp in sheet_specs]
+                        + [sp.footprint for sp in pec_sheets],
             sigma_threshold=thr,
             shape=grid.shape,
         )
@@ -722,10 +701,12 @@ class _CompileMixin:
 
     def _assemble_materials_nu(
         self, grid: NonUniformGrid, sheet_specs: list | None = None,
+        pec_sheets: list | None = None, pec_wires: list | None = None,
     ) -> tuple[MaterialArrays, object, object, jnp.ndarray | None]:
         """Build material arrays and dispersion specs for non-uniform grid."""
         from rfx.runners.nonuniform import assemble_materials_nu
-        return assemble_materials_nu(self, grid, sheet_specs=sheet_specs)
+        return assemble_materials_nu(self, grid, sheet_specs=sheet_specs,
+                                     pec_sheets=pec_sheets, pec_wires=pec_wires)
 
     def _pos_to_nu_index(self, grid: NonUniformGrid, pos):
         """Convert physical (x, y, z) to non-uniform grid indices."""

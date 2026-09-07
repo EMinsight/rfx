@@ -101,7 +101,10 @@ def compute_lumped_wire_s_matrix_via_scan(
     from rfx.materials.thin_conductor import build_sheet_impedance_ctx
     # #689: default (non-periodic) — preflight refuses lumped/wire
     # S-params under periodic axes (#206), matching apply_pec_mask here.
-    _sheet_ctx = build_sheet_impedance_ctx(_sheet_specs, pec_mask=pec_mask)
+    from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+    _sheet_ctx = build_sheet_impedance_ctx(
+        _sheet_specs,
+        pec_edge_masks=None if pec_mask is None else _rpem(pec_mask))
 
     if n_steps is None:
         n_steps = grid.num_timesteps(num_periods=30)

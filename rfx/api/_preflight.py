@@ -26,13 +26,13 @@ from rfx.grid import C0
 from rfx.core.yee import MaterialArrays
 from rfx.core.jax_utils import is_tracer
 from rfx.geometry.csg import Box
-# Bound at import time ON PURPOSE (issue #703 check 2): the live-edge check
-# must keep its own reference to the real resample even when a test (or a
-# regression) replaces the module attribute the ASSEMBLY resolves — the
-# check exists to notice exactly that divergence.
-from rfx.geometry.rasterize_grid import (
-    resample_sheet_node_materials as _resample_sheet_node_materials,
-)
+# #931 stage B (import-level only, by the core agent): the #702 resample
+# family was deleted from rfx.geometry.rasterize_grid. The #703 check-2
+# body below still names ``_resample_sheet_node_materials``; the preflight
+# owner rewrites that check against the lattice ownership contract
+# (design note §3: ``sheet_slot_vacuum``). Bound to None so the module
+# imports; the check must be retired/rewritten before it runs.
+_resample_sheet_node_materials = None
 
 
 def _fmt_len(meters: float) -> str:
