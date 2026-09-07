@@ -172,6 +172,44 @@ group lands `_port_pec_mask`, `_port_transverse_spans` and the wire-port
 advisory on `realized_wall_planes`. The ingest phase re-derives it ONCE, after
 P. Until then these six are a known, explained red with no number in them.
 
+## Round 2 — the redrawn / re-instrumented runs, read back
+
+| case | run | pre-declared | measured | verdict |
+|---|---|---|---|---|
+| `patch-harminv` | 369367259225 | Leg A moves UP from -6.17 % toward ~-4.4 % and STAYS NEGATIVE; a positive value means the slot survived. Leg B moves < 1 pp | Leg A **-1.871 %** (negative, slot signature gone); Leg B **-7.077 %**, 0.968 pp of movement, still inside its window; cavity / raster / fidelity assertions all PASSED | falsifier CLEARED; magnitude larger than the ~2 pp guess (see the settling finding) |
+| `patch-s11` | 369367259226 | a crossing with Re(Zin) > 500 ohm between 8.8189 and 9.3453 GHz; Re(Zin) no longer negative across the band; Z0 median falls from 79.74 toward 50.6 | crossing **7.7620 GHz** with Re(Zin) peak **4157 ohm**; Re(Zin) positive across the band; Z0 median **60.87 ohm**; preflight cavity advisory SILENT (4 -> 3 advisories) | partly falsified — the crossing moved DOWN, not up, and the reason is physical (see below). Re-pinned from this run |
+| `pec-short-sweep` | 369367259233 | abs S11 tracking thickness = the redraw owns it; flat = the operator owns it | min abs S11 1 -> 0.95721, 2 -> 0.96705, 4 -> 0.97607, spread 0.01886 | tracks thickness — and that REFUTES the framing: a total reflector's abs S11 cannot depend on its thickness. Not re-pinned |
+| `sheet-resonance-ab` | 369367259230 | the census says whether the modes moved or the picker swapped | the old 28.1318 line is still there at 27.9141 (within one df) at 0.117 amplitude; a 0.418 line at 30.2153 took its place in the top two | PICKER, not the modes. Re-pinned to (25.1741, 30.2153); confirm run 369367259241 **PASSED** |
+| `sheet-perturbation-q` | 369367259231 | same instrument, same question | f_mode 25.3992 GHz, reproducing 369367259167 to 4 figures | re-pinned 24.753 -> 25.399; confirm run 369367259242 **PASSED** |
+| `refplane-thru` | 369367259228 | the 6 physics legs run for the first time at HEAD | 27 passed, 6 errors — all one preflight-code-list fixture, blocked on the P group | BLOCKED, not re-derived (see above) |
+| `leontovich-alpha` | 369367259232 | alpha UNCHANGED | alpha_fit inside its 5 % pin; endpoint-ratio comparator 0.87333 vs 0.72494 (+20.5 %); O3 field fit 0.0108 vs the 0.01 trust gate | partly falsified. Profile dump added and re-run as 369367259243; NOT re-pinned |
+
+### The Board H settling finding
+
+The redraw cleared Leg A's falsifier and exposed a second consequence of the
+same change: at `NUM_PERIODS = 120` the UNFED ring-down ends at **-35.43 dB**
+of peak against this module's -40 dB truncation bar, while the fed arm still
+clears it at -42.21. A 787 um cavity radiates less than the 983.75 um
+laminate-plus-vacuum one, so the isolated patch drains more slowly. The bar is
+NOT touched; `NUM_PERIODS` goes 120 -> 200, which is what the assertion message
+itself prescribes and what the Board S sibling already does (280). Leg A's
+-1.871 % is therefore not pinned from the 120-period run — a frequency read off
+an unsettled record is what that bar exists to reject. Re-run: 369367259237.
+
+### Why Board S moved DOWN while Board H moved UP
+
+Same redraw, opposite directions, and that is the check rather than a puzzle.
+Board H's Leg A is the ISOLATED patch mode: a thinner cavity fringes less, so
+it rises. Board S's number is the PORT-PLANE antiresonance of that patch loaded
+by a 13.18 mm open feed stub, and a thinner substrate raises eps_eff, so the
+stub is electrically longer and its resonance falls. A single spurious global
+shift could not move two features in opposite directions, which is why the fed
+and unfed terms are pinned separately in the first place.
+
+Confirm runs after the re-pins: `patch-s11` 369367259239, `msl-nu-gate`
+369367259240 (re-submitted so it reads Board S's re-pinned band, which it
+imports), `patch-harminv` 369367259237.
+
 ## Measured on this pod, no VESSL needed
 
 **Waveguide chain battery LIVE layer** —
