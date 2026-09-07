@@ -90,6 +90,38 @@ def test_the_short_declaration_is_falsifiable(cv11):
     assert "realized wall planes" in str(exc.value)
 
 
+def test_the_front_wall_is_the_whole_cross_section(cv11):
+    """The plug reaches the REALIZED guide walls (23 x 11 mm), so every
+    tangential edge on its front plane is PEC — 276 Ey and 264 Ez on the
+    24 x 12 node plane. This is the check that was missing on 2026-09-06:
+    the plug was drawn to the declared 22.86 x 10.16 mm, its top face
+    rounded to z = 10.000 mm under a wall at 11.000 mm, and the one-cell
+    slot read max||S11|-1| = 0.0560 on VESSL 369367259194 (adjudicated
+    2026-09-07, scripts/diagnostics/pec_short_lane_ab.py)."""
+    sim = cv11._build_sim(cv11.FREQS_HZ, pec_short_x=cv11.PEC_SHORT_X)
+    r = cv11.assert_realized_short(sim)
+    assert r["front_wall_full"]
+    assert r["front_wall"] == {"ey_pec": 276, "ey_full": 276,
+                               "ez_pec": 264, "ez_full": 264}
+    assert r["n_cells"] == 2 * 23 * 11
+
+
+def test_a_plug_drawn_to_the_declared_cross_section_is_refused(cv11):
+    """The falsifier arm of the test above: the 2026-09-06 drawing (hi
+    corner at DOMAIN_Y x DOMAIN_Z) realizes 240/264 Ez and 253/276 Ey on
+    the front plane and the gate must refuse it by name."""
+    sim = cv11._build_sim(cv11.FREQS_HZ, pec_short_x=None)
+    sim.add(cv11.Box((cv11.PEC_SHORT_X, 0.0, 0.0),
+                     (cv11.PEC_SHORT_X + cv11.PEC_SHORT_T_M,
+                      cv11.DOMAIN_Y, cv11.DOMAIN_Z)),
+            material="pec")
+    with pytest.raises(RuntimeError) as exc:
+        cv11.assert_realized_short(sim)
+    msg = str(exc.value)
+    assert "not the full cross-section" in msg
+    assert "Ez 240/264" in msg and "Ey 253/276" in msg
+
+
 def test_port_cutoff_no_longer_needs_the_in_script_aperture_trim(cv11):
     """#889 fixed the rfx-side default (`_node_span_to_cell_span`), so the
     untrimmed port now solves the guide's 23 cells and its cutoff lands on

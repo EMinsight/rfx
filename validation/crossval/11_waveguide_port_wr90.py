@@ -338,6 +338,39 @@ envelope, not here.
       cutoff) where the walls make 23, and it is worse on the magnitude leg
       too.
 
+      ADJUDICATED 2026-09-07 (scripts/diagnostics/pec_short_lane_ab.py,
+      per-bin dumps + port time records, both checkouts, 200 periods): the
+      +0.057 is NOT the lane's edge realization. It is THIS SCRIPT'S
+      DRAWING of the plug's cross-section, made visible by the contract.
+      The plug was drawn to the DECLARED 22.86 x 10.16 mm; the grid
+      realizes the guide as 23 x 11 mm (ceil, the quote-realized walls
+      above), and a volume's face rounds to the NEAREST node plane
+      (§1.1), so the top face landed at z = 10.000 mm with the wall at
+      11.000 mm — a 1 mm x 22.86 mm x 2 mm vacuum slot along the top
+      broad wall, open at both ends, a parallel-plate line for Ez. Under
+      the old node-half-open sampler node 10 (z = 10.000 < 10.16) was in
+      and the sigma fill covered the whole height by accident. Same
+      lane, same mesh, same window, one variable (the Box's hi corner):
+
+                                       declared x-sec   realized x-sec
+        |S11| envelope                 [0.9440,0.9888]  [0.9980,1.0019]
+        max||S11|-1|                       0.0560           0.0020
+        round-trip phase max              17.20 deg        3.26 deg
+        single-run |S21| behind the plug  0.22-0.33         0 exactly
+        right-port record re left peak    -13.3 dB         nothing
+        H1 window x2 (100 -> 200 periods) no change        no change
+        H3 far face 147 -> 148 mm             -            no change
+
+      The baseline (d990e18c) is invariant to the redraw (node sampler,
+      506 cells either way) and reproduces 0.0146 / 9.99 deg here. The
+      lane is exonerated on the same evidence: with the plug at the wall
+      it seals the guide exactly (the record behind it is identically
+      zero) and a sheet-declared short drawn to the realized walls reads
+      the same >= 0.99 class, so the lane does apply sheets. The plug is
+      now drawn to (A_WG_REALIZED, B_WG_REALIZED) and
+      assert_realized_short() refuses a front wall that is not the full
+      cross-section, so this cannot regress silently again.
+
   (b) THE PEC SHORT STAYS A VOLUME, and its walls are now asserted. It is
       a 2 mm metal plug across the guide — the Meep and openEMS legs this
       case is byte-matched against terminate with metal — so under the
@@ -499,6 +532,9 @@ PEC_SHORT_X = MON_RIGHT_X - 0.005  # 0.145 m = +45 mm OE = Meep/OpenEMS canonica
 # VOLUME under the lattice ownership contract: walls at 145.000 / 146.000 /
 # 147.000 mm with the interior shorted. Only the FIRST wall sets the
 # reflection plane, and it is at PEC_SHORT_X on any of these readings.
+# Its cross-section is drawn to the REALIZED guide (A_WG_REALIZED x
+# B_WG_REALIZED) — see _build_sim for the 2026-09-07 measurement of what a
+# plug drawn to the declared 22.86 x 10.16 mm leaves open.
 PEC_SHORT_T_M = 0.002
 
 
@@ -602,9 +638,34 @@ def _build_sim(
         # at 1 mm. PEC_SHORT_T_M realizes the identical body at dx = 1 mm
         # (measured: walls at 145.000 / 146.000 / 147.000 mm) and keeps
         # meaning the same 2 mm plug at any other dx.
+        #
+        # The CROSS-SECTION is drawn to the REALIZED guide (A_WG_REALIZED x
+        # B_WG_REALIZED = 23 x 11 mm at dx = 1 mm), the same quote-realized
+        # walls F_CUTOFF_TE10 is computed from — not to the declared
+        # DOMAIN_Y x DOMAIN_Z (22.86 x 10.16 mm). Under the contract a
+        # volume's faces round to the NEAREST node plane (§1.1), so a plug
+        # drawn to z = 10.16 mm realizes its top face at 10.000 mm while
+        # the grid's top wall (ceil) is at 11.000 mm: a 1 mm x 22.86 mm
+        # vacuum slot along the top broad wall, open at both ends, carrying
+        # Ez — the TE10 field — straight past the "short" as a
+        # parallel-plate line (no cutoff). MEASURED 2026-09-07
+        # (scripts/diagnostics/pec_short_lane_ab.py, 200 periods, same
+        # lane, same mesh): drawn to the declared cross-section the leg
+        # reads |S11| in [0.9440, 0.9888], max||S11|-1| 0.0560, single-run
+        # |S21| 0.22-0.33 behind the plug, the right-port record only 13 dB
+        # below the left-port peak; drawn to the realized cross-section it
+        # reads [0.9980, 1.0019], max||S11|-1| 0.0020, |S21| = 0 exactly,
+        # nothing recorded behind the plug. That is the whole of the
+        # 0.0146 -> 0.0560 step VESSL 369367259194 measured: it was this
+        # drawing, not the waveguide lane's edge realization (which is
+        # what closes the slot correctly the moment the plug reaches the
+        # wall). The pre-#931 node-half-open sampler happened to include
+        # node 10 (z = 10.000 < 10.16 mm) and the sigma fill damped the
+        # whole 11 mm; nothing asserted it. assert_realized_short() below
+        # now refuses a front wall that is not the full cross-section.
         sim.add(
             Box((pec_short_x, 0.0, 0.0),
-                (pec_short_x + PEC_SHORT_T_M, DOMAIN_Y, DOMAIN_Z)),
+                (pec_short_x + PEC_SHORT_T_M, A_WG_REALIZED, B_WG_REALIZED)),
             material="pec",
         )
     port_freqs = jnp.asarray(freqs)
@@ -679,11 +740,28 @@ def realized_short_planes(sim) -> dict:
                                     periodic=sim._periodic_flags())
     nodes = _np.asarray(coords_from_uniform_grid(grid).x)
     planes = realized_wall_planes(edges, 0)
+    # The FRONT wall must be the whole cross-section: every tangential E
+    # edge on that x-plane PEC. A short that stops one row short of a guide
+    # wall is an iris with a slot, not a short (measured 2026-09-07: one
+    # missing row of Ez along the top broad wall reads |S11| ~ 0.94-0.99).
+    # The domain-face rows (j = ny-1, k = nz-1) count because the volume
+    # rule marks them through the last occupied cell.
+    _my, _mz = (_np.asarray(edges[1], dtype=bool), _np.asarray(edges[2], dtype=bool))
+    ny, nz = _my.shape[1], _mz.shape[2]
+    front = dict(
+        ey_pec=int(_my[planes[0]].sum()) if planes else 0,
+        ey_full=int((ny - 1) * nz),
+        ez_pec=int(_mz[planes[0]].sum()) if planes else 0,
+        ez_full=int(ny * (nz - 1)))
     return dict(
         planes=[int(k) for k in planes],
         planes_m=[float(nodes[k]) for k in planes],
         n_cells=0 if pec_mask is None else int(_np.asarray(pec_mask).sum()),
-        n_sheets=len(sheets))
+        n_sheets=len(sheets),
+        front_wall=front,
+        front_wall_full=bool(
+            planes and front["ey_pec"] == front["ey_full"]
+            and front["ez_pec"] == front["ez_full"]))
 
 
 def assert_realized_short(sim) -> dict:
@@ -721,6 +799,14 @@ def assert_realized_short(sim) -> dict:
         problems.append(
             f"the reflection plane realizes at {xs[0]*1e3:.3f} mm, declared "
             f"{PEC_SHORT_X*1e3:.3f} mm")
+    if xs and not r["front_wall_full"]:
+        fw = r["front_wall"]
+        problems.append(
+            f"the front wall at {xs[0]*1e3:.3f} mm is not the full "
+            f"cross-section: Ey {fw['ey_pec']}/{fw['ey_full']}, Ez "
+            f"{fw['ez_pec']}/{fw['ez_full']} tangential edges PEC — a slot "
+            "against a guide wall (the plug must be drawn to the REALIZED "
+            f"guide, {A_WG_REALIZED*1e3:.3f} x {B_WG_REALIZED*1e3:.3f} mm)")
     if problems:
         raise RuntimeError(
             "assert_realized_short: the realized PEC short is not the drawn "

@@ -33,7 +33,10 @@ import pytest
 from rfx.api import Simulation
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
-from tests._realized_geometry import assert_wall_planes, node_index, realized
+from tests._realized_geometry import (
+    assert_wall_planes, domain_wall_positions, node_index, realized,
+)
+from tests._realized_pec import assert_walls_at, realize
 
 
 # =============================================================================
@@ -121,11 +124,24 @@ def _build_sim(
         # solid short with walls on BOTH drawn planes. The incident wave
         # meets the LEADING plane, which is what every gate here measures,
         # so the redraw moves the reflector by at most half a cell.
-        d = float(sim._build_grid().dx)
+        #
+        # Its CROSS-SECTION is drawn to the REALIZED guide walls, read off
+        # the grid, not to DOMAIN. With dx = None the mesh is 2.1414 mm and
+        # ceil(20 / 2.1414) = 10 cells make the guide 21.41 mm tall; a plug
+        # drawn to z = 20 mm rounds its top face to the nearest node
+        # (#931 §1.1) at 19.27 mm and leaves a 2.14 mm vacuum slot under
+        # the top wall — a parallel-plate line for Ez straight past the
+        # "short". That slot, not the lane, was the 0.9670 this test read
+        # after the redraw (adjudicated 2026-09-07 on cv11's identical
+        # case: scripts/diagnostics/pec_short_lane_ab.py).
+        grid = sim._build_grid()
+        d = float(grid.dx)
         k_lo = int(round(pec_short_x / d))
         x_lo, x_hi = k_lo * d, (k_lo + SHORT_CELLS) * d
+        y_wall = domain_wall_positions(grid, 1)[1]
+        z_wall = domain_wall_positions(grid, 2)[1]
         sim.add(
-            Box((x_lo, 0.0, 0.0), (x_hi, DOMAIN[1], DOMAIN[2])),
+            Box((x_lo, 0.0, 0.0), (x_hi, y_wall, z_wall)),
             material="pec",
         )
         # What the fixture declares, for the build-time realization check.
@@ -536,31 +552,23 @@ def test_pec_short_s11_magnitude():
         pec_short_x=0.085,
         waveform="modulated_gaussian",
     )
-    # MEASURED AFTER THE REDRAW, and left RED on purpose: min |S11| =
-    # 0.9670 against this module's 0.99 Meep-class gate (worst bin; the
-    # run also raises the reciprocity advisory at 0.0242 vs 0.011 at
-    # 7 GHz). The gate is NOT widened — see the design note's migration
-    # rule 3 and the T6 handover
-    # docs/design_notes/931_migration/T6-waveguide-chain-battery.md, which
-    # measured the same class on the chain battery's pec_short DUT
-    # (max|dS| 0.938 coarse / 0.498 mid while the empty guide reproduced
-    # to 2.5e-6).
+    # After the #931 redraw this test read min |S11| = 0.9670 and was left
+    # RED with the gate untouched (migration rule 3). Adjudicated 2026-09-07
+    # on cv11's identical case (scripts/diagnostics/pec_short_lane_ab.py,
+    # per-bin dumps + port time records, both checkouts): NEITHER of the
+    # two suspects — the thicker reflector, or the lane's switch from the
+    # sigma = 1e10 cell fill to the realized PEC edges (stage C, 0184d64c)
+    # — was it. The plug was drawn to DOMAIN[2] = 20 mm on a 2.1414 mm
+    # auto mesh whose guide is 21.41 mm tall, so its top face rounded to
+    # 19.27 mm and a one-cell vacuum slot ran along the top broad wall;
+    # cv11's 1 mm slot of the same origin transmitted |S21| 0.22-0.33 past
+    # the "short" and closing it returned |S11| to [0.9980, 1.0019], equal
+    # to the pre-change baseline to four decimals, with the lane's far
+    # face and the window both shown not to matter. `_build_sim` now draws
+    # the plug to the grid's realized walls, and the check below refuses a
+    # front wall that is not the whole cross-section, which is what would
+    # have caught this at build time.
     #
-    # Two changes landed on this fixture at once and they have to be
-    # separated before anything is re-pinned:
-    #   1. the geometry. The short used to be 0.002 m against a cell this
-    #      module never pinned — 0.93 of ONE cell, which the pre-#931 rule
-    #      realized as a single wall and §1.5 now refuses. It is redrawn
-    #      as SHORT_CELLS whole cells on the node line, so the reflector
-    #      is thicker and its leading face moved by up to half a cell.
-    #   2. the operator. Stage C (0184d64c) made the waveguide S-matrix
-    #      lane apply the realized PEC edges instead of folding pec_mask
-    #      into a sigma = 1e10 cell fill. A hard wall and a 1e10 S/m lossy
-    #      volume do not reflect with the same phase.
-    # The cheap separation: re-run with SHORT_CELLS = 1 and 4. If |S11|
-    # tracks the thickness, it is (1); if it does not move, it is (2) and
-    # belongs with the chain-battery re-measure. Do that before touching a
-    # number here.
     # Build-time realization check (#931), no solve: it fails before the
     # 40-period run if the geometry ever drifts off the node line again.
     #
@@ -577,6 +585,12 @@ def test_pec_short_s11_magnitude():
     assert_wall_planes(
         sim, 0, expected_planes=list(range(faces[0], faces[1] + 1)),
         what="PEC short")
+    # ... and each drawn face is a wall across the WHOLE cross-section
+    # (footprint=None): a plug that stops one row short of a guide wall is
+    # a slotted iris, and a footprint taken from the plug's own cells would
+    # not notice the row it is missing.
+    assert_walls_at(realize(sim), 0, list(sim._pec_short_faces_m),
+                    what="PEC short (full cross-section)")
     # Full-window DFT: the single PEC->CPML round trip fits inside
     # num_periods=40 and there is no resonator to build up late-time.
     # Phase 2 cleanup (2026-04-25) removed the num_periods_dft early

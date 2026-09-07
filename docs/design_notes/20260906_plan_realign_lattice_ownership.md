@@ -386,3 +386,30 @@ the consumers that still measure metal from the primal CELL mask —
 `_validate_cfg_sheet_live_edge_materials`. Until those switch, a sheet-declared
 conductor is invisible to preflight and preflight's own
 `_assemble_materials(grid)` calls take the sheets-dropped warning above.
+
+**§1.1 nearest-plane rounding meets a ceil-realized domain (2026-09-07, the
+cv11 pec-short "core regression").** cv11's pec-short |S11| deficit went
+0.0146 → 0.0560 after this branch (VESSL 369367259194) and was filed against
+the waveguide lane's stage-C change. Adjudicated with per-bin dumps and port
+time records on both checkouts (`scripts/diagnostics/pec_short_lane_ab.py`):
+it was the FIXTURE'S DRAWING, made visible by §1.1. The plug was drawn to the
+declared 22.86 × 10.16 mm; `Grid` realizes the guide by ceil as 23 × 11 mm,
+a volume's face rounds to the nearest node, so the plug's top landed at
+10.000 mm under a wall at 11.000 mm — a one-cell vacuum slot along the top
+broad wall, a parallel-plate line for Ez, transmitting |S21| 0.22–0.33 past
+the "short". The pre-#931 node-half-open sampler included node 10 by
+accident and the sigma fill covered the full height. Drawn to the realized
+walls the leg reads [0.9980, 1.0019] / 3.26°, identical to the no-trim
+baseline to four decimals; the far face, the window and the reference run do
+not matter; a sheet drawn to the walls reproduces the closed volume (the lane
+applies sheets — the 0b6f1239 "sheet does not work" reading was the same
+rim-short footprint as a resonant slot). Rule for fixtures: a conductor meant
+to reach a domain wall is drawn to the grid's REALIZED wall plane
+(`tests/_realized_geometry.domain_wall_positions`), and a shorting plug
+asserts a full-cross-section front wall at build time. Owed by the preflight
+stage: a finding for a conductor face drawn within a cell of a domain wall
+that rounds away from it. The validation battery's `test_pec_short_s11_magnitude`
+(auto mesh, same slot) is green again with its gate untouched; the chain
+battery's `pec_short` DUT is on-lattice at every rung and its T6 red
+(max|ΔS| 0.938) is a different reading — S22's phase, the far face one cell
+further from the right port — not this one.
