@@ -99,3 +99,15 @@ changed (node-plane redraw, or a realization that gained the far face), so
 their committed numbers are stale, but each has its own pre-declared window
 set that must be re-derived BEFORE the gates are read again — which is a
 decision, not a recompute. They are listed in the group report, not submitted.
+
+## Known red on this branch, one cause, cleared by the cv20 fixture ingest
+
+`tests/crossval/test_msl_phase_referee_header.py` — **14 failed, 49 passed**
+(measured on this branch, 2026-09-07). Every one of the 14 fails inside
+`_stage_b_layout`, on the same `KeyError`: the committed fixture
+`tests/fixtures/msl_phase_referee/msl_thru_rfx_dx50.json` carries no
+`meta['trace_wall_planes_realized']`, i.e. it predates the contract. That
+refusal is the intended behaviour — cv20 must not run Stage B against a board
+solved under the old realization — and it clears when run 369367259171's
+fixture is ingested. Anything still red after that ingest is a real pin on a
+pre-contract number and must be re-derived, not relaxed.
