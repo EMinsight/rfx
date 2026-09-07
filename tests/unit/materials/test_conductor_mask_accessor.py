@@ -289,13 +289,28 @@ def test_driver_drive_pass_registers_planes_on_the_sheet_trace():
     """The per-drive call the S-matrix driver makes registers FOUR planes,
     and their Ampere loops hug the SHEET trace.
 
-    The leg/span indices asserted here are the hand-derived Phase-0 values
-    pinned for the PEC thru in
+    The plane indices and the v (height) legs are the hand-derived Phase-0
+    values pinned for the PEC thru in
     ``tests/locks/test_refplane_port_waves.py::
     test_refplane_registers_two_planes_per_port_with_phase0_geometry``.
-    They can only come out equal if the cross-section BFS found the sheet
-    at the same cells the PEC box occupies — a fallback or a partial mask
-    would move them.
+
+    The u (width) legs are ONE NODE WIDER than the PEC thru's, and that is
+    the contract, not a fallback (#931 §1.3/§1.9). The trace is drawn
+    ``y = 7.5 .. 12.5 mm`` at dx = 0.5 mm. A SHEET footprint is sampled
+    CLOSED, so it is nodes 23..33 — the drawn rectangle exactly, hi row
+    included. A one-cell PEC Box is a VOLUME, and its cell mask is cells
+    23..32; the two describe the SAME physical trace (the volume's realized
+    wall planes are 23 and 33), but ``_refplane_conductor_mask`` unions
+    cells-of-volumes with footprints-of-sheets in one array, where a node
+    footprint spans one index more than the cell footprint of the same
+    rectangle. The Ampere loop is built one node outside the mask bbox, so
+    the sheet's hi leg is 34 where the PEC box's is 33.
+
+    Re-pinned 2026-09-07 (#931): (u_lo_leg, u_hi_leg) 22,33 -> 22,34 and
+    (u_span_lo, u_span_hi) 23,34 -> 23,35. What the test still proves is
+    unchanged: the cross-section BFS FOUND the sheet — a fallback or a
+    partial mask moves the plane indices and the v legs, which did not
+    move.
     """
     from rfx.materials.thin_conductor import build_sheet_impedance_ctx
 
@@ -322,7 +337,7 @@ def test_driver_drive_pass_registers_planes_on_the_sheet_trace():
         (0, 0): 27, (0, 1): 30, (1, 0): 53, (1, 1): 50}
     for key, spec in by_key.items():
         # Trace bbox -> Ampere loop, byte-equal to the PEC thru's pins.
-        assert (spec.u_lo_leg, spec.u_hi_leg) == (22, 33), key
+        assert (spec.u_lo_leg, spec.u_hi_leg) == (22, 34), key
         assert (spec.v_lo_leg, spec.v_hi_leg) == (1, 3), key
-        assert (spec.u_span_lo, spec.u_span_hi) == (23, 34), key
+        assert (spec.u_span_lo, spec.u_span_hi) == (23, 35), key
         assert (spec.v_span_lo, spec.v_span_hi) == (2, 4), key
