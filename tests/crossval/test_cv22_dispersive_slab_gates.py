@@ -347,8 +347,11 @@ def test_baseline_artifact_e4_against_the_committed_meep_jsons():
         e4 = G.evaluate_e4(_replay_e2(ad), md)
         assert e4["e4_ok"], (arm, e4["gates"], e4["max_dR_rfx_meep_gated"], e4["max_dT_rfx_meep_gated"])
         assert e4["gates"]["precheck_passed"]
-        # the committed r4 artifact predates the precheck_passed gate key
-        # (review finding 2); every stored gate must still replay identically
+        # the intersection, not equality: the committed artifact's gate set
+        # is whatever the run that produced it emitted (the pre-#931 r4 file
+        # predated precheck_passed, review finding 2; the #931 control
+        # re-solve 369367259201 carries it). Every stored gate must still
+        # replay identically whichever set that is.
         assert ad["meep"]["present"]
         assert {k: v for k, v in e4["gates"].items() if k in ad["meep"]["gates"]} == ad["meep"]["gates"]
     assert doc["verdict"]["exit_code"] == 0
