@@ -18,6 +18,23 @@ under both rules), so the iris thickness is the single variable that moved.
 Every committed trace, envelope and gate is therefore void and is regenerated
 — none is carried forward or re-tuned.
 
+## MEASURED so far — pass 1, first two gated rows
+
+Run 369367259159 was in its gated fine rung when this was written. The two
+completed rows already show the direction the correction predicts: the oracle
+was being fed an iris 25% thicker (fine rung) than the one the lattice built,
+and closing that gap shrinks the disagreement.
+
+| config | committed max abs S11 gap | post-change | per-config gate (pre-change) |
+|---|---|---|---|
+| d = 18.288, glen 0.20, frac 0.50 | 0.0122 | 0.0079 | 0.019 |
+| d = 12.192, glen 0.20, frac 0.50 | 0.0223 | 0.0101 | 0.034 |
+
+Both PASS their pre-change per-configuration gates, which is a weak statement
+(the gates were set from the worse numbers). The number that matters is the
+new envelope, and the new gates derived from it — see below. Do not quote
+these two rows as the result; quote the regenerated record.
+
 ## Commands
 
 Two passes, and the second is not optional.

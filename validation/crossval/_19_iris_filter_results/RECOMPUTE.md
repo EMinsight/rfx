@@ -38,6 +38,43 @@ geometry-preserving. Anything left after that is the one-cell feed change,
 which should be small; report the measured `d_f0` against +12.08 verbatim,
 pass or fail.
 
+## MEASURED — the pre-declared falsifier, read against the prediction
+
+Run 369367259160 was still in progress when this was written (it had finished
+the gated leg and moved on to the coarse rung), so this is the gated result
+only; the rest lands with the record.
+
+Predicted, in commit 96c55c3a, BEFORE the run: "the built structure does not
+move, so the realized wall planes must come back at today's committed
+iris_x_nodes and d_f0 must stay at +12.08 MHz. Anything else means the redraw
+was not geometry-preserving and the arithmetic is wrong."
+
+| quantity | pre-change (committed) | post-change (run 369367259160) |
+|---|---|---|
+| realized iris walls | [[150,158],[214,222],[284,292],[354,362],[418,426]] | identical |
+| realized cavities / apertures | 56/62/62/56, 40/26/24/26/40 | identical |
+| oracle @ as-realized f0 | 10.95851 GHz | 10.9585 GHz |
+| oracle @ as-realized BW | 350.43 MHz | 350 MHz |
+| snap df0 vs nominal | +3.3 MHz | +3.3 MHz |
+| rfx band | 10.80037-11.14082 GHz | 10.8003-11.1409 GHz |
+| rfx f0 | 10.97060 GHz | 10.9706 GHz |
+| **d_f0** | **+12.08 MHz** | **+12.12 MHz** |
+| d_lo / d_hi / d_bw | +17.08 / +7.09 / -9.99 MHz | +17.0 / +7.2 / -9.8 MHz |
+| zeros, span holes, max colpow | 3, 1, 1.0065 | 3, 1, 1.0065 |
+
+**The falsifier passes.** d_f0 moved by 0.04 MHz, which is 0.3% of the residual
+and 0.01% of the passband; the filter did not move. That 0.04 MHz is where the
+one deliberate non-preserved change shows up: the metal span is now 276 cells
+rather than the compensated 277, so the trailing feed lost the extra cell it
+carried and P2 sits one cell closer, in uniform guide. It is the size such a
+change should be.
+
+What that buys: the case's headline ~12 MHz unexplained rfx-vs-oracle residual
+is NOT a lattice-ownership artifact. It survived the contract intact, so the
+attribution question the fixture records as open stays open — and it is now
+open against a geometry whose realized dimensions are the drawn ones, with no
+convention ambiguity left to blame.
+
 ## Commands
 
 Two passes, same as cv18 and for the same reason: the `--write-fixture`
