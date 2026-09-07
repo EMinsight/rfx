@@ -26,7 +26,10 @@ def _build() -> Simulation:
     sim = Simulation(freq_max=40e9, domain=(4e-3, 4e-3, 4e-3), dx=200e-6,
                      boundary="cpml", cpml_layers=8,
                      dz_profile=[200e-6] * 8 + [100e-6] * 8 + [200e-6] * 8)
-    sim.add(Box((1.5e-3, 1.5e-3, 1.3e-3), (2.5e-3, 2.5e-3, 1.4e-3)),
+    # #931: one full 200 um cell of the coarse block, drawn on nodes. The
+    # old 100 um box was half a cell thick and is refused now (a Box is a
+    # volume); nothing in this file is about the conductor's thickness.
+    sim.add(Box((1.5e-3, 1.5e-3, 1.2e-3), (2.5e-3, 2.5e-3, 1.4e-3)),
             material="pec")
     sim.add_source(position=(2e-3, 2e-3, 2.4e-3), component="ez",
                    amplitude_kind="current",

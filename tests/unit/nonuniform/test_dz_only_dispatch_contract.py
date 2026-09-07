@@ -157,7 +157,8 @@ def test_msl_dz_only_reaches_the_nu_lane():
     )
     sim.add_msl_port(position=(0.004, 0.003, 0.0), width=0.5e-3,
                      height=0.5e-3, direction="+x", mode="laplace")
-    with pytest.raises(RuntimeError, match="no PEC trace conductor"):
+    with pytest.raises(RuntimeError,
+                       match="no realized PEC trace conductor"):
         sim.compute_msl_s_matrix(n_steps=1)
 
 
