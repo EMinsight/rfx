@@ -326,18 +326,51 @@ def test_cv15_correct_build_would_pass_with_margin():
     assert worst < 0.5 * ident.tol        # margin, not a squeaker
 
 
-def test_cv15_reproduction_ringdown_matches_the_committed_leg():
+def test_cv15_reproduction_ringdown_matches_the_leg_it_was_recorded_from():
     """The reproduction the two cv15 fixtures rest on is the same ring-down as
-    the leg #768 committed -- so reverting this lane's regeneration of
-    ``_15_patch_results/rfx.json`` (design note section 6.9) costs no evidence.
+    the leg #768 committed -- so reverting this lane's regeneration of that leg
+    (design note section 6.9) costs no evidence.
+
+    #931 moved the target, and the fix is to name it. The leg this fixture was
+    recorded against is #768's two_plane-ground build; the lattice ownership
+    contract deletes that spelling (both conductors become declared SHEETS and
+    the feed spans the full substrate), so ``_15_patch_results/rfx.json`` is now
+    a DIFFERENT STRUCTURE and comparing a frozen 2026-09-01 reproduction to it
+    would be comparing two boards. #768's leg is preserved verbatim beside it as
+    ``rfx_pre931_two_plane_ground_1f005d0d.json`` -- same file, same bytes, named
+    for the commit that produced it, following the
+    ``rfx_one_plane_ground_b29f9de7.json`` precedent -- and that is what this
+    fixture rests on, permanently.
 
     The leg carries no mode list; f0 is the field the two share."""
     fx = _fixture("cv15_ringdown_spectra.json")["two_plane_ground"]
     leg = json.loads(
-        (REPO_ROOT / "validation/crossval/_15_patch_results/rfx.json")
-        .read_text(encoding="utf-8"))
+        (REPO_ROOT / "validation/crossval/_15_patch_results"
+         / "rfx_pre931_two_plane_ground_1f005d0d.json").read_text(encoding="utf-8"))
     assert "modes" not in leg          # the committed leg is #768's, untouched
     assert fx["f_harminv_hz"] == pytest.approx(leg["f_harminv_hz"], rel=1e-7)
+    # ... and it IS the pre-#931 build: the two_plane ground realization, which
+    # the current leg can no longer be (the flag is a TypeError now).
+    assert leg["stack_check"]["ground_realization"] == "two_plane"
+
+
+def test_cv15_pre931_leg_is_the_receipt_for_what_the_contract_closed():
+    """The preserved #768 leg carries, in its own recorded preflight, the three
+    findings the ownership contract exists to remove: the ground sheet's own
+    vacuum cell inflating the cavity by +55.0% in electrical thickness (#703 /
+    #702), the feed reaching one cell short of the patch so coupling is
+    capacitive only (#556), and the one-cell PEC sheet whose normal-E edge stays
+    live. Pinned so the before side of the before/after stays legible after the
+    leg beside it is regenerated."""
+    leg = json.loads(
+        (REPO_ROOT / "validation/crossval/_15_patch_results"
+         / "rfx_pre931_two_plane_ground_1f005d0d.json").read_text(encoding="utf-8"))
+    pf = leg["preflight"]
+    assert "+55.0%" in pf
+    assert "coupling is capacitive only" in pf
+    assert "issue #702" in pf
+    # and no key that only the post-#931 stack check writes
+    assert "n_distinct_eps" not in leg["stack_check"]
 
 
 def test_cv15_740_defect_is_a_common_mode_dilation():
