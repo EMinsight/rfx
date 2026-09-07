@@ -166,6 +166,45 @@ is, so the branch must be committed before submitting.
 * Not attempted on this branch: it is a full re-declaration of a 3-D conductor
   stack plus a new predeclaration, and it is the single most expensive fixture
   in the group. Listed, not run — see the report.
+* **PHASE 2b: the eleven red WITNESSES are rewritten on the realization
+  channel; the FIXTURE is untouched and the re-solve is still owed.** They
+  were reading `pec_mask[:, :, k]` — a CELL layer — to answer a question about
+  a NODE PLANE. Under the contract those are different indices, and this
+  fixture's `_half_cell_box_z(n, n)` recipe makes the gap visible: the ground
+  plane's cells sit at z index 32 (node 24) while the junction node is 33
+  (node 25), so the old read returned 2 of 36 annulus cells. New readers:
+  `_realized_node_pec` / `_assemble_junction_realized`, both thin wrappers on
+  `realized_pec_edge_masks` via `tests/_realized_geometry.py`, with the
+  vectorized whole-plane form cross-checked against `realized_wall_planes`'
+  own per-column `ij=` rule in
+  `test_realized_node_pec_reader_agrees_with_the_single_owner`. No count,
+  radius or window size moved.
+  * **Green (6):** attempt-1 and attempt-2 short witnesses (annulus 36/36
+    in-plane PEC, wide ring 68/68, 0 open nodes in the 9x9 window — the same
+    numbers the cell mask gave before the contract), shell-ground contact
+    32/32 and ground lip 32/32 on both fixtures, and the trace-width
+    invariant. The trace one gained an arithmetic correction: the realized
+    footprint is a CLOSED run of 7 NODES with 6 CELLS between them and a
+    realized width of 6 x DX = 600.00 um = the declared width, which the test
+    now asserts in metres instead of inferring from a count.
+    `TRACE_NODE_ROWS_2 = 6` kept its value and its name was corrected to say
+    it is a cell count.
+  * **`xfail(strict=True)` (5), each with its measurement in the marker:**
+    the four attempt-3 launch tests — attempt 3's hole is itself a
+    compensation for the deleted rule (20 half-cell ground Boxes leaving the
+    disk uncovered IN CELLS), and §1.2 now realizes each Box's inner faces as
+    walls on the hole's rim, so the annulus reads 25/36 PEC, the window 11
+    open nodes (not 38), the post-stamp open fraction 0.3056 (not 1.0) and the
+    node-plane xor 11 nodes on EACH of the ground's two wall planes (22 total,
+    against 37 on the cell channel); and the wide Step-B byte-identity test —
+    its trace is placed by the `-3 / +2` node compensation while attempt 2
+    draws the same trace by its physical width, and on exact node coordinates
+    the two land one row apart (13..19 against 14..20, 62 cells differing, all
+    at z node 28 on the trace's edge rows).
+  * Both remaining items are FIXTURE redraws that move what a run measures, so
+    they go with the post-contract attempt predeclaration and its GPU run.
+    `PREDECLARATION`, `PREDECLARATION_ATTEMPT2`, `PREDECLARATION_ATTEMPT3` and
+    `SETTLED_RUN_RECORD` are untouched.
 
 ## R7 — `msl_z0_bias_floor_sweep_realized_anchor.json` — cross-group, blocked
 
