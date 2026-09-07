@@ -180,3 +180,33 @@ def test_sheet_plane_falsifier_moves_the_cavity(tmp_path):
         "how much the post-contract resonance is allowed to move")
     assert st["cavity_eps_r"][0] == pytest.approx(1.0, abs=1e-5), (
         "the arm was supposed to put a vacuum cell inside the cavity")
+
+
+def test_the_old_cv05_declaration_is_refused_and_names_the_sheet_api():
+    """cv05's pre-#931 conductor declaration cannot come back silently.
+
+    Both conductors were 250 um PEC Boxes. On cv05's mesh that is 0.25 of a
+    cell at the ground and 0.55 at the patch — neither a volume nor a sheet,
+    and the old code resolved it with a third rule (csg's thin branch: the
+    single cell whose centre is nearest the mid-plane), which is what put the
+    ground on a node OUTSIDE its own drawn window and the patch 316 um above
+    the laminate.
+
+    Under §1.5 that Box is refused, and the refusal must NAME the sheet
+    declaration — an error that only says "too thin" leaves the author to
+    guess, and guessing is what produced the compensations this branch
+    deletes. Cheap and self-contained: a five-cell box on a 1 mm grid, no
+    solve, no cv05 build.
+    """
+    from rfx import Box, Simulation
+    from rfx.boundaries.spec import BoundarySpec
+
+    sim = Simulation(freq_max=4e9, domain=(20e-3, 20e-3, 20e-3), dx=1.0e-3,
+                     boundary=BoundarySpec.uniform("cpml"), cpml_layers=4)
+    sim.add(Box((5e-3, 5e-3, 10e-3), (15e-3, 15e-3, 10.25e-3)), material="pec")
+    with pytest.raises(ValueError) as exc:
+        sim.conductor_mask()
+    msg = str(exc.value)
+    assert "thinner than one cell" in msg
+    assert "add_thin_conductor" in msg, (
+        f"the refusal does not name the sheet API: {msg}")

@@ -139,7 +139,14 @@ import numpy as np
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 C0 = 2.998e8
 
-# Stage 2 gate: set RFX_SUBPIXEL_SMOOTHING=kottke_pec to test Stage 2 path
+# Stage 2 gate: set RFX_SUBPIXEL_SMOOTHING=kottke_pec to test Stage 2 path.
+# Kept after #931: the contract fences the Kottke Stage-2 and Dey-Mittra
+# Stage-1 paths as subpixel models with their own interior selection (design
+# note §1.8), so this hook is not a per-entry realization knob of the kind
+# §1.5 forbids. It is also close to inert here now — both conductors are
+# sheets, which own no cell for a subpixel rule to smooth, and the substrate
+# faces are exact nodes, so there is no partially-filled cell left to weight.
+# The committed run leaves it unset.
 _sps_env = os.environ.get("RFX_SUBPIXEL_SMOOTHING", "")
 SUBPIXEL_SMOOTHING = _sps_env if _sps_env else False
 
@@ -1209,8 +1216,10 @@ print("   • Before the PML fix, OpenEMS used `MUR` at ≈λ/4 margin which")
 print("     reflected energy and made the effective cavity larger,")
 print("     shifting the resonance 8 % low (2.231 vs 2.424 GHz).")
 print("   • The two bugs pointed in opposite directions and gave a 17 %")
-print("     inter-tool gap. With both fixed (rfx = explicit finite PEC box")
-print("     BELOW substrate; OpenEMS = PML_8 + 50 mm margin) the remaining")
+print("     inter-tool gap. With both fixed (rfx = a finite PEC ground")
+print("     SHEET on the substrate floor plane, which is where openEMS")
+print("     has always put its 2-D ground; OpenEMS = PML_8 + 50 mm")
+print("     margin) the remaining")
 print(f"     Harminv gap in this run is {rfx_vs_oe_pct:.2f} %.")
 print()
 print("  NOTES:")
