@@ -99,3 +99,34 @@ Checked directly on the pod, without VESSL, before submitting:
   `test_patch_edgefed_resonance_harminv.py`. The board moved onto the lattice
   (dx 0.197 mm -> h_sub/4 = 0.19675 mm) and the metal moved onto the board
   faces, so both locks will move. Owned by whoever owns `tests/locks/`.
+
+## One thing the merge agent should NOT "fix"
+
+The core branch gained `tests/_realized_geometry.py` (`realized(sim)`,
+`assert_wall_planes(...)`) after this group branched, and its docstring says a
+second hand-rolled check is the drift the single-owner rule exists to stop.
+That is right for tests. It is not available to the seven build-time checks
+this group added, because they live in **shipped examples and top-level
+scripts**, and a shipped tutorial must not import from `tests/`.
+
+Those checks are not a second rule: each one calls
+`rfx.boundaries.pec.realized_pec_edge_masks` and `realized_wall_planes` — the
+single owner — over the arrays the assembly hands the stepper. What they
+duplicate is four lines of assembly plumbing, and only because
+`Simulation` has no public accessor for its realized edge set yet. The right
+resolution is to give `Simulation` that accessor and have BOTH the tests
+helper and the examples call it; until then, do not rewrite the examples to
+import a test module.
+
+Where the hand-rolled checks live:
+
+* `examples/tutorials/patch_antenna_demo.py::realized_z_wall_planes`
+* `examples/tutorials/nonuniform_patch_demo.py` (inline, after the sources)
+* `examples/tutorials/ports_and_sparams_101.py::build_microstrip_ports`
+* `examples/tutorials/slab_rt_flux_monitor.py::build_sim` (fidelity report,
+  dielectric extent — not an edge check)
+* `scripts/_gallery_v3_patch_figs.py::_assert_realized_stack`
+* `scripts/precompute_gallery_artifacts.py::_assert_realized_planes`
+  (covers both the NU port model and the uniform animation model)
+* `scripts/patch_edgefed_s11_validation.py` and
+  `scripts/msl_flux_ratio_dof.py` (inline, before preflight)
