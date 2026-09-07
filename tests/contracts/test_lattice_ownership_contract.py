@@ -604,6 +604,60 @@ def test_sub_cell_pec_box_via_add_is_refused():
         sim._assemble_materials(sim._build_grid())
 
 
+def test_conformal_weights_do_not_replace_the_realized_edges():
+    """§1.7 / §1.8: Dey-Mittra conformal is a subpixel UPDATE-COEFFICIENT
+    model, not a second realization — a run that carries conformal weights
+    still applies ``(Mx, My, Mz)`` in its step body.
+
+    ``apply_conformal_pec`` zeroes only edges whose weight is exactly 0, and
+    NO edge of a one-cell PEC slab is fully covered (both its faces sit on
+    the slab's own boundary, so w = 1/2 there — measured below). While the
+    waveguide S-matrix lane folded interior PEC into sigma=1e10 the
+    conductor survived that gap; with the fold deleted, a step body that
+    chose one branch OR the other dropped it outright (measured: conformal
+    PEC-short min|S11| 0.2296 against a 0.99 gate, restored to 0.9942).
+    Falsifier: restore the ``elif`` in ``rfx/simulation.py``'s step body and
+    the field on the slab is nonzero.
+    """
+    import jax.numpy as _jnp
+    from rfx import Box
+    from rfx.core.yee import init_materials
+    from rfx.geometry.conformal import (
+        clamp_conformal_weights, compute_conformal_weights_sdf)
+    from rfx.grid import Grid
+    from rfx.simulation import make_source, run as run_simulation
+    from rfx.sources.sources import GaussianPulse
+    from rfx.boundaries.pec import realized_pec_edge_masks
+
+    grid = Grid(freq_max=10e9, domain=(0.024, 0.012, 0.012), dx=0.003)
+    shape = grid.shape
+    slab = Box((0.012, 0.0, 0.0), (0.015, 0.012, 0.012))   # one cell thick
+    k = grid.position_to_index((0.012, 0.006, 0.006))[0]
+    cells = np.zeros(shape, bool)
+    cells[k, :, :] = True
+    w = clamp_conformal_weights(
+        *compute_conformal_weights_sdf(grid, [slab]), 0.1)
+    # The premise, measured: the conformal path alone zeroes NOTHING on a
+    # one-cell slab — no edge of it has weight 0.
+    for c in range(3):
+        assert int(np.count_nonzero(np.asarray(w[c]) == 0.0)) == 0, c
+    # ... while the realized edge set shorts both of its faces.
+    edges = realized_pec_edge_masks(_jnp.asarray(cells))
+    assert bool(np.asarray(edges[1])[k].all()) and bool(np.asarray(edges[1])[k + 1].all())
+
+    src = make_source(grid, (0.018, 0.006, 0.006), "ey",
+                      GaussianPulse(f0=6e9, bandwidth=0.8), 40)
+    res = run_simulation(
+        grid, init_materials(shape), 40, sources=[src], boundary="pec",
+        pec_mask=_jnp.asarray(cells), conformal_weights=w)
+    st = res.state
+    for plane in (k, k + 1):
+        assert float(np.abs(np.asarray(st.ey)[plane]).max()) == 0.0, plane
+        assert float(np.abs(np.asarray(st.ez)[plane]).max()) == 0.0, plane
+    # ... and the run is not trivially zero everywhere
+    assert float(np.abs(np.asarray(st.ey)[k + 3]).max()) > 0.0
+
+
 def test_two_plane_is_gone_from_the_package():
     """§1.5: no ``two_plane`` and no per-entry realization knob in rfx/.
     The reference-plane helper ``refplane_zc_two_plane`` is unrelated."""

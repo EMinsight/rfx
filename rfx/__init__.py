@@ -281,8 +281,10 @@ __all__ = [
     "ThinConductor", "MATERIAL_LIBRARY",
     # lattice ownership contract (#931): the one realization of conductor
     # geometry as PEC E edges, and the two helpers every consumer reads.
-    "SheetSpec", "WireSpec", "realized_pec_edge_masks", "realized_wall_planes",
-    "edge_is_pec",
+    # ``SheetSpec`` / ``WireSpec`` stay OFF the star surface (declaration
+    # records the rasterizer produces, not something a user constructs) —
+    # they are still importable as ``rfx.SheetSpec``.
+    "realized_pec_edge_masks", "realized_wall_planes", "edge_is_pec",
     "load_material_csv", "fit_debye", "fit_lorentz", "eval_debye", "eval_lorentz",
     "plot_material_fit", "DebyeFitResult", "LorentzFitResult",
     "differentiable_material_fit", "MaterialFitResult", "sparam_loss",

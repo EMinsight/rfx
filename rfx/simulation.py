@@ -1457,8 +1457,20 @@ def make_core_step(ctx: _StepContext):
                 # already, so this would be redundant double-zeroing.
                 from rfx.geometry.conformal import apply_conformal_pec
                 st = apply_conformal_pec(st, ctx.conformal_weights[0], ctx.conformal_weights[1], ctx.conformal_weights[2])
-            elif ctx.use_pec_edges:
+            if ctx.use_pec_edges:
                 # #931 §1.7: the (Mx, My, Mz) realized once at setup.
+                #
+                # NOT an ``elif`` on the conformal branch. Dey-Mittra is a
+                # subpixel UPDATE-COEFFICIENT model, not a second geometry
+                # realization: ``apply_conformal_pec`` zeroes only edges
+                # whose weight is exactly 0, and no edge of a one-cell PEC
+                # slab is fully covered — both its faces sit ON the slab's
+                # own boundary, so w = 1/2 there. While the waveguide
+                # S-matrix lane folded interior PEC into sigma=1e10 the
+                # conductor survived anyway; with that fold deleted (#931)
+                # the ``elif`` dropped it outright — measured on the
+                # conformal PEC-short battery, min|S11| 0.2296 against a
+                # gate of 0.99, restored to 0.9942 by applying both.
                 st = apply_pec_edges(st, ctx.pec_edge_masks)
 
             if ctx.use_pec_occupancy:
