@@ -14,6 +14,24 @@ preflight on the fixture class: "All checks passed"):
   tangential-H jump across each sheet plane (both from the same PEC-run
   DFT, so the phasor normalization cancels).
 
+LATTICE OWNERSHIP CONTRACT (#931) — WHAT MOVED AND THE PRE-DECLARATION.
+A sheet footprint is now sampled CLOSED on its in-plane axes, so a drawn
+rectangle realizes exactly (§1.3). Measured at build time on this fixture
+(no solve): the patch footprint is x nodes 13..35 — 22 Ex edges = 5.500
+mm, the drawn L_PATCH — where the old half-open rule gave 13..34, 21
+edges = 5.250 mm, 4.55 % short. The y faces are off-lattice (Y0/dx =
+14.5) and are unchanged at 15..33 (18 edges = 4.500 mm against a drawn
+4.75 mm; that residual is registration, not the rule, and the contract
+does not paper over it).
+
+PRE-DECLARED before the re-measure: a 4.76 % longer resonant length must
+drop f_mode by about the same fraction, 24.7530 -> ~23.62 GHz. Q_f0
+should be roughly unchanged (loss per square is a local quantity), so
+the FWHM ratio tooth is expected to survive. If f_mode does NOT move by
+about one cell's worth of length, the diagnosis is wrong. The pinned
+numbers below are re-derived from that run, never re-centred by hand;
+RECOMPUTE.md names it.
+
 Two teeth, split by what the evidence supports:
 
 * LOSS-IS-REAL (green): FWHM_f0 / FWHM_pec measured 6.98 — the f0 sheet
@@ -139,8 +157,14 @@ def _measured():
     dA = DX * DX
     P = 0.0
     for sp in specs:
+        # The sheet's realized plane is a property of the spec (#931
+        # §1.3), not something to re-derive from its mask. This used to
+        # take the LOWEST populated z index of the mask, which is the same
+        # answer only as long as a sheet occupies exactly one layer — a
+        # second hand-rolled realization reader of the kind the
+        # single-owner rule exists to remove.
         m = np.asarray(sp.mask)
-        k = sorted({int(i[2]) for i in np.argwhere(m)})[0]
+        k = int(sp.plane)
         foot = m[:, :, k]
         for comp in ("hx", "hy"):
             dH = planes[f"{comp}{k}"] - planes[f"{comp}{k - 1}"]

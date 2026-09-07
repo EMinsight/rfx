@@ -32,6 +32,26 @@ both ways):
                                          same class as the original
                                          1.01/3.22 GHz)
 
+LATTICE OWNERSHIP CONTRACT (#931) — WHAT MOVED AND THE PRE-DECLARATION.
+A sheet's footprint is now sampled CLOSED on its two in-plane axes, so a
+drawn rectangle realizes exactly, hi row included (§1.3). This fixture's
+patch is 5.5 mm long on a 0.25 mm cell with X0 = 3.25 mm, i.e. BOTH x
+faces on node lines — exactly the case the old half-open rule shortened.
+Measured at build time (no solve): the patch footprint is now x nodes
+13..35, 22 Ex edges = 5.500 mm, the drawn length; the old rule realized
+13..34, 21 edges = 5.250 mm, 4.55 % short. The y faces are off-lattice
+(Y0/dx = 14.5) and are unchanged at 15..33.
+
+PRE-DECLARED before the re-measure (issue #931 phase 2): a patch whose
+resonant length grows 4.76 % must drop both modes by about the same
+fraction, i.e. 24.5646 -> ~23.44 GHz and 28.1318 -> ~26.85 GHz. If the
+re-measured modes do NOT move by roughly one cell's worth of length, the
+diagnosis is wrong and the footprint change is not what moved them.
+MEASURED_PEC_MODES is re-derived from that run, never re-centred by hand;
+until then this lock is red on purpose and RECOMPUTE.md names the run.
+The A/B itself (pec vs f0 vs prefix) is a DIFFERENCE and is expected to
+survive unchanged — all three arms move together.
+
 Gate (contract G1, log-space with the spectral-resolution floor):
 ``max(|f_f0 - f_pec|, df) <= max(0.1*FWHM_loss, df)`` per mode. On this
 CPU-sized fixture the copper-loss FWHM is far below the window-limited
@@ -143,20 +163,40 @@ def _run(mode):
 
 @pytest.mark.slow_physics
 def test_g1_resonance_position_ab():
-    # --- assembly-identity witness: same cells both ways -----------------
+    # --- assembly-identity witness: same FOOTPRINT both ways -------------
+    #
+    # This used to compare the f0 operator's node mask against the PEC
+    # leg's ``pec_mask`` cells. Under the lattice ownership contract a PEC
+    # sheet owns NO cell (#931 §1.3), so ``pec_mask`` is empty on the PEC
+    # leg and that comparison reads two different things — it went red for
+    # bookkeeping, not physics. Both legs now come back as SHEETS through
+    # their own collector, and the witness compares what actually decides
+    # the geometry: the realized plane AND the node footprint, per sheet.
+    # That is the #677 G4 identity ("f0 toggles loss, never geometry")
+    # read directly rather than inferred from two different arrays.
     sim_f0 = _build("f0")
     grid = sim_f0._build_nonuniform_grid()
     specs = []
     assemble_materials_nu(sim_f0, grid, sheet_specs=specs)
-    f0_layers = sorted(
-        int(k) for sp in specs
-        for k in {int(i[2]) for i in np.argwhere(np.asarray(sp.mask))})
     sim_pec = _build("pec")
-    _, _, _, pec_mask = assemble_materials_nu(sim_pec, grid)
-    pec_layers = sorted(
-        {int(i[2]) for i in np.argwhere(np.asarray(pec_mask))})
+    pec_sheets = []
+    _, _, _, pec_mask = assemble_materials_nu(sim_pec, grid,
+                                              pec_sheets=pec_sheets)
+    assert pec_mask is None or not bool(np.asarray(pec_mask).any()), (
+        "a PEC sheet owns no cell; the volume mask must stay empty")
+
+    f0_layers = sorted(int(sp.plane) for sp in specs)
+    pec_layers = sorted(int(sp.plane) for sp in pec_sheets)
     assert f0_layers == pec_layers == sorted((K_GND, K_P1, K_P2)), (
         f0_layers, pec_layers)
+    by_plane_f0 = {int(sp.plane): np.asarray(sp.mask, dtype=bool)
+                   for sp in specs}
+    by_plane_pec = {int(sp.plane): np.asarray(sp.footprint, dtype=bool)
+                    for sp in pec_sheets}
+    for k in f0_layers:
+        assert np.array_equal(by_plane_f0[k], by_plane_pec[k]), (
+            f"plane {k}: the f0 sheet and the PEC sheet must be the SAME "
+            "footprint — f0 toggles loss, never geometry (#677 G4)")
 
     # --- three realizations, identical processing ------------------------
     runs = {}
