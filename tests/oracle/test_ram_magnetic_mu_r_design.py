@@ -27,6 +27,21 @@ Measured (CPU, f0=8 GHz, dx=0.5 mm, eps'=4, sigma=1.4, mu_r=2, ~9-cell layer, on
 PEC): channel live (18.7% output change mu 1->2); d|Gamma|/dmu_r AD==FD 0.0%; AD vs
 analytic magnetic-TMM gradient sign-match, ratio 0.65-0.78; |Gamma|(f) vs TMM band
 mean 3.2%; lossless mean|Gamma|~1.02.
+
+LATTICE OWNERSHIP CONTRACT (#931). The PEC backing here is a cell mask built
+by index (``m[xb:xpec] = True``) and handed to ``forward(pec_mask_override=)``,
+which stays a VOLUME override (design note §1.8). Under §1.2 that slab now
+realizes tangential walls on BOTH bounding node planes and shorts the normal
+edges between them, where the old rule gave one wall per masked cell plane.
+
+The analytic TMM oracle puts its short (``z_load = 0``) at ``X_BACK``, the
+LEADING face at index ``xb`` — the face the incident wave meets — and that face
+does not move. So the envelope is expected to be unchanged, and the expectation
+is checked by running the module rather than argued: VESSL run 369367259193
+(``rfx-931-post-ram-backings``), recorded in
+``docs/design_notes/931_migration/T6-RECOMPUTE.md``. If the |Gamma| envelope or
+either AD-vs-FD leg moves, the far face at ``xpec`` is what moved it and this
+row becomes a re-measure.
 """
 from __future__ import annotations
 

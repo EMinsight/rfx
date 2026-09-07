@@ -33,6 +33,7 @@ worktree at commit `b884b83f`, artifacts under
 | `patch-s11` | 369367259174 | same migration, Board S | max abs S11 0.9921, in-band min 0.8794, Im(Zin) crossing 8.8189 GHz, in-band max Re(Zin) 4326 ohm all HOLD | 1-3 h |
 | `msl-nu-gate` | 369367259178 (and a duplicate 369367259179 — same yaml, submitted twice by a retry loop; either is valid, neither deleted) | NU twin of Board S | same as `patch-s11`, and the two lanes must realize the identical raster (#834) | 1-3 h |
 | `conformal-convergence` | 369367259182 | staircase leg now realizes the volume rule (outer face + shorted interior) | staircase `boundary_error` FALLS, so the 1.2x margin may shrink; if BOTH legs collapse toward zero the ring observable has stopped discriminating and needs replacing — a redesign, not a widened margin | 30-90 min |
+| `ram-backings` | 369367259193 | `pec_mask_override` backings are index slabs `m[a:b]` — volumes that gain a far face at `b` while the TMM oracle's short sits at the LEADING face `a` | the abs Gamma envelope and both AD-vs-FD legs UNCHANGED on both modules; a move is the far face and turns this row into a re-measure | 20-40 min |
 | `farfield-dipole` | 369367259186 | dipole declared a `WireSpec`; edge set verified byte-identical to the old rule on the old mask (Ez 14 edges, Ex/Ey empty) | D stays 2.380 dBi within the +/- 0.5 dBi gate; a move falsifies the byte-identity check | 5-15 min |
 
 `vessl run create -f /tmp/t6vessl/<case>.yaml` for each. Re-submitting a row is
@@ -87,13 +88,6 @@ recording that the device lane changed operator. Handover:
   Pinned as a measurement, not a claim, in
   `tests/contracts/test_lattice_ownership_contract.py::test_a_sigma_fill_conductor_is_not_a_pec_body`
   (910 sigma cells vs 912 PEC volume cells on the same sphere).
-* `tests/oracle/test_ram_multilayer_inverse_design.py`,
-  `test_ram_magnetic_mu_r_design.py` — `pec_mask_override` backings built as
-  index slabs `m[a:b]`. These ARE volumes and gain their far face at index `b`;
-  the TMM oracle puts its short at `X_BACK` = the LEADING face at index `a`,
-  which does not move. Confirmation is folded into the fast lane rather than a
-  dedicated run; if either envelope moves, it is the far face and the row
-  becomes a re-measure.
 * Every frozen artifact under `tests/fixtures/` — this group does no numeric
   regeneration (phase-2 scope). Rows whose numbers move are listed in the
   handover files under `docs/design_notes/931_migration/`.
