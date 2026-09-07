@@ -99,6 +99,37 @@ def _msl_thru_z0_beta():
 
 _timed("msl_thru_z0_beta", _msl_thru_z0_beta)
 
+
+# --- 4. dual-spacing port sigma: oracle-2 table --------------------------
+def _dual_spacing_closed_form():
+    """The four rows of ``test_nu_port_sigma_dual_spacing``'s oracle-2 table.
+
+    #931 R8 (half-open extent) dropped one realized cell from every
+    declaration, so the extents were re-declared to realize the SAME
+    counts the table was built on. ``n_live`` is read from the stamped
+    array, never derived from the extent.
+    """
+    from tests.unit.nonuniform import test_nu_port_sigma_dual_spacing as d
+    out = {}
+    for comp, mult in (("ez", 5), ("ez", 9), ("ex", 3), ("ey", 4)):
+        extent = mult * d.D
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            s11, n_live = d._s11(comp, extent)
+        s11 = np.asarray(s11, dtype=np.float64)
+        expect = (1.0 - n_live) / (1.0 + n_live)
+        out[f"{comp}_{mult}D"] = {
+            "extent_mult_D": mult,
+            "n_live": int(n_live),
+            "expected": float(expect),
+            "re_s11": [float(v) for v in s11.ravel()],
+            "worst_rel": float(np.max(np.abs(s11 - expect) / abs(expect))),
+        }
+    return out
+
+
+_timed("dual_spacing_closed_form", _dual_spacing_closed_form)
+
 with open(OUT, "w") as fh:
     json.dump(res, fh, indent=1)
 print("wrote", OUT)

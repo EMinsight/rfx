@@ -362,8 +362,18 @@ def _s11(component, extent):
     return np.real(np.asarray(res.s_params)[0, 0, :]), n_live
 
 
-@pytest.mark.parametrize("component,extent", [("ez", 2 * D), ("ez", 6 * D),
-                                              ("ex", 2 * D), ("ey", 2 * D)])
+# #931 R8 made a wire port's extent HALF-OPEN in edges, so every declaration
+# here realizes one cell fewer than it did. The extents below are re-declared
+# to realize the SAME cell counts the oracle was built on (2, 3, 2, 2) —
+# measured per component, because the port sits in the coarse run and the
+# three axes have different spacings there, so no single multiple of D works
+# for all of them. Nothing about the oracle moved: the guard is still
+# n_live >= 2 and the expected values are still -1/3 and -1/2. Re-deriving
+# the extents rather than lowering the guard is the point — at n_live = 1 the
+# closed form is S11 = 0, which every wrong cell resistance also satisfies,
+# so the test would still be green and would no longer discriminate.
+@pytest.mark.parametrize("component,extent", [("ez", 5 * D), ("ez", 9 * D),
+                                              ("ex", 3 * D), ("ey", 4 * D)])
 def test_passive_port_quasi_static_s11_matches_the_closed_form(component,
                                                                extent):
     """ORACLE 2 — S11 -> (1 - n_live)/(1 + n_live), independent of Z0."""
