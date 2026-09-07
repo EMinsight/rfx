@@ -94,7 +94,11 @@ H_SUB = 254e-6        # substrate thickness (m)
 W_TRACE = 600e-6      # trace width (m)
 L_LINE = 8e-3         # thru-line length (m)
 PORT_MARGIN = 2e-3    # feed -> domain edge clearance (m)
-DX = 80e-6
+# ON-LATTICE board (#931 §1.3): h_sub / dx = 3 exactly, so the foil sheet
+# lands on the laminate face. The fixture ran at dx = 80 um
+# (h_sub/dx = 3.175); there the substrate realizes four cells and a sheet
+# declared at 254 um snaps to 240 um, buried in the dielectric.
+DX = H_SUB / 3
 F_MAX = 5e9
 LX = L_LINE + 2 * PORT_MARGIN
 LY = W_TRACE + 2 * (2 * H_SUB + 8 * DX)
@@ -146,8 +150,13 @@ def build_msl_thru(sheet=None, dz_profile=None):
     sim.add_material("ro4350b", eps_r=EPS_R)
     sim.add(Box((0.0, 0.0, 0.0), (LX, LY, H_SUB)), material="ro4350b")
     y_c = LY / 2.0
+    # The trace: 35 um foil -> a SHEET on the laminate face (#931 §1.3),
+    # declared by a zero-thickness Box. This file is where the repo's two
+    # sheet spellings meet -- this one, and the floating add_thin_conductor
+    # sheet below -- and under the contract they are one thing: a
+    # footprint on one node plane that owns no cell.
     sim.add(Box((0.0, y_c - W_TRACE / 2, H_SUB),
-                (LX, y_c + W_TRACE / 2, H_SUB + DX)), material="pec")
+                (LX, y_c + W_TRACE / 2, H_SUB)), material="pec")
     if sheet is not None:
         box = Box((SHEET_X[0], y_c - SHEET_HALF_W, SHEET_Z),
                   (SHEET_X[1], y_c + SHEET_HALF_W, SHEET_Z))
@@ -205,9 +214,22 @@ def _settled(tag):
 @pytest.mark.slow
 def test_o1_no_sheet_identity_vs_13de212_golden():
     """With NO f0 sheet registered, the lane's S is byte-identical to the
-    golden captured at commit 13de212 (BEFORE the fence removal).
+    committed golden.
 
-    Provenance: the golden pair
+    #931 RECAPTURE PENDING. The 13de212 golden is a record of a board
+    this tree no longer builds: the trace was a one-cell PEC Box on a
+    bisecting mesh (dx = 80 um, h_sub/dx = 3.175, single wall at node 4)
+    and it is now a sheet on an on-lattice board (dx = h_sub/3, wall at
+    node 3 = 254 um). Both the realization and the mesh moved, so byte
+    identity against the old file cannot hold and must not be relaxed
+    into a tolerance -- the file is re-captured from the same procedure on
+    the post-contract tree and the old one kept as pre-#931 history. The
+    capture command and the VESSL run are recorded in
+    ``tests/unit/sparams/_results_931/RECOMPUTE.md``; until that lands
+    this test fails against the stale golden, which is the correct
+    reading of "the geometry changed".
+
+    Provenance of the file being replaced: the golden pair
     ``tests/fixtures/golden_msl_sheet_thread_{s,freqs}_13de212.npy`` was
     produced on 2026-08-19 from a pristine detached worktree of commit
     13de212 (the #677/#678 merge, the parent of the #679 change), running
@@ -504,9 +526,18 @@ def test_probe0_clears_the_sheet():
     sim = build_msl_thru(sheet=("f0", _sigma_bulk_for_rs0(1.0)))
     grid = sim._build_grid()
 
+    # Two collectors, because this board carries two KINDS of sheet and the
+    # assembler keeps them apart (#931 §1.3 + #677): ``sheet_specs`` takes
+    # the lossy f0 thin conductor this fixture is about, ``pec_sheets``
+    # takes the PEC trace, which owns no cell and is dropped with a warning
+    # if nobody asks for it. Passing only the first is what makes the
+    # sheets-dropped UserWarning fire on a test that has no reason to see it.
     specs: list = []
-    sim._assemble_materials(grid, sheet_specs=specs)
-    assert len(specs) == 1, f"expected one sheet spec, got {len(specs)}"
+    pec_sheets: list = []
+    sim._assemble_materials(grid, sheet_specs=specs, pec_sheets=pec_sheets)
+    assert len(specs) == 1, f"expected one f0 sheet spec, got {len(specs)}"
+    assert len(pec_sheets) == 1, (
+        f"expected the PEC trace as one sheet, got {len(pec_sheets)}")
     mask = np.asarray(specs[0].mask)
     sheet_ix = np.where(mask.any(axis=(1, 2)))[0]
     assert sheet_ix.size, "sheet rasterized to zero cells"

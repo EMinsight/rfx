@@ -28,6 +28,41 @@ precedents):
    claimed). Attempt 1's own predeclaration, fixture, and regression locks
    above are UNCHANGED and UNDELETED — they remain a valid, reproducible
    historical record of a deliberately short ladder.
+
+#931 — NOT MIGRATED HERE, AND WHY (see
+``tests/unit/sparams/_results_931/RECOMPUTE.md`` R6).
+
+This is the only fixture in the S-parameter/port suite with a genuine
+three-dimensional conductor stack, and the lattice ownership contract
+touches every part of it:
+
+* the ground plane and the trace are ``_half_cell_box_z(n, n)`` — a recipe
+  that exists ONLY to make a Box rasterize to exactly one node plane. That
+  is a sheet declaration written in the language of a volume, and §1.3
+  gives it a first-class spelling: a zero-thickness Box with a static
+  integer plane. Left as volumes they realize a wall on node 26 as well as
+  25 — node 26 is ``N_SUB_LO``, the substrate's own bottom plane — which
+  shorts the laminate's lower face and destroys the MSL launch;
+* the pin ``Cylinder`` is a volume and gains its far end plane;
+* ``_TRACE_Y_LO_OFFSET_NODES = -3`` / ``_TRACE_Y_HI_OFFSET_NODES = +2`` is a
+  hard-coded compensation for the old rule dropping a footprint's hi row —
+  exactly the class of local repair this branch deletes;
+* every realized-count constant in the attempt-3 block (``N_GROUND_BOXES_3``,
+  ``HOLE_CELLS_3``, ``ANNULUS_CELLS_3``, ``LIP_CELLS_3``, ``SHELL_CELLS_3``,
+  ``TRACE_NODE_ROWS_2`` and the entity cell counts) is a measurement of the
+  old realization, and the continuity checks read a CELL column that a
+  sheet-declared ground plane no longer populates;
+* ``test_attempt3_junction_is_attempt2_plus_hole_only`` asserts the numeric
+  effect of #702's ``resample_sheet_node_materials``, which this branch
+  deleted: with no resample the eps_r arrays agree at the 38 hole cells, so
+  ``eps_diff`` empties while ``xor`` stays 38.
+
+The PREDECLARATION / PREDECLARATION_ATTEMPT2 blocks and ``SETTLED_RUN_RECORD``
+are frozen; the post-contract junction needs its OWN attempt predeclaration
+and its own GPU run, the way the RASTERIZER NOTE already marks these records
+as pre-#834. Editing the frozen numbers in place would be the thing that
+discipline exists to prevent, so nothing here is touched until that
+predeclaration is written.
 """
 
 from __future__ import annotations
