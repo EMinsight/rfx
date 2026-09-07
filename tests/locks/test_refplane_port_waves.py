@@ -446,7 +446,7 @@ def test_refplane_registers_two_planes_per_port_with_phase0_geometry():
     27/30; port 2 at 24mm -> i=56; planes at 22.5/21.0mm -> 53/50.  Ampere
     loop legs half a cell outside the trace bbox (y 7.5..12.5mm -> j
     23..33 realized; z 1.0..1.5mm -> k 2): Hz columns at j=22/34 spanning
-    k=[2,4), Hy rows at k=1/3 spanning j=[23,34) — the Phase-0 probe
+    k=[2,4), Hy rows at k=1/3 spanning j=[23,35) — the Phase-0 probe
     layout with the hi leg one node out (#931: the trace footprint is
     sampled CLOSED, so the drawn 5.0 mm strip realizes y 23..33 where the
     old half-open rule stopped at 32, and the loop leg half a cell outside
@@ -475,13 +475,14 @@ def test_refplane_registers_two_planes_per_port_with_phase0_geometry():
         assert spec.third_index == 28                # y = 10mm (padded)
         # #931: the trace footprint is sampled CLOSED, so the drawn
         # 5.0 mm strip realizes y-nodes 23..33 where the old half-open
-        # rule stopped at 32. The Ampere loop leg half a cell OUTSIDE the
-        # bbox therefore sits at j = 34 rather than 33 — the loop follows
-        # the realized conductor, which is the point. u_span is unchanged
-        # because it was already the padded [23, 34).
+        # rule stopped at 32. The whole Ampere loop follows it — the leg
+        # half a cell OUTSIDE the bbox moves 33 -> 34 and the integration
+        # span 34 -> 35. Measured, not predicted: the first re-derivation
+        # here assumed u_span was already padded far enough and it was
+        # not.
         assert (spec.u_lo_leg, spec.u_hi_leg) == (22, 34)
         assert (spec.v_lo_leg, spec.v_hi_leg) == (1, 3)
-        assert (spec.u_span_lo, spec.u_span_hi) == (23, 34)
+        assert (spec.u_span_lo, spec.u_span_hi) == (23, 35)
         assert (spec.v_span_lo, spec.v_span_hi) == (2, 4)
         assert spec.hu_component == "hy" and spec.hv_component == "hz"
 
