@@ -318,17 +318,19 @@ control; that was true in phase 2a and stays true.
 cv04 has no geometry layer to digest — it is a hand-written Fresnel loop — so
 its control is end-to-end: re-run and `git diff --exit-code` on the two
 committed JSONs. On the X-A branch (run 369367259144) that diff came back rc 0
-and EMPTY. Re-submitted on the merged tree as run **369367259290**; if that rc
-is not 0, a dielectric-only case moved and the contract's own pre-declared
-control has fired.
+and EMPTY. **Re-run on the merged tree at `b798d41f` as run 369367259290: same
+verdict, `cv04_artifact_diff.rc = 0` with both diff files zero bytes**, and the
+gate line reproduces digit for digit (T mean error 0.0110, R 0.0066, R+T energy
+deviation 0.0091, all against a 0.0500 limit). `cv04.rc = 2` on both runs is the
+script's "Meep absent" exit, not a failure. The contract's dielectric-only
+pre-declaration holds end-to-end as well as at build time.
 
 ## Submitted in phase 2b, not yet returned
 
 | run | yaml | what it decides |
 |---|---|---|
 | **369367259288** | `scripts/vessl_931/cv05_fixture_check.yaml` | `build_cv05_ringdown_spectra.py --check`: rebuilds all five lengths and compares against the COMMITTED fixture at 1e-6 relative. This is the falsifier for `efc9d2b1`; a MISMATCH means the fixture is not reproducible from the repo and the manifest citations resting on it are not safe to apply. ~20 min. |
-| **369367259289** | `scripts/vessl_931/cv05_farfield_envelope.yaml` | Re-derives `D_ABS_TOL_DB`, `F_RES_REL_LO`/`HI` and the mode-pair band for `tests/crossval/test_patch_canonical_farfield_e4.py` by calling that file's own `rfx_run` fixture function on the sheet-declared canonical patch, and writes the arithmetic beside the measurement. Until it returns, `_ENVELOPES_REDERIVED_FOR_931` stays `False` and the three slow gates stay skipped. ~15 min. |
-| **369367259290** | `scripts/vessl_931/cv04.yaml` | cv04's byte-level control, re-run on the merged tree. ~10-30 min. |
+| **369367259302** | `scripts/vessl_931/cv05_farfield_envelope.yaml` | Re-derives `D_ABS_TOL_DB`, `F_RES_REL_LO`/`HI` and the mode-pair band for `tests/crossval/test_patch_canonical_farfield_e4.py` by calling that file's own `rfx_run` fixture function on the sheet-declared canonical patch, and writes the arithmetic beside the measurement. Until it returns, `_ENVELOPES_REDERIVED_FOR_931` stays `False` and the three slow gates stay skipped. ~15 min. Replaces run **369367259289**, which died in 40 s on `No module named pytest`: its refusal gate shelled out to pytest and the solver image does not carry it, so the job refused on a missing test runner rather than on the board. The four fast gates now run as plain function calls inside the measuring script and pytest is in the pip line because the gate file imports it at module scope. |
 
 Nothing in those three is a re-solve of a question already answered: the first
 is a reproducibility check on a file just committed, the second is the first
