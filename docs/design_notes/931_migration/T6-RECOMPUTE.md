@@ -142,6 +142,36 @@ directory (the worktree crash above still applies). The band constants in
 those three lock modules are re-pinned FROM these runs, never from the
 arithmetic in this file.
 
+
+## refplane-thru: the six physics legs are BLOCKED on the preflight group, not on this branch
+
+Re-run at HEAD (VESSL 369367259228): **27 passed, 6 errors**, 13.8 s. The two
+fast-lane failures the stale run showed are gone — the refplane helper collects
+the sheet it declares now — and the 27 that run are green. The 6 errors are all
+one session-scoped fixture, and they are a cross-group dependency:
+
+```
+E  refplane thru preflight drifted from the baseline:
+   ['_assemble_materials (uniform lane): PEC sheets/wires were classified but
+     the caller passed no pec_sheets/pec_wires collector ...']
+E  assert ['uncoded'] == ['pec_faces_finite_pec',
+                          'wire_port_dead_extent_cells',
+                          'wire_port_dead_extent_cells']
+```
+
+The fixture asserts the exact advisory CODE list, deliberately ("anything else
+= fixture drift, stop"). The trace is a sheet now, and design note §6 says in
+as many words that preflight has not been migrated yet — its own
+`_assemble_materials(grid)` call passes no collector, so the sheet is invisible
+to it and the two conductor-derived codes disappear, replaced by the uncoded
+collector warning.
+
+**Not re-derived here, on purpose.** Re-deriving the list now would pin
+preflight's un-migrated state and the list would move again the moment the P
+group lands `_port_pec_mask`, `_port_transverse_spans` and the wire-port
+advisory on `realized_wall_planes`. The ingest phase re-derives it ONCE, after
+P. Until then these six are a known, explained red with no number in them.
+
 ## Measured on this pod, no VESSL needed
 
 **Waveguide chain battery LIVE layer** —
