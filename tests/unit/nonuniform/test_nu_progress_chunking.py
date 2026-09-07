@@ -49,20 +49,14 @@ def test_the_declared_scatterer_realizes_the_walls_it_is_drawn_with():
     an error now (§1.5) and the box is drawn on nodes, so drawn extent ==
     realized extent: walls at z = 1.2 mm and z = 1.4 mm.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests.unit._nu_lane_shim import wall_planes_m
 
-    sim = _build()
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert not sheets, "the block is a VOLUME; nothing here declares a sheet"
-    edges = realized_pec_edge_masks(pec_mask)
-    k_lo = grid.position_to_index((2e-3, 2e-3, 1.2e-3))[2]
-    k_hi = grid.position_to_index((2e-3, 2e-3, 1.4e-3))[2]
-    assert k_hi == k_lo + 1
-    region = (slice(None), slice(None), slice(None))
-    assert realized_wall_planes(edges, 2, region=region) == [k_lo, k_hi], (
-        "a declared conductor that realizes no wall plane is a silent no-op")
+    # dz_profile => the NU lane; assemble on the lane the run uses.
+    rz, zs = wall_planes_m(_build(), 2, nonuniform=True)
+    assert not rz.sheets, "the block is a VOLUME; nothing here declares a sheet"
+    assert [round(z, 9) for z in zs] == [1.2e-3, 1.4e-3], (
+        f"realized z wall planes {zs}; drawn 1.2 -> 1.4 mm. A declared "
+        "conductor that realizes no wall plane is a silent no-op.")
 
 
 def test_chunked_progress_is_bit_identical_and_reports(capsys):

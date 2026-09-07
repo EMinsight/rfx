@@ -146,20 +146,17 @@ def _msl_thru():
 def test_msl_thru_realizes_the_trace_where_it_is_drawn():
     """Build-time (no solve) gate on the migrated fixture: the sheet lands on
     the substrate top node plane, owns no cell, and leaves Ez live there."""
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, realized)
     sim = _msl_thru()
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    k = grid.position_to_index((0.006, 0.004, 0.0008))[2]
-    assert len(sheets) == 1 and sheets[0].normal_axis == 2
-    assert sheets[0].plane == k
-    assert pec_mask is None or not bool(np.any(np.asarray(pec_mask)))
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k]
+    assert_sheet_planes(sim, 2, [0.0008], what="thru-line trace")
+    assert_wall_planes(sim, 2, [0.0008], what="thru-line trace")
+    rz = realized(sim)
+    assert rz.pec_mask is None or not bool(np.any(np.asarray(rz.pec_mask))), (
+        "a sheet owns no cell")
     # a sheet leaves the normal component live (#690); a one-cell VOLUME
     # would short it — that is what the old drawing realized.
-    assert not bool(np.any(np.asarray(edges[2])))
+    assert not bool(np.any(np.asarray(rz.edge_masks[2])))
 
 
 _MSL_FREQS = jnp.linspace(2e9, 18e9, 12)

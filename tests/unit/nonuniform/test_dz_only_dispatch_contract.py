@@ -175,8 +175,8 @@ def test_a_sheet_declared_msl_trace_is_found_by_the_detector():
     trace answers with its single plane and a volume trace with its two.
     Build-time only: no solve.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks
     from rfx.probes.msl_wave_decomp import realized_trace_planes_on_column
+    from tests._realized_geometry import node_index, realized
 
     h_sub, w_trace, dx = 0.5e-3, 1.0e-3, 0.25e-3
     lx, ly, lz = 4e-3, 4e-3, 2e-3
@@ -193,15 +193,13 @@ def test_a_sheet_declared_msl_trace_is_found_by_the_detector():
         return s
 
     for sheet, expect_span in ((True, 0), (False, 1)):
-        s = _sim(sheet)
-        grid = s._build_grid()
-        sheets: list = []
-        pec_mask = s._assemble_materials(grid, pec_sheets=sheets)[3]
-        assert len(sheets) == (1 if sheet else 0)
-        edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-        i, j, k_sub = grid.position_to_index((lx / 2, y_c, h_sub))
+        rz = realized(_sim(sheet))
+        assert len(rz.sheets) == (1 if sheet else 0)
+        i = node_index(rz.grid, 0, lx / 2)
+        j = node_index(rz.grid, 1, y_c)
+        k_sub = node_index(rz.grid, 2, h_sub)
         lo, hi = realized_trace_planes_on_column(
-            edges, 2, (i, j), k_from=k_sub)
+            rz.edge_masks, 2, (i, j), k_from=k_sub)
         assert lo == k_sub, (
             f"sheet={sheet}: the trace must be found at the plane it is "
             f"drawn on ({k_sub}), got {lo}")

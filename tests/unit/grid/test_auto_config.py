@@ -366,7 +366,8 @@ def test_thin_pec_is_a_sheet_that_owns_no_cell_and_changes_no_material():
     """
     import warnings
     from rfx import Simulation, Box, GaussianPulse
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, node_index, realized)
 
     sim = Simulation(freq_max=5e9, domain=(0.03, 0.03, 0.02),
                      boundary="pec", dx=2e-3)
@@ -382,19 +383,15 @@ def test_thin_pec_is_a_sheet_that_owns_no_cell_and_changes_no_material():
                     waveform=GaussianPulse(f0=3e9, bandwidth=0.5))
     sim.add_probe((0.015, 0.015, 0.01), "ez")
 
-    # Build-time (no solve): declared plane == realized plane.
-    grid = sim._build_grid()
-    sheets: list = []
-    mats, *rest = sim._assemble_materials(grid, pec_sheets=sheets)
-    pec_mask = rest[2]
-    k_declared = grid.position_to_index((0.005, 0.005, 0.002))[2]
-    assert len(sheets) == 1, "the PEC thin conductor must be ONE sheet"
-    assert sheets[0].normal_axis == 2 and sheets[0].plane == k_declared
-    assert pec_mask is None or not bool(np.any(np.asarray(pec_mask))), (
+    # Build-time (no solve): declared plane == realized plane, one sheet,
+    # no cell, no material — read from the shared owner.
+    assert_sheet_planes(sim, 2, [0.002], what="35 um copper trace")
+    assert_wall_planes(sim, 2, [0.002], what="35 um copper trace")
+    rz = realized(sim)
+    assert rz.pec_mask is None or not bool(np.any(np.asarray(rz.pec_mask))), (
         "a sheet owns no cell")
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k_declared]
-    # ... and it wrote no material at its own node plane.
+    k_declared = node_index(rz.grid, 2, 0.002)
+    mats = sim._assemble_materials(rz.grid, pec_sheets=[])[0]
     assert float(np.asarray(mats.eps_r)[8, 8, k_declared]) == 1.0
     assert float(np.asarray(mats.sigma)[8, 8, k_declared]) == 0.0
 
@@ -418,8 +415,8 @@ def test_auto_mesh_thin_conductor_only_configures_dx():
     conductor realizes at least one wall plane.
     """
     from rfx.api import Simulation
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
     from rfx.geometry.csg import Box
+    from tests._realized_geometry import assert_sheet_planes, assert_wall_planes
     sim = Simulation(freq_max=10e9, domain=(0.02, 0.02, 0.002), boundary="pec")
     w = 2.0e-3
     sim.add_thin_conductor(Box((0.005, 0.005, 0.001), (0.015, 0.005 + w, 0.001)),
@@ -432,15 +429,10 @@ def test_auto_mesh_thin_conductor_only_configures_dx():
     assert sim._dx < 0.02 / 10, "dx must be finer than the empty-geometry fallback"
 
     # The declared conductor realizes a wall plane, and it is the one drawn.
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert len(sheets) == 1 and sheets[0].normal_axis == 2
-    k = grid.position_to_index((0.005, 0.005, 0.001))[2]
-    assert sheets[0].plane == k
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k], (
-        "a declared conductor that realizes no wall plane is a silent no-op")
+    # (A declaration that realizes nothing is a silent no-op — which is what
+    # this spelling was before the contract.)
+    assert_sheet_planes(sim, 2, [0.001], what="thin-only auto-mesh sheet")
+    assert_wall_planes(sim, 2, [0.001], what="thin-only auto-mesh sheet")
 
 
 def test_auto_mesh_trigger_fires_thin_only_end_to_end():
@@ -465,14 +457,8 @@ def test_auto_mesh_trigger_fires_thin_only_end_to_end():
     # #931: the same zero-thickness declaration must reach the run as ONE
     # sheet on a real node plane (the pre-contract spelling realized no
     # node at all — see the sibling test above).
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert len(sheets) == 1
-    k = grid.position_to_index((0.006, 0.006, 0.001))[2]
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k]
+    assert_sheet_planes(sim, 2, [0.001], what="run()-trigger thin-only sheet")
+    assert_wall_planes(sim, 2, [0.001], what="run()-trigger thin-only sheet")
 
 
 # ---------------------------------------------------------------------------

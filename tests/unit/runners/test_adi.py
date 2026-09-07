@@ -325,7 +325,8 @@ def test_simulation_adi_internal_pec_geometry_masks_ez():
     from tests._realized_geometry import assert_wall_planes, realized
     assert not realized(sim).sheets
     for axis in (0, 1):
-        assert_wall_planes(sim, axis, [0.008, 0.010, 0.012],
+        assert_wall_planes(sim, axis,
+                           [0.008 + n * dx for n in range(5)],
                            what=f"2-D ADI interior PEC body, {'xy'[axis]}")
 
     result = sim.run(n_steps=20)
