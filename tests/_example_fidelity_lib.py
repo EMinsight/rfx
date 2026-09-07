@@ -287,6 +287,16 @@ CLASSIFICATION: dict[str, Entry] = {
         "no_simulation",
         "same two-stage openEMS-referee shape as cv20: no rfx Simulation is "
         "constructed by this script"),
+    "validation/crossval/_wr90_iris_realized.py": Entry(
+        "no_simulation",
+        "cv18/cv19's shared realized-geometry reader (#931 crossval-D): takes "
+        "a built Simulation and reads realized_pec_edge_masks / "
+        "realized_wall_planes -- constructs no Simulation"),
+    "validation/crossval/comparators/realized_conductors.py": Entry(
+        "no_simulation",
+        "crossval-side build-time realized-conductor gate (#931): takes a "
+        "built Simulation and delegates to the shared realized-edge spelling "
+        "-- constructs no Simulation"),
     "validation/crossval/comparators/fdfd_hplane.py": Entry(
         "no_simulation",
         "plain numpy/scipy.sparse FDFD comparator -- no rfx import at all"),
@@ -512,9 +522,12 @@ CLASSIFICATION: dict[str, Entry] = {
         "builder_fused_with_solve",
         "`main()` builds and calls .run(...) in the same function"),
     "validation/crossval/07_sheen_lpf.py": Entry(
-        "builder_fused_with_solve",
-        "`run_rfx()` builds `sim` and calls sim.compute_msl_s_matrix(...) in "
-        "the same function -- no separable build-only path"),
+        "audited",
+        "`build_rfx_sim(dx)` returns Simulation with no solve call (split out "
+        "of run_rfx() by the #931 crossval-B migration so the build-time "
+        "realized-metal gate is exercised against the production builder); "
+        "run_rfx() consumes it and solves",
+        (Builder("build_rfx_sim", None, (_v("default", dx=200e-6),)),)),
     "validation/crossval/09_half_symmetric_waveguide.py": Entry(
         "builder_fused_with_solve",
         "`_run_cavity()` builds and calls .run(...) in the same function"),

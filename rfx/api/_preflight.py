@@ -480,7 +480,9 @@ class _RealizedPEC:
         return realized_wall_planes(self.edges, axis, ij=ij, region=region,
                                     periodic=self.periodic)
 
-    def edge_is_pec(self, component, i, j, k) -> bool:
+    def is_pec_edge(self, component, i, j, k) -> bool:
+        # thin delegate; named differently from the owner so the single-owner
+        # lock (tests/contracts/test_pec_single_owner_lock.py) reads one rule
         from rfx.boundaries.pec import edge_is_pec
         return edge_is_pec(self.edges, component, i, j, k)
 
@@ -2150,7 +2152,7 @@ class _PreflightMixin:
         ``rfx.boundaries.pec.realized_pec_edge_masks`` under the run's own
         periodic flags — the same call the solver lanes make. Every
         preflight consumer that needs "where is metal" reads the returned
-        :class:`_RealizedPEC` (wall planes, ``edge_is_pec``), never the
+        :class:`_RealizedPEC` (wall planes, ``is_pec_edge``), never the
         cell mask: a sheet owns no cell, and a volume's far face is a
         wall the cell mask does not mark (the #868 class).
         """
