@@ -106,7 +106,12 @@ nothing may be quoted from it.
 
 ---
 
-# RESULT (2026-09-07) — run, decomposition, and the pre-declaration scored
+# RESULT (2026-09-07, first pass) — run, decomposition, and the pre-declaration scored
+
+> **SUPERSEDED for every digit below.** Runs 369367259156 / 369367259164 were solved
+> on the pre-merge base. Both legs were re-solved after the phase-2a merge and the
+> committed files come from 369367259275 / 369367259279 — see the ingest section at
+> the end. The mechanism story here still stands; the numbers do not.
 
 ## The migrated leg (VESSL 369367259156)
 
@@ -192,3 +197,118 @@ cv16 and cv17 therefore has TWO post-change runs a few minutes apart. Per the
 machine rules no VESSL run was deleted. The duplicates are harmless for
 cv14/16/17 (they write nothing) and for cv15 the two runs agree exactly; the
 `.latest` pointers name the second of each pair.
+
+
+---
+
+# INGEST (2026-09-07) — re-solved on the merged base, and what moved
+
+Both committed legs were re-solved after `feat/931-lattice-ownership` was merged
+in. The order came from the ingest brief: the first pass embedded preflight text
+that was wrong for a sheet-declared board, because the preflight group had not
+landed yet. Re-solving fixed that — and moved the physics as well, which was not
+expected.
+
+## The runs
+
+| leg | run | outputs |
+|---|---|---|
+| production (`rfx.json`) | `369367259275` | `/root/workspace/claude-workspace/rfx/runs/issue931-post-cv15-20260907T191128Z/` |
+| decomposition (`rfx_decomposition_feed_pre931.json`) | `369367259279` | `.../issue931-post-cv15-feeddecomp-20260907T192042Z/` |
+
+Same yamls, same commands, same `--num-periods 45.0 --gain`, same 12389 steps,
+preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`, submitted from
+`/root/workspace/byungkwan-workspace/research/rfx` (outside every worktree).
+Both committed files are copies of the runs' `produced/` trees, `cmp`-identical
+to what the jobs left in the worktree.
+
+## 1. The preflight text — the reason for the re-solve, and it holds
+
+Counted in the committed `rfx.json::preflight`, all three now zero:
+
+| line | before | after |
+|---|---|---|
+| `Port/source ... is inside PEC geometry 'pec'` on the galvanic feed (#929 defect 1) | 1 | 0 |
+| `Zero-thickness geometry ... Consider giving it at least one cell of thickness` on a sheet | 2 | 0 |
+| `_assemble_materials ... no pec_sheets/pec_wires collector` from preflight's own assembly | 2 | 0 |
+
+In their place: `sheet_plane_realized` (2 sheets, 0 off their declared mid-plane,
+node planes 18 at 7.938 mm and 22 at 11.11 mm) and the off-lattice conductor-Box
+advisory reworded for sheets. The NTFF λ/4 advisories and the small-ground
+far-field advisory stay — this domain cannot clear them and the module banner
+says so. The same three counts are zero in the decomposition leg.
+
+## 2. The feed's driven edges — not the reason, and it moved f0
+
+`6d66ac65` made the wire-port extent half-open in edges. Measured on the current
+build with `sim._wire_port_cell_centers` (build only, no solve):
+
+* full-span feed: **4** Ez edges, centres z = 8.334, 9.128, 9.922, 10.716 mm,
+  all strictly inside the substrate [7.9375, 11.1125] mm. The old
+  endpoint-inclusive rule drove **5**, the fifth centred at 11.509 mm — above the
+  patch plane, where the patch SHEET does not short it.
+* pre-#931 feed (decomposition arm): **2** edges, was **3**.
+
+## 3. What moved, first pass → this pass
+
+Production leg, 369367259156 → 369367259275:
+
+| field | first pass | committed |
+|---|---|---|
+| `f_primary_hz` | 2436612206.24 | **2423039171.40** (−13.57 MHz, −0.56 %) |
+| `q_harminv` | 10.2056 | 10.0605 |
+| `f_dip_hz` | 2.45000 GHz | 2.42000 GHz |
+| `s11_dip_db` | −19.659 | −19.048 |
+| `max_abs_s11` | 0.85621 | **0.99057** |
+| `settle_db` | −68.056 | −68.691 |
+| `gain_dbi` | 7.20006 | 7.19978 |
+| `stack_check` | sheet / sheet, 4 cells, `n_distinct_eps` 2 | unchanged |
+
+Decomposition leg, 369367259164 → 369367259279: `f_primary_hz`
+2371306854.95 → 2377431249.05, `q_harminv` 18.0868 → 18.2968, `s11_dip_db`
+−0.3190 → −0.0097, `max_abs_s11` 0.99814 → 1.00001, `settle_db` −59.077 → −55.419.
+
+No gate constant changed and none was re-derived. All six gates PASS on the
+committed leg: f0 3.99 % vs openEMS (envelope 8 %), settling −68.7 dB (bar −40),
+rfx max|S11| 0.991 and openEMS 0.992 (bar 1.05), broadside ΔD 0.14 dB (envelope
+3 dB), stack gate PASS. Figure (not committed — `.gitignore:64` excludes
+`**/*.png` repo-wide): `patch_compare.png` in the run's `produced/` tree and
+beside `rfx.json` in the worktree.
+
+## 4. The decomposition, re-read on one base
+
+| leg | f_primary | Q |
+|---|---|---|
+| #768: `two_plane` ground, feed one cell short (frozen artifact, old code) | 2.313947 GHz | 18.90 |
+| sheets, PRE-#931 feed (`rfx_decomposition_feed_pre931.json`) | 2.377431 GHz | 18.30 |
+| sheets, full-span feed (`rfx.json`, production) | 2.423039 GHz | 10.06 |
+
+* leg 1 → leg 2: **+63.483813 MHz (+2.744 %)**, 58.2 % of the total
+* leg 2 → leg 3: **+45.607922 MHz (+1.918 %)**, 41.8 % of the total
+* total: **+109.091735 MHz (+4.715 %)**
+
+Only leg 2 → leg 3 is a clean A/B — both legs on this base, differing only in the
+declared feed span — and it carries essentially the whole Q collapse. Leg 1 → leg
+2 crosses the frozen artifact's code state, so it carries the conductor
+declarations AND the port-extent fix on the pre-#931 feed spelling (3 edges → 2);
+it is not the contract's contribution alone.
+
+The first pass read this split as 47 % / 53 % and scored the pre-declaration
+"most of the shift lands in the ownership term" as WRONG. On the merged base it
+comes out 58 % / 42 %, i.e. the other way. The pre-declaration is not rescued by
+that: the lesson is that the split moved by 11 points under a one-cell port
+rasterization fix, so it was never a stable quantity to have predicted, and
+neither number may be quoted without the code state that produced it.
+
+## 5. Recorded, not smoothed
+
+* `max_abs_s11` on the production leg moved 0.85621 → 0.99057, the largest single
+  change, and rfx now sits where the comparator sits off resonance (0.992).
+  **No cause is attributed**: the whole phase-2a merge lies between the two runs
+  — §1.9 port clearing touches this port too — and no A/B was run to split it.
+  The edge-count change above is measured; the attribution is not.
+* The decomposition leg reads `max_abs_s11` = 1.0000055, marginally above unity
+  in float32. It is not gated (the gate is on the production leg, 1.05) and the
+  arm is a near-total reflector — its feed stops a cell short of the patch, so
+  its S11 dip is −0.010 dB.
+* `openems.json` did not move and was not re-run.

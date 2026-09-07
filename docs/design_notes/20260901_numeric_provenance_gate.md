@@ -43,10 +43,14 @@ in the same commit as its reason.
 - **(A)** the opted-in documents pass on the committed tree, with every reference resolving
   and every value inside its stated precision.
 - **(B)** the gate fails on a measured round-1 defect, for the right reason. The instance is
-  cv15: the round-1 lane regenerated the committed rfx leg so that
-  `validation/crossval/_15_patch_results/rfx.json::s11_dip_db = -4.4298` moved to
-  −0.3448 dB, while the prose describing it did not move. `test_the_gate_fires_on_the_measured_cv15_regression`
-  reproduces that artifact mutation in a scratch tree and asserts the gate reports the
+  cv15: the round-1 lane regenerated the committed rfx leg so that its `s11_dip_db` moved
+  from −4.4298 dB to −0.3448 dB, while the prose describing it did not move. Both of those
+  digits are history — #931 regenerated the leg again (sheet ground, sheet patch, full-span
+  galvanic feed) and the committed file now holds
+  `validation/crossval/_15_patch_results/rfx.json::s11_dip_db = -19.0480` (VESSL 369367259275).
+  The arm is anchored on whatever the live artifact holds, which is what makes it a
+  falsifier rather than a frozen quotation: `test_the_gate_fires_on_the_measured_cv15_regression`
+  mutates that key to round 1's −0.3448 dB in a scratch tree and asserts the gate reports the
   document, the reference and both values. A second arm asserts the same for a sign
   inversion of the cited literal.
 
