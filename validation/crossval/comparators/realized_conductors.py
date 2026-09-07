@@ -48,6 +48,7 @@ __all__ = [
     "sheet_planes",
     "footprint_nodes",
     "assert_wall_planes",
+    "assert_wall_span",
     "assert_no_conductor",
 ]
 
@@ -93,9 +94,51 @@ def realize(sim, grid=None, *, lane: str = "uniform"):
 
 
 def _node_coords(grid, axis: int):
-    """Node coordinates along ``axis`` in metres, pad included."""
-    from rfx.geometry.csg import _grid_coords
-    return np.asarray(_grid_coords(grid)[axis], dtype=np.float64)
+    """Node coordinates along ``axis`` in metres, pad included.
+
+    Uniform and non-uniform lanes both, from the rasterizer's own node
+    builders — a graded z profile does NOT have nodes at ``k*dx``, and a
+    gate that assumed it would report the right plane INDEX with the wrong
+    physical coordinate, which is worse than no coordinate at all.
+    """
+    from rfx.geometry.rasterize_grid import (
+        coords_from_nonuniform_grid, coords_from_uniform_grid)
+    if getattr(grid, "dz", None) is not None:
+        coords = coords_from_nonuniform_grid(grid)
+    else:
+        coords = coords_from_uniform_grid(grid)
+    return np.asarray((coords.x, coords.y, coords.z)[axis], dtype=np.float64)
+
+
+def assert_wall_span(sim, axis: int, lo_m: float, hi_m: float, *, at=None,
+                     region=None, grid=None, lane: str = "uniform",
+                     label: str = "conductor", tol_m: float = 0.0):
+    """Assert a SOLID body realizes walls on every node plane from ``lo_m``
+    to ``hi_m`` and on no other.
+
+    A volume more than one cell thick is PEC on every plane it spans, not
+    only its two faces: the tangential edges of every interior node plane
+    are incident to an occupied cell.  Spelling that as an explicit index
+    list at every mesh rung would be arithmetic the caller has to redo per
+    rung, so the declaration here is the two physical FACES and the gate
+    fills in the contiguous run between them.  The falsifier property is
+    unchanged: a body realized one plane short, one plane long, or with a
+    hole loses exact equality and the failure names both lists.
+    """
+    nodes = _node_coords(_grid_of(sim, grid, lane), axis)
+    k_lo = int(np.argmin(np.abs(nodes - float(lo_m))))
+    k_hi = int(np.argmin(np.abs(nodes - float(hi_m))))
+    want = list(range(min(k_lo, k_hi), max(k_lo, k_hi) + 1))
+    return assert_wall_planes(sim, axis, want, at=at, region=region,
+                              grid=grid, lane=lane, label=label,
+                              tol_m=tol_m)
+
+
+def _grid_of(sim, grid, lane):
+    if grid is not None:
+        return grid
+    return (sim._build_nonuniform_grid() if lane == "nonuniform"
+            else sim._build_grid())
 
 
 def wall_planes(sim, axis: int, *, at=None, region=None, grid=None,
