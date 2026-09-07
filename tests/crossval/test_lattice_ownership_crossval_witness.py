@@ -178,6 +178,14 @@ _ALLOWED = {
     "validation/crossval/05_patch_antenna.py":
         "cites the 2026-08-28 two_plane A/B verdict in its header as the "
         "recorded reason the openEMS agreement moves; no flag, no mechanism",
+    "tests/crossval/test_rcs_dielectric_sphere_mie_gates.py":
+        "asserts the three #702 helpers are GONE from "
+        "rfx.geometry.rasterize_grid (not hasattr) — it names them to "
+        "refuse them, which is this guard's own job one level down",
+    "tests/crossval/test_cv23_lossy_slab_gates.py":
+        "names resample_sheet_node_materials as the retired mechanism its "
+        "one-cell-lossy-body pin used to guard against; history in a "
+        "docstring, no call",
 }
 
 
