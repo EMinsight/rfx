@@ -224,8 +224,38 @@ N_PROBE_Y = 5                   # probes along y (the parity line for TM001)
 #
 # Discrimination: pre-#702 (6b1302b3) measures +7.430 % on identical geometry, mesh,
 # domain and extractor — only the tree differs.
-LEG_A_CENTRE_PCT = -6.17
-LEG_A_HALF_PCT = 1.125          # = 0.935 configuration + 0.190 extractor
+#
+# RE-PINNED 2026-09-07 for #931, from VESSL 369367259237 (this fixture, 200
+# periods, both arms settled at -58.3 dB). Centre -6.17 -> -1.886.
+#
+# WHY THE CENTRE MOVED, and why the WIDTH did not. The board this window was
+# built on reserved a vacuum CELL for the ground foil, and rfx's #702 re-sample
+# silently filled it with laminate, so the mesh cavity was 983.75 um while the
+# Balanis anchor was evaluated at the declared h = H_SUB = 787 um. Leg A was
+# measuring, among other things, that 25 % thickness disagreement. The
+# ownership contract deletes the re-sample, this fixture is redrawn with each
+# foil ON the laminate face it bounds, and the mesh cavity is now four cells of
+# laminate — 787.000 um, the declared value, asserted at build time. With the
+# mesh and the model finally agreeing on h, what is left is much closer to the
+# cavity MODEL's own error, which this module's refinement ladder already
+# plateaus near -4.4 %.
+#
+#   measured at 120 periods  -1.871 %   (record ended at -35.43 dB, under bar)
+#   measured at 200 periods  -1.886 %   (settled at -58.30 dB)  <- the pin
+#
+# The 0.015 pp between them is the whole effect of the longer record, so the
+# frequency was already converged and the settling fix did not move the physics.
+#
+# THE WIDTH IS CARRIED FORWARD, NOT RE-MEASURED, and that is a disclosure
+# rather than a claim: 0.935 pp of it is the mesh/domain/cpml ladder sampled on
+# the PRE-REDRAW board (h/3..h/6, +0/+20/+40 cells, cpml 8->12) and 0.190 pp is
+# the extractor spread. Nothing about the redraw makes that ladder wider — the
+# cavity is now exactly four cells at every refinement instead of four plus a
+# vacuum one — so carrying it is conservative. Re-measuring it on the redrawn
+# board is the follow-up, and it can only narrow this window.
+LEG_A_CENTRE_PCT = -1.886
+LEG_A_HALF_PCT = 1.125          # = 0.935 configuration + 0.190 extractor,
+#                                 both measured on the pre-redraw board
 
 # ------------------------------------------------------------- Leg B window --
 # f_TM010(fed) / f_TM010(unfed) - 1, in percent. The edge-feed loading term.
@@ -260,6 +290,15 @@ LEG_A_HALF_PCT = 1.125          # = 0.935 configuration + 0.190 extractor
 #   stub length moves this leg by +0.85 pp, and the pull runs about -2.2 %/mm of stub.
 #   With the stub held fixed the pull SHRINKS with inset depth (-6.74 -> -3.63 % at
 #   2.4 mm) — an inset-intrinsic matching term exists but is not what this leg pins.
+# NOT re-pinned under #931, and the reason is the construction rather than the
+# result: this centre is the midpoint of FIVE measured fed/unfed pairs, and the
+# redrawn board has one (h/4 base). Re-centring a five-point midpoint on a
+# single point would be a different statistic wearing the same name. The
+# redrawn board measures -7.061 % (VESSL 369367259237), which PASSES — but it
+# sits 0.952 pp from this centre against a 0.986 pp half-width, i.e. at 97 % of
+# the window, so the next drift in either direction trips it. Re-deriving both
+# legs properly needs the ladder re-run on the redrawn board; that is the
+# follow-up named in Leg A's block above, and it owns this centre too.
 LEG_B_CENTRE_PCT = -6.109       # midpoint of the 5 measured pairs, NOT rounded toward
 #                                 zero: rounding the centre in would contradict the Leg A
 #                                 block's claim that rounding UP is the only slack here.
