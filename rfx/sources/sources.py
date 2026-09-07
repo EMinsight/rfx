@@ -425,22 +425,25 @@ def _wire_port_cells(grid, port):
     return cells
 
 
-def _wire_port_live_cells(grid, port, pec_mask=None):
+def _wire_port_live_cells(grid, port, pec_edge_masks=None):
     """Split the wire cells into (cells, live_flags, n_live) — issue #318.
 
-    A cell is *live* when the assembled-geometry PEC mask (geometry PEC +
-    PEC thin conductors, read BEFORE the runner's port-cell clearing) is
-    False there.  A dead cell — one whose extent lies inside a PEC
-    conductor — carries essentially no port current (measured on the
-    issue-#313 thru: |I_dead|/|I_mid| = 0.003-0.03), so its per-cell port
-    resistor is bypassed and it must not be counted in the series
-    impedance distribution or the drive/normalization cell counts.
+    A cell is *live* when the port's OWN E edge at that index is not a
+    realized PEC edge (#931 §1.9: ``edge_is_pec(edge_masks, component, i,
+    j, k)``, read BEFORE the runner's port-cell clearing).  A dead cell —
+    one whose edge is shorted by a conductor — carries essentially no port
+    current (measured on the issue-#313 thru: |I_dead|/|I_mid| =
+    0.003-0.03), so its per-cell port resistor is bypassed and it must not
+    be counted in the series impedance distribution or the
+    drive/normalization cell counts.  Reading the component's own edge, not
+    a cell mask, is what makes a sheet trace (which owns no cell) visible
+    here.
 
-    ``pec_mask=None`` treats every cell as live — identical to the
+    ``pec_edge_masks=None`` treats every cell as live — identical to the
     historical behaviour, and the degenerate case n_live == n makes every
     caller's formula bit-identical to the pre-#318 one.
 
-    The mask must be concrete (host-readable): the live split is a static
+    The masks must be concrete (host-readable): the live split is a static
     geometry decision, made once at setup time, mirroring the
     reference-plane spec builder's concreteness requirement.
 
@@ -450,19 +453,22 @@ def _wire_port_live_cells(grid, port, pec_mask=None):
         When every extent cell is inside PEC (n_live == 0): such a port
         has no live cell to terminate or drive.
     """
-    import numpy as np
+    from rfx.boundaries.pec import edge_is_pec
 
     cells = _wire_port_cells(grid, port)
-    if pec_mask is None:
+    if pec_edge_masks is None:
         return cells, [True] * len(cells), max(len(cells), 1)
 
-    mask_np = np.asarray(pec_mask)
-    live_flags = [not bool(mask_np[c[0], c[1], c[2]]) for c in cells]
+    live_flags = [
+        not edge_is_pec(pec_edge_masks, port.component, c[0], c[1], c[2])
+        for c in cells
+    ]
     n_live = sum(live_flags)
     if n_live == 0:
         raise ValueError(
             f"WirePort {port.start} -> {port.end} ({port.component}): all "
-            f"{len(cells)} extent cells land inside PEC geometry, so the "
+            f"{len(cells)} extent cells have their {port.component} edge "
+            "shorted by realized PEC, so the "
             "port has no live cell to terminate or drive (issue #318). "
             "Shorten the extent or move the port so at least one of its "
             "rasterized cells is not PEC (per the assembled geometry -- "
@@ -471,7 +477,7 @@ def _wire_port_live_cells(grid, port, pec_mask=None):
     return cells, live_flags, n_live
 
 
-def setup_wire_port(grid, port, materials, pec_mask=None):
+def setup_wire_port(grid, port, materials, pec_edge_masks=None):
     """Distribute port impedance across the LIVE wire cells (issue #318).
 
     For n_live live cells in series with total impedance Z0:
@@ -482,10 +488,10 @@ def setup_wire_port(grid, port, materials, pec_mask=None):
     their resistor is bypassed by the surrounding conductor, so counting
     them made the physical series termination Z0·(n_live/n) instead of Z0
     (issue #318; measured 33.3 ohm on the issue-#313 thru, n=3 with one
-    dead cell).  With ``pec_mask=None`` — or no dead cells — this is
+    dead cell).  With ``pec_edge_masks=None`` — or no dead cells — this is
     bit-identical to the historical all-cells formula.
     """
-    cells, live_flags, n_live = _wire_port_live_cells(grid, port, pec_mask)
+    cells, live_flags, n_live = _wire_port_live_cells(grid, port, pec_edge_masks)
 
     sigma = materials.sigma
     for cell, live in zip(cells, live_flags):
@@ -496,7 +502,7 @@ def setup_wire_port(grid, port, materials, pec_mask=None):
     return materials._replace(sigma=sigma)
 
 
-def apply_wire_port(state, grid, port, t, materials, pec_mask=None):
+def apply_wire_port(state, grid, port, t, materials, pec_edge_masks=None):
     """Inject source voltage distributed across the LIVE wire cells.
 
     Each live cell gets V_src / n_live, with Cb computed from local
@@ -504,7 +510,7 @@ def apply_wire_port(state, grid, port, t, materials, pec_mask=None):
     injection — pre-#318 they accumulated phantom EMF on an edge whose
     only discharge path was the port sigma folded at that cell.
     """
-    cells, live_flags, n_live = _wire_port_live_cells(grid, port, pec_mask)
+    cells, live_flags, n_live = _wire_port_live_cells(grid, port, pec_edge_masks)
     v_src = port.excitation(t) / n_live
     dt = grid.dt
 

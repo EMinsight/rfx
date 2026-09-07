@@ -1260,7 +1260,7 @@ def build_coaxial_tem_plane_source_specs(
     # ``setup_coaxial_port``. Source cells must stay strictly inside the
     # PTFE annulus [pin_radius, shell_inner]; injecting at radii in
     # [shell_inner, outer_radius] hits PEC cells whose E is zeroed every
-    # step by ``apply_pec_mask``, breaking the TFSF cancellation
+    # step by ``apply_pec_edges``, breaking the TFSF cancellation
     # symmetry.
     shell_thickness = min(
         float(dz),

@@ -28,7 +28,12 @@ from rfx.core.yee import (
     FDTDState, MaterialArrays, init_state,
     update_h_nu, update_e_nu, EPS_0, MU_0,
 )
-from rfx.boundaries.pec import apply_pec, apply_pec_mask, apply_pec_occupancy
+from rfx.boundaries.pec import (
+    apply_pec,
+    apply_pec_edges,
+    apply_pec_occupancy,
+    realized_pec_edge_masks,
+)
 from rfx.core.jax_utils import is_tracer
 
 C0 = 1.0 / np.sqrt(float(EPS_0) * float(MU_0))
@@ -1102,7 +1107,9 @@ def _build_nu_scan(
     n_steps: int,
     *,
     pec_mask=None,
-    pec_two_plane_mask=None,
+    pec_sheets=(),
+    pec_wires=(),
+    pec_edge_masks=None,
     pec_occupancy=None,
     sources: list = None,
     probes: list = None,
@@ -1192,8 +1199,22 @@ def _build_nu_scan(
     use_pmc_faces = bool(pmc_faces)
     _pmc_faces_frozen = frozenset(pmc_faces) if pmc_faces else frozenset()
 
-    use_pec_mask = pec_mask is not None
+    # #931 §1.7: realize the PEC edges ONCE here.  The NU stepper installs
+    # no periodic BC at all and NU grids are 3-D, so the non-periodic #689
+    # convention is the right one; a lane that pre-realized (and
+    # port-cleared) its masks passes them in instead.
+    pec_sheets = tuple(pec_sheets or ())
+    pec_wires = tuple(pec_wires or ())
+    if pec_edge_masks is None and (
+            pec_mask is not None or pec_sheets or pec_wires):
+        pec_edge_masks = realized_pec_edge_masks(
+            pec_mask, sheets=pec_sheets, wires=pec_wires)
+    use_pec_edges = pec_edge_masks is not None
     use_pec_occupancy = pec_occupancy is not None
+    pec_static_edge_masks = None
+    if use_pec_occupancy and (pec_sheets or pec_wires):
+        pec_static_edge_masks = realized_pec_edge_masks(
+            None, sheets=pec_sheets, wires=pec_wires)
 
     # #677 surface-impedance sheet: exponential-stepping A/B built once
     # from the FINAL scan materials; applied per step at tangential edges
@@ -1394,14 +1415,11 @@ def _build_nu_scan(
 
         # PEC
         st = apply_pec(st)
-        if use_pec_mask:
-            # #689: default (non-periodic) is correct here — the NU
-            # stepper installs no periodic BC at all, and NU grids are
-            # 3-D, so both of the wrap-keeping guards are inert.
-            # TODO(stage C, #931): precompute the edge masks once at setup.
-            st = apply_pec_mask(st, pec_mask)
+        if use_pec_edges:
+            st = apply_pec_edges(st, pec_edge_masks)
         if use_pec_occupancy:
-            st = apply_pec_occupancy(st, pec_occupancy)
+            st = apply_pec_occupancy(
+                st, pec_occupancy, sheet_edge_masks=pec_static_edge_masks)
 
         # #677 node-thin surface-impedance sheet operator. Contract slot:
         # AFTER apply_pec_mask/apply_pec_occupancy (PEC wins on overlap),
@@ -1684,7 +1702,9 @@ def run_nonuniform(
     n_steps: int,
     *,
     pec_mask=None,
-    pec_two_plane_mask=None,
+    pec_sheets=(),
+    pec_wires=(),
+    pec_edge_masks=None,
     pec_occupancy=None,
     sources: list = None,
     probes: list = None,
@@ -1728,7 +1748,9 @@ def run_nonuniform(
     setup = _build_nu_scan(
         grid, materials, n_steps,
         pec_mask=pec_mask,
-        pec_two_plane_mask=pec_two_plane_mask,
+        pec_sheets=pec_sheets,
+        pec_wires=pec_wires,
+        pec_edge_masks=pec_edge_masks,
         pec_occupancy=pec_occupancy,
         sources=sources,
         probes=probes,
@@ -2173,7 +2195,9 @@ def run_nonuniform_until_decay(
     report_every: int | None = None,
     report_label: str = "",
     pec_mask=None,
-    pec_two_plane_mask=None,
+    pec_sheets=(),
+    pec_wires=(),
+    pec_edge_masks=None,
     pec_occupancy=None,
     sources: list = None,
     probes: list = None,
@@ -2272,7 +2296,9 @@ def run_nonuniform_until_decay(
     setup = _build_nu_scan(
         grid, materials, max_steps,
         pec_mask=pec_mask,
-        pec_two_plane_mask=pec_two_plane_mask,
+        pec_sheets=pec_sheets,
+        pec_wires=pec_wires,
+        pec_edge_masks=pec_edge_masks,
         pec_occupancy=pec_occupancy,
         sources=sources,
         probes=probes,

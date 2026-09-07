@@ -552,7 +552,7 @@ def _build_waveguide_port_config_nu(sim, entry, grid: NonUniformGrid,
 
 
 def _setup_msl_ports_nu(sim, grid, materials, materials_concrete, sources,
-                        n_steps, pec_mask):
+                        n_steps, pec_edge_masks):
     """Set up MSL ports on the non-uniform mesh (Ez static-Laplace feed only).
 
     Mirrors the uniform MSL block (``rfx/runners/uniform.py``: ``_msl_ports``)
@@ -568,7 +568,8 @@ def _setup_msl_ports_nu(sim, grid, materials, materials_concrete, sources,
     NU point-source scan injection). The per-probe DFT planes are registered
     separately by ``compute_msl_s_matrix`` via ``add_dft_plane_probe`` and
     flow through the existing NU ``dft_plane_probes`` accumulation. Returns
-    the (possibly σ-updated) ``materials`` and ``pec_mask``.
+    the (possibly σ-updated) ``materials`` and the port-cleared realized PEC
+    edge masks (#931 §1.9).
     """
     from rfx.sources.msl_port import (
         _msl_yz_cells,
@@ -609,10 +610,11 @@ def _setup_msl_ports_nu(sim, grid, materials, materials_concrete, sources,
             sources.extend(make_msl_port_sources(
                 grid, mp, materials_concrete, n_steps, mode_profile=mode_profile,
             ))
-        if pec_mask is not None:
-            for cell in _msl_yz_cells(grid, mp):
-                pec_mask = pec_mask.at[cell[0], cell[1], cell[2]].set(False)
-    return materials, pec_mask
+        if pec_edge_masks is not None:
+            from rfx.boundaries.pec import clear_edges
+            pec_edge_masks = clear_edges(
+                pec_edge_masks, list(_msl_yz_cells(grid, mp)))
+    return materials, pec_edge_masks
 
 
 def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=None,
@@ -751,8 +753,11 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
         ),
     )
     _sheet_specs: list = []
+    _pec_sheets: list = []
+    _pec_wires: list = []
     materials, debye_spec, lorentz_spec, pec_mask = assemble_materials_nu(
-        sim, grid, sheet_specs=_sheet_specs)
+        sim, grid, sheet_specs=_sheet_specs, pec_sheets=_pec_sheets,
+        pec_wires=_pec_wires)
     if strip_sheet_impedance:
         # #677 EXPLICIT reference strip: the surface-impedance sheet no
         # longer rides materials.sigma, so the two-run vacuum reference's
@@ -774,6 +779,10 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     # PEC reflector on the NU path.
     if strip_interior_pec:
         pec_mask = None
+        # #931: a sheet iris owns no cell, so stripping only ``pec_mask``
+        # would leave it in the vacuum reference and give S11 = 0.
+        _pec_sheets = []
+        _pec_wires = []
 
     # ``eps_override`` / ``sigma_override`` replace the assembled material
     # arrays for the scan. We keep the original concrete ``materials`` for
@@ -791,6 +800,22 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
 
     if pec_mask_override is not None:
         pec_mask = pec_mask_override if pec_mask is None else (pec_mask | pec_mask_override)
+
+    # #931 §1.7: realize (Mx, My, Mz) ONCE here.  The NU stepper installs no
+    # periodic BC and NU grids are 3-D, so the non-periodic #689 convention
+    # is the one the step function uses.  Port clearing, wire-port liveness
+    # and the sheet ctx all read THIS object from here on.
+    from rfx.boundaries.pec import (
+        clear_edges as _clear_edges,
+        edge_is_pec as _edge_is_pec,
+        realized_pec_edge_masks as _rpem,
+    )
+    _pec_sheets = tuple(_pec_sheets)
+    _pec_wires = tuple(_pec_wires)
+    pec_edge_masks = None
+    if pec_mask is not None or _pec_sheets or _pec_wires:
+        pec_edge_masks = _rpem(pec_mask, sheets=_pec_sheets,
+                               wires=_pec_wires)
 
     # ── Subpixel smoothing on non-uniform mesh ─────────────────────────
     # Builds Kottke tensor-averaged ε per E-component using per-axis
@@ -891,10 +916,11 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                 cell = list(idx)
                 cell[axis] = k
                 _cells_ijk.append(tuple(cell))
-            if pec_mask is not None:
-                _mask_np = np.asarray(pec_mask)
-                live_flags = [not bool(_mask_np[c[0], c[1], c[2]])
-                              for c in _cells_ijk]
+            if pec_edge_masks is not None:
+                live_flags = [
+                    not _edge_is_pec(pec_edge_masks, pe.component,
+                                     c[0], c[1], c[2])
+                    for c in _cells_ijk]
             else:
                 live_flags = [True] * len(_cells_ijk)
             n_live = sum(live_flags)
@@ -948,12 +974,13 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                     materials = materials._replace(
                         sigma=materials.sigma.at[ci, cj, ck].add(
                             sigma_port))
-                    # Clear PEC mask at LIVE cells only (issue #318
-                    # commit 2): dead extent cells stay PEC so the port
-                    # does not punch an in-plane conductivity hole in the
-                    # DUT conductor.
-                    if pec_mask is not None:
-                        pec_mask = pec_mask.at[ci, cj, ck].set(False)
+                    # Release the realized PEC edges at LIVE cells only
+                    # (issue #318 commit 2; #931 §1.9): dead extent cells
+                    # stay shorted so the port does not punch an in-plane
+                    # hole in the DUT conductor.
+                    if pec_edge_masks is not None:
+                        pec_edge_masks = _clear_edges(
+                            pec_edge_masks, [(ci, cj, ck)])
 
             # Create per-cell sources — only when the port is excited.
             # Passive (excite=False) ports contribute just the σ
@@ -1038,8 +1065,8 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
             sigma_port = d_parallel / (pe.impedance * d_perp1 * d_perp2)
             materials = materials._replace(
                 sigma=materials.sigma.at[i, j, k].add(sigma_port))
-            if pec_mask is not None:
-                pec_mask = pec_mask.at[i, j, k].set(False)
+            if pec_edge_masks is not None:
+                pec_edge_masks = _clear_edges(pec_edge_masks, [(i, j, k)])
             if pe.excite:
                 src = make_current_source(
                     grid, idx, pe.component, pe.waveform, sizing_n, materials_concrete)
@@ -1185,8 +1212,9 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     # ride the generic point-source `sources` list; per-probe DFT planes are
     # registered by compute_msl_s_matrix via add_dft_plane_probe.
     if getattr(sim, "_msl_ports", None):
-        materials, pec_mask = _setup_msl_ports_nu(
-            sim, grid, materials, materials_concrete, sources, sizing_n, pec_mask,
+        materials, pec_edge_masks = _setup_msl_ports_nu(
+            sim, grid, materials, materials_concrete, sources, sizing_n,
+            pec_edge_masks,
         )
 
     # Optional per-waveguide-port Poynting flux monitors at each port's
@@ -1296,15 +1324,12 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
         ntff_data_init = init_ntff_data(ntff_box)
 
     # #677: assemble the surface-impedance sheet ctx from the specs the
-    # assembler emitted, against the FINAL pec_mask of this run (PEC wins on
-    # overlapping edges). Crossing-normal refusal lives in the builder.
+    # assembler emitted, against the FINAL realized PEC edges of this run
+    # (PEC wins on overlapping edges). Crossing-normal refusal lives in the
+    # builder.
     from rfx.materials.thin_conductor import build_sheet_impedance_ctx
-    # #689: default (non-periodic) — the NU stepper installs no periodic
-    # BC and NU grids are 3-D, matching its apply_pec_mask call.
-    from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
     sheet_ctx = build_sheet_impedance_ctx(
-        _sheet_specs,
-        pec_edge_masks=None if pec_mask is None else _rpem(pec_mask))
+        _sheet_specs, pec_edge_masks=pec_edge_masks)
     if sheet_ctx is not None:
         # v1 fences (loud, never silent): the sheet operator replaces the
         # standard E update at its edges, which is only correct against the
@@ -1328,6 +1353,9 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
         sheet_impedance=sheet_ctx,
         aniso_eps=aniso_eps,
         pec_mask=pec_mask,
+        pec_edge_masks=pec_edge_masks,
+        pec_sheets=_pec_sheets,
+        pec_wires=_pec_wires,
         pec_occupancy=pec_occupancy_override,
         sources=sources,
         probes=probes,

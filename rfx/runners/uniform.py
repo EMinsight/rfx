@@ -170,6 +170,8 @@ def run_uniform(
     report_every: int | None = None,
     report_label: str = "",
     sheet_specs=None,
+    pec_sheets=None,
+    pec_wires=None,
 ):
     """Run the uniform-grid simulation path.
 
@@ -185,6 +187,11 @@ def run_uniform(
         Material arrays (before port impedance loading).
     debye_spec, lorentz_spec : dispersion specs or None
     pec_mask : jnp.ndarray or None
+        Primal-cell occupancy of the PEC VOLUMES (#931 §1.1).
+    pec_sheets, pec_wires : list or None
+        PEC sheets (#931 §1.3) and sub-cell wires (§1.4) collected by the
+        assembler; they own no cell, so they reach the stepper only
+        through the realized edge masks built here.
     conformal_pec : bool
         Enable Dey-Mittra conformal PEC (default False).
     conformal_min_weight : float
@@ -253,7 +260,7 @@ def run_uniform(
         )
         # Stage 2 *keeps* pec_mask alive (was previously null'd here).
         # Reasons:
-        # 1. ``apply_pec_mask`` on top of inv=0 provides defense-in-
+        # 1. ``apply_pec_edges`` on top of inv=0 provides defense-in-
         #    depth: numerical noise that creeps into PEC cells (e.g.
         #    via float-arithmetic-ordering at boundary cells with
         #    fractional inv) is zeroed each step rather than
@@ -336,12 +343,28 @@ def run_uniform(
     if sim._periodic_axes:
         periodic = tuple(axis in sim._periodic_axes for axis in "xyz")
 
+    # #931 §1.7: realize (Mx, My, Mz) ONCE, under the flags the stepper
+    # will use, and keep working on THOSE from here on — port clearing,
+    # wire-port liveness, the sheet ctx and the run all read the same
+    # object.  A sheet owns no cell, so it exists only here.
+    from rfx.boundaries.pec import (
+        clear_edges as _clear_edges,
+        realized_pec_edge_masks as _rpem,
+    )
+    _pec_periodic = _simulation.resolve_periodic(grid, periodic)
+    pec_sheets = tuple(pec_sheets or ())
+    pec_wires = tuple(pec_wires or ())
+    pec_edge_masks = None
+    if pec_mask is not None or pec_sheets or pec_wires:
+        pec_edge_masks = _rpem(pec_mask, sheets=pec_sheets, wires=pec_wires,
+                               periodic=_pec_periodic)
+
     # Port sources — fold impedances into materials first
     lumped_ports = []
     wire_ports = []
     # Issue #764: per-wire-port static LIVE-cell runs and excite flags,
     # parallel to ``wire_ports`` — captured inside the loop where the
-    # assembled-geometry pec_mask (the #318 "live" definition, read BEFORE
+    # assembled-geometry edge masks (the #318 "live" definition, read BEFORE
     # this port's own clearing) is in hand.  Feed the S-param specs below.
     wire_port_live_cells = []
     wire_port_excites = []
@@ -382,7 +405,7 @@ def run_uniform(
             # the assembled-geometry state (pre-clearing).
             from rfx.sources.sources import _wire_port_live_cells
             _wp_cells_764, _wp_live_764, _ = _wire_port_live_cells(
-                grid, wp, pec_mask)
+                grid, wp, pec_edge_masks)
             wire_port_live_cells.append(tuple(
                 (int(c[0]), int(c[1]), int(c[2]))
                 for c, l in zip(_wp_cells_764, _wp_live_764) if l))
@@ -391,25 +414,23 @@ def run_uniform(
             # here is the assembled-geometry state BEFORE this port's own
             # clearing below, which is exactly the "live" definition.
             materials = setup_wire_port(grid, wp, materials,
-                                        pec_mask=pec_mask)
+                                        pec_edge_masks=pec_edge_masks)
             if pe.excite:
                 sources.extend(_simulation.make_wire_port_sources(
-                    grid, wp, materials, n_steps, pec_mask=pec_mask))
-            # Clear PEC mask at LIVE wire cells only (issue #318 commit 2).
-            # Dead extent cells stay PEC: the old all-cells clearing punched
-            # a one-cell in-plane conductivity hole in the DUT conductor
-            # (the cleared cell's Ex/Ey were exempt from apply_pec_mask
-            # while its neighbors stayed zeroed). The port's Ez chain is
-            # unaffected either way: Ez at a 1-cell-thick sheet is normal
-            # to it and free under the thin-sheet rule.
-            if pec_mask is not None:
+                    grid, wp, materials, n_steps,
+                    pec_edge_masks=pec_edge_masks))
+            # Release the realized PEC edges at LIVE wire cells only
+            # (issue #318 commit 2; #931 §1.9 turns "clear the cell" into
+            # "un-zero the three E entries at that index").  Dead extent
+            # cells stay shorted: the old all-cells clearing punched a
+            # one-cell in-plane hole in the DUT conductor.
+            if pec_edge_masks is not None:
                 from rfx.sources.sources import _wire_port_live_cells
                 wp_cells, wp_live, _ = _wire_port_live_cells(
-                    grid, wp, pec_mask)
-                for cell, live in zip(wp_cells, wp_live):
-                    if live:
-                        pec_mask = pec_mask.at[
-                            cell[0], cell[1], cell[2]].set(False)
+                    grid, wp, pec_edge_masks)
+                pec_edge_masks = _clear_edges(
+                    pec_edge_masks,
+                    [c for c, live in zip(wp_cells, wp_live) if live])
         else:
             # Single-cell lumped port
             lp = LumpedPort(
@@ -420,10 +441,10 @@ def run_uniform(
             materials = setup_lumped_port(grid, lp, materials)
             if pe.excite:
                 sources.append(_simulation.make_port_source(grid, lp, materials, n_steps))
-            # Clear PEC mask at lumped port cell
-            if pec_mask is not None:
+            # Release the realized PEC edges at the lumped port cell.
+            if pec_edge_masks is not None:
                 idx = grid.position_to_index(pe.position)
-                pec_mask = pec_mask.at[idx[0], idx[1], idx[2]].set(False)
+                pec_edge_masks = _clear_edges(pec_edge_masks, [idx])
 
     # Build wire port S-param specs for JIT-integrated DFT
     wire_sparam_specs = []
@@ -507,9 +528,9 @@ def run_uniform(
                         grid, mp, materials, n_steps,
                         mode_profile=mode_profile,
                     ))
-            if pec_mask is not None:
-                for cell in _msl_yz_cells(grid, mp):
-                    pec_mask = pec_mask.at[cell[0], cell[1], cell[2]].set(False)
+            if pec_edge_masks is not None:
+                pec_edge_masks = _clear_edges(
+                    pec_edge_masks, list(_msl_yz_cells(grid, mp)))
 
     for pe in sim._probes:
         probes.append(_simulation.make_probe(grid, pe.position, pe.component))
@@ -680,24 +701,14 @@ def run_uniform(
         rlc_metas = [build_rlc_meta(grid, spec, materials) for spec in sim._lumped_rlc]
 
     # #677: assemble the surface-impedance sheet ctx against the FINAL
-    # pec_mask of this run (after the wire-port live-cell clearing above —
+    # realized PEC edges of this run (after the port clearing above —
     # PEC wins on overlapping edges). Crossing-normal refusal lives in the
     # builder.
     from rfx.materials.thin_conductor import build_sheet_impedance_ctx
-    # #689: the same effective periodic flags the stepper will apply, so the
-    # sheet and PEC footprints keep the G4 identity. ``simulation.py``
-    # normalizes None -> all-False and forces z periodic on a 2-D grid;
-    # mirror both here rather than passing the raw local.
-    _sheet_periodic = (False, False, False) if periodic is None else tuple(
-        bool(v) for v in periodic)
-    if grid.is_2d:
-        _sheet_periodic = (_sheet_periodic[0], _sheet_periodic[1], True)
-    from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
     sheet_ctx = build_sheet_impedance_ctx(
         sheet_specs,
-        pec_edge_masks=(None if pec_mask is None
-                        else _rpem(pec_mask, periodic=_sheet_periodic)),
-        periodic=_sheet_periodic)
+        pec_edge_masks=pec_edge_masks,
+        periodic=_pec_periodic)
 
     # Main simulation
     if until_decay is not None:
@@ -730,6 +741,9 @@ def run_uniform(
             aniso_eps=aniso_eps,
             aniso_inv_eps=aniso_inv_eps,
             pec_mask=pec_mask,
+            pec_edge_masks=pec_edge_masks,
+            pec_sheets=pec_sheets,
+            pec_wires=pec_wires,
             conformal_weights=conformal_weights,
             wire_port_sparams=wire_sparam_specs or None,
             lumped_rlc=rlc_metas,
@@ -762,6 +776,9 @@ def run_uniform(
             aniso_eps=aniso_eps,
             aniso_inv_eps=aniso_inv_eps,
             pec_mask=pec_mask,
+            pec_edge_masks=pec_edge_masks,
+            pec_sheets=pec_sheets,
+            pec_wires=pec_wires,
             conformal_weights=conformal_weights,
             wire_port_sparams=wire_sparam_specs or None,
             lumped_rlc=rlc_metas,

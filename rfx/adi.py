@@ -100,25 +100,30 @@ def thomas_solve(a: jnp.ndarray, b: jnp.ndarray,
 # ADI core
 # ---------------------------------------------------------------------------
 
-def _apply_pec_2d(ez: jnp.ndarray, pec_mask: jnp.ndarray | None = None) -> jnp.ndarray:
+def _apply_pec_2d(ez: jnp.ndarray, ez_pec_mask: jnp.ndarray | None = None) -> jnp.ndarray:
     """Apply PEC constraints for 2D TMz.
 
     TMz has only one electric component (Ez), so PEC means Ez=0 on
-    domain boundaries and on any internal PEC cells.
+    domain boundaries and wherever the internal geometry realizes an Ez
+    edge as PEC.  ``ez_pec_mask`` is that realized mask (#931 §1.7): the
+    ``Mz`` plane from ``rfx.boundaries.pec.realized_pec_edge_masks``, NOT
+    the primal-cell occupancy.  Zeroing Ez at the occupied CELL indices
+    instead was this lane's own realization rule — a body one cell thick
+    shorted one node plane and never its far one.
     """
     ez = ez.at[0, :].set(0.0)
     ez = ez.at[-1, :].set(0.0)
     ez = ez.at[:, 0].set(0.0)
     ez = ez.at[:, -1].set(0.0)
-    if pec_mask is not None:
-        ez = jnp.where(pec_mask, 0.0, ez)
+    if ez_pec_mask is not None:
+        ez = jnp.where(ez_pec_mask, 0.0, ez)
     return ez
 
 
 def adi_step_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
                 eps_r: jnp.ndarray, sigma: jnp.ndarray,
                 dt: float, dx: float, dy: float,
-                pec_mask: jnp.ndarray | None = None):
+                ez_pec_mask: jnp.ndarray | None = None):
     r"""Advance (Ez, Hx, Hy) by one full ADI timestep.
 
     Implements the Zheng et al. (2000) 2D TMz ADI-FDTD scheme.
@@ -239,7 +244,7 @@ def adi_step_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
     interior_ez1 = jax.vmap(_solve_x_column)(jnp.arange(Ny))  # (Ny, Nx-2)
     ez_half = jnp.zeros_like(ez)
     ez_half = ez_half.at[1:-1, :].set(interior_ez1.T)
-    ez_half = _apply_pec_2d(ez_half, pec_mask)
+    ez_half = _apply_pec_2d(ez_half, ez_pec_mask)
 
     # Step 1c: Compute Hy^{n+1/2} using the implicit Ez^{n+1/2}
     dez_dx_half = jnp.zeros_like(ez_half)
@@ -294,7 +299,7 @@ def adi_step_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
     interior_ez2 = jax.vmap(_solve_y_row)(jnp.arange(Nx))  # (Nx, Ny-2)
     ez_new = jnp.zeros_like(ez)
     ez_new = ez_new.at[:, 1:-1].set(interior_ez2)
-    ez_new = _apply_pec_2d(ez_new, pec_mask)
+    ez_new = _apply_pec_2d(ez_new, ez_pec_mask)
 
     # Step 2c: Compute Hx^{n+1} using the implicit Ez^{n+1}
     dez_dy_new = jnp.zeros_like(ez_new)
@@ -500,7 +505,7 @@ def run_adi_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
                n_steps: int,
                sources: list | None = None,
                probes: list | None = None,
-               pec_mask: jnp.ndarray | None = None,
+               ez_pec_mask: jnp.ndarray | None = None,
                cpml_params: ADICPMLParams2D | None = None,
                cpml_state: ADICPMLState2D | None = None):
     """Run a 2D TMz ADI-FDTD simulation for *n_steps* timesteps.
@@ -514,7 +519,8 @@ def run_adi_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
     n_steps : number of full timesteps
     sources : list of (i, j, waveform_array) tuples.
     probes : list of probe tuples.
-    pec_mask : (Nx, Ny) bool array or None
+    ez_pec_mask : (Nx, Ny) bool array or None
+        The REALIZED Ez PEC edge mask (#931 §1.7), not a cell mask.
     cpml_params : ADICPMLParams2D or None
         CPML profile coefficients. When provided, CPML absorbing boundary
         is applied after each ADI step (operator-splitting).
@@ -577,7 +583,7 @@ def run_adi_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
 
             # ADI step (PEC at outer boundary handled by CPML)
             ez_s, hx_s, hy_s = adi_step_2d(
-                ez_s, hx_s, hy_s, eps_r, sigma, dt, dx, dy, pec_mask)
+                ez_s, hx_s, hy_s, eps_r, sigma, dt, dx, dy, ez_pec_mask)
 
             # CPML correction (operator-splitting)
             ez_s, hx_s, hy_s, cs = apply_adi_cpml_2d(
@@ -617,7 +623,7 @@ def run_adi_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
                 ez_s, _ = jax.lax.scan(inject_one, ez_s, jnp.arange(n_src))
 
             ez_s, hx_s, hy_s = adi_step_2d(
-                ez_s, hx_s, hy_s, eps_r, sigma, dt, dx, dy, pec_mask)
+                ez_s, hx_s, hy_s, eps_r, sigma, dt, dx, dy, ez_pec_mask)
 
             if n_prb > 0:
                 samples = []
@@ -659,8 +665,15 @@ class ADIState3D(NamedTuple):
     step: jnp.ndarray
 
 
-def _apply_pec_3d(ex, ey, ez, pec_mask=None):
-    """Zero tangential E on all 6 domain faces + internal PEC cells."""
+def _apply_pec_3d(ex, ey, ez, pec_edge_masks=None):
+    """Zero tangential E on all 6 domain faces + the realized PEC edges.
+
+    ``pec_edge_masks`` is the ``(Mx, My, Mz)`` triple from
+    ``rfx.boundaries.pec.realized_pec_edge_masks`` (#931 §1.7).  Zeroing
+    all three components at the occupied CELL indices — this lane's own
+    rule until #931 — is a fourth realization of the same geometry and is
+    gone.
+    """
     # x-faces: Ey, Ez = 0
     ey = ey.at[0, :, :].set(0.0)
     ey = ey.at[-1, :, :].set(0.0)
@@ -676,10 +689,11 @@ def _apply_pec_3d(ex, ey, ez, pec_mask=None):
     ex = ex.at[:, :, -1].set(0.0)
     ey = ey.at[:, :, 0].set(0.0)
     ey = ey.at[:, :, -1].set(0.0)
-    if pec_mask is not None:
-        ex = jnp.where(pec_mask, 0.0, ex)
-        ey = jnp.where(pec_mask, 0.0, ey)
-        ez = jnp.where(pec_mask, 0.0, ez)
+    if pec_edge_masks is not None:
+        mx, my, mz = pec_edge_masks
+        ex = jnp.where(mx, 0.0, ex)
+        ey = jnp.where(my, 0.0, ey)
+        ez = jnp.where(mz, 0.0, ez)
     return ex, ey, ez
 
 
@@ -716,7 +730,7 @@ def _solve_tridiag_along(field_3d, C_3d, rhs_3d, axis):
 
 def adi_step_3d(ex, ey, ez, hx, hy, hz,
                 eps_r, sigma, dt, dx, dy, dz,
-                pec_mask=None):
+                pec_edge_masks=None):
     r"""Advance all 6 field components by one full 3D ADI timestep.
 
     Implements the Zheng–Chen–Zhang (ZCZ) 3D ADI-FDTD scheme (F. Zheng,
@@ -745,7 +759,7 @@ def adi_step_3d(ex, ey, ez, hx, hy, hz,
     much coarser than the timestep. Use large CFL factors for stiff
     meshes (thin substrates), not wavelength-scale resonances.
 
-    Caveat: an *internal* ``pec_mask`` is enforced by post-solve
+    Caveat: the *internal* ``pec_edge_masks`` are enforced by post-solve
     projection (same approximation as the 2D path), not by exact
     Dirichlet rows; the domain-boundary PEC is exact.
 
@@ -811,12 +825,12 @@ def adi_step_3d(ex, ey, ez, hx, hy, hz,
         - cc * _dm(_dp(ex, 2, dz), 0, dx)
     # PEC on the RHS: a zero RHS line with zero Dirichlet ends solves to
     # exactly zero, so face-parallel lines inside PEC faces stay PEC.
-    rhs_ex, rhs_ey, rhs_ez = _apply_pec_3d(rhs_ex, rhs_ey, rhs_ez, pec_mask)
+    rhs_ex, rhs_ey, rhs_ez = _apply_pec_3d(rhs_ex, rhs_ey, rhs_ez, pec_edge_masks)
 
     ex1 = _solve_tridiag_along(ex, Cy, rhs_ex, axis=1)
     ey1 = _solve_tridiag_along(ey, Cz, rhs_ey, axis=2)
     ez1 = _solve_tridiag_along(ez, Cx, rhs_ez, axis=0)
-    ex1, ey1, ez1 = _apply_pec_3d(ex1, ey1, ez1, pec_mask)
+    ex1, ey1, ez1 = _apply_pec_3d(ex1, ey1, ez1, pec_edge_masks)
 
     # Explicit H updates: implicit-partner E at n+1/2, other E at n.
     hx1 = hx + ch * (_dp(ey1, 2, dz) - _dp(ez, 1, dy))
@@ -833,12 +847,12 @@ def adi_step_3d(ex, ey, ez, hx, hy, hz,
         - cc * _dm(_dp(ex1, 1, dy), 0, dx)
     rhs_ez = damping * ez1 + ce * (_dm(hy1, 0, dx) - _dm(hx1, 1, dy)) \
         - cc * _dm(_dp(ey1, 2, dz), 1, dy)
-    rhs_ex, rhs_ey, rhs_ez = _apply_pec_3d(rhs_ex, rhs_ey, rhs_ez, pec_mask)
+    rhs_ex, rhs_ey, rhs_ez = _apply_pec_3d(rhs_ex, rhs_ey, rhs_ez, pec_edge_masks)
 
     ex2 = _solve_tridiag_along(ex1, Cz, rhs_ex, axis=2)
     ey2 = _solve_tridiag_along(ey1, Cx, rhs_ey, axis=0)
     ez2 = _solve_tridiag_along(ez1, Cy, rhs_ez, axis=1)
-    ex2, ey2, ez2 = _apply_pec_3d(ex2, ey2, ez2, pec_mask)
+    ex2, ey2, ez2 = _apply_pec_3d(ex2, ey2, ez2, pec_edge_masks)
 
     hx2 = hx1 + ch * (_dp(ey1, 2, dz) - _dp(ez2, 1, dy))
     hy2 = hy1 + ch * (_dp(ez1, 0, dx) - _dp(ex2, 2, dz))
@@ -883,7 +897,7 @@ def run_adi_3d(
     n_steps: int,
     sources: list | None = None,
     probes: list | None = None,
-    pec_mask: jnp.ndarray | None = None,
+    pec_edge_masks: tuple | None = None,
 ):
     """Run a 3D ADI-FDTD simulation for *n_steps* timesteps.
 
@@ -896,7 +910,8 @@ def run_adi_3d(
     n_steps : number of full timesteps
     sources : list of (i, j, k, component, waveform_array) tuples
     probes : list of (i, j, k, component) tuples
-    pec_mask : (Nx, Ny, Nz) bool array or None
+    pec_edge_masks : (Mx, My, Mz) bool arrays or None
+        The REALIZED PEC edge masks (#931 §1.7), not a cell mask.
 
     Returns
     -------
@@ -960,7 +975,7 @@ def run_adi_3d(
         ex_, ey_, ez_, hx_, hy_, hz_ = adi_step_3d(
             ex_, ey_, ez_, hx_, hy_, hz_,
             eps_r, sigma, dt, dx, dy, dz,
-            pec_mask=pec_mask,
+            pec_edge_masks=pec_edge_masks,
         )
 
         # Probe sampling
