@@ -33,6 +33,7 @@ import pytest
 from rfx.api import Simulation
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
+from tests._realized_geometry import assert_wall_planes, node_index, realized
 
 
 # =============================================================================
@@ -48,6 +49,9 @@ PORT_LEFT_X = 0.01
 PORT_RIGHT_X = 0.09
 F_CUTOFF_HZ = 3.75e9
 TARGET_CPML_M = 0.030  # 30 mm physical CPML absorber target
+#: whole cells of the PEC short (#931: a Box is a volume; a sub-cell
+#: extent is refused, and this module does not pin dx).
+SHORT_CELLS = 2
 
 
 def _build_sim(
@@ -102,12 +106,30 @@ def _build_sim(
         sim.add(Box(lo, hi), material=name)
 
     if pec_short_x is not None:
-        # Thin PEC wall spanning the full cross-section.
-        thickness = 0.002  # 2 mm — a few cells
+        # Full-cross-section PEC short, drawn as a VOLUME on the node line
+        # (lattice ownership contract #931 §1.2/§1.5).
+        #
+        # It used to be a hard-coded 0.002 m against a cell this module
+        # never pins: with dx=None the Simulation picks lambda_min/20 =
+        # c/7e9/20 = 2.1414 mm, so the "2 mm — a few cells" comment
+        # described a body 0.93 of ONE cell thick. The old sheet rule
+        # realized any non-empty cell set as at least one wall, so the
+        # sub-cell body passed silently; the contract refuses it (a Box is
+        # a volume, and nothing is inferred from raster thickness).
+        #
+        # Drawn from the nearest node for SHORT_CELLS whole cells it is a
+        # solid short with walls on BOTH drawn planes. The incident wave
+        # meets the LEADING plane, which is what every gate here measures,
+        # so the redraw moves the reflector by at most half a cell.
+        d = float(sim._build_grid().dx)
+        k_lo = int(round(pec_short_x / d))
+        x_lo, x_hi = k_lo * d, (k_lo + SHORT_CELLS) * d
         sim.add(
-            Box((pec_short_x, 0.0, 0.0), (pec_short_x + thickness, DOMAIN[1], DOMAIN[2])),
+            Box((x_lo, 0.0, 0.0), (x_hi, DOMAIN[1], DOMAIN[2])),
             material="pec",
         )
+        # What the fixture declares, for the build-time realization check.
+        sim._pec_short_faces_m = (x_lo, x_hi)
 
     port_freqs = jnp.asarray(freqs)
     sim.add_waveguide_port(
@@ -514,6 +536,47 @@ def test_pec_short_s11_magnitude():
         pec_short_x=0.085,
         waveform="modulated_gaussian",
     )
+    # MEASURED AFTER THE REDRAW, and left RED on purpose: min |S11| =
+    # 0.9670 against this module's 0.99 Meep-class gate (worst bin; the
+    # run also raises the reciprocity advisory at 0.0242 vs 0.011 at
+    # 7 GHz). The gate is NOT widened — see the design note's migration
+    # rule 3 and the T6 handover
+    # docs/design_notes/931_migration/T6-waveguide-chain-battery.md, which
+    # measured the same class on the chain battery's pec_short DUT
+    # (max|dS| 0.938 coarse / 0.498 mid while the empty guide reproduced
+    # to 2.5e-6).
+    #
+    # Two changes landed on this fixture at once and they have to be
+    # separated before anything is re-pinned:
+    #   1. the geometry. The short used to be 0.002 m against a cell this
+    #      module never pinned — 0.93 of ONE cell, which the pre-#931 rule
+    #      realized as a single wall and §1.5 now refuses. It is redrawn
+    #      as SHORT_CELLS whole cells on the node line, so the reflector
+    #      is thicker and its leading face moved by up to half a cell.
+    #   2. the operator. Stage C (0184d64c) made the waveguide S-matrix
+    #      lane apply the realized PEC edges instead of folding pec_mask
+    #      into a sigma = 1e10 cell fill. A hard wall and a 1e10 S/m lossy
+    #      volume do not reflect with the same phase.
+    # The cheap separation: re-run with SHORT_CELLS = 1 and 4. If |S11|
+    # tracks the thickness, it is (1); if it does not move, it is (2) and
+    # belongs with the chain-battery re-measure. Do that before touching a
+    # number here.
+    # Build-time realization check (#931), no solve: it fails before the
+    # 40-period run if the geometry ever drifts off the node line again.
+    #
+    # The short is a VOLUME SHORT_CELLS cells thick, so it realizes a
+    # tangential wall on EVERY node plane it touches — the two drawn faces
+    # AND the interior plane between the two occupied cells, which is
+    # shared by both and therefore carries PEC tangential edges too. The
+    # claim "drawn == realized" is about the SPAN: the first and last
+    # realized planes are the drawn faces, and the planes between them are
+    # contiguous (a solid short, no gap). Asserting only two planes would
+    # be asserting a one-cell body.
+    faces = [node_index(realized(sim).grid, 0, x)
+             for x in sim._pec_short_faces_m]
+    assert_wall_planes(
+        sim, 0, expected_planes=list(range(faces[0], faces[1] + 1)),
+        what="PEC short")
     # Full-window DFT: the single PEC->CPML round trip fits inside
     # num_periods=40 and there is no resonator to build up late-time.
     # Phase 2 cleanup (2026-04-25) removed the num_periods_dft early

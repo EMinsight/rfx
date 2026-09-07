@@ -98,10 +98,30 @@ def _build_thru(reference_plane_cells: int | None = None) -> Simulation:
                               z=Boundary(lo="pec", hi="cpml")),
         cpml_layers=8,
     )
-    sim.add(
+    # The microstrip TRACE is a FOIL: a footprint on one node plane with
+    # its normal E live, declared as a sheet (lattice ownership contract
+    # #931 §1.3). It used to be a one-cell PEC Box, which the contract
+    # reads as a VOLUME — walls on both bounding z planes and the interior
+    # shorted, i.e. a 0.5 mm thick slab of copper on a 1 mm substrate.
+    # Nothing about this line ever meant that.
+    #
+    # What moves and what does not, measured on this grid before the
+    # change (dx = 0.5 mm, all four in-plane faces on node lines):
+    #   plane  z = 1.0 mm, node k=2, unchanged — the sheet's mid-plane sits
+    #          a half cell up, which is the tie, and a tie resolves to the
+    #          LOWER plane, the same plane the old node-half-open sampler
+    #          picked;
+    #   width  the footprint is now sampled CLOSED on the two in-plane
+    #          axes, so the drawn 5.0 mm strip realizes 5.0 mm (11 nodes,
+    #          10 edges). The old half-open rule dropped the hi row and
+    #          realized 4.5 mm — a -10% width the line constants below were
+    #          measured through. Zc therefore FALLS and beta rises; the
+    #          bands are re-derived from a fresh measurement (RECOMPUTE.md),
+    #          never re-centred by hand.
+    sim.add_thin_conductor(
         Box((_X1 - _DX, _Y_MID - _W / 2, _H),
-            (_X2 + _DX, _Y_MID + _W / 2, _H + _DX)),
-        material="pec",
+            (_X2 + _DX, _Y_MID + _W / 2, _H)),
+        sigma_bulk=5.8e7,
     )
     pulse = GaussianPulse(f0=5e9, bandwidth=0.8)
     kw = {}
@@ -112,6 +132,37 @@ def _build_thru(reference_plane_cells: int | None = None) -> Simulation:
     sim.add_port(position=(_X2, _Y_MID, 0.0), component="ez", impedance=50.0,
                  extent=_H, waveform=pulse, direction="+x", **kw)
     return sim
+
+
+def test_the_thru_trace_realizes_the_drawn_foil():
+    """Build-time (no solve): the trace is one plane and the drawn width.
+
+    Every number in this module is measured THROUGH this strip, so the
+    strip's realization is the first thing that must be right. The
+    contract's claim is drawn == realized (#931 §1.3); this reads it back
+    off the single owner rather than trusting the declaration.
+
+    Measured on this grid: plane z-node 2 (z = 1.0 mm, the substrate top
+    and the tie-to-lower resolution of the sheet's mid-plane), footprint
+    x nodes 23..57 and y nodes 23..33, i.e. 10 Ey edges across the strip
+    = 5.0 mm, the drawn width. The pre-#931 half-open sampler dropped the
+    hi row and realized 4.5 mm.
+    """
+    from rfx.boundaries.pec import realized_wall_planes
+    from tests._realized_geometry import realized
+
+    rz = realized(_build_thru())
+    assert rz.sheet_planes == {2: [2]}, rz.sheet_planes
+    assert rz.pec_mask is None or not bool(np.asarray(rz.pec_mask).any()), (
+        "a foil owns no cell — the trace must not be in the volume mask")
+    assert realized_wall_planes(rz.edge_masks, 2) == [2]
+
+    (sheet,) = rz.sheets
+    occ = np.argwhere(np.asarray(sheet.footprint))
+    ny = int(occ[:, 1].max() - occ[:, 1].min())     # Ey edges across the strip
+    nx = int(occ[:, 0].max() - occ[:, 0].min())
+    assert abs(ny * _DX - _W) < 1e-12, (ny, ny * _DX, _W)
+    assert abs(nx * _DX - ((_X2 + _DX) - (_X1 - _DX))) < 1e-12, nx
 
 
 # ===========================================================================
@@ -369,11 +420,21 @@ def test_nonuniform_lane_guard_fails_loudly():
 # ===========================================================================
 
 def _raw_drive(sim, n_steps=8, drive_idx=0):
+    # The trace is a SHEET, and a sheet owns no cell (#931 §1.3), so it is
+    # not in ``pec_mask``. This helper must collect it and hand it on, or
+    # the reference-plane machinery scans a bare cell mask, finds no metal
+    # on a perfectly healthy board and raises. ``_assemble_materials``
+    # warns when a caller drops a classified sheet; that warning was this
+    # helper's, not the library's.
     grid = sim._build_grid()
-    mats, dsp, lsp, pm, _, _, _ = sim._assemble_materials(grid)
+    pec_sheets: list = []
+    pec_wires: list = []
+    mats, dsp, lsp, pm, _, _, _ = sim._assemble_materials(
+        grid, pec_sheets=pec_sheets, pec_wires=pec_wires)
     return sim._forward_from_materials(
         grid, mats, dsp, lsp, n_steps=n_steps, checkpoint=False,
-        pec_mask=pm, port_s11_freqs=_FREQS,
+        pec_mask=pm, pec_sheets=tuple(pec_sheets),
+        pec_wires=tuple(pec_wires), port_s11_freqs=_FREQS,
         _sparam_drive_idx=drive_idx, _return_raw_port_sparams=True)
 
 
@@ -384,9 +445,12 @@ def test_refplane_registers_two_planes_per_port_with_phase0_geometry():
     x/y, PEC z_lo): port 1 at x=8mm -> i=24; planes at 9.5/11.0mm ->
     27/30; port 2 at 24mm -> i=56; planes at 22.5/21.0mm -> 53/50.  Ampere
     loop legs half a cell outside the trace bbox (y 7.5..12.5mm -> j
-    23..32 padded; z 1.0..1.5mm -> k 2): Hz columns at j=22/33 spanning
-    k=[2,4), Hy rows at k=1/3 spanning j=[23,34) — the exact Phase-0
-    probe layout (x=9.5mm plane: legs at y=7.25/12.75mm, z=0.75/1.75mm).
+    23..33 realized; z 1.0..1.5mm -> k 2): Hz columns at j=22/34 spanning
+    k=[2,4), Hy rows at k=1/3 spanning j=[23,35) — the Phase-0 probe
+    layout with the hi leg one node out (#931: the trace footprint is
+    sampled CLOSED, so the drawn 5.0 mm strip realizes y 23..33 where the
+    old half-open rule stopped at 32, and the loop leg half a cell outside
+    the bbox follows it).
     """
     raw = _raw_drive(_build_thru(reference_plane_cells=3))
     rp = raw["wire_refplane"]
@@ -409,9 +473,16 @@ def test_refplane_registers_two_planes_per_port_with_phase0_geometry():
         # 2-cell integral that measured Zc = 47.9-48.6 ohm.
         assert (spec.e_lo, spec.e_hi) == (0, 2)
         assert spec.third_index == 28                # y = 10mm (padded)
-        assert (spec.u_lo_leg, spec.u_hi_leg) == (22, 33)
+        # #931: the trace footprint is sampled CLOSED, so the drawn
+        # 5.0 mm strip realizes y-nodes 23..33 where the old half-open
+        # rule stopped at 32. The whole Ampere loop follows it — the leg
+        # half a cell OUTSIDE the bbox moves 33 -> 34 and the integration
+        # span 34 -> 35. Measured, not predicted: the first re-derivation
+        # here assumed u_span was already padded far enough and it was
+        # not.
+        assert (spec.u_lo_leg, spec.u_hi_leg) == (22, 34)
         assert (spec.v_lo_leg, spec.v_hi_leg) == (1, 3)
-        assert (spec.u_span_lo, spec.u_span_hi) == (23, 34)
+        assert (spec.u_span_lo, spec.u_span_hi) == (23, 35)
         assert (spec.v_span_lo, spec.v_span_hi) == (2, 4)
         assert spec.hu_component == "hy" and spec.hv_component == "hz"
 
@@ -443,10 +514,12 @@ def test_refplane_requires_pec_trace_at_plane():
                               z=Boundary(lo="pec", hi="cpml")),
         cpml_layers=8,
     )
-    sim.add(
+    # Same foil sheet as ``_build_thru`` (#931 §1.3) — see the comment
+    # there for what the closed footprint moved and what it did not.
+    sim.add_thin_conductor(
         Box((_X1 - _DX, _Y_MID - _W / 2, _H),
-            (_X2 + _DX, _Y_MID + _W / 2, _H + _DX)),
-        material="pec",
+            (_X2 + _DX, _Y_MID + _W / 2, _H)),
+        sigma_bulk=5.8e7,
     )
     pulse = GaussianPulse(f0=5e9, bandwidth=0.8)
     # direction "+x" on port 1: outboard becomes -x, off the trace end
@@ -612,10 +685,12 @@ def test_preflight_partial_optin_advisory():
                               z=Boundary(lo="pec", hi="cpml")),
         cpml_layers=8,
     )
-    sim.add(
+    # Same foil sheet as ``_build_thru`` (#931 §1.3) — see the comment
+    # there for what the closed footprint moved and what it did not.
+    sim.add_thin_conductor(
         Box((_X1 - _DX, _Y_MID - _W / 2, _H),
-            (_X2 + _DX, _Y_MID + _W / 2, _H + _DX)),
-        material="pec",
+            (_X2 + _DX, _Y_MID + _W / 2, _H)),
+        sigma_bulk=5.8e7,
     )
     pulse = GaussianPulse(f0=5e9, bandwidth=0.8)
     sim.add_port(position=(_X1, _Y_MID, 0.0), component="ez", impedance=50.0,
@@ -658,10 +733,12 @@ def test_nonuniform_lane_end_to_end_raises():
                               z=Boundary(lo="pec", hi="cpml")),
         cpml_layers=8,
     )
-    sim.add(
+    # Same foil sheet as ``_build_thru`` (#931 §1.3) — see the comment
+    # there for what the closed footprint moved and what it did not.
+    sim.add_thin_conductor(
         Box((_X1 - _DX, _Y_MID - _W / 2, _H),
-            (_X2 + _DX, _Y_MID + _W / 2, _H + _DX)),
-        material="pec",
+            (_X2 + _DX, _Y_MID + _W / 2, _H)),
+        sigma_bulk=5.8e7,
     )
     pulse = GaussianPulse(f0=5e9, bandwidth=0.8)
     sim.add_port(position=(_X1, _Y_MID, 0.0), component="ez", impedance=50.0,
