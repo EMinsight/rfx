@@ -293,6 +293,23 @@ merged tree, and each artifact it names is re-solved or it does not ship.
   magnitude deficit moved 0.0146 → 0.0560 (VESSL 369367259194; the trim A/B
   369367259198 attributes it to this change, not to the script) — an open
   item for the core, recorded, not absorbed into a gate.
+  **Adjudicated 2026-09-07** (`scripts/diagnostics/pec_short_lane_ab.py`,
+  per-bin |S11| + port time records, both checkouts): the 0.0560 was NOT the
+  lane. cv11 drew its shorting plug to the DECLARED 22.86 × 10.16 mm
+  cross-section; the grid realizes the guide as 23 × 11 mm and a volume's
+  face rounds to the nearest node (§1.1), so the plug's top face landed at
+  10.000 mm under a wall at 11.000 mm — a one-cell vacuum slot along the
+  top broad wall that carried Ez past the "short" (single-run |S21|
+  0.22–0.33; the pre-#931 node sampler had filled that row by accident).
+  Drawn to the realized walls the leg reads [0.9980, 1.0019] / 3.26°,
+  equal to the pre-change baseline to four decimals; the far face and the
+  window do not matter, a sheet-declared short drawn to the walls reads the
+  same, so the lane applies sheets. cv11, the validation battery's
+  `test_pec_short_s11_magnitude` (same slot on its 2.14 mm auto mesh) and
+  the broad-E5 live anchor now draw their shorts to the grid's realized
+  walls and assert a full-cross-section front wall at build time. A
+  preflight finding for "conductor face rounds away from a domain wall it
+  was drawn to" is owed by the preflight stage.
 - Microstrip trace width (BREAKING for quoted numbers): a trace declared as
   foil is a sheet, and a sheet's footprint is the closed node rectangle. On the
   canonical dx = 63.5 µm / 254 µm board the realized GEOMETRIC width (node

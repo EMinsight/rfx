@@ -94,6 +94,7 @@ from build_waveguide_band_broad_e5_phase_envelope import (  # type: ignore  # no
 )
 
 from tests._gate_policy import ENVELOPE_GATE_MULTIPLIER, gate_from_envelope  # noqa: E402
+from tests._realized_geometry import domain_wall_positions  # noqa: E402
 from tests._realized_pec import (  # noqa: E402
     assert_no_wall_at, assert_walls_at, realize, wall_positions,
 )
@@ -622,31 +623,39 @@ def _live_build_sim(freqs_hz, *, pec_short_x=None):
         # is exactly one cell drawn on node planes from the same front face:
         # the declaration says what the lattice can build.
         #
-        # NOT a sheet, and that is measured, not assumed: declared as a
-        # zero-thickness Box at pec_short_x this anchor reads
-        # |S11| = [1.2128, 0.7139, 0.8416, 0.9628, 1.0023, 1.4836] instead of
-        # ~1 — the waveguide S-matrix lane does not reflect off a
-        # sheet-declared short. A PEC sheet across the full cross-section IS
-        # a perfect short physically, so that is a lane limitation worth its
-        # own issue (#931 §1.9 consumers); it is recorded here rather than
-        # worked around silently. cv11's own short is a 2 mm plug drawn on a
-        # dx = 1 mm mesh, so it is a volume there too and is unaffected.
+        # Two earlier readings of this anchor on the merged tree, both now
+        # ATTRIBUTED (2026-09-07, scripts/diagnostics/pec_short_lane_ab.py
+        # on cv11's identical case, per-bin dumps + port time records):
         #
-        # Two measurements of this anchor exist on the merged tree and they
-        # disagree on the MESH, not on the physics: crossval-B, with the
-        # one-cell volume on the auto mesh (~2.14 mm), read |S11| =
-        # [0.9663, 0.9572, 0.9741, 0.9827, 0.9847, 0.9836], min 0.9572
-        # against the 0.99 floor — the same regression cv11's A/B isolated
-        # (VESSL 369367259198): on the waveguide S-matrix lane the #931 core
-        # moved the pec-short |S11| deficit from 0.0146 to ~0.056, where
-        # stage C (0184d64c) replaced a sigma = 1e10 cell fill with the
-        # realized PEC edges. tests-crossval, with LIVE_DX = 2 mm, re-ran
-        # both live legs and they passed. If this anchor is red, the fix
-        # belongs to the core, not to the fixture: this test is the file's
-        # "primary regression witness" and it is doing its job.
+        # 1. On the AUTO mesh (2.1414 mm) the one-cell volume read |S11| =
+        #    [0.9663, 0.9572, 0.9741, 0.9827, 0.9847, 0.9836]. That mesh
+        #    makes the guide ceil(20 / 2.1414) = 10 cells = 21.41 mm tall,
+        #    and a plug drawn to DOMAIN[2] = 20 mm rounds its top face to
+        #    the nearest node (#931 §1.1) at 19.27 mm: a 2.14 mm vacuum slot
+        #    under the top wall, a parallel-plate line that carries Ez past
+        #    the "short". cv11's 1 mm slot of the same origin was the whole
+        #    0.0146 -> 0.0560 step (|S21| 0.22-0.33 behind the plug; closing
+        #    it returns [0.9980, 1.0019], equal to the pre-change baseline).
+        #    Not the lane: with the plug at the wall the lane seals the guide
+        #    exactly (the record behind it is identically zero).
+        # 2. Declared as a zero-thickness Box at pec_short_x on that same
+        #    mesh the anchor read [1.2128, 0.7139, 0.8416, 0.9628, 1.0023,
+        #    1.4836]. A sheet's footprint is sampled CLOSED at nodes, so on
+        #    the auto mesh it stops one node short of the wall on BOTH
+        #    transverse axes: an L-shaped zero-thickness slot, a resonator,
+        #    in a 40-period record. The lane DOES apply sheets — a sheet
+        #    drawn to the realized walls reads the >= 0.99 class on cv11.
+        #
+        # So the short is drawn to the grid's REALIZED walls (identical to
+        # DOMAIN at LIVE_DX = 2 mm, which is on-lattice, and the reason the
+        # tests-crossval re-run at LIVE_DX passed), and the build-time test
+        # below asserts each face is a wall across the WHOLE cross-section.
+        _grid = sim._build_grid()
+        y_wall = domain_wall_positions(_grid, 1)[1]
+        z_wall = domain_wall_positions(_grid, 2)[1]
         sim.add(
             Box((pec_short_x, 0.0, 0.0),
-                (pec_short_x + PEC_SHORT_THICKNESS, DOMAIN[1], DOMAIN[2])),
+                (pec_short_x + PEC_SHORT_THICKNESS, y_wall, z_wall)),
             material="pec",
         )
     port_freqs = jnp.asarray(freqs)
@@ -691,9 +700,11 @@ def test_live_pec_short_realizes_the_block_it_declares():
     freqs = np.linspace(*BAND_HZ, N_FREQS)
     sim = _live_build_sim(freqs, pec_short_x=PEC_SHORT_X)
     realized = realize(sim)
-    footprint = np.asarray(realized.cells).any(axis=0)
+    # footprint=None: the WHOLE cross-section. A footprint taken from the
+    # plug's own cells passed on the auto mesh while the plug was one row
+    # short of the top wall (the slot the builder's comment describes).
     assert_walls_at(realized, 0, [PEC_SHORT_X, PEC_SHORT_X + PEC_SHORT_THICKNESS],
-                    footprint=footprint, what="live-anchor PEC short")
+                    what="live-anchor PEC short (full cross-section)")
     assert wall_positions(realized, 0) == pytest.approx(
         [PEC_SHORT_X, PEC_SHORT_X + PEC_SHORT_THICKNESS], abs=1e-9), (
         "the reflector realizes wall planes it did not declare: "

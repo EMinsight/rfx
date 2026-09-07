@@ -47,6 +47,7 @@ __all__ = [
     "assert_wall_planes",
     "assert_sheet_planes",
     "node_index",
+    "domain_wall_positions",
     "Realization",
 ]
 
@@ -135,6 +136,33 @@ def realized(sim, *, nonuniform: bool | None = None) -> Realization:
             pec, sheets=tuple(sheets), wires=tuple(wires),
             periodic=_periodic_of(sim, grid))
     return Realization(grid, pec, sheets, wires, edges)
+
+
+def domain_wall_positions(grid, axis: int) -> tuple[float, float]:
+    """The domain's REALIZED lo / hi face planes along ``axis`` (metres).
+
+    ``Grid`` realizes a declared extent by ``ceil(extent / dx)`` cells, so a
+    22.86 x 10.16 mm WR-90 declared on a 1 mm cell is a 23 x 11 mm guide and
+    the domain-face PEC (design note §1.8, BC-owned) stands on the LAST
+    INTERIOR node, not at the declared number. A conductor that is meant to
+    reach a guide wall — a shorting plug, a full-width iris — must be drawn
+    to THIS plane: a volume's face rounds to the nearest node (§1.1), so a
+    plug drawn to the declared 10.16 mm realizes its top at 10.000 mm and
+    leaves a one-cell vacuum slot under the wall at 11.000 mm. Measured
+    2026-09-07 on cv11 (``scripts/diagnostics/pec_short_lane_ab.py``): that
+    slot is the whole 0.0146 -> 0.0560 pec-short |S11| step.
+
+    Read off the grid the run builds (``interior`` slices + the node line),
+    never recomputed from ``dx`` by the caller.
+    """
+    line = _node_line(grid, axis)
+    interior = getattr(grid, "interior", None)
+    if interior is None:
+        raise TypeError(
+            "domain_wall_positions: this grid has no `interior` slices "
+            "(non-uniform lane); read its node line directly")
+    sl = interior[axis]
+    return float(line[sl.start]), float(line[sl.stop - 1])
 
 
 def node_index(grid, axis: int, position: float) -> int:
