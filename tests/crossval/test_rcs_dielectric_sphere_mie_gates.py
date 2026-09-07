@@ -405,6 +405,29 @@ def test_material_gate_rejects_the_permittivity_the_db_gate_cannot_see():
     assert not mod.material_gate_ok(st)                   # G17-B catches it
 
 
+def test_no_code_path_can_give_a_body_a_third_permittivity():
+    """#931: the one mechanism that could break ``n_distinct_eps == 2`` is gone.
+
+    ``resample_sheet_node_materials`` (#702) re-sampled a node-thin
+    conductor's own cell to the material its live edge sat in — the single
+    code path that could write a third permittivity onto a binary board, and
+    it is why this gate's third-value arm exists. The lattice ownership
+    contract deletes it: a sheet owns no cell, so there is no "own cell" to
+    re-sample (design note §2). Checked at the module surface rather than
+    assumed, because a gate whose defect class has silently become
+    unreachable should say so out loud rather than keep passing for a reason
+    nobody can name.
+    """
+    import rfx.geometry.rasterize_grid as rg
+    for gone in ("resample_sheet_node_materials",
+                 "sheet_normal_live_axis_masks",
+                 "collect_thin_conductor_sheet_inputs"):
+        assert not hasattr(rg, gone), (
+            f"{gone} is back in rfx.geometry.rasterize_grid; it can write a "
+            "third permittivity onto a one-node body and G17-B's third-value "
+            "arm is no longer hypothetical (#702 / #931 §2)")
+
+
 def test_realized_material_is_recorded_and_will_be_gated_on_the_frozen_leg(fixture):
     """Forward-guard for the frozen leg.
 

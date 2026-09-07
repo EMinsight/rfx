@@ -262,6 +262,47 @@ def test_add_material_path_assembles_the_direct_arrays_bit_for_bit(arm):
     assert int((mats.sigma[:, 0, 0] > 0).sum()) == 10
 
 
+@pytest.mark.parametrize("arm", L.ARM_ORDER[:1])
+def test_a_one_cell_lossy_body_still_owns_exactly_one_cell(arm):
+    """#931 regression guard: the contract changes EDGES, not cells.
+
+    This is the sharpest pin in the crossval suite on the conductor /
+    dielectric boundary, so it gets the case that used to be special. A
+    one-cell lossy body is where ``resample_sheet_node_materials`` (#702)
+    acted: it gave a node-thin conductor's own cell the material its live
+    edge sat in, which is the one mechanism that could put a THIRD material
+    value on a one-node body (measured on the canonical patch: 18590 cells on
+    one z plane went 1.000 -> 3.380, and the resonance moved 9.32 -> 8.16 GHz).
+    That function is deleted by the contract, and a lossy dielectric must not
+    fall through the PEC sigma threshold either.
+
+    So: exactly one cell carries sigma, its value is the declared one, and
+    ``pec_mask`` stays empty. The ten-cell sibling above says the same thing
+    about a thick body; this says it where the old code was clever.
+    """
+    import jax.numpy as jnp
+    from rfx import Box, Simulation
+    from rfx.geometry.csg import _grid_coords
+    from rfx.grid import Grid
+    p = L.ARMS[arm]["params"]
+    domain = (G.NX_INTERIOR_R3 * G.DX_M, 0.004, G.DX_M)
+    grid = Grid(freq_max=20e9, domain=domain, dx=G.DX_M, cpml_layers=G.N_CPML,
+                mode="2d_tmz")
+    lo = G.rig_cells(G.NX_INTERIOR_R3)["slab_lo"]
+    sim = Simulation(freq_max=20e9, domain=domain, dx=G.DX_M,
+                     cpml_layers=G.N_CPML, mode="2d_tmz")
+    sim.add_material(L.API_MATERIAL_NAME, eps_r=p["eps_inf"], sigma=p["sigma"])
+    xs, _, _ = _grid_coords(grid)
+    sim.add(Box((float(xs[lo]), -1.0, -1.0), (float(xs[lo + 1]), 1.0, 1.0)),
+            material=L.API_MATERIAL_NAME)
+    mats, _, _, pec, *_ = sim._assemble_materials(sim._build_grid())
+    assert int((mats.sigma[:, 0, 0] > 0).sum()) == 1
+    assert float(mats.sigma[lo, 0, 0]) == pytest.approx(p["sigma"])
+    assert float(mats.eps_r[lo, 0, 0]) == pytest.approx(p["eps_inf"])
+    assert pec is None or not bool(jnp.any(pec)), (
+        "a lossy dielectric fell through the PEC sigma threshold")
+
+
 @pytest.mark.parametrize("name", sorted(L.FALSIFIERS))
 def test_rfx_falsifiers_exceed_the_windows_analytically(name):
     """Note section 6: every F1/F2/F4 defect must fail G2 (band-mean) on R, T
