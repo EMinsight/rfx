@@ -597,36 +597,101 @@ class _Anchor(NamedTuple):
     kind: str
 
 
-def _band_ramp(anchor: _Anchor | None, u: float, cap: float) -> list[float]:
-    """Geometric ramp from ``anchor`` to the plateau value ``u``.
+# Engine constants — see make_band_profile's docstring for the numbers.
+_RATIO_FLOOR = 1.0001        # a 2x transition already needs 6932 cells here
+_MAX_PROFILE_CELLS = 1_000_000
+_STEP_TOL = 1e-10            # relative slack on the ramp step count (F5 fix)
+_EDGE_TOL = 1e-12            # the I1 node tolerance, metres
 
-    Edge-adjacent cell first; the LAST cell is ``u`` itself (the ramp ends
-    on the first plateau cell, so the ramp/plateau junction ratio is the
-    ramp's own ratio ``rho <= cap`` whatever the plateau count). The
-    per-step ratio is spread evenly over the minimal step count. Returns
-    ``[]`` when this side needs no ramp (no anchor, or the anchor is not
-    finer than ``u`` and cannot be descended from).
+
+def _ramp_steps(ratio: float, cap: float) -> int:
+    """Minimal step count ``m`` with ``cap**m >= ratio`` (``ratio > 1``).
+
+    The ceiling carries a 1e-10 relative slack on the logarithm: a seam
+    cell on the ratio law exactly (``ratio == cap**k``) arrives with float
+    noise of order ``ulp(column) / cell`` — 5.5e-13 relative on a 39 m
+    column of mm cells — and a 1e-12 slack flipped ``k`` to ``k + 1``
+    there, which broke the exact-fit branch (review finding, 2026-09-07).
+    The per-step ratio may then exceed ``cap`` by at most
+    ``cap x ln(cap) x 1e-10 / m`` — 4.7e-11 absolute at 1.4, far inside
+    the I2 tolerance of 1e-9.
+    """
+    return max(1, int(np.ceil(np.log(ratio) / np.log(cap) - _STEP_TOL)))
+
+
+def _ramp_spec(anchor: _Anchor | None, u: float, cap: float) -> tuple[str, int]:
+    """Classify the ramp one side needs to reach the plateau ``u``.
+
+    Returns ``(mode, m)``: ``"none"`` (no ramp on this side), ``"up"``
+    (``m`` cells from the neighbour's seam cell up to ``u``, the seam cell
+    excluded), ``"down"`` (from a pinned cell down to ``u``, pin
+    excluded), ``"emax"`` (the run's own first cell bounded by ``anchor``,
+    ``m + 1`` cells including that first cell). ``m`` is the minimal
+    step count for the anchor/``u`` pair.
     """
     if anchor is None:
-        return []
+        return "none", 0
     v, kind = float(anchor.value), anchor.kind
-    ln_cap = float(np.log(cap))
     tol = 1e-12
     if kind == "emax":
         if u <= v * (1.0 + tol):
-            return []          # thin run: its cells are already <= emax
-        m = max(1, int(np.ceil(np.log(u / v) / ln_cap - tol)))
-        rho = (u / v) ** (1.0 / m)
-        return [v * rho ** i for i in range(0, m + 1)]   # includes v and u
+            return "none", 0            # thin run: its cells are <= emax
+        return "emax", _ramp_steps(u / v, cap)
     if u > v * (1.0 + tol):
-        m = max(1, int(np.ceil(np.log(u / v) / ln_cap - tol)))
-        rho = (u / v) ** (1.0 / m)
-        return [v * rho ** i for i in range(1, m + 1)]   # excludes v, ends on u
+        return "up", _ramp_steps(u / v, cap)
     if kind == "pin" and v > u * (1.0 + tol):
-        m = max(1, int(np.ceil(np.log(v / u) / ln_cap - tol)))
+        return "down", _ramp_steps(v / u, cap)
+    return "none", 0
+
+
+def _ramp_sum(anchor: _Anchor | None, u: float, mode: str, m: int) -> float:
+    """Closed-form sum of the ramp ``(mode, m)`` from ``anchor`` to ``u``.
+
+    Geometric series; O(1) whatever ``m`` is (the old cell-by-cell sum made
+    the plateau solve quadratic in the ramp length — 8.5 s at
+    ``max_ratio = 1.0001`` on a 40-cell profile). ``m == 1`` is returned
+    directly (the closed form divides by ``rho - 1``, which vanishes as
+    the one-step ratio approaches 1).
+    """
+    if mode == "none":
+        return 0.0
+    v = float(anchor.value)
+    if mode == "up":
+        if m == 1:
+            return u
+        rho = (u / v) ** (1.0 / m)
+        return rho * (u - v) / (rho - 1.0)
+    if mode == "down":
+        if m == 1:
+            return u
         rho = (v / u) ** (1.0 / m)
-        return [v / rho ** i for i in range(1, m + 1)]   # excludes v, ends on u
-    return []
+        return (v - u) / (rho - 1.0)
+    # emax: v, v rho, ..., u  (m + 1 cells)
+    if m == 1:
+        return v + u
+    rho = (u / v) ** (1.0 / m)
+    return (u * rho - v) / (rho - 1.0)
+
+
+def _ramp_cells(anchor: _Anchor | None, u: float, mode: str, m: int) -> list[float]:
+    """The cells of the ramp ``(mode, m)``, edge-adjacent cell first; the
+    last cell is ``u`` itself (the ramp ends ON the first plateau cell, so
+    the ramp/plateau junction ratio is the ramp's own ratio whatever the
+    plateau count)."""
+    if mode == "none":
+        return []
+    v = float(anchor.value)
+    if mode == "up":
+        rho = (u / v) ** (1.0 / m)
+        cells = [v * rho ** i for i in range(1, m + 1)]
+    elif mode == "down":
+        rho = (v / u) ** (1.0 / m)
+        cells = [v / rho ** i for i in range(1, m + 1)]
+    else:
+        rho = (u / v) ** (1.0 / m)
+        cells = [v * rho ** i for i in range(0, m + 1)]
+    cells[-1] = float(u)
+    return cells
 
 
 def _band_realize_free(length: float, target: float, cap: float,
@@ -637,111 +702,115 @@ def _band_realize_free(length: float, target: float, cap: float,
     Cells are ``ramp(lo -> u) + [u] * n + ramp(u <- hi)`` with a plateau
     value ``u <= min(target, length)`` and an integer ``n >= 0`` chosen so
     the run sums to ``length`` EXACTLY: ``G(u) = (length - S_lo(u) -
-    S_hi(u)) / u`` must be an integer, and ``u`` is bisected for it inside
-    the pieces on which the ramps' step counts are constant (``G`` is
-    continuous and strictly decreasing on each piece). Scanned from the
-    largest ``u`` down, so the first solution has the fewest cells.
-    Never rescales, never places a cell above ``target``, never moves a
-    pinned cell.
+    S_hi(u)) / u`` must be an integer. The candidate range ``[u_floor, P]``
+    is cut into pieces at every value where a ramp's step count changes
+    (``v cap^k`` for an ascending side, ``v / cap^k`` for a descent from a
+    pin); on each CLOSED piece the step counts are held at the piece's
+    interior value, so ``G`` is continuous and strictly decreasing there
+    and its ends can be evaluated exactly (no inset, no snap — the inset
+    version missed roots inside its own 1e-10 band on long plateaus).
+    Scanned from the largest ``u`` down, so the first solution has the
+    fewest cells. Never rescales, never places a cell above ``target``,
+    never moves a pinned cell.
+
+    Tolerance on "G is an integer": ``1e-10 x (|G| + ramp cells + 1)``,
+    the float error of ``(length - S) / u`` scaled the same way; the
+    residual is spread over the plateau cells (or, with no plateau, as a
+    uniform scale of the run), so every ratio moves by at most 1e-10
+    relative.
     """
     if length <= 0.0:
         return []
     P = min(float(target), float(length))
     u_floor = P * 1e-9
 
-    def _thresholds(anchor):
+    th: set[float] = set()
+    for anchor in (lo, hi):
         if anchor is None:
-            return []
+            continue
         v = float(anchor.value)
-        t = [v]
-        k = 1
-        while v * cap ** k < P:
-            t.append(v * cap ** k)
+        k = 0
+        while True:
+            t = v * cap ** k
+            if t >= P * (1.0 - _STEP_TOL):
+                break
+            if t > u_floor * (1.0 + _STEP_TOL):
+                th.add(t)
             k += 1
         if anchor.kind == "pin":
             k = 1
-            while v / cap ** k > u_floor:
-                t.append(v / cap ** k)
+            while True:
+                t = v / cap ** k
+                if t <= u_floor * (1.0 + _STEP_TOL):
+                    break
+                if t < P * (1.0 - _STEP_TOL):
+                    th.add(t)
                 k += 1
-        return t
+    # Merge thresholds closer than the step slack (a seam cell on the law
+    # exactly produces two thresholds 1e-13 apart from the two sides).
+    bounds = [P]
+    for t in sorted(th, reverse=True):
+        if t < bounds[-1] * (1.0 - _STEP_TOL):
+            bounds.append(t)
+    bounds.append(u_floor)
 
-    def _G(u):
-        s = sum(_band_ramp(lo, u, cap)) + sum(_band_ramp(hi, u, cap))
-        return (length - s) / u
-
-    def _finish(u, n):
-        left = _band_ramp(lo, u, cap)
-        right = _band_ramp(hi, u, cap)
-        cells = left + [u] * n + right[::-1]
-        if not cells:
-            return None
-        # float dust -> the largest cell (ratio change ~1e-16 relative)
-        dust = length - float(np.sum(cells))
-        j = int(np.argmax(cells))
-        cells[j] += dust
-        return [float(c) for c in cells]
-
-    # Exact fit at the target itself (the engineered case: a span that is
-    # an integer number of target cells plus its ramps). Checked on P's
-    # own accounting before any inset evaluation — measured on the F8
-    # fixture (140 x 1.96 mm + 1.4 mm): G(P) = 139.000000000000, and the
-    # inset moved it by n x 1e-10 = 1.4e-8, past the old 1e-8 tolerance.
-    g0 = _G(P)
-    n0 = int(round(g0))
-    has_ramp0 = bool(_band_ramp(lo, P, cap) or _band_ramp(hi, P, cap))
-    if n0 >= (0 if has_ramp0 else 1) and abs(g0 - n0) <= 1e-9:
-        cells = _finish(P, n0)
-        if cells is not None:
-            return cells
-
-    th = sorted({t for t in _thresholds(lo) + _thresholds(hi)
-                 if u_floor < t < P}, reverse=True)
-    bounds = [P] + th + [u_floor]
-    # At a threshold the ramp on that side switches between "empty" and
-    # "one cell equal to u" — the same physical cells, counted in S rather
-    # than in n — so G jumps by an integer exactly there. Every piece is
-    # therefore evaluated just INSIDE its ends, and a root that lands on
-    # an end is snapped back to it (u == P or u == pin come out exact).
-    inset = 1e-10
     for b_hi, b_lo in zip(bounds[:-1], bounds[1:]):
-        b_lo_in = b_lo * (1.0 + inset)
-        b_hi_in = b_hi * (1.0 - inset)
-        if b_lo_in >= b_hi_in:
-            continue
-        g_hi = _G(b_hi_in)
-        g_lo = _G(b_lo_in)
-        has_ramp = bool(_band_ramp(lo, b_hi_in, cap)
-                        or _band_ramp(hi, b_hi_in, cap))
-        # The inset shifts G by about (G + ramp cells) x inset; the ceil
-        # tolerance scales with it so a long plateau cannot round up.
-        g_tol = (abs(g_hi) + 100.0) * 10.0 * inset
-        n = int(np.ceil(g_hi - g_tol))
-        n = max(n, 0 if has_ramp else 1)
-        if n > g_lo + g_tol:
+        mid = float(np.sqrt(b_hi * b_lo))
+        mode_lo, m_lo = _ramp_spec(lo, mid, cap)
+        mode_hi, m_hi = _ramp_spec(hi, mid, cap)
+
+        def _G(u):
+            s = _ramp_sum(lo, u, mode_lo, m_lo) + _ramp_sum(hi, u, mode_hi, m_hi)
+            return (length - s) / u
+
+        g_hi = _G(b_hi)
+        g_lo = _G(b_lo)
+        has_ramp = mode_lo != "none" or mode_hi != "none"
+        tol_g = 1e-10 * (abs(g_hi) + m_lo + m_hi + 1.0)
+        n = max(int(np.ceil(g_hi - tol_g)), 0 if has_ramp else 1)
+        if n > g_lo + tol_g:
             continue                      # no integer reachable on this piece
-        a, b = b_lo_in, b_hi_in           # G(a) >= n >= G(b) (up to inset)
-        for _ in range(200):
-            mid = 0.5 * (a + b)
-            if _G(mid) - n > 0.0:
-                a = mid
-            else:
-                b = mid
-            if b - a <= 1e-16 * P:
-                break
-        u = 0.5 * (a + b)
-        for snap in (b_hi, b_lo):
-            if abs(u - snap) <= 1e-9 * snap and snap > u_floor:
-                g_snap = _G(snap)
-                n_snap = int(round(g_snap))
-                if n_snap >= 0 and abs(g_snap - n_snap) <= 1e-9:
-                    u, n = snap, n_snap
-                break
-        if abs(_G(u) - n) > 1e-9:
-            continue                      # landed on a jump, not a root
-        cells = _finish(u, n)
-        if cells is None:
+        if g_hi >= n - tol_g:
+            u = b_hi                      # root at the top (u == P exact)
+        elif g_lo <= n + tol_g:
+            u = b_lo
+        else:
+            a, b = b_lo, b_hi             # G(a) > n > G(b)
+            for _ in range(200):
+                mid = 0.5 * (a + b)
+                if _G(mid) - n > 0.0:
+                    a = mid
+                else:
+                    b = mid
+                if b - a <= 1e-15 * b_hi:
+                    break
+            u = 0.5 * (a + b)
+        if abs(_G(u) - n) > tol_g:
             continue
-        return cells
+        left = _ramp_cells(lo, u, mode_lo, m_lo)
+        right = _ramp_cells(hi, u, mode_hi, m_hi)
+        cells = left + [float(u)] * n + right[::-1]
+        if not cells:
+            continue
+        # Float dust: onto the plateau cells; with no plateau, spread
+        # over the ramp cells that are not pinned by construction (an
+        # ``emax`` first/last cell is ``dx_fine`` exactly and stays so).
+        dust = length - float(np.sum(cells))
+        if n > 0:
+            per = dust / n
+            for j in range(len(left), len(left) + n):
+                cells[j] += per
+        else:
+            free_idx = list(range(len(cells)))
+            if mode_lo == "emax" and len(free_idx) > 1:
+                free_idx = free_idx[1:]
+            if mode_hi == "emax" and len(free_idx) > 1:
+                free_idx = free_idx[:-1]
+            base = sum(cells[j] for j in free_idx)
+            scale = 1.0 + dust / base
+            for j in free_idx:
+                cells[j] *= scale
+        return [float(c) for c in cells]
     raise ValueError(
         f"{what}: span {length*1e3:.6g} mm cannot hold its ramps at ratio "
         f"<= {cap:g} (pinned boundary cell too large for the span, or the "
@@ -769,6 +838,13 @@ def _band_realize_protected(seg: _BandSeg, lim_lo: float | None,
     n = max(int(seg.min_cells), int(np.ceil(seg.length / c - 1e-9)))
     if seg.split_lo or seg.split_hi:
         n = max(n, 2)
+    if n > _MAX_PROFILE_CELLS:
+        raise ValueError(
+            f"protected segment of span {seg.length*1e3:.6g} mm would need "
+            f"{n} cells (seam limit {c*1e6:.4g} um) — more than the "
+            f"{_MAX_PROFILE_CELLS} cell ceiling. A neighbouring segment is "
+            "a sliver (edges from float noise?) and the ratio law is "
+            "pulling this one down to its size; merge or widen it.")
     # Seam guard: the realized seam cell must respect the limit itself (the
     # 1e-9 ceil tolerance above is for float dust on the declared quotient,
     # not a licence to overshoot a seam limit).
@@ -805,8 +881,14 @@ def _build_band_profile(segs: list[_BandSeg], cap: float,
     n_seg = len(segs)
     if n_seg == 0:
         return np.zeros(0, dtype=np.float64)
-    if cap <= 1.0:
-        raise ValueError(f"max_ratio must be > 1 (got {cap})")
+    if not (np.isfinite(cap) and cap > 1.0):
+        raise ValueError(f"max_ratio must be a finite number > 1 (got {cap})")
+    if cap < _RATIO_FLOOR:
+        raise ValueError(
+            f"max_ratio must be >= {_RATIO_FLOOR} (got {cap!r}): a 2x "
+            f"transition at that ratio already needs "
+            f"{int(np.ceil(np.log(2.0) / np.log(_RATIO_FLOOR)))} cells, and "
+            "the plateau solve's cost grows with the ramp length")
     for k, s in enumerate(segs):
         if not (s.length > 0.0):
             raise ValueError(f"segment {k}: span must be > 0 (got {s.length})")
@@ -829,7 +911,9 @@ def _build_band_profile(segs: list[_BandSeg], cap: float,
             raise ValueError(
                 f"segment {k}: span {segs[k].length*1e3:.6g} mm is shorter "
                 f"than the pinned boundary cell(s) it must hold")
-        return max(L, 0.0)
+        # A remainder inside the node tolerance is float dust from the
+        # edge subtraction (10 mm - 9 mm - 1 mm = 8.7e-19 m), not a run.
+        return L if L > _EDGE_TOL else 0.0
 
     lens = [_free_len(k) if not s.protected else float(s.length)
             for k, s in enumerate(segs)]
@@ -846,15 +930,30 @@ def _build_band_profile(segs: list[_BandSeg], cap: float,
             m = max(1, int(np.ceil(lens[k] / P - 1e-9)))
             real.append([lens[k] / m] * m)
 
+    # An end segment whose span EQUALS its pinned cell has no free cells:
+    # the pin is then that segment's seam cell on BOTH sides (its lo side
+    # for k == 0, its hi side for k == n_seg - 1), so the neighbour ramps
+    # from it and the seam audit sees it. Before the 2026-09-07 review the
+    # pin was visible from the outside only, and
+    # ``make_band_profile([0, 1e-3, 5e-3], [1e-3, 1e-4], boundary_cell=1e-3)``
+    # returned a ratio-10 seam with no error.
     def _lo_cell(k, cur):
         if cur[k]:
             return cur[k][0]
-        return float(pin_lo) if (k == 0 and pin_lo is not None) else None
+        if k == 0 and pin_lo is not None:
+            return float(pin_lo)
+        if k == n_seg - 1 and pin_hi is not None:
+            return float(pin_hi)
+        return None
 
     def _hi_cell(k, cur):
         if cur[k]:
             return cur[k][-1]
-        return float(pin_hi) if (k == n_seg - 1 and pin_hi is not None) else None
+        if k == n_seg - 1 and pin_hi is not None:
+            return float(pin_hi)
+        if k == 0 and pin_lo is not None:
+            return float(pin_lo)
+        return None
 
     def _anchor_lo(k, new, cur):
         s = segs[k]
@@ -909,6 +1008,12 @@ def _build_band_profile(segs: list[_BandSeg], cap: float,
                     lens[k], float(s.target), cap,
                     _anchor_lo(k, new, real), _anchor_hi(k, new, real),
                     what=f"segment {k}"))
+        n_cells = sum(len(x) for x in new)
+        if n_cells > _MAX_PROFILE_CELLS:
+            raise ValueError(
+                f"band profile would need {n_cells} cells, more than the "
+                f"{_MAX_PROFILE_CELLS} cell ceiling (a sliver segment or a "
+                "ratio close to 1 is driving the count)")
         # Seam audit on the ACTUAL seam cells.
         viol = []
         for k in range(n_seg - 1):
@@ -1005,7 +1110,12 @@ def make_band_profile(
     max_ratio : float
         Cap on every adjacent-cell ratio (default 1.4 — the validated
         z-axis multi-band cap; pass 1.3 for an in-plane profile, the
-        in-plane threshold, see docs/guides/support_matrix.md).
+        in-plane threshold, see docs/guides/support_matrix.md). Must be
+        finite and ``>= 1.0001`` (a 2x transition at that ratio already
+        needs 6932 cells; the plateau solve's cost grows with the ramp
+        length — measured 0.03 s at 1.0001 on a 40-cell profile and
+        0.4 s for a 1 um pin descending into 10 mm of 100 um cells, an
+        8110-cell profile).
     protected : sequence of bool, optional
         Per segment. A protected segment is realized UNIFORM —
         ``n = max(min_cells, ceil(span / target - 1e-9))`` equal cells —
@@ -1027,6 +1137,25 @@ def make_band_profile(
         ``<= max_ratio`` (to 1e-9), INCLUDING seams between two protected
         segments; the sum equals ``edges[-1] - edges[0]`` to 1e-12 m;
         with ``boundary_cell``, both end cells equal it bit-exactly.
+        The two 1e-12 m figures are float64 accumulation of the cells
+        (a running sum, as the rasterizer positions nodes) and hold for
+        columns up to about 1 m with up to 1e4 cells; the miss grows
+        with column length and cell count (measured 1e-11 m on a 10 m
+        column of 1e5 cells, 2.2e-9 m on 100 m / 1e6 cells), while each
+        cell itself matches its declared value to 1e-15 relative.
+
+    Raises
+    ------
+    ValueError
+        On inconsistent input: edges not strictly increasing or two edges
+        closer than 1e-12 m (the node tolerance — merge them), a
+        non-positive cell size, ``max_ratio`` not finite or below 1.0001,
+        a protected end segment with ``boundary_cell``, an end segment
+        shorter than the pinned cell or too short to hold the pin plus
+        its ramp, and a profile that would exceed 1,000,000 cells (a
+        sliver segment pulls its neighbours down to its size under the
+        ratio law: a 1e-9 m protected sliver between 1 mm blocks asks
+        for 1.4e6 cells).
 
     Notes
     -----
@@ -1036,8 +1165,17 @@ def make_band_profile(
     declared span exactly (no cell above its target, no rescale). Two
     adjacent PROTECTED segments whose seam exceeds the cap cannot be
     served by a ramp: the coarser one's uniform cell is reduced (more
-    cells) until the seam complies, iterated to a fixed point — the cost
-    is cells, not accuracy. A free segment too thin for any ramp is a
+    cells) until the seam complies, iterated to a fixed point. The cost
+    is cells AND, whenever the refined block was the coarsest declared
+    cell, a smaller minimum cell than declared — the time step follows
+    the global minimum, so dt drops with it. Measured on 3000 seeded
+    stacks (rng 1; 2-6 segments, spans 20 um-3 mm, targets 0.05-2x the
+    span, 70 % protected, caps 1.2-1.4): the realized minimum sits below
+    the declared minimum in 410 of them, down to 0.31x in the worst case
+    (two single-cell protected blocks whose span ratio just exceeds the
+    cap at 1.2). Hand case: ``[0, 0.1, 0.1355] mm, [25, 100] um, both
+    protected, 1.4`` realizes 5 x 20 um + 2 x 17.75 um, minimum 0.71x
+    the declared 25 um. A free segment too thin for any ramp is a
     refinement source for its neighbours in the same way.
     """
     e = np.asarray(edges, dtype=np.float64).ravel()
@@ -1051,6 +1189,11 @@ def make_band_profile(
     spans = np.diff(e)
     if np.any(spans <= 0.0):
         raise ValueError("edges must be strictly increasing")
+    if np.any(spans <= _EDGE_TOL):
+        k = int(np.argmax(spans <= _EDGE_TOL))
+        raise ValueError(
+            f"edges[{k}] and edges[{k + 1}] are {spans[k]:.3g} m apart, "
+            f"closer than the {_EDGE_TOL:g} m node tolerance: merge them")
     if np.any(cs <= 0.0):
         raise ValueError("cell_sizes must be > 0")
     if protected is None:
@@ -1099,16 +1242,54 @@ def make_z_profile(
     dx_fine : fine cell size (at feature planes)
     dx_coarse : coarse cell size (away from features). If None, uses dx_fine
         everywhere (no grading).
-    grading : max ratio between adjacent cells (default 1.4)
+    grading : max ratio between adjacent cells (default 1.4). A value
+        ``<= 1`` means no grading (uniform ``dx_fine`` everywhere, as
+        before); otherwise it must be ``>= 1.0001`` (see
+        :func:`make_band_profile`).
+
+    Raises
+    ------
+    ValueError
+        A feature outside ``[0, domain_z]`` (the column must sum to
+        ``domain_z``), non-positive sizes, or a non-finite ``grading``.
+        Features closer than 1e-12 m are merged into one plane.
     """
     if dx_coarse is None:
         dx_coarse = dx_fine
     if not (dx_fine > 0.0) or not (dx_coarse > 0.0):
         raise ValueError("dx_fine and dx_coarse must be > 0")
+    grading = float(grading)
+    if not np.isfinite(grading):
+        raise ValueError(f"grading must be a finite number (got {grading})")
+    cap = grading
     if grading <= 1.0:
-        raise ValueError(f"grading must be > 1 (got {grading})")
+        # No grading: uniform dx_fine everywhere, which is what the old
+        # loop produced for grading <= 1 (its plateau never grew). The
+        # seams between the uniform segments are then held at the
+        # default 1.4.
+        dx_coarse = dx_fine
+        cap = 1.4
+    if not (domain_z > 0.0):
+        raise ValueError(f"domain_z must be > 0 (got {domain_z})")
 
-    feats = sorted(set(list(features) + [0, domain_z]))
+    # Features outside [0, domain_z] cannot be node planes of a column
+    # that sums to domain_z (the old loop silently extended the column);
+    # features closer together than the 1e-12 m node tolerance are one
+    # plane (0.1 mm + 0.2 mm vs 0.3 mm differ by 5e-20 m and used to
+    # become a 5e-20 m cell).
+    pts = sorted(float(f) for f in features)
+    for f in pts:
+        if f < -_EDGE_TOL or f > domain_z + _EDGE_TOL:
+            raise ValueError(
+                f"feature {f} lies outside [0, domain_z = {domain_z}]")
+    feats = [0.0]
+    for f in pts:
+        if f - feats[-1] > _EDGE_TOL:
+            feats.append(f)
+    if domain_z - feats[-1] > _EDGE_TOL:
+        feats.append(float(domain_z))
+    else:
+        feats[-1] = float(domain_z)
 
     segs: list[_BandSeg] = []
     for i in range(len(feats) - 1):
@@ -1125,7 +1306,7 @@ def make_z_profile(
                                  emax_lo=float(dx_fine), emax_hi=float(dx_fine)))
     if not segs:
         return np.array([])
-    return _build_band_profile(segs, float(grading))
+    return _build_band_profile(segs, cap)
 
 
 def make_current_source(grid: NonUniformGrid, position_ijk, component,

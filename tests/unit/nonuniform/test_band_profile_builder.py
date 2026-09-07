@@ -444,3 +444,181 @@ def test_pin_with_no_room_for_its_ramp_raises():
 def test_public_export():
     import rfx
     assert rfx.make_band_profile is make_band_profile
+
+
+# --- 2026-09-07 review findings (second pass) --------------------------------
+# Each test names the finding it closes and quotes the OLD number where one
+# was measured on the first-pass tree (e65542c8) or on main (d990e18c).
+
+
+def test_pin_visible_when_end_segment_equals_boundary_cell():
+    """Review (blocking): an end segment whose span EQUALS boundary_cell has
+    no free cells, and the pin was invisible to its neighbour — on
+    e65542c8 ``make_band_profile([0, 1, 5] mm, [1, 0.1] mm, boundary_cell
+    = 1 mm)`` returned a ratio-10.07 seam and the both-ends form
+    ``[0, 1, 5, 6] mm`` ratio 10.0 at both ends, no error. Now the
+    neighbour ramps from the pin when it can, and a contradiction raises."""
+    # Feasible: 8 mm of free span after the hi pin holds two 1 -> 0.1 mm
+    # descents (2 x 2.25 mm at ratio 1.4).
+    c = make_band_profile([0.0, 1e-3, 9e-3], [1e-3, 1e-4], max_ratio=1.4,
+                          boundary_cell=1e-3)
+    _assert_invariants(c, [0.0, 1e-3, 9e-3], 1.4, boundary_cell=1e-3)
+    c = make_band_profile([0.0, 1e-3, 9e-3, 10e-3], [1e-3, 1e-4, 1e-3],
+                          max_ratio=1.4, boundary_cell=1e-3)
+    _assert_invariants(c, [0.0, 1e-3, 9e-3, 10e-3], 1.4, boundary_cell=1e-3)
+    # Infeasible: 3 mm of free span cannot hold two such descents.
+    with pytest.raises(ValueError, match="cannot hold its ramps"):
+        make_band_profile([0.0, 1e-3, 5e-3], [1e-3, 1e-4], max_ratio=1.4,
+                          boundary_cell=1e-3)
+    # A protected finer neighbour against the bare pin: no room for a ramp.
+    with pytest.raises(ValueError, match="no room for a ramp"):
+        make_band_profile([0.0, 1e-3, 5e-3, 6e-3], [1e-3, 1e-4, 1e-3],
+                          protected=[False, True, False], boundary_cell=1e-3)
+    # Degenerate but consistent: two pins and nothing else.
+    c = make_band_profile([0.0, 1e-3, 2e-3], [1e-3, 1e-3], boundary_cell=1e-3)
+    assert c.tolist() == [1e-3, 1e-3]
+
+
+def test_slivers_are_rejected_not_realized():
+    """Review (major): a protected sliver drove its neighbours to 1.4e9
+    cells (239 s, then I1 missed by 5e-11 m; a 1e-15 m sliver was
+    OOM-killed). Edges closer than the 1e-12 m node tolerance are
+    rejected; a profile past the 1,000,000-cell ceiling is rejected."""
+    with pytest.raises(ValueError, match="node tolerance"):
+        make_band_profile([0.0, 1e-3, 1e-3 + 1e-12, 2e-3 + 1e-12], [1e-4] * 3,
+                          protected=[True] * 3)
+    with pytest.raises(ValueError, match="node tolerance"):
+        make_band_profile([0.0, 1e-3, 1e-3 + 1e-15, 2e-3], [1e-4] * 3)
+    with pytest.raises(ValueError, match="cell ceiling"):
+        make_band_profile([0.0, 1e-3, 1e-3 + 1e-9, 2e-3 + 1e-9], [1e-4] * 3,
+                          protected=[True] * 3)
+    # A 10 um layer between 1 mm blocks is a legitimate stack (145 cells).
+    edges = [0.0, 1e-3, 1e-3 + 1e-5, 2e-3 + 1e-5]
+    c = make_band_profile(edges, [1e-4] * 3, protected=[True] * 3)
+    _assert_invariants(c, edges, 1.4)
+    assert len(c) == 145
+
+
+@pytest.mark.parametrize("cap", [1.01, 1.001, 1.0001])
+def test_ratio_close_to_one_is_bounded_cost(cap):
+    """Review (major): the plateau solve summed each ramp cell by cell
+    inside a bisection — 8.5 s at 1.0001, no return at 1.00002 on a
+    40-cell profile. Closed-form ramp sums: 0.03 s at 1.0001 (measured);
+    the invariants are what is gated here."""
+    c = make_band_profile([0.0, 1e-3, 2e-3], [1e-4, 5e-5], max_ratio=cap)
+    _assert_invariants(c, [0.0, 1e-3, 2e-3], cap)
+    z = make_z_profile([1e-3], 4e-3, 50e-6, 200e-6, grading=cap)
+    _assert_invariants(z, [0.0, 1e-3, 4e-3], cap)
+
+
+def test_ratio_floor_and_non_finite_are_rejected():
+    """Review (major): NaN passed ``cap <= 1.0`` and died later; inf was
+    accepted; caps below 1.0001 have no usable cost."""
+    for bad in (1.00009, 1.0, 0.5, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="max_ratio"):
+            make_band_profile([0.0, 1e-3], [1e-4], max_ratio=bad)
+    with pytest.raises(ValueError, match="grading"):
+        make_z_profile([1e-3], 4e-3, 50e-6, 200e-6, grading=float("nan"))
+    # The floor itself, on a long descent: 1 um pin into 10 mm of 100 um
+    # cells, 8110 cells (0.4 s measured).
+    c = make_band_profile([0.0, 10e-3], [1e-4], boundary_cell=1e-6,
+                          max_ratio=1.0001)
+    _assert_invariants(c, [0.0, 10e-3], 1.0001, boundary_cell=1e-6)
+
+
+@pytest.mark.parametrize("n", [17000, 24000])
+def test_long_column_seam_on_the_law_keeps_the_declared_vector(n):
+    """Review (major): the F8 shape scaled to a 33-47 m column. The band's
+    1.0 mm cell carries 5.5e-13 relative float noise, a 1e-12 slack on
+    the ramp step count flipped 1.96 -> 1.0 from 2 to 3 steps, and the
+    run raised 'cannot hold its ramps' although the declared vector
+    (n x 1.96 | 1.4 | 4 x 1.0 | 1.4 | (n+10) x 1.96 mm) fits exactly.
+    The step slack is now 1e-10; every cell matches its declared value."""
+    dc, dr, df = 1.96e-3, 1.4e-3, 1e-3
+    z1 = n * dc + dr
+    z2 = z1 + 4 * df
+    z3 = z2 + dr + (n + 10) * dc
+    c = make_band_profile([0.0, z1, z2, z3], [dc, df, dc],
+                          protected=[False, True, False], max_ratio=1.4)
+    decl = np.concatenate([[dc] * n, [dr], [df] * 4, [dr], [dc] * (n + 10)])
+    assert len(c) == 2 * n + 16
+    assert float(np.max(np.abs(c - decl) / decl)) <= 1e-11
+    assert float(_ratios(c).max()) <= 1.4 + RTOL_RATIO
+    # I1 by running sum is a RELATIVE 1e-12 at this column length (the
+    # absolute 1e-12 m holds for columns up to about 1 m; review, minor).
+    nodes = _nodes(c)
+    assert max(float(np.min(np.abs(nodes - e))) for e in (z1, z2)) <= 1e-12 * z3
+
+
+def test_protected_seam_refinement_prices_the_minimum_cell():
+    """Review (major): the refinement's cost is cells AND, when the refined
+    block held the coarsest declared cell, a smaller minimum cell (dt).
+    Hand case: declared minimum 25 um, realized 17.75 um (0.71x)."""
+    c = make_band_profile([0.0, 0.1e-3, 0.1355e-3], [25e-6, 100e-6],
+                          protected=[True, True], max_ratio=1.4)
+    _assert_invariants(c, [0.0, 0.1e-3, 0.1355e-3], 1.4)
+    assert len(c) == 7
+    assert float(c.min()) == pytest.approx(17.75e-6, rel=1e-9)
+
+
+def test_make_z_profile_grading_at_or_below_one_is_uniform_fine():
+    """Review (minor): main d990e18c returned 30 uniform 0.1 mm cells for
+    grading 1.0 (its plateau never grew); e65542c8 raised. Restored."""
+    z = make_z_profile([1e-3], 3e-3, 0.1e-3, 0.3e-3, 1.0)
+    assert len(z) == 30
+    assert np.allclose(z, 0.1e-3, rtol=1e-12)
+
+
+def test_make_z_profile_rejects_features_outside_domain_and_merges_planes():
+    """Review (minor): main extended the column past domain_z for a feature
+    outside it (sum 5 mm for domain 4 mm) and emitted a 5.4e-20 m cell for
+    two features that far apart (0.1 + 0.2 mm vs 0.3 mm)."""
+    with pytest.raises(ValueError, match="outside"):
+        make_z_profile([1e-3, 5e-3], 4e-3, 50e-6, 200e-6)
+    with pytest.raises(ValueError, match="outside"):
+        make_z_profile([-1e-3, 1e-3], 4e-3, 50e-6, 200e-6)
+    z = make_z_profile([0.3e-3, 3 * 0.1e-3, 2.5e-3], 4e-3, 50e-6, 200e-6)
+    _assert_invariants(z, [0.0, 0.3e-3, 2.5e-3, 4e-3], 1.4)
+    assert float(z.min()) >= 50e-6 * (1 - 1e-12)
+
+
+def _auto_z_check(feats, dom, dx, cap=1.3):
+    dz = np.asarray(_make_dz_profile(feats, dom, dx), dtype=float)
+    edges = sorted({0.0, dom} | {float(z) for f in feats for z in f[:2]})
+    assert abs(float(np.sum(dz)) - dom) <= ATOL
+    assert _iface_err(dz, edges) <= ATOL
+    rr = _ratios(dz)
+    ex = _thirds_pair_indices(dz, _block_index_ranges(dz, edges))
+    non_thirds = [float(r) for k, r in enumerate(rr) if k not in ex]
+    assert max(non_thirds) <= cap + RTOL_RATIO
+    return dz
+
+
+def test_auto_z_realizes_every_air_gap_and_the_full_column():
+    """Review (major, pre-existing on main d990e18c): an air gap <= dx/2
+    was DROPPED from the column — two 0.8 mm cores 50 um apart at dx
+    0.2 mm gave a 3.95 mm column (interfaces off by up to 50 um), a
+    50 um air run below or above a layer shortened the column by 50 um,
+    and dx 10 mm on a 4 mm domain gave a 0.8 mm column of 4 cells. Every
+    gap is now a free run; the engine treats a thin one as a refinement
+    source (R5)."""
+    E = 4.3
+    dz = _auto_z_check([(0.5e-3, 1.3e-3, E), (1.35e-3, 2.15e-3, E)], 4e-3, 0.2e-3)
+    assert len(dz) == 32
+    _auto_z_check([(0.05e-3, 0.85e-3, E)], 4e-3, 0.2e-3)
+    _auto_z_check([(0.5e-3, 3.95e-3, E)], 4e-3, 0.2e-3)
+    dz = _auto_z_check([(0.5e-3, 1.3e-3, E)], 4e-3, 10e-3)
+    assert len(dz) == 19
+
+
+def test_auto_z_overlapping_features_partition_and_beyond_domain_raises():
+    """Review (major, pre-existing): overlapping z features (bounding boxes
+    of any two non-PEC shapes — a sphere inside a substrate) EXTENDED the
+    column by the overlap (4.2 mm for a 4 mm domain). The column is now
+    partitioned at every distinct boundary; a feature outside the column
+    is a ValueError (main realized it and extended the column)."""
+    E = 4.3
+    _auto_z_check([(0.5e-3, 1.3e-3, E), (1.1e-3, 1.9e-3, E)], 4e-3, 0.2e-3)
+    _auto_z_check([(0.5e-3, 1.5e-3, E), (0.7e-3, 1.3e-3, E)], 4e-3, 0.2e-3)
+    with pytest.raises(ValueError, match="outside the column"):
+        _make_dz_profile([(3.5e-3, 4.5e-3, E)], 4e-3, 0.2e-3)

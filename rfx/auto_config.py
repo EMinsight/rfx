@@ -629,17 +629,40 @@ def _make_dz_profile(
         n = max(1, int(round(domain_z / dx)))
         return np.ones(n) * dx
 
-    # Sort features by z_lo
-    features = sorted(z_features, key=lambda f: f[0])
+    # Partition the column into sub-intervals at every feature boundary
+    # (2026-09-07 review). Feature z-ranges are bounding boxes of every
+    # non-PEC shape, so they can overlap (a dielectric sphere inside a
+    # substrate) or touch; the old loop assumed disjoint features with air
+    # gaps wider than dx/2, silently DROPPED any narrower gap from the
+    # column (measured: two 0.8 mm cores 50 um apart at dx 0.2 mm gave a
+    # 3.95 mm column for a 4.0 mm domain, interfaces off by up to 50 um)
+    # and EXTENDED the column by an overlap. Every distinct boundary is now
+    # a node plane, every covered sub-interval a block, every uncovered one
+    # an air run of whatever width, and the column sums to domain_z. For a
+    # stack of disjoint features with gaps wider than dx/2 the cells and
+    # boundary indices are the same as before.
+    node_tol = 1e-12
+    for z_lo, z_hi, _eps in z_features:
+        if z_lo < -node_tol or z_hi > domain_z + node_tol:
+            raise ValueError(
+                f"z feature ({z_lo}, {z_hi}) lies outside the column "
+                f"[0, {domain_z}]; the profile cannot place it on a node")
+    pts = sorted({0.0, float(domain_z)}
+                 | {float(z) for f in z_features for z in f[:2]})
+    planes = [pts[0]]
+    for p in pts[1:]:
+        if p - planes[-1] > node_tol:
+            planes.append(p)
+    planes[-1] = float(domain_z)
+    planes[0] = 0.0
 
-    # Collect z-boundary points
-    z_max = max(f[1] for f in features)
-    # Add air region above features up to domain_z
-    air_height = max(0, domain_z - z_max)
+    def _covered(lo: float, hi: float) -> bool:
+        mid = 0.5 * (lo + hi)
+        return any(z_lo - node_tol <= mid <= z_hi + node_tol
+                   for z_lo, z_hi, _e in z_features)
 
     cells = []
     boundary_indices = []  # cell indices at material interfaces
-    z_cursor = 0.0
     # #763: realized feature bounds in cumulative-cell coordinates. The
     # thirds rule preserves the cell sum on each side of every boundary it
     # splits, so these coordinates remain cell edges after
@@ -648,13 +671,15 @@ def _make_dz_profile(
     block_meta = []  # (thickness, n_feat, dz_feat, lo_index, hi_index)
     running = 0.0
 
-    for z_lo, z_hi, eps_r in features:
-        # Air gap before this feature
-        gap = z_lo - z_cursor
-        if gap > dx * 0.5:
-            n_gap = max(1, int(round(gap / dx)))
-            cells.extend([gap / n_gap] * n_gap)
-            running += gap
+    for lo, hi in zip(planes[:-1], planes[1:]):
+        span = hi - lo
+        if not _covered(lo, hi):
+            # Air run: coarse dx cells (the band engine re-realizes the
+            # run from its length; these cells only feed the thirds rule)
+            n_gap = max(1, int(round(span / dx)))
+            cells.extend([span / n_gap] * n_gap)
+            running += span
+            continue
 
         # Mark the air-to-dielectric boundary
         b_lo = len(cells)
@@ -664,7 +689,7 @@ def _make_dz_profile(
         # tolerance on the float quotient (design note 2026-09-07, R3):
         # ``2.2e-3 - 1.4e-3`` evaluates to ``8.000000000000002e-4``, which
         # gave one 0.8 mm core 5 cells while its identical neighbours got 4.
-        thickness = z_hi - z_lo
+        thickness = span
         n_feat = max(min_cells_per_feature,
                      int(np.ceil(thickness / dx - 1e-9)))
         dz_feat = thickness / n_feat
@@ -676,12 +701,6 @@ def _make_dz_profile(
         feature_bounds.append((running, running + thickness))
         block_meta.append((thickness, n_feat, dz_feat, b_lo, b_hi))
         running += thickness
-        z_cursor = z_hi
-
-    # Air above features
-    if air_height > dx * 0.5:
-        n_air = max(1, int(round(air_height / dx)))
-        cells.extend([air_height / n_air] * n_air)
 
     # Which boundaries will the thirds rule actually split? Same guard as
     # ``apply_thirds_rule`` (index 0 / len skipped, sub-micron thirds
