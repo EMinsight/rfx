@@ -36,7 +36,13 @@ H_SUB = 254e-6
 W_TRACE = 600e-6
 L_LINE = 10e-3
 PORT_MARGIN = 2e-3
-DX = 80e-6
+# ON-LATTICE board (#931 §1.3): h_sub / dx = 3 exactly, so the laminate face IS
+# a node line and the foil sheet below lands on it with no snap. This mirrors
+# tests/unit/sparams/test_msl_port_integration.py, which the fixture is a
+# replay of; it ran at dx = 80 µm (h_sub/dx = 3.175) until the contract, where
+# a sheet declared at H_SUB would snap to node 3 (240 µm), buried inside a
+# dielectric the same mesh realizes 320 µm thick.
+DX = H_SUB / 3
 F_MAX = 5e9
 LX = L_LINE + 2 * PORT_MARGIN
 LY = W_TRACE + 2 * (2 * H_SUB + 8 * DX)
@@ -67,8 +73,13 @@ def _build_sim() -> Simulation:
     y_centre = LY / 2.0
     trace_y_lo = y_centre - W_TRACE / 2.0
     trace_y_hi = y_centre + W_TRACE / 2.0
+    # 35 µm copper foil: a SHEET (#931 §1.3), declared by a zero-thickness Box
+    # on the laminate face. Realized as ONE wall plane with the normal Ez left
+    # live. One cell thick it is a VOLUME — walls at both z faces and the Ez
+    # between them shorted, i.e. 85 µm of solid metal where the board carries
+    # 35 µm of foil.
     sim.add(
-        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + DX)),
+        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB)),
         material="pec",
     )
     sim.add_msl_port(
