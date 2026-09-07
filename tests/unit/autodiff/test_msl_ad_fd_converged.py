@@ -708,3 +708,23 @@ def test_fd_ulp_span_is_dtype_sensitive_not_container_sensitive():
         "the recorded measurement no longer applies and the docstring numbers "
         "above need re-measuring, not just this constant nudged."
     )
+
+
+def _assert_trace_sheet_realized(sim_sim):
+    """Build-time check (no solve): the migrated trace realizes on the node
+    plane its declaration names — 320 um on this board, the plane the
+    pre-#931 rule realized — and it owns no cell (#931 §1.3).
+
+    Every migrated conductor on this branch owes this assertion; the shared
+    spelling is tests/_realized_geometry.py, so a fixture never re-derives
+    the rule it is checking.
+    """
+    from tests._realized_geometry import assert_sheet_planes, realized
+    rz = realized(sim_sim)
+    assert rz.pec_mask is None, "a sheet owns no cell"
+    assert len(rz.sheets) == 1
+    return assert_sheet_planes(sim_sim, 2, [4.0 * _MSL_DX], what="MSL trace")
+
+
+def test_migrated_trace_is_a_sheet_on_the_declared_plane():
+    _assert_trace_sheet_realized(_build_msl_sim())

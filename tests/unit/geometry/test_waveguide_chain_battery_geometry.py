@@ -133,18 +133,12 @@ def test_dut_cell_counts_scale_exactly_with_inverse_dx(sims, dut, dx):
         # nodes the drawn 5.08 mm span covers — 2*s cells, 2*s + 1 planes,
         # starting on the declared lo face. Before the contract the hi face
         # was never a wall at any thickness.
-        from rfx.boundaries.pec import (
-            realized_pec_edge_masks, realized_wall_planes,
-        )
-        edges = realized_pec_edge_masks(masks[mat])
-        planes = realized_wall_planes(edges, 0)
-        assert planes == list(range(planes[0], planes[0] + 2 * s + 1)), (
-            dx, planes)
-        grid = sim._build_grid()
-        x0 = (planes[0] - grid.pad_x_lo) * dx
-        x1 = (planes[-1] - grid.pad_x_lo) * dx
-        assert x0 == pytest.approx(F.PEC_SHORT_X_M[0], abs=1e-12), (dx, x0)
-        assert x1 == pytest.approx(F.PEC_SHORT_X_M[1], abs=1e-12), (dx, x1)
+        from tests._realized_geometry import assert_wall_planes
+        x0, x1 = F.PEC_SHORT_X_M
+        planes = assert_wall_planes(
+            sim, 0, [x0 + k * dx for k in range(2 * s + 1)],
+            what=f"pec_short DUT at dx={dx}")
+        assert len(planes) == 2 * s + 1, (dx, planes)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
