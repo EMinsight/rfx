@@ -263,3 +263,23 @@ as written — it declined to compute a ratio for exactly this reason.
 Stale label fixed in the same commit: the script's closing line still told the
 reader "face2 is the ruler", naming a pre-2.0 arm that no longer exists. It
 now prints the docstring's actual rule.
+
+## The yaml is not on this branch, and that is the repo's rule
+
+`scripts/vessl_931_docs_sheet_vs_volume_ab.yaml` exists in the worktree and was
+submitted from there, but `.gitignore:31` (`**/vessl*.yaml`, "VESSL cluster
+configs (internal infra)") keeps every VESSL yaml out of the repository. The
+only tracked ones are historical files under `scripts/archive/`, which predate
+that rule. So do not go looking for it in `git show`: what survives review is
+this ledger — the run id, the preset, the worktree the job copied, the output
+directory, the steps in order, and the pre-declared reading — plus the run's own
+logs under `/root/workspace/claude-workspace/rfx/runs/`.
+
+To resubmit, rebuild the block from this section: preset `gpu-rtx4090` on
+cluster `remilab-c0`, image `ghcr.io/bk-squared/rfx-openems:5b423bdfe0c8`,
+`JAX_PLATFORMS=cpu`, mount `volume://remilab-fs/personal-workspaces/` at
+`/root/workspace/`, copy the worktree to `/root/work/rfx931-docs-ab`, install
+`jax[cpu]==0.6.2`, then run in order: `--check` (the build-time realized-plane
+gate, no solve — the job stops if it fails), the A/B (timeout 7200), and the
+ladder `--solve` (timeout 10800), each tee'd to its own log with its rc beside
+it. Submit from a directory that is not a git worktree.
