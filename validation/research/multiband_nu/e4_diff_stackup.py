@@ -488,6 +488,12 @@ def _ulp(x: float) -> float:
     return float(np.spacing(np.float32(abs(x))))
 
 
+def _sgn(x) -> int:
+    """Sign as an int; 0 for a non-finite value (a NaN is a recorded
+    witness, never an exception in the judge — smoke bring-up fix)."""
+    return int(np.sign(x)) if np.isfinite(x) else 0
+
+
 def _fd_rows(loss_j, p0: np.ndarray, rel_steps: dict, names, n_out: int = 1) -> dict:
     """Central / one-sided FD of a (vector) loss in each design variable."""
     l0 = np.atleast_1d(np.asarray(loss_j(jnp.asarray(p0)), np.float64))
@@ -629,13 +635,15 @@ def measure_l2(smoke: bool = False, sc: dict | None = None) -> dict:
             sp, sm = asym(lp[1], lp[2]), asym(lm[1], lm[2])
             step = r["step"]
             s_fd = (sp - sm) / (2 * step)
-            q = float(abs(sp - sm) / _ulp(out["S0"]))
+            q = float(abs(sp - sm) / _ulp(out["S0"])) if np.isfinite(out["S0"]) else float("nan")
             srows[n] = {"g_ad": gS_ad[n], "g_fd": float(s_fd), "s_plus": float(sp), "s_minus": float(sm),
-                        "quanta": q, "resolved": q >= REF_FLOOR_QUANTA,
-                        "sign_ad": int(np.sign(gS_ad[n])), "sign_fd": int(np.sign(s_fd)),
+                        "quanta": q, "resolved": bool(np.isfinite(q) and q >= REF_FLOOR_QUANTA),
+                        "sign_ad": _sgn(gS_ad[n]), "sign_fd": _sgn(s_fd),
                         "sign_oracle": ORACLE_SIGNS[n],
                         "rel_err_ad_fd": float(abs(gS_ad[n] - s_fd) / max(abs(s_fd), 1e-300))}
-            srows[n]["verdict"] = ("INCONCLUSIVE" if not srows[n]["resolved"] else
+            srows[n]["finite"] = bool(np.isfinite(gS_ad[n]) and np.isfinite(s_fd))
+            srows[n]["verdict"] = ("FIRED" if not srows[n]["finite"] else
+                                   "INCONCLUSIVE" if not srows[n]["resolved"] else
                                    ("HELD" if srows[n]["sign_ad"] == ORACLE_SIGNS[n] else "FIRED"))
             # reported: the up / dn rows themselves
             rows[n]["up"] = judge_row(J[1, i], r, k=1)
@@ -657,9 +665,9 @@ def measure_l2(smoke: bool = False, sc: dict | None = None) -> dict:
                        "ad_over_pred_discrete": gS_ad[n] / (dsd * d) if dsd * d else float("nan"),
                        "discrete_over_oracle": d / o}
         out["dS_prediction"] = pred
-        out["literal_Pnom_sign_h_thin"] = {"sign_dPnom_dh_ad": int(np.sign(J[0, 0])),
+        out["literal_Pnom_sign_h_thin"] = {"sign_dPnom_dh_ad": _sgn(J[0, 0]),
                                            "sign_df_res_dh_oracle": ORACLE_SIGNS["h_thin"],
-                                           "agree": int(np.sign(J[0, 0])) == ORACLE_SIGNS["h_thin"],
+                                           "agree": _sgn(J[0, 0]) == ORACLE_SIGNS["h_thin"],
                                            "gated": False}
         out["E4_T"] = {"kink": rows["h_thin"]["kink"], "tol": TOL_KINK, "resolved": rows["h_thin"]["resolved"],
                        "verdict": ("INCONCLUSIVE" if not rows["h_thin"]["resolved"] else
