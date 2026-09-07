@@ -323,8 +323,11 @@ earlier releases.
   abutting sheets realize seamlessly. Sheets on adjacent planes stay two films
   with a live normal edge between them.
 * A sheet meant to sit on a dielectric interface needs that interface on a node
-  plane. Draw the mesh so it is (`dx = h_sub / n`); otherwise the sheet snaps to
-  the nearest node and preflight reports the declared-versus-realized offset.
+  plane. Node planes are the integer multiples of `dx` from the domain origin,
+  so `dx = h_sub / n` sizes the laminate but does not place it — the face's
+  offset from the origin has to be a whole number of cells as well. Otherwise
+  the sheet snaps to the nearest node and preflight reports the
+  declared-versus-realized offset.
 * The rule is invariant under mirroring and axis permutation of the geometry.
 
 `fidelity_report()` prints, per PEC entry, the drawn extent against the realized
@@ -377,28 +380,57 @@ with a different answer, and it is on you to say which one a number came from.
 
 ### Two worked contrasts
 
-**Foil is a sheet.** A 35 µm ground on a 0.787 mm RO4003C substrate, meshed at
+**Foil is a sheet.** A 35 µm ground on a 0.787 mm RO4003C laminate, meshed at
 `dx = h_sub / 4 = 196.75 µm`. The copper is a fifth of a cell thick, so a `Box`
-through `add()` raises. Declare the sheet on the laminate face:
+through `add()` raises. Declare the sheet on the laminate face — and put that
+face on a node plane, because the sheet is realized on the nearest one.
+
+Choosing `dx = h_sub / 4` fixes the laminate's *thickness* at four cells. It
+says nothing about *where* the laminate floor lands, and the two are separate
+conditions. A floor at `z = 4 mm` is not a node plane at all:
+`0.004 / 196.75e-6 = 20.33`, so the ground would be realized at node 20,
+`3.935 mm`, 65 µm below the dielectric it is supposed to sit under. Declare the
+floor as `20 · dx`, and the in-plane edges as cell counts too, and the mesh
+carries the board you drew:
 
 ```python
 from rfx import Box, Simulation
 
 H_SUB = 0.787e-3
-DX = H_SUB / 4                       # nodes land on both laminate faces
+DX = H_SUB / 4                       # 196.75 µm — four cells across the laminate
+Z_GND = 20 * DX                      # 3.935 mm — node plane 20, by construction
+XY_LO, XY_HI = 25 * DX, 175 * DX     # 4.91875 mm, 34.43125 mm — nodes 25 and 175
+
 board = Simulation(freq_max=12e9, domain=(0.04, 0.04, 0.012), dx=DX,
                    boundary="cpml")
-board.add(Box((0.005, 0.005, 0.004), (0.035, 0.035, 0.004 + H_SUB)),
+board.add(Box((XY_LO, XY_LO, Z_GND), (XY_HI, XY_HI, Z_GND + H_SUB)),
           material="rogers4003c")
 # Ground: zero thickness on the substrate floor. One node plane, no cell.
-board.add_thin_conductor(Box((0.005, 0.005, 0.004), (0.035, 0.035, 0.004)),
+board.add_thin_conductor(Box((XY_LO, XY_LO, Z_GND), (XY_HI, XY_HI, Z_GND)),
                          sigma_bulk=5.8e7, thickness=35e-6)
+board.fidelity_report()
 ```
 
-Realized: one wall plane at `z = 4 mm`, the substrate's four cells above it
-untouched, and `Ez` through the ground still live. Drawing the same foil as a
-one-cell `Box` instead would fill that cell and put a second wall at
-`z = 4 mm + DX` — a 5-cell electrical cavity under a 4-cell substrate.
+The report comes back with **0 findings**: every declared face is realized as
+itself, and the sheet names the plane it landed on. The `z` rows, with the `x`
+and `y` rows (identical in form, `0.0` residuals) left out:
+
+```text
+  geometry[0] 'rogers4003c'
+    cells: 90000
+    z: declared [3935.0, 4722.0] um -> realized [3935.0, 4722.0] um | face residuals (0.0, 0.0) um | extent 787.0 -> 787.0 um
+
+  thin_conductor[0] sigma_bulk=5.8e+07 S/m -> pec — PEC sheet on node plane z = 3935.00 um (22801 nodes, closed footprint, zero thickness, no cell; in-plane E zeroed on that plane, normal E live)
+    sheet nodes: 22801 (owns no cell)
+    z: declared [3935.0, 3935.0] um -> realized [3935.0, 3935.0] um | face residuals (0.0, 0.0) um | extent 0.0 -> 0.0 um
+```
+
+One wall plane at `z = 3.935 mm`, the laminate's four cells above it untouched,
+and `Ez` through the ground still live. Draw the same foil as a one-cell `Box`
+instead and it eats the laminate's bottom cell: walls at `3935.0 µm` and
+`4131.8 µm`, and the report adds
+`claimed-by-conductor: 25.0% of this dielectric's cells are also PEC` — a
+three-cell dielectric cavity under a board you declared four cells thick.
 
 **A plate is a volume.** A 2 mm-thick iris in a WR-90 guide at `dx = 1 mm`:
 
