@@ -610,8 +610,10 @@ def _fake_forward_mixed_z_profile(nz_markers, n_lw):
 
     def fake_forward(self, grid, materials, debye_spec, lorentz_spec,
                      n_steps=None, checkpoint=False, pec_mask=None,
+                     pec_sheets=(), pec_wires=(),
                      port_s11_freqs=None, _return_raw_port_sparams=False):
         del materials, debye_spec, lorentz_spec, n_steps, checkpoint, pec_mask
+        del pec_sheets, pec_wires
         freqs = jnp.asarray(port_s11_freqs)
         n_f = int(freqs.shape[0])
         zramp = jnp.asarray(
@@ -715,8 +717,15 @@ def _ground_truth_wire_port_n_live(sim, position, component, extent,
     end[axis] += extent
     wp = WirePort(start=tuple(position), end=tuple(end),
                   component=component, impedance=impedance)
-    _, _, _, pec_mask, _, _, _ = sim._assemble_materials(grid)
-    _, live_flags, n_live = _wire_port_live_cells(grid, wp, pec_mask)
+    _pec_sheets: list = []
+    _, _, _, pec_mask, _, _, _ = sim._assemble_materials(
+        grid, pec_sheets=_pec_sheets)
+    # #931 §1.9: liveness is read off the port component's own REALIZED
+    # edge, so the ground truth realizes the same geometry through the
+    # single owner rather than scanning cells.
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    edges = realized_pec_edge_masks(pec_mask, sheets=tuple(_pec_sheets))
+    _, live_flags, n_live = _wire_port_live_cells(grid, wp, edges)
     return n_live, len(live_flags)
 
 
@@ -1031,8 +1040,12 @@ def _d5_gap_ground_truth(sim, position, component, extent, impedance=50.0):
     end[axis] += extent
     wp = WirePort(start=tuple(position), end=tuple(end),
                   component=component, impedance=impedance)
-    _, _, _, pec_mask, _, _, _ = sim._assemble_materials(grid)
-    cells, live_flags, _ = _wire_port_live_cells(grid, wp, pec_mask)
+    _pec_sheets: list = []
+    _, _, _, pec_mask, _, _, _ = sim._assemble_materials(
+        grid, pec_sheets=_pec_sheets)
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    edges = realized_pec_edge_masks(pec_mask, sheets=tuple(_pec_sheets))
+    cells, live_flags, _ = _wire_port_live_cells(grid, wp, edges)
     mask_np = np.asarray(pec_mask)
     nb = list(cells[-1])
     nb[axis] += 1
