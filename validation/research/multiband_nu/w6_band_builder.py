@@ -22,6 +22,14 @@ Usage (declared in the note):
     PYTHONPATH=. python -m validation.research.multiband_nu.w6_band_builder \
         --widths 2,4,8,16 --out validation/research/multiband_nu/results/w6_band_builder.json
     add ``--f7-only`` to skip the FDTD rows.
+
+E1 (resolution x ratio sweep of the F8 witness, pre-declared in
+docs/design_notes/20260907_nu_exp1_band_law_sweep_predeclaration.md):
+    PYTHONPATH=. python -m validation.research.multiband_nu.w6_band_builder \
+        --sweep --fine-cells-per-lambda 15,30,60 --ratio 1.2,1.4,2.0 \
+        --widths 2,4,8,16,32 --out validation/research/multiband_nu/results/e1_band_law_sweep.json
+    ``--model-only`` writes the chain-model predictions without FDTD;
+    ``--resume`` skips cells already present in ``--out``.
 """
 
 from __future__ import annotations
@@ -40,7 +48,7 @@ from rfx.auto_config import _make_dz_profile
 from rfx.nonuniform import make_band_profile, make_nonuniform_grid, run_nonuniform
 
 from . import fixtures as fx
-from .chain_model import scattering
+from .chain_model import bloch_kz, s0_sy, scattering
 from .harness import build_pec_fixture
 from .w2_w3_reflection import (
     F0, SIGMA_T, T0, FS2_FLOOR, dft_at, gaussian_sine, te10_sources, vg_of,
@@ -297,20 +305,439 @@ def run_f8(widths: list[int]) -> dict:
               f"gate_end={res['gates_ns']['gate_end']:.3f}", flush=True)
     return out
 
+# --- E1: resolution x ratio sweep of the F8 witness ---------------------------
+# Pre-declared in docs/design_notes/20260907_nu_exp1_band_law_sweep_predeclaration.md.
+# The lane-A F8 layout is kept in PHYSICAL lengths (source 166.6 mm, probe
+# 196.0 mm, transition 274.4 mm, tail 294.0 mm, B reference 784.0 mm, all
+# multiples of the 1.96 mm coarse cell) and re-expressed in cells of the
+# setting's coarse cell, so the 30 / 1.4 cell of the sweep reproduces the
+# lane-A F8 arm bit for bit (K_SRC 85, K_PRB 100, 140 / 150 / 400 cells,
+# 1200 steps) and every other cell keeps the same gate geometry in time.
+E1_N_LAMBDA_REF = 30                    # lane-A fine resolution (1 mm cells)
+E1_Z_SRC = K_SRC * DC                   # 166.6 mm
+E1_Z_PRB = K_PRB * DC                   # 196.0 mm
+E1_Z_LEAD = N_LEAD_C * DC               # 274.4 mm
+E1_Z_TAIL = N_TAIL_C * DC               # 294.0 mm
+E1_Z_B = B_N_COARSE * DC                # 784.0 mm
+E1_DT_LANE_A = 2.4027649366612596e-12   # dt of the lane-A F8 runs (JSON dt_b_s)
+E1_T_RUN = N_STEPS * E1_DT_LANE_A       # 2.883 ns, the lane-A run length
+E1_T_RUN_PAD = 0.1e-9                   # run at least 0.1 ns past t_s
+E1_LAW_SWEEP_MAX = 80                   # chain-model n_b range for the c fit
+E1_C_FIT_MAX_DR = 3.0                   # c search range, in ramp cells
+E1_BOUND_SLACK = 0.05                   # (ii): R_meas <= 2 R_single (1 + 0.05)
+E1_SCALING_TOL = 0.25                   # (i): measured / model ratio within 25 %
+E1_C_TOL_DR = 0.10                      # (iii): |c_meas - c_model| <= 0.10 DR
+E1_CLASS_RATIO = 1.4                    # -54 dB accuracy class: ratio cap ...
+E1_CLASS_N_LAMBDA = 30                  # ... and >= 30 fine cells per wavelength
+
+
+def _round_half_up(x: float) -> int:
+    return int(np.floor(x + 0.5))
+
+
+def e1_setting(n_lambda: int, ratio: float) -> dict:
+    """Cell layout of one (resolution, ratio) setting. The fine cell is
+    ``DZ_FINE x 30 / n_lambda`` (2.0 / 1.0 / 0.5 mm for 15 / 30 / 60), the
+    coarse cell ``ratio^2 x fine``, the ramp cell ``ratio x fine``; every
+    runway length is the lane-A physical length rounded to whole coarse
+    (or, for the single-ramp tail, fine) cells."""
+    dzf = fx.DZ_FINE * E1_N_LAMBDA_REF / n_lambda
+    dc, dr = dzf * ratio * ratio, dzf * ratio
+    return {
+        "n_lambda": n_lambda, "ratio": ratio,
+        "fine_cell_m": dzf, "coarse_cell_m": dc, "ramp_cell_m": dr,
+        "fine_cells_per_lambda0": (C0_E1 / F0) / dzf,
+        "coarse_cells_per_lambda0": (C0_E1 / F0) / dc,
+        "k_src": _round_half_up(E1_Z_SRC / dc),
+        "k_prb": _round_half_up(E1_Z_PRB / dc),
+        "n_lead": _round_half_up(E1_Z_LEAD / dc),
+        "n_tail": _round_half_up(E1_Z_TAIL / dc),
+        "n_b_coarse": _round_half_up(E1_Z_B / dc),
+        "n_tail_fine": _round_half_up(E1_Z_TAIL / dzf),
+        "in_accuracy_class": bool(ratio <= E1_CLASS_RATIO + 1e-12
+                                  and n_lambda >= E1_CLASS_N_LAMBDA),
+    }
+
+
+C0_E1 = 299792458.0
+
+
+def e1_band_profile(st: dict, n_b: int) -> np.ndarray:
+    dc, dzf, dr = st["coarse_cell_m"], st["fine_cell_m"], st["ramp_cell_m"]
+    z1 = st["n_lead"] * dc + dr
+    z2 = z1 + n_b * dzf
+    z3 = z2 + dr + st["n_tail"] * dc
+    return make_band_profile([0.0, z1, z2, z3], [dc, dzf, dc],
+                             protected=[False, True, False], max_ratio=st["ratio"])
+
+
+def e1_band_expected(st: dict, n_b: int) -> np.ndarray:
+    dc, dzf, dr = st["coarse_cell_m"], st["fine_cell_m"], st["ramp_cell_m"]
+    return np.asarray([dc] * st["n_lead"] + [dr] + [dzf] * n_b + [dr]
+                      + [dc] * st["n_tail"], dtype=np.float64)
+
+
+def e1_single_profile(st: dict) -> np.ndarray:
+    """Single ramp coarse -> ramp -> fine, fine tail of the lane-A tail
+    length: the R_single arm of law check (i)."""
+    dc, dzf, dr = st["coarse_cell_m"], st["fine_cell_m"], st["ramp_cell_m"]
+    z1 = st["n_lead"] * dc + dr
+    z2 = z1 + st["n_tail_fine"] * dzf
+    return make_band_profile([0.0, z1, z2], [dc, dzf], protected=[False, True],
+                             max_ratio=st["ratio"])
+
+
+def e1_single_expected(st: dict) -> np.ndarray:
+    dc, dzf, dr = st["coarse_cell_m"], st["fine_cell_m"], st["ramp_cell_m"]
+    return np.asarray([dc] * st["n_lead"] + [dr] + [dzf] * st["n_tail_fine"],
+                      dtype=np.float64)
+
+
+def e1_b_profile(st: dict) -> np.ndarray:
+    return np.asarray([st["coarse_cell_m"]] * st["n_b_coarse"]
+                      + [st["fine_cell_m"]] * B_N_FINE_PIN, dtype=np.float64)
+
+
+def e1_fit_c(n_bs, r_vals, dzf: float, r_single: float, k_g: float,
+             c_max: float) -> float:
+    """Least-squares c in ``2 R_single |sin(k_g (n_b dzf + c))|`` over the
+    given rows: coarse scan then two refinements (the objective is smooth
+    and 1-D; the scan spacing is c_max / 4000)."""
+    L = np.asarray(n_bs, dtype=np.float64) * dzf
+    R = np.asarray(r_vals, dtype=np.float64)
+
+    def err(c):
+        return float(np.sum((R - 2 * r_single * np.abs(np.sin(k_g * (L + c)))) ** 2))
+
+    lo, hi, n = 0.0, c_max, 4001
+    for _ in range(3):
+        cs = np.linspace(lo, hi, n)
+        e = np.array([err(c) for c in cs])
+        i = int(np.argmin(e))
+        step = cs[1] - cs[0]
+        lo, hi = max(0.0, cs[i] - step), min(c_max, cs[i] + step)
+    return float(cs[i])
+
+
+def e1_stopband_edge_hz(dc: float, dt: float, dy: float, b: float) -> float | None:
+    """Lowest frequency at which the coarse lattice stops propagating the
+    TE10 Bloch wave (``bloch_kz`` argument reaches 1); None if above the
+    scan (60 GHz)."""
+    for f in np.linspace(F0, 60e9, 5001):
+        s0, sy = s0_sy(f, dt, dy, b)
+        if s0 ** 2 - sy ** 2 < 0:
+            continue
+        if dc * np.sqrt(s0 ** 2 - sy ** 2) / 2 >= 1.0:
+            return float(f)
+    return None
+
+
+def e1_model(st: dict, dt: float, widths: list[int]) -> dict:
+    """Chain-model side of one setting: single-ramp R, k_g, the c fit over
+    n_b = 0..80 (c_model), the width rows with their frozen windows."""
+    dy, b = fx.DXY, fx.B_Y
+    single = e1_single_profile(st)
+    single_exact = (len(single) == len(e1_single_expected(st))
+                    and bool(np.max(np.abs(single - e1_single_expected(st))) <= 1e-12))
+    r_single = abs(scattering(single, st["n_lead"], st["n_tail_fine"], F0, dt, dy, b)[0])
+    k_g = bloch_kz(F0, dt, dy, b, st["fine_cell_m"])
+    k_c = bloch_kz(F0, dt, dy, b, st["coarse_cell_m"])
+    sweep_n = list(range(0, E1_LAW_SWEEP_MAX + 1))
+    sweep_r = []
+    for n_b in sweep_n:
+        prof = e1_band_expected(st, n_b)
+        sweep_r.append(abs(scattering(prof, st["n_lead"], st["n_tail"], F0, dt, dy, b)[0]))
+    c_model = e1_fit_c(sweep_n, sweep_r, st["fine_cell_m"], r_single, k_g,
+                       E1_C_FIT_MAX_DR * st["ramp_cell_m"])
+    fit = 2 * r_single * np.abs(np.sin(k_g * (np.asarray(sweep_n) * st["fine_cell_m"] + c_model)))
+    rows = []
+    for n_b in widths:
+        prof = e1_band_profile(st, n_b)
+        exp = e1_band_expected(st, n_b)
+        exact = len(prof) == len(exp) and bool(np.max(np.abs(prof - exp)) <= 1e-12)
+        r_model = abs(scattering(prof, st["n_lead"], st["n_tail"], F0, dt, dy, b)[0])
+        half = 0.20 * r_model + FS2_FLOOR
+        rows.append({"n_b": n_b, "band_mm": n_b * st["fine_cell_m"] * 1e3,
+                     "builder_matches_declared_vector": exact, "nz": int(len(prof)),
+                     "R_model": r_model, "R_model_db": 20 * np.log10(r_model),
+                     "window": [r_model - half, r_model + half], "half": half,
+                     "bound_2R1": 2 * r_single * (1 + E1_BOUND_SLACK),
+                     "fp_form_model": 2 * r_single * abs(np.sin(k_g * (n_b * st["fine_cell_m"] + c_model)))})
+    return {
+        "dt_s": dt, "single_builder_matches_declared_vector": single_exact,
+        "single_nz": int(len(single)),
+        "R_single_model": r_single, "R_single_model_db": 20 * np.log10(r_single),
+        "k_g_fine_per_m": k_g, "k_coarse_per_m": k_c,
+        "lambda_g_fine_mm": 2 * np.pi / k_g * 1e3,
+        "coarse_bloch_arg": st["coarse_cell_m"] * np.sqrt(
+            s0_sy(F0, dt, dy, b)[0] ** 2 - s0_sy(F0, dt, dy, b)[1] ** 2) / 2,
+        "vg_coarse_over_c": vg_of(st["coarse_cell_m"], dt, dy, b) / C0_E1,
+        "stopband_edge_ghz": (lambda f: None if f is None else f / 1e9)(
+            e1_stopband_edge_hz(st["coarse_cell_m"], dt, dy, b)),
+        "c_model_m": c_model, "c_model_over_ramp_cell": c_model / st["ramp_cell_m"],
+        "c_fit_rms_0_80": float(np.sqrt(np.mean((np.asarray(sweep_r) - fit) ** 2))),
+        "c_fit_max_rel_0_80": float(np.max(np.abs(np.asarray(sweep_r) - fit)
+                                           / np.maximum(np.asarray(sweep_r), 1e-300))),
+        "chain_max_over_2R1": float(max(sweep_r) / (2 * r_single)),
+        "chain_sweep_R": sweep_r,
+        "rows": rows,
+    }
+
+
+def e1_gates(st: dict, prof: np.ndarray, kind: str, n_b: int, dt: float,
+             n_steps: int) -> dict:
+    """Gate geometry of one arm from the chain-model group velocities (the
+    lane-A construction): arrival times in s, the gate end, and the five
+    margins whose conjunction is ``gates_hold``. Pure geometry — used by
+    the note's gate table before any run and by ``e1_arm`` after it."""
+    dy, b = fx.DXY, fx.B_Y
+    dc = st["coarse_cell_m"]
+    vg_c = vg_of(dc, dt, dy, b)
+    z_src, z_prb, z_tr = st["k_src"] * dc, st["k_prb"] * dc, st["n_lead"] * dc
+    t_r = T0 + (2 * z_tr - z_src - z_prb) / vg_c
+    t_s = T0 + (z_src + 2 * z_tr - z_prb) / vg_c
+    beyond = prof[st["n_lead"]:]
+    t_f = T0 + (z_tr - z_src) / vg_c + 2 * _cell_delay(beyond, dt, dy, b) + (z_tr - z_prb) / vg_c
+    if kind == "band":
+        inner = prof[st["n_lead"]:st["n_lead"] + 2 + n_b]
+    else:
+        inner = prof[st["n_lead"]:st["n_lead"] + 1]
+    t_inner = T0 + (z_tr - z_src) / vg_c + 2 * _cell_delay(inner, dt, dy, b) + (z_tr - z_prb) / vg_c
+    gate_end = min(t_s, t_f) - 4 * SIGMA_T
+    n_gate = int(gate_end / dt)
+    t_echo_prb = T0 + (z_src + z_prb) / vg_c
+    t_inc_arr = T0 + (z_prb - z_src) / vg_c
+    t_inc_end = min(t_inc_arr + 8 * SIGMA_T, t_echo_prb - 4 * SIGMA_T)
+    # B reference: far wall / fine pin return must land after the gate
+    t_bpin = T0 + (z_src + 2 * st["n_b_coarse"] * dc - z_prb) / vg_c
+    margins = {
+        "reflection_inside": gate_end - (t_r + 4 * SIGMA_T),
+        "inner_return_inside": gate_end - (t_inner + 4 * SIGMA_T),
+        "run_covers_gate": n_steps * dt - gate_end,
+        "b_pin_return_after_gate": t_bpin - gate_end,
+        "incident_inside": t_inc_end - (t_inc_arr + 4 * SIGMA_T),
+    }
+    return {
+        "gates_ns": {"t_r": t_r * 1e9, "t_inner_last": t_inner * 1e9, "t_s": t_s * 1e9,
+                     "t_f": t_f * 1e9, "gate_end": gate_end * 1e9, "gate_steps": n_gate,
+                     "t_inc_end": t_inc_end * 1e9, "t_b_pin_return": t_bpin * 1e9,
+                     "run_end": n_steps * dt * 1e9},
+        "gate_margins_ns": {k: v * 1e9 for k, v in margins.items()},
+        "gates_hold": bool(all(v > 0 for v in margins.values())),
+        "_n_gate": n_gate, "_t_inc_end": t_inc_end,
+    }
+
+
+def e1_arm(st: dict, prof: np.ndarray, kind: str, n_b: int, trace_b: np.ndarray,
+           grid_b, r_model: float, r_single: float) -> dict:
+    """One FDTD arm (band or single ramp) with the lane-A gating, generalized
+    to the setting's cells; every gate margin is reported in ns and
+    ``gates_hold`` is their conjunction (nothing is asserted — a violated
+    gate is a result)."""
+    n_steps = len(trace_b)
+    grid_a, trace_a = _run_probe(prof, n_steps)
+    dt = float(grid_a.dt)
+    dt_match = abs(dt - float(grid_b.dt)) < 1e-20
+    g = e1_gates(st, prof, kind, n_b, dt, n_steps)
+    diff = trace_a - trace_b
+    refl = dft_at(diff, dt, F0, 0, min(g["_n_gate"], n_steps))
+    inc = dft_at(trace_b, dt, F0, 0, int(g["_t_inc_end"] / dt))
+    r_meas = abs(refl) / abs(inc)
+    half = 0.20 * r_model + FS2_FLOOR
+    dev = abs(r_meas - r_model)
+    out = {
+        "kind": kind, "n_b": n_b, "nz": int(len(prof)), "dt_s": dt, "dt_matches_b": dt_match,
+        "R_model": r_model, "R_meas": r_meas, "R_meas_db": 20 * np.log10(max(r_meas, 1e-300)),
+        "deviation": dev, "deviation_rel": dev / r_model,
+        "window": [r_model - half, r_model + half],
+        "fired": bool(dev > half),
+        "gates_ns": g["gates_ns"], "gate_margins_ns": g["gate_margins_ns"],
+        "gates_hold": bool(g["gates_hold"] and dt_match),
+    }
+    if kind == "band":
+        out["bound_2R1"] = 2 * r_single * (1 + E1_BOUND_SLACK)
+        out["bound_fired"] = bool(r_meas > 2 * r_single * (1 + E1_BOUND_SLACK))
+    return out
+
+
+def e1_cell_key(n_lambda: int, ratio: float) -> str:
+    return f"N{n_lambda}_r{ratio:g}"
+
+
+def run_e1_cell(st: dict, widths: list[int], model_only: bool) -> dict:
+    dzf = st["fine_cell_m"]
+    grid_probe = make_nonuniform_grid((fx.A_X, fx.B_Y), e1_b_profile(st), fx.DXY, cpml_layers=0)
+    dt = float(grid_probe.dt)
+    model = e1_model(st, dt, widths)
+    vg_c = vg_of(st["coarse_cell_m"], dt, fx.DXY, fx.B_Y)
+    dc = st["coarse_cell_m"]
+    t_s = T0 + (st["k_src"] * dc + 2 * st["n_lead"] * dc - st["k_prb"] * dc) / vg_c
+    n_steps = int(np.ceil(max(E1_T_RUN, t_s + E1_T_RUN_PAD) / dt - 1e-9))
+    for row in model["rows"]:
+        g = e1_gates(st, e1_band_expected(st, row["n_b"]), "band", row["n_b"], dt, n_steps)
+        row["gates_ns"], row["gate_margins_ns"], row["gates_hold"] = (
+            g["gates_ns"], g["gate_margins_ns"], g["gates_hold"])
+    g = e1_gates(st, e1_single_expected(st), "single", 0, dt, n_steps)
+    model["single_gates_ns"], model["single_gate_margins_ns"], model["single_gates_hold"] = (
+        g["gates_ns"], g["gate_margins_ns"], g["gates_hold"])
+    cell = {"setting": st, "n_steps": n_steps, "run_ns": n_steps * dt * 1e9,
+            "model": model}
+    print(f"E1 {e1_cell_key(st['n_lambda'], st['ratio'])}: fine={dzf*1e3:.3f}mm coarse={dc*1e3:.3f}mm "
+          f"K={st['k_src']}/{st['k_prb']} lead/tail/B={st['n_lead']}/{st['n_tail']}/{st['n_b_coarse']} "
+          f"dt={dt:.4e} n_steps={n_steps} R1_model={model['R_single_model']:.4e} "
+          f"({model['R_single_model_db']:.1f} dB) k_g={model['k_g_fine_per_m']/1e3:.5f}/mm "
+          f"c_model={model['c_model_m']*1e3:.3f}mm (c/DR={model['c_model_over_ramp_cell']:.3f}) "
+          f"vg_c/c={model['vg_coarse_over_c']:.3f} stopband={model['stopband_edge_ghz']} GHz "
+          f"single_exact={model['single_builder_matches_declared_vector']}", flush=True)
+    for row in model["rows"]:
+        print(f"   model n_b={row['n_b']}: exact={row['builder_matches_declared_vector']} "
+              f"R_model={row['R_model']:.4e} ({row['R_model_db']:.1f} dB) "
+              f"window=[{row['window'][0]:.4e}, {row['window'][1]:.4e}] "
+              f"fp_form={row['fp_form_model']:.4e} gates_hold={row['gates_hold']}", flush=True)
+    if model_only:
+        return cell
+    t0 = time.time()
+    grid_b, trace_b = _run_probe(e1_b_profile(st), n_steps)
+    assert abs(float(grid_b.dt) - dt) < 1e-20
+    single = e1_arm(st, e1_single_profile(st), "single", 0, trace_b, grid_b,
+                    model["R_single_model"], model["R_single_model"])
+    print(f"   FDTD single ramp: R_meas={single['R_meas']:.4e} ({single['R_meas_db']:.1f} dB) "
+          f"model={single['R_model']:.4e} dev={single['deviation_rel']*100:.2f}% "
+          f"fired={single['fired']} gates_hold={single['gates_hold']}", flush=True)
+    arms = []
+    for row in model["rows"]:
+        arm = e1_arm(st, e1_band_profile(st, row["n_b"]), "band", row["n_b"], trace_b,
+                     grid_b, row["R_model"], model["R_single_model"])
+        arm["builder_matches_declared_vector"] = row["builder_matches_declared_vector"]
+        arms.append(arm)
+        print(f"   FDTD n_b={row['n_b']}: R_meas={arm['R_meas']:.4e} ({arm['R_meas_db']:.1f} dB) "
+              f"model={arm['R_model']:.4e} dev={arm['deviation_rel']*100:.2f}% "
+              f"fired={arm['fired']} bound_fired={arm['bound_fired']} "
+              f"gates_hold={arm['gates_hold']} margins(ns)="
+              + ", ".join(f"{k}={v:.3f}" for k, v in arm["gate_margins_ns"].items()), flush=True)
+    c_meas = e1_fit_c([a["n_b"] for a in arms], [a["R_meas"] for a in arms], dzf,
+                      model["R_single_model"], model["k_g_fine_per_m"],
+                      E1_C_FIT_MAX_DR * st["ramp_cell_m"])
+    c_dev = abs(c_meas - model["c_model_m"])
+    cell.update({
+        "single": single, "arms": arms, "wallclock_s": time.time() - t0,
+        "c_meas_m": c_meas, "c_model_m": model["c_model_m"],
+        "c_dev_m": c_dev, "c_dev_over_ramp_cell": c_dev / st["ramp_cell_m"],
+        "c_window_m": E1_C_TOL_DR * st["ramp_cell_m"],
+        "law_iii_fired": bool(c_dev > E1_C_TOL_DR * st["ramp_cell_m"]),
+        "any_width_fired": any(a["fired"] for a in arms),
+        "any_bound_fired": any(a["bound_fired"] for a in arms),
+        "all_gates_hold": bool(single["gates_hold"] and all(a["gates_hold"] for a in arms)),
+    })
+    cell["in_law_domain"] = bool(not cell["any_width_fired"] and not cell["any_bound_fired"]
+                                 and not cell["law_iii_fired"] and not single["fired"])
+    print(f"   c_meas={c_meas*1e3:.3f}mm c_model={model['c_model_m']*1e3:.3f}mm "
+          f"dev={c_dev*1e3:.3f}mm window={E1_C_TOL_DR*st['ramp_cell_m']*1e3:.3f}mm "
+          f"law_iii_fired={cell['law_iii_fired']} in_law_domain={cell['in_law_domain']} "
+          f"in_accuracy_class={st['in_accuracy_class']} wallclock={cell['wallclock_s']:.1f}s", flush=True)
+    return cell
+
+
+def e1_scaling_checks(cells: dict, ratios: list[float], n_lambdas: list[int]) -> list[dict]:
+    """Law check (i): single-ramp reflection ratio N / 30, measured vs
+    model, within E1_SCALING_TOL; the model's own exponent vs 2 reported."""
+    out = []
+    for ratio in ratios:
+        ref = cells.get(e1_cell_key(E1_N_LAMBDA_REF, ratio))
+        if ref is None:
+            continue
+        for n_lambda in n_lambdas:
+            if n_lambda == E1_N_LAMBDA_REF:
+                continue
+            c = cells.get(e1_cell_key(n_lambda, ratio))
+            if c is None:
+                continue
+            m_ratio = c["model"]["R_single_model"] / ref["model"]["R_single_model"]
+            rec = {"ratio": ratio, "n_lambda": n_lambda, "ref_n_lambda": E1_N_LAMBDA_REF,
+                   "model_ratio": m_ratio,
+                   "model_exponent": float(np.log(m_ratio) / np.log(E1_N_LAMBDA_REF / n_lambda)),
+                   "dz_over_lambda_sq_ratio": (E1_N_LAMBDA_REF / n_lambda) ** 2}
+            if "single" in c and "single" in ref:
+                meas = c["single"]["R_meas"] / ref["single"]["R_meas"]
+                rec.update({"meas_ratio": meas, "meas_over_model": meas / m_ratio,
+                            "fired": bool(abs(meas / m_ratio - 1) > E1_SCALING_TOL)})
+            out.append(rec)
+    return out
+
+
+def run_e1(n_lambdas: list[int], ratios: list[float], widths: list[int],
+           out_path: str, model_only: bool, resume: bool) -> dict:
+    results = {"rfx_file": rfx.__file__, "argv": sys.argv[1:], "git_sha": _git_sha(),
+               "git_dirty": _git_dirty(),
+               "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "model_only": model_only, "widths": widths, "n_lambdas": n_lambdas,
+               "ratios": ratios, "F0_Hz": F0, "sigma_t_s": SIGMA_T, "dxy_m": fx.DXY,
+               "b_m": fx.B_Y, "a_m": fx.A_X,
+               "windows": {"per_arm": "|R_meas - R_model| <= 0.20 R_model + 3e-5",
+                           "law_i_scaling_tol": E1_SCALING_TOL,
+                           "law_ii_bound_slack": E1_BOUND_SLACK,
+                           "law_iii_c_tol_ramp_cells": E1_C_TOL_DR},
+               "cells": {}}
+    if resume:
+        try:
+            with open(out_path) as fh:
+                prev = json.load(fh)
+            if prev.get("model_only") == model_only:
+                results["cells"] = prev.get("cells", {})
+                results["resumed_from"] = {"git_sha": prev.get("git_sha"),
+                                           "started_utc": prev.get("started_utc")}
+        except (OSError, ValueError):
+            pass
+    t0 = time.time()
+    for n_lambda in n_lambdas:
+        for ratio in ratios:
+            key = e1_cell_key(n_lambda, ratio)
+            if key in results["cells"] and (model_only or "arms" in results["cells"][key]):
+                print(f"E1 {key}: already in {out_path}, skipped (resume)", flush=True)
+                continue
+            results["cells"][key] = run_e1_cell(e1_setting(n_lambda, ratio), widths, model_only)
+            results["law_i"] = e1_scaling_checks(results["cells"], ratios, n_lambdas)
+            results["wallclock_s"] = time.time() - t0
+            with open(out_path, "w") as fh:
+                json.dump(results, fh, indent=1)
+    results["law_i"] = e1_scaling_checks(results["cells"], ratios, n_lambdas)
+    for rec in results["law_i"]:
+        print(f"law (i) r={rec['ratio']} N={rec['n_lambda']}/30: model_ratio={rec['model_ratio']:.4f} "
+              f"(exponent {rec['model_exponent']:.3f}) "
+              + (f"meas_ratio={rec['meas_ratio']:.4f} meas/model={rec['meas_over_model']:.4f} "
+                 f"fired={rec['fired']}" if "meas_ratio" in rec else "(model only)"), flush=True)
+    results["wallclock_s"] = time.time() - t0
+    with open(out_path, "w") as fh:
+        json.dump(results, fh, indent=1)
+    print("wrote", out_path)
+    return results
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--widths", default="2,4,8,16")
     ap.add_argument("--out", default="validation/research/multiband_nu/results/w6_band_builder.json")
     ap.add_argument("--f7-only", action="store_true")
+    ap.add_argument("--sweep", action="store_true",
+                    help="E1: resolution x ratio sweep of the F8 witness (no F7)")
+    ap.add_argument("--fine-cells-per-lambda", default="30",
+                    help="E1: fine cells per free-space wavelength, comma list of 15/30/60")
+    ap.add_argument("--ratio", default="1.4", help="E1: band ratio, comma list")
+    ap.add_argument("--model-only", action="store_true", help="E1: chain model only, no FDTD")
+    ap.add_argument("--resume", action="store_true", help="E1: skip cells already in --out")
     args = ap.parse_args(argv)
+    widths = [int(w) for w in args.widths.split(",") if w]
+    if args.sweep:
+        n_lambdas = [int(n) for n in args.fine_cells_per_lambda.split(",") if n]
+        ratios = [float(r) for r in args.ratio.split(",") if r]
+        run_e1(n_lambdas, ratios, widths, args.out, args.model_only, args.resume)
+        return
     t0 = time.time()
     results = {"rfx_file": rfx.__file__, "argv": sys.argv[1:],
                "git_sha": _git_sha(), "git_dirty": _git_dirty(),
                "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0))}
     results["f7"] = run_f7()
     if not args.f7_only:
-        widths = [int(w) for w in args.widths.split(",") if w]
         results["f8"] = run_f8(widths)
     results["wallclock_s"] = time.time() - t0
     with open(args.out, "w") as fh:
