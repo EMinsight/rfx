@@ -26,13 +26,6 @@ from rfx.grid import C0
 from rfx.core.yee import MaterialArrays
 from rfx.core.jax_utils import is_tracer
 from rfx.geometry.csg import Box
-# #931 stage B (import-level only, by the core agent): the #702 resample
-# family was deleted from rfx.geometry.rasterize_grid. The #703 check-2
-# body below still names ``_resample_sheet_node_materials``; the preflight
-# owner rewrites that check against the lattice ownership contract
-# (design note §3: ``sheet_slot_vacuum``). Bound to None so the module
-# imports; the check must be retired/rewritten before it runs.
-_resample_sheet_node_materials = None
 
 
 def _fmt_len(meters: float) -> str:
@@ -248,35 +241,29 @@ def _coord_near_absorber(
 # --------------------------------------------------------------------------
 
 # Check 1 — congruence key quantum (extents equal within 1e-9 m) and the
-# tolerated rasterized-cell-count spread inside one congruence group. The
-# tolerance is one cell: the smallest extent of the incident class (a
-# node-thin sheet) rasterizes to a single cell, so any spread beyond one
-# cell means the lattice sees two different solids where the design has one.
+# tolerated realized-EDGE-count spread inside one congruence group. Under
+# the lattice ownership contract (#931) every conductor is realized as a
+# set of PEC E edges by one function (rfx.boundaries.pec
+# .realized_pec_edge_masks); two congruent members that land at different
+# sub-cell offsets realize different edge sets, and the edge count is the
+# quantity that decides whether the lattice kept the design's symmetry.
+# The tolerance is one edge: a symmetric pair realizes IDENTICAL counts,
+# so any spread at all is an asymmetry, and one edge is the smallest
+# spread a rounding tie on a single face can produce.
 _CONGRUENCE_EXTENT_QUANTUM_M = 1e-9
 _CONGRUENCE_SPREAD_TOL_CELLS = 1
-# Check 2 — relative tolerance for "assigned statics == statics at the live
-# edge" (float32 arrays; 1e-4 is ~1e3 ULP at eps_r ~ 4, far below any real
-# material contrast).
-_LIVE_EDGE_RTOL = 1e-4
-# Check 3 — advisory threshold on either electrical-thickness measure.
+# Check 3 — advisory threshold on either electrical-thickness measure of a
+# cavity between two adjacent realized wall planes (sheet planes and the
+# faces of volumes alike). Mesh sums run over the cells strictly between
+# the two planes; the physical stack runs between the DECLARED faces, so
+# the difference is exactly the plane snap (declared face vs realized
+# node plane) plus any vacuum the declaration left at a sheet plane
+# (``sheet_slot_vacuum`` names that separately).
 _CAVITY_THICKNESS_TOL = 0.01
-# Check 3 — a node-thin sheet "owns" a mesh cell when one cell holds this
-# fraction of the sheet AND is that fraction full of it. A face-registered
-# sheet (both faces on nodes) fills its cell ~1.0 and owns it; a mid-plane
-# registered sheet straddles two cells, filling neither by more than half,
-# and owns none — it is realized as a zero-thickness node. This decides
-# WHICH of the two mechanisms the message attributes a pair's excess to,
-# not how far the cavity is summed: an owned cell is still inside the
-# electrical cavity, because rfx zeroes only tangential E on a one-cell
-# PEC sheet and the cell's normal-E edge stays live.
-_CAVITY_SHEET_CELL_FILL_FRAC = 0.9
 # Check 4 — off-lattice face residual as a fraction of the axis extent.
 _OFF_LATTICE_EDGE_TOL = 5e-3
 # Shared cap on named offenders per aggregated message.
 _CAMPAIGN_MAX_OFFENDERS = 5
-# "Thinner than its local cell" margin — same 1% slack as
-# rfx.geometry.rasterize_grid._subcell_box_axis_window.
-_CAMPAIGN_SUBCELL_FACTOR = 1.01
 
 # ---------------------------------------------------------------------------
 # MSL check 2c (#752 / #766 review B2): how far the REALIZED substrate may
@@ -369,17 +356,214 @@ def _local_cell(profile, lo, hi, fallback):
     return float(d[inside].max())
 
 
+def _shift_back_np(arr, ax: int, periodic: bool):
+    """``arr[i-1]`` along ``ax`` under the #689 convention (numpy twin of
+    ``rfx.boundaries.pec._shift``): wrap on a periodic or length-1 axis,
+    zero pad otherwise."""
+    if arr.shape[ax] == 1 or periodic:
+        return np.roll(arr, 1, axis=ax)
+    out = np.zeros_like(arr)
+    sl_dst = [slice(None)] * arr.ndim
+    sl_src = [slice(None)] * arr.ndim
+    sl_dst[ax] = slice(1, None)
+    sl_src[ax] = slice(None, -1)
+    out[tuple(sl_dst)] = arr[tuple(sl_src)]
+    return out
+
+
+def _wall_nodes_on_plane(edges, axis: int, k: int, periodic) -> np.ndarray:
+    """In-plane boolean node map of plane ``k`` along ``axis``: True where
+    the node carries a tangential PEC wall.
+
+    A node carries a wall when any E edge tangential to ``axis`` and
+    INCIDENT to the node is PEC — the edge stored at the node's own index
+    or at the backward index along that edge's own axis (the same rule
+    :func:`rfx.boundaries.pec.realized_wall_planes` applies to one column,
+    evaluated for the whole plane). The result's two axes are the in-plane
+    axes in xyz order.
+    """
+    tangential = [c for c in range(3) if c != axis]
+    out = None
+    for pos, t in enumerate(tangential):
+        m = np.asarray(np.take(edges[t], k, axis=axis), dtype=bool)
+        hit = m | _shift_back_np(m, pos, bool(periodic[t]))
+        out = hit if out is None else (out | hit)
+    return out
+
+
+def _realized_edges_np(pec_mask, sheets, wires, periodic, shape):
+    """``(Mx, My, Mz)`` as host numpy from the ONE realization function."""
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    if pec_mask is None and not sheets and not wires:
+        return tuple(np.zeros(tuple(shape), dtype=bool) for _ in range(3))
+    cells = None if pec_mask is None else jnp.asarray(pec_mask)
+    edges = realized_pec_edge_masks(cells, sheets, wires, periodic)
+    return tuple(np.asarray(m, dtype=bool) for m in edges)
+
+
+_H_LOOP = {
+    # H component -> the four E edges of its curl loop, as (component,
+    # di, dj, dk) offsets from the H index. Hx[i,j,k] sits at
+    # (x_i, y_{j+1/2}, z_{k+1/2}); its loop is Ey[i,j,k], Ey[i,j,k+1],
+    # Ez[i,j,k], Ez[i,j+1,k]; cyclically for Hy, Hz.
+    "hx": ((1, 0, 0, 0), (1, 0, 0, 1), (2, 0, 0, 0), (2, 0, 1, 0)),
+    "hy": ((2, 0, 0, 0), (2, 1, 0, 0), (0, 0, 0, 0), (0, 0, 0, 1)),
+    "hz": ((0, 0, 0, 0), (0, 0, 1, 0), (1, 0, 0, 0), (1, 1, 0, 0)),
+}
+
+
+def _component_is_dead(edges, component: str, idx) -> bool:
+    """Whether a field component at grid index ``idx`` is frozen by the
+    realized PEC edges — the one rule for ``port_in_pec`` (#929).
+
+    An E component is dead iff its OWN edge is PEC (the contract's one
+    sentence). An H component is dead iff ALL FOUR E edges of its curl
+    loop are PEC: then ``curl E = 0`` around it every step and it never
+    moves. Half a cell above a sheet only one loop edge is PEC, so H there
+    is live — the sheet exemption falls out of the rule instead of a
+    thickness heuristic; inside a one-cell volume all four are PEC and H
+    is frozen, which is what a volume declaration means.
+    """
+    comp = component.lower()
+    i, j, k = (int(v) for v in idx)
+    shape = edges[0].shape
+    if comp in ("ex", "ey", "ez"):
+        c = "xyz".index(comp[1])
+        if not (0 <= i < shape[0] and 0 <= j < shape[1] and 0 <= k < shape[2]):
+            return False
+        return bool(edges[c][i, j, k])
+    loop = _H_LOOP.get(comp)
+    if loop is None:
+        return False
+    for c, di, dj, dk in loop:
+        ii, jj, kk = i + di, j + dj, k + dk
+        if not (0 <= ii < shape[0] and 0 <= jj < shape[1]
+                and 0 <= kk < shape[2]):
+            return False
+        if not edges[c][ii, jj, kk]:
+            return False
+    return True
+
+
+class _RealizedPEC:
+    """The run's realized conductor set, read once from the production
+    assembly with the #931 collectors: volume cells (``pec_mask``),
+    :class:`~rfx.boundaries.pec.SheetSpec` sheets, wires, and the
+    ``(Mx, My, Mz)`` edge masks the solver zeroes — host numpy.
+    """
+
+    def __init__(self, *, lane, grid, materials, pec_mask, sheets, wires,
+                 periodic):
+        self.lane = lane
+        self.grid = grid
+        self.materials = materials
+        self.pec_mask = (None if pec_mask is None
+                         else np.asarray(pec_mask, dtype=bool))
+        self.sheets = list(sheets)
+        self.wires = list(wires)
+        self.periodic = tuple(bool(p) for p in periodic)
+        self.edges = _realized_edges_np(
+            pec_mask, self.sheets, self.wires, self.periodic, grid.shape)
+
+    @property
+    def empty(self) -> bool:
+        return self.pec_mask is None and not self.sheets and not self.wires
+
+    def wall_planes(self, axis: int, *, ij=None, region=None) -> list:
+        from rfx.boundaries.pec import realized_wall_planes
+        return realized_wall_planes(self.edges, axis, ij=ij, region=region,
+                                    periodic=self.periodic)
+
+    def edge_is_pec(self, component, i, j, k) -> bool:
+        from rfx.boundaries.pec import edge_is_pec
+        return edge_is_pec(self.edges, component, i, j, k)
+
+    def wall_nodes_on_plane(self, axis: int, k: int) -> np.ndarray:
+        return _wall_nodes_on_plane(self.edges, axis, k, self.periodic)
+
+    def component_is_dead(self, component: str, idx) -> bool:
+        return _component_is_dead(self.edges, component, idx)
+
+
+class _EntryRealization:
+    """What ONE conductor declaration realizes as under #931.
+
+    ``kind`` is ``"volume"`` (centre-sampled cells), ``"sheet"`` (a
+    :class:`SheetSpec`: one plane, closed footprint, no cell), ``"wire"``
+    (a filament), ``"lossy"`` (a sigma-fold thin conductor — fenced, not
+    PEC realization) or ``"refused"`` (the classifier raised; ``error``
+    carries its message). Nothing here is inferred from an extent: the
+    kind is what the shared classifier says.
+    """
+
+    def __init__(self, *, label, name, shape, kind, cells=None, sheet=None,
+                 wire=None, error=None, lo=None, hi=None, declared_mid=None,
+                 tie_planes=None):
+        self.label = label
+        self.name = name
+        self.shape = shape
+        self.kind = kind
+        self.cells = None if cells is None else np.asarray(cells, dtype=bool)
+        self.sheet = sheet
+        self.wire = wire
+        self.error = error
+        self.lo = lo
+        self.hi = hi
+        self.declared_mid = declared_mid   # sheet: declared mid-plane coord
+        self.tie_planes = tie_planes       # sheet: (k_lo, k_hi) on an exact tie
+        self._edges = None
+
+    @property
+    def is_pec(self) -> bool:
+        return self.kind in ("volume", "sheet", "wire")
+
+    def edges(self, periodic, shape):
+        """This entry's OWN realized ``(Mx, My, Mz)`` (numpy), cached."""
+        if self._edges is None:
+            if self.kind == "volume":
+                self._edges = _realized_edges_np(
+                    self.cells, (), (), periodic, shape)
+            elif self.kind == "sheet":
+                self._edges = _realized_edges_np(
+                    None, [self.sheet], (), periodic, shape)
+            elif self.kind == "wire":
+                self._edges = _realized_edges_np(
+                    None, (), [self.wire], periodic, shape)
+            else:
+                self._edges = tuple(np.zeros(tuple(shape), dtype=bool)
+                                    for _ in range(3))
+        return self._edges
+
+    def wall_planes(self, axis: int, periodic, shape) -> list:
+        from rfx.boundaries.pec import realized_wall_planes
+        return realized_wall_planes(self.edges(periodic, shape), axis,
+                                    periodic=periodic)
+
+    def edge_count(self, periodic, shape) -> int:
+        return int(sum(int(m.sum()) for m in self.edges(periodic, shape)))
+
+    def footprint_on_plane(self, axis: int, k: int, periodic, shape):
+        """In-plane node map of this entry's wall on plane ``k``."""
+        return _wall_nodes_on_plane(self.edges(periodic, shape), axis, k,
+                                    periodic)
+
+
 class _CampaignStaticsContext:
-    """Shared lazily-built state for the four issue-#703 campaign checks.
+    """Shared lazily-built state for the issue-#703 campaign checks and
+    every other preflight check that reads conductor geometry.
 
     Built fresh per ``_validate_simulation_config`` call and deliberately
     NOT cached on the ``Simulation`` (an ``add_box`` after a preflight
-    would leave a cached grid/mask stale). The grid, sample coordinates
-    and per-entry masks come from the PRODUCTION builders — the check must
-    see the run's rasterization, not a hand model of it (the
-    ``_validate_cfg_graded_box_rasterization`` lesson: a hand model of the
-    sampling diverged from the rasterizer on exactly the cases it existed
-    to catch).
+    would leave a cached grid/mask stale). The grid, sample coordinates,
+    cell centres and the realized conductor set come from the PRODUCTION
+    builders — the check must see the run's realization, not a hand model
+    of it (the ``_validate_cfg_graded_box_rasterization`` lesson: a hand
+    model of the sampling diverged from the rasterizer on exactly the
+    cases it existed to catch). Under #931 that means one thing: every
+    conductor number a check prints is read from
+    ``rfx.boundaries.pec.realized_pec_edge_masks`` (through
+    :meth:`realized` for the whole model and :meth:`entry_realizations`
+    per declaration), never from a cell mask or a bounding box.
     """
 
     _NARROW_EXCS = (ValueError, TypeError, NotImplementedError, KeyError,
@@ -391,10 +575,13 @@ class _CampaignStaticsContext:
         self.lane: str | None = None
         self.grid = None
         self.coords = None       # production GridCoords (E-node samples)
+        self.centres = None      # production primal-cell centres (§1.1)
+        self.cell_sizes = None   # per-axis per-cell size arrays
         self.nodes = None        # 3x float64 node-position arrays
         self.spacings = None     # 3x float64 per-cell spacing arrays
-        self._entry_masks: dict[int, np.ndarray] = {}
-        self._assembled = None
+        self.periodic = (False, False, False)
+        self._realized = None
+        self._entries = None
         self.assembly_error: str | None = None
         self._build()
 
@@ -409,12 +596,17 @@ class _CampaignStaticsContext:
             return
         from rfx.geometry.rasterize_grid import (
             GridCoords, _axis_node_positions, coords_from_nonuniform_grid,
+            centres_from_nonuniform_grid, cell_sizes_from_nonuniform_grid,
+            centres_from_uniform_grid, cell_sizes_from_uniform_grid,
+            periodic_flags_from_axes,
         )
         try:
             if any(p is not None for p in profiles):
                 self.lane = "nonuniform"
                 grid = sim._build_nonuniform_grid()
                 self.coords = coords_from_nonuniform_grid(grid)
+                self.centres = centres_from_nonuniform_grid(grid, self.coords)
+                self.cell_sizes = cell_sizes_from_nonuniform_grid(grid)
                 nodes, spacings = [], []
                 for d_arr, pad in (
                     (grid.dx_arr, getattr(grid, "pad_x_lo", grid.cpml_layers)),
@@ -430,6 +622,8 @@ class _CampaignStaticsContext:
                 from rfx.geometry.csg import _grid_coords
                 cx, cy, cz = _grid_coords(grid)
                 self.coords = GridCoords(x=cx, y=cy, z=cz, shape=grid.shape)
+                self.centres = centres_from_uniform_grid(grid)
+                self.cell_sizes = cell_sizes_from_uniform_grid(grid)
                 d = float(grid.dx)
                 nodes, spacings = [], []
                 for n, pad in zip(grid.shape, grid.axis_pads):
@@ -438,138 +632,177 @@ class _CampaignStaticsContext:
             self.grid = grid
             self.nodes = nodes
             self.spacings = spacings
+            pf = getattr(sim, "_periodic_flags", None)
+            self.periodic = (tuple(bool(p) for p in pf()) if callable(pf)
+                             else periodic_flags_from_axes(
+                                 getattr(sim, "_periodic_axes", "")))
         except self._NARROW_EXCS as exc:  # malformed config; preflight
             self.error = f"{type(exc).__name__}: {exc}"  # must not crash
 
-    def rasterize(self, shape) -> np.ndarray:
-        """This shape's PRODUCTION mask on this lane's grid, cached."""
-        m = self._entry_masks.get(id(shape))
-        if m is None:
-            if self.lane == "uniform":
-                m = np.asarray(shape.mask(self.grid))
-            else:
-                m = np.asarray(shape.mask_on_coords(
-                    self.coords.x, self.coords.y, self.coords.z))
-            self._entry_masks[id(shape)] = m
-        return m
+    # ------------------------------------------------------------------
+    # The realized conductor set (whole model) and per-entry realization
+    # ------------------------------------------------------------------
 
-    def conductor_entries(self):
-        """``(box_entries, other_entries)`` of PEC-class geometry entries."""
+    def realized(self):
+        """:class:`_RealizedPEC` from the PRODUCTION assembly (with the
+        #931 sheet/wire collectors), once; ``None`` when the assembly
+        raised (``assembly_error`` says why)."""
+        if self._realized is None and self.assembly_error is None:
+            try:
+                self._realized = self.sim._assemble_realized(
+                    self.grid, nonuniform=(self.lane == "nonuniform"))
+            except self._NARROW_EXCS as exc:
+                self.assembly_error = f"{type(exc).__name__}: {exc}"
+        return self._realized
+
+    def assembled(self):
+        """``(materials, pec_mask)`` — kept for callers that only read
+        cells; ``pec_mask`` holds VOLUME cells only (a sheet owns none)."""
+        r = self.realized()
+        if r is None:
+            return None
+        return r.materials, r.pec_mask
+
+    def entry_realizations(self) -> list:
+        """One :class:`_EntryRealization` per conductor declaration —
+        PEC geometry entries (``geometry[i]``) and thin conductors
+        (``thin_conductor[i]``) — through the shared classifier."""
+        if self._entries is not None:
+            return self._entries
+        from rfx.geometry.rasterize_grid import (
+            classify_pec_entry, sheet_spec_from_shape, _local_cell,
+        )
+        from rfx.materials.thin_conductor import sheet_bounds
         sim = self.sim
-        boxes, others = [], []
+        out = []
+
+        def _bounds(shape):
+            lo, hi = _sorted_box_corners(shape)
+            if lo is not None:
+                return lo, hi
+            try:
+                blo, bhi = sheet_bounds(shape)
+            except self._NARROW_EXCS:
+                return None, None
+            if blo is None or bhi is None:
+                return None, None
+            blo = np.asarray(blo, dtype=np.float64)
+            bhi = np.asarray(bhi, dtype=np.float64)
+            return np.minimum(blo, bhi), np.maximum(blo, bhi)
+
+        def _tie(sheet, lo, hi):
+            """(k_lo, k_hi) when the declared mid-plane is an exact
+            half-cell tie between two node planes, else None — the same
+            comparison ``_nearest_plane`` resolves LOWER."""
+            if lo is None or hi is None:
+                return None, None
+            a = int(sheet.normal_axis)
+            mid = 0.5 * (float(lo[a]) + float(hi[a]))
+            nodes = self.nodes[a]
+            d_local = _local_cell(nodes, self.cell_sizes[a], mid)
+            k = int(sheet.plane)
+            if k + 1 < len(nodes):
+                d_lo = abs(mid - float(nodes[k]))
+                d_hi = abs(float(nodes[k + 1]) - mid)
+                if abs(d_lo - d_hi) <= 1e-9 * d_local and d_lo > 0.0:
+                    return mid, (k, k + 1)
+            return mid, None
+
         for i, entry in enumerate(sim._geometry):
-            mat = sim._resolve_material(entry.material_name)
+            try:
+                mat = sim._resolve_material(entry.material_name)
+            except KeyError:
+                continue
             if mat.sigma < sim._PEC_SIGMA_THRESHOLD:
                 continue
-            lo, _hi = _sorted_box_corners(entry.shape)
-            if isinstance(entry.shape, Box) and lo is not None:
-                boxes.append((i, entry))
+            label = f"geometry[{i}]"
+            lo, hi = _bounds(entry.shape)
+            try:
+                cells, sheet, wire = classify_pec_entry(
+                    entry.shape, self.coords, self.centres, self.cell_sizes,
+                    name=entry.material_name)
+            except ValueError as exc:
+                out.append(_EntryRealization(
+                    label=label, name=entry.material_name, shape=entry.shape,
+                    kind="refused", error=str(exc), lo=lo, hi=hi))
+                continue
+            if cells is not None:
+                out.append(_EntryRealization(
+                    label=label, name=entry.material_name, shape=entry.shape,
+                    kind="volume", cells=cells, lo=lo, hi=hi))
+            elif sheet is not None:
+                mid, tie = _tie(sheet, lo, hi)
+                out.append(_EntryRealization(
+                    label=label, name=entry.material_name, shape=entry.shape,
+                    kind="sheet", sheet=sheet, lo=lo, hi=hi,
+                    declared_mid=mid, tie_planes=tie))
             else:
-                others.append((i, entry))
-        return boxes, others
+                out.append(_EntryRealization(
+                    label=label, name=entry.material_name, shape=entry.shape,
+                    kind="wire", wire=wire, lo=lo, hi=hi))
+        for i, tc in enumerate(getattr(sim, "_thin_conductors", ())):
+            label = f"thin_conductor[{i}]"
+            lo, hi = _bounds(tc.shape)
+            if not getattr(tc, "is_pec", False):
+                out.append(_EntryRealization(
+                    label=label, name=label, shape=tc.shape, kind="lossy",
+                    lo=lo, hi=hi))
+                continue
+            try:
+                sheet = sheet_spec_from_shape(
+                    tc.shape, self.coords, self.cell_sizes, name=label,
+                    lane=self.lane or "", refuse_thick=True)
+            except ValueError as exc:
+                out.append(_EntryRealization(
+                    label=label, name=label, shape=tc.shape, kind="refused",
+                    error=str(exc), lo=lo, hi=hi))
+                continue
+            mid, tie = _tie(sheet, lo, hi)
+            out.append(_EntryRealization(
+                label=label, name=label, shape=tc.shape, kind="sheet",
+                sheet=sheet, lo=lo, hi=hi, declared_mid=mid, tie_planes=tie))
+        self._entries = out
+        return out
+
+    def pec_entries(self) -> list:
+        """Realized (not refused, not lossy) conductor entries."""
+        return [e for e in self.entry_realizations() if e.is_pec]
+
+    def rasterize(self, shape) -> np.ndarray:
+        """This shape's PRODUCTION node mask on this lane's grid (dielectric
+        sampling — node, half-open). Conductors do NOT go through here;
+        their realization is :meth:`entry_realizations`."""
+        if self.lane == "uniform":
+            return np.asarray(shape.mask(self.grid))
+        return np.asarray(shape.mask_on_coords(
+            self.coords.x, self.coords.y, self.coords.z))
 
     def congruence_entries(self):
         """``(keyed, unkeyed)`` conductor entries for the congruence check.
 
-        ``keyed`` is ``(index, entry, lo, hi, exact)`` for every conductor
-        entry that reports a bounding box through the public ``Shape``
-        protocol; ``unkeyed`` is the rest, which the message must name as
-        skipped.
-
-        Deliberately NOT :meth:`conductor_entries`'s Box/non-Box split. A
-        patterned metal LAYER is the incident class, and a ``Box`` cannot
-        represent one — a Box fills the layer's clearance holes with metal
-        — so such a layer arrives as a user-defined ``Shape`` (CAD sheet
-        collapsed to one cell). An ``isinstance(shape, Box)`` census put
-        every one of those into "skipped", which is how the check stayed
-        silent on the very mirror pairs it was written for. Congruence
-        needs an extent, not a Box: any shape that reports its bounds can
-        be grouped, and whether the bounds ARE the shape is carried along
-        (``exact``) so the message can say what it inferred.
+        ``keyed`` is ``(realization, lo, hi, exact)`` for every realized
+        conductor (geometry PEC entries AND PEC thin conductors — a sheet
+        is a conductor with an extent) whose shape reports a bounding box
+        through the public ``Shape`` protocol; ``unkeyed`` is the rest,
+        which the message must name as skipped. A patterned metal LAYER
+        cannot be a ``Box`` (a Box fills its clearance holes), so the
+        census keys on bounds, not on ``isinstance(shape, Box)``, and
+        carries whether the bounds ARE the shape (``exact``).
         """
-        sim = self.sim
         keyed, unkeyed = [], []
-        for i, entry in enumerate(sim._geometry):
-            mat = sim._resolve_material(entry.material_name)
-            if mat.sigma < sim._PEC_SIGMA_THRESHOLD:
-                continue
-            bounds = _shape_bounds(entry.shape)
+        for e in self.pec_entries():
+            bounds = _shape_bounds(e.shape)
             if bounds is None:
-                unkeyed.append((i, entry))
+                unkeyed.append(e)
             else:
-                keyed.append((i, entry, bounds[0], bounds[1], bounds[2]))
+                keyed.append((e, bounds[0], bounds[1], bounds[2]))
         return keyed, unkeyed
-
-    def sheet_own_cell(self, axis: int, lo_a: float, hi_a: float,
-                       node_idx: int):
-        """The mesh cell this node-thin sheet FILLS along ``axis``, or None.
-
-        A sheet whose two faces are registered as nodes occupies exactly
-        one cell; a sheet registered at its mid-plane straddles two and
-        fills neither, so it owns none and is realized as a
-        zero-thickness node. Only the two cells touching the sheet's own
-        node are candidates.
-
-        Owning a cell does NOT take that cell out of the cavity — the
-        cell's normal-E edge is live (``apply_pec_mask`` zeroes only
-        tangential E on a one-cell PEC sheet), so its permittivity is in
-        series with the gap. The caller uses this to say WHICH mechanism
-        a cavity's excess came from.
-        """
-        thick = float(hi_a) - float(lo_a)
-        if thick <= 0.0:
-            return None
-        nodes = self.nodes[axis]
-        best = None
-        for j in (node_idx - 1, node_idx):
-            if j < 0 or j + 1 >= len(nodes):
-                continue
-            c_lo, c_hi = float(nodes[j]), float(nodes[j + 1])
-            width = c_hi - c_lo
-            if width <= 0.0:
-                continue
-            overlap = min(float(hi_a), c_hi) - max(float(lo_a), c_lo)
-            if overlap <= 0.0:
-                continue
-            score = min(overlap / thick, overlap / width)
-            if score < _CAVITY_SHEET_CELL_FILL_FRAC:
-                continue
-            if best is None or score > best[1]:
-                best = (j, score)
-        return None if best is None else best[0]
 
     def local_spacing(self, axis: int, coord: float) -> float:
         nodes = self.nodes[axis]
         j = int(np.searchsorted(nodes, coord)) - 1
         j = min(max(j, 0), len(self.spacings[axis]) - 1)
         return float(self.spacings[axis][j])
-
-    def node_thin_axes(self, shape) -> list[int]:
-        """Axes along which this Box is thinner than its local cell."""
-        lo, hi = _sorted_box_corners(shape)
-        if lo is None:
-            return []
-        mid = 0.5 * (lo + hi)
-        return [
-            a for a in range(3)
-            if float(hi[a] - lo[a])
-            <= self.local_spacing(a, float(mid[a])) * _CAMPAIGN_SUBCELL_FACTOR
-        ]
-
-    def assembled(self):
-        """``(materials, pec_mask)`` from the PRODUCTION assembly, once."""
-        if self._assembled is None and self.assembly_error is None:
-            sim = self.sim
-            try:
-                if self.lane == "uniform":
-                    mats, _, _, pec_mask, _, _, _ = (
-                        sim._assemble_materials(self.grid))
-                else:
-                    mats, _, _, pec_mask = sim._assemble_materials_nu(self.grid)
-                self._assembled = (mats, pec_mask)
-            except self._NARROW_EXCS as exc:
-                self.assembly_error = f"{type(exc).__name__}: {exc}"
-        return self._assembled
 
     def sub_lattice_offsets(self, lo_corner) -> list[float]:
         """Per-axis fractional offset (in cells) of a corner from the node below."""
@@ -1554,46 +1787,52 @@ class _PreflightMixin:
             is_thin_along_some_axis = min(cells_per_axis) < 3.0
 
             for axis, (dim, cell) in enumerate(zip(dims, cell_sizes)):
+                mat = self._resolve_material(mat_name)
+                is_pec = mat.sigma >= self._PEC_SIGMA_THRESHOLD
+                axis_name = "xyz"[axis]
                 if dim <= 0:
-                    # Zero-thickness geometry
-                    axis_name = "xyz"[axis]
+                    # Zero-thickness geometry. For a PEC Box that IS the
+                    # sheet declaration (lattice ownership contract #931
+                    # §1.5: "zero thickness is a statement of intent") —
+                    # it is realized on one node plane and reported by
+                    # ``sheet_plane_realized``, so nothing to say here.
+                    # For a dielectric a zero-extent Box samples no node
+                    # and rasterizes to nothing.
+                    if is_pec:
+                        continue
                     _w.warn(
                         PreflightWarning(
-                            f"Zero-thickness geometry '{mat_name}' along "
-                            f"{axis_name}-axis. On non-uniform mesh this may "
-                            f"produce empty rasterization. Consider giving it "
-                            f"at least one cell of thickness ({_fmt_len(cell)}).",
+                            f"Zero-thickness dielectric '{mat_name}' along "
+                            f"{axis_name}-axis rasterizes to nothing (the "
+                            f"node sampler is half-open [lo, hi), so a "
+                            f"zero-extent span contains no node). Give it "
+                            f"at least one cell of thickness "
+                            f"({_fmt_len(cell)}). (A zero-thickness PEC Box "
+                            f"is the sheet declaration and is fine.)",
                             code="mesh_resolution",
                             source="_validate_mesh_quality",
                         ),
                         stacklevel=3,
                     )
                 elif dim < cell:
-                    axis_name = "xyz"[axis]
                     cells_count = dim / cell
-                    # Check if this is a PEC material that could use thin sheet
-                    mat = self._resolve_material(mat_name)
-                    is_pec = mat.sigma >= self._PEC_SIGMA_THRESHOLD
-                    # This used to advise add_thin_conductor() here. Measured:
-                    # for a PEC material that advice is a NO-OP — a sub-cell PEC
-                    # Box and add_thin_conductor() on the same footprint produce
-                    # a BIT-IDENTICAL pec_mask (verified in
-                    # tests/unit/materials/test_thin_conductor_honesty.py). Neither models a
-                    # sub-cell thickness; both give one cell of mask, which
-                    # rfx/boundaries/pec.py treats as a surface. Say what is
-                    # actually true instead of offering a change that changes
-                    # nothing (issue #504).
+                    # #931 §1.5: a PEC Box (or any PEC shape with a
+                    # bounding box) thinner than one local cell is REFUSED
+                    # at assembly — nothing is inferred from raster
+                    # thickness. This advisory only documents the rule;
+                    # the ``pec_box_subcell`` ERROR carries the refusal.
                     hint = (
-                        " A conductor thinner than a cell is modelled as a "
-                        "one-cell PEC surface — tangential E is zeroed on it "
-                        "and the normal component survives as surface charge. "
-                        "That is usually what you want for metal many skin "
-                        "depths thick, and switching to add_thin_conductor() "
-                        "would not change it; but it means the sheet carries "
-                        "no conductor loss and its thickness is not modelled. "
-                        "For band-centre conductor loss use "
-                        "add_thin_conductor(..., surface_impedance_f0=...) "
-                        "(Leontovich surface resistance, issue #669)."
+                        " A PEC shape passed to sim.add() is a VOLUME "
+                        "(realized with both faces and a shorted interior, "
+                        "lattice ownership contract #931 §1.2), and a "
+                        "volume thinner than one local cell is refused at "
+                        "assembly (§1.5) rather than snapped to a plane. "
+                        "If this is foil (a ground plane, patch, trace), "
+                        "declare a SHEET: a zero-thickness Box via add(), "
+                        "or add_thin_conductor(shape) — realized on the "
+                        "node plane nearest its mid-plane, with the normal "
+                        "E edge through it live. Otherwise resolve the "
+                        "thickness with a finer local cell."
                         if is_pec else
                         " Use non-uniform mesh or reduce dx."
                     )
@@ -1609,14 +1848,14 @@ class _PreflightMixin:
                     )
                 else:
                     # Physics-based resolution thresholds (issue #37).
-                    # PEC with extent <3 cells is a thin sheet — 1-cell
-                    # rasterization is canonical. Only warn on partial
-                    # volume: 3-5 cells thick PEC slabs.
+                    # A PEC volume 1-2 cells thick is a FILLED SLAB with
+                    # walls on both faces (#931 §1.2 — ``pec_box_one_cell``
+                    # says so for the 1-cell case); its thickness is
+                    # realized as drawn, so there is no partial-volume
+                    # question. Only warn on partial volume: 3-5 cells
+                    # thick PEC bodies that are volumes on every axis.
                     # Dielectric: cells per local λ_eff, not cells per
                     # geometry extent.
-                    mat = self._resolve_material(mat_name)
-                    is_pec = mat.sigma >= self._PEC_SIGMA_THRESHOLD
-                    axis_name = "xyz"[axis]
                     cells = dim / cell
                     if is_pec:
                         if (3.0 <= cells < 5.0
@@ -1625,8 +1864,10 @@ class _PreflightMixin:
                                 PreflightWarning(
                                     f"PEC '{mat_name}' {axis_name}-extent "
                                     f"{_fmt_len(dim)} = {cells:.1f} cells — "
-                                    "volume under-resolved (PEC volume needs "
-                                    "≥5 cells; thin sheets <3 cells are fine).",
+                                    "volume under-resolved (a PEC volume's "
+                                    "curved/edge features need ≥5 cells; a "
+                                    "1-2 cell slab is realized as drawn, "
+                                    "with walls on both faces).",
                                     code="mesh_resolution",
                                     source="_validate_mesh_quality",
                                 ),
@@ -1789,95 +2030,120 @@ class _PreflightMixin:
             )
 
     def _validate_thin_metal_on_nu_mesh(self) -> None:
-        """Warn when a thin PEC sheet sits on a NU axis without symmetric
-        neighbouring cells (Meep/OpenEMS require equal dz on both sides of
-        a metal plane, else surface currents pick up O(1) error and the
-        far-field pattern is corrupted — issue #48).
+        """Warn when a realized metal PLANE sits on a NU axis without
+        symmetric neighbouring cells (Meep/OpenEMS require equal dz on
+        both sides of a metal plane, else surface currents pick up O(1)
+        error and the far-field pattern is corrupted — issue #48).
+
+        Lattice ownership contract (#931): the plane examined is the one
+        the run REALIZES — a sheet's node plane, or each wall plane of a
+        thin volume (a slab at most two cells thick along the NU axis,
+        whose two faces are both surface-current planes) — read from the
+        shared realization, never from a bounding-box midpoint (which
+        could name the wrong cell). Thick volumes are not "thin metal"
+        and are skipped.
         """
         import warnings as _w
-        profiles = (
-            ("x", self._dx_profile),
-            ("y", self._dy_profile),
-            ("z", self._dz_profile),
-        )
-        for axis_name, prof in profiles:
+        profiles = (self._dx_profile, self._dy_profile, self._dz_profile)
+        if all(p is None for p in profiles):
+            return
+        if any(p is not None and is_tracer(p) for p in profiles):
+            # Tracer profiles can't be host-scanned for edge / ratio
+            # checks. The warning is advisory only; correctness is
+            # preserved downstream.
+            return
+        ctx = _CampaignStaticsContext(self)
+        if ctx.error is not None:
+            return
+        shape = tuple(ctx.grid.shape)
+        for axis_idx, prof in enumerate(profiles):
             if prof is None:
                 continue
-            if is_tracer(prof):
-                # Tracer profiles can't be host-scanned for edge / ratio
-                # checks. The warning is advisory only; correctness is
-                # preserved downstream.
+            axis_name = "xyz"[axis_idx]
+            d = ctx.spacings[axis_idx]
+            if d.size < 3:
                 continue
-            prof_arr = np.asarray(prof, dtype=np.float64)
-            if len(prof_arr) < 3:
-                continue
-            axis_idx = "xyz".index(axis_name)
-            for entry in self._geometry:
-                mat = self._resolve_material(entry.material_name)
-                if mat.sigma < self._PEC_SIGMA_THRESHOLD:
+            for e in ctx.pec_entries():
+                if e.kind == "wire":
                     continue
-                try:
-                    c1, c2 = entry.shape.bounding_box()
-                except Exception:
+                planes = e.wall_planes(axis_idx, ctx.periodic, shape)
+                if not planes:
                     continue
-                lo, hi = float(c1[axis_idx]), float(c2[axis_idx])
-                extent = hi - lo
-                min_d = float(prof_arr.min())
-                if extent > min_d * 1.5:
-                    continue
-                # _dz_profile is the user's interior profile (no CPML
-                # padding). Geometry coordinates are in interior space
-                # starting at 0, so cumsum gives the cell edges directly.
-                edges = np.concatenate([[0.0], np.cumsum(prof_arr)])
-                mid = 0.5 * (lo + hi)
-                k = int(np.searchsorted(edges, mid) - 1)
-                if k < 0 or k + 1 >= len(prof_arr) or k - 1 < 0:
-                    continue
-                dz_here = prof_arr[k]
-                dz_above = prof_arr[k + 1]
-                dz_below = prof_arr[k - 1]
-                # Check ratio both directions — metal-in-coarse-cell
-                # next to a fine region is just as bad as the reverse.
-                def _ratio(a, b):
-                    return max(a, b) / min(a, b)
-                ratio_above = _ratio(dz_above, dz_here)
-                ratio_below = _ratio(dz_below, dz_here)
-                if max(ratio_above, ratio_below) > 1.5:
+                if e.kind == "volume":
+                    # thin slab: at most two cell layers between its faces
+                    if max(planes) - min(planes) > 2:
+                        continue
+                for k in planes:
+                    if k - 1 < 0 or k >= d.size:
+                        continue
+                    d_below = float(d[k - 1])
+                    d_above = float(d[k])
+                    ratio = max(d_below, d_above) / min(d_below, d_above)
+                    if ratio <= 1.5:
+                        continue
                     _w.warn(
                         PreflightWarning(
-                            f"Thin PEC '{entry.material_name}' on axis "
-                            f"{axis_name} sits in a cell of dz={dz_here*1e3:.3f}"
-                            f"mm with asymmetric neighbours "
-                            f"(below {dz_below*1e3:.3f}, above "
-                            f"{dz_above*1e3:.3f} mm). Meep/OpenEMS require "
+                            f"Thin PEC {e.label} ('{e.name}', realized as a "
+                            f"{e.kind}) has a metal plane at {axis_name} = "
+                            f"{_fmt_len(float(ctx.nodes[axis_idx][k]))} "
+                            f"(node {k}) with asymmetric neighbouring cells "
+                            f"({_fmt_len(d_below)} below, {_fmt_len(d_above)} "
+                            f"above, ratio {ratio:.2f}). Meep/OpenEMS require "
                             f"equal cell sizes across a metal plane; "
                             f"radiation pattern may be corrupted (issue #48). "
-                            f"Put the metal on a preserved-region boundary "
-                            f"or refine the neighbouring cell.",
+                            f"Put the metal plane on a preserved-region "
+                            f"boundary or refine the neighbouring cell.",
                             code="thin_metal_nu_mesh",
                             source="_validate_thin_metal_on_nu_mesh",
                         ),
                         stacklevel=4,
                     )
 
-    def _port_pec_mask(self, grid):
-        """Assembled ``pec_mask`` for the uniform lane, or ``None``.
+    def _assemble_realized(self, grid, *, nonuniform: bool):
+        """The run's realized conductor set on ``grid`` (#931 §1.7).
+
+        Runs the PRODUCTION assembly with the sheet / wire collectors and
+        realizes the ``(Mx, My, Mz)`` edge masks through
+        ``rfx.boundaries.pec.realized_pec_edge_masks`` under the run's own
+        periodic flags — the same call the solver lanes make. Every
+        preflight consumer that needs "where is metal" reads the returned
+        :class:`_RealizedPEC` (wall planes, ``edge_is_pec``), never the
+        cell mask: a sheet owns no cell, and a volume's far face is a
+        wall the cell mask does not mark (the #868 class).
+        """
+        sheets: list = []
+        wires: list = []
+        sheet_specs: list = []
+        if nonuniform:
+            mats, _, _, pec_mask = self._assemble_materials_nu(
+                grid, sheet_specs=sheet_specs, pec_sheets=sheets,
+                pec_wires=wires)
+        else:
+            mats, _, _, pec_mask, _, _, _ = self._assemble_materials(
+                grid, sheet_specs=sheet_specs, pec_sheets=sheets,
+                pec_wires=wires)
+        return _RealizedPEC(
+            lane="nonuniform" if nonuniform else "uniform", grid=grid,
+            materials=mats, pec_mask=pec_mask, sheets=sheets, wires=wires,
+            periodic=self._periodic_flags())
+
+    def _port_realized_edges(self, grid):
+        """:class:`_RealizedPEC` for the uniform lane, or ``None``.
 
         Issue #738 review: the guide a waveguide port sits in is defined
         by its WALLS, and on the committed sub-aperture fixtures those
         walls are interior PEC shapes, not the domain faces. Read from
-        the PRODUCTION assembly (``_assemble_materials``) so preflight
-        sees the same rasterized conductors the solve does — no
-        geometric re-derivation from the shape list. Called once per
-        preflight and threaded through, so the assembly runs once. A
-        simulation with no geometry entries at all has no interior walls
-        by construction, so the assembly is skipped there rather than
-        run to produce an all-False mask.
+        the PRODUCTION assembly so preflight sees the same realized
+        conductors the solve does — no geometric re-derivation from the
+        shape list. Called once per preflight and threaded through, so
+        the assembly runs once. A simulation with no geometry entries at
+        all has no interior walls by construction, so the assembly is
+        skipped there rather than run to produce an all-False set.
         """
         if not self._geometry and not getattr(self, "_thin_conductors", None):
             return None
         try:
-            _, _, _, pec_mask, _, _, _ = self._assemble_materials(grid)
+            realized = self._assemble_realized(grid, nonuniform=False)
         except (ValueError, TypeError, NotImplementedError, KeyError,
                 AttributeError, IndexError):
             # Deliberately NOT ``except Exception`` (PR #555): an async
@@ -1889,11 +2155,11 @@ class _PreflightMixin:
             # see the longer comment at the other ``_assemble_materials``
             # call site in this file.
             return None
-        if pec_mask is None:
+        if realized.empty:
             return None
-        return np.asarray(pec_mask).astype(bool)
+        return realized
 
-    def _port_transverse_spans(self, entry, grid, pec_np=None):
+    def _port_transverse_spans(self, entry, grid, realized=None):
         """Per transverse axis, the widths one waveguide port has on THIS grid.
 
         Returns ``{axis_name: dict}`` with keys:
@@ -1914,15 +2180,16 @@ class _PreflightMixin:
           ``domain_max`` instead (issue #729 site 2), so the two differ
           whenever ``dx`` does not divide the domain.
         - ``guide``: the wall-to-wall transverse extent of the guide the
-          port sits in, measured on the assembled ``pec_mask`` along the
-          port's own transverse line. ``guide_source`` says where it
-          came from: ``"pec_walls"`` (an interior PEC wall was found on
-          both sides), ``"domain_faces"`` (no interior wall, and the
-          axis' two domain faces are both PEC/PMC, so the closed domain
-          IS the guide), or ``"aperture"`` (neither — the transverse
-          axis is not closed, so no guide wider than the port's own
-          aperture can be asserted and ``guide`` falls back to
-          ``rasterized``).
+          port sits in, measured as the distance between the REALIZED
+          wall planes (``rfx.boundaries.pec.realized_wall_planes`` on
+          the port's own transverse line, #931 §1.9) that bracket the
+          aperture. ``guide_source`` says where it came from:
+          ``"pec_walls"`` (an interior realized wall was found on both
+          sides), ``"domain_faces"`` (no interior wall, and the axis' two
+          domain faces are both PEC/PMC, so the closed domain IS the
+          guide), or ``"aperture"`` (neither — the transverse axis is not
+          closed, so no guide wider than the port's own aperture can be
+          asserted and ``guide`` falls back to ``rasterized``).
 
         Issue #738 (family #737) lead measurement,
         ``examples/inverse_design/differentiable_s11_design.py`` at its
@@ -1938,12 +2205,21 @@ class _PreflightMixin:
         Boxes fill y in [0, 0.04] and [0.08, 0.12], ports
         ``y_range=(0.04, 0.08)``) showed that is wrong wherever the walls
         are interior PEC: it reported fc_TE10 = 1.249 GHz / fc_TE20 =
-        2.498 GHz, the cutoffs of the 120 mm DOMAIN. Measured on the
-        mask instead, that fixture's walls are 42.0000 mm apart (the
-        Boxes rasterize half-open to y-nodes 10..29 and 50..69 at
-        dx = 2 mm, so the outermost PEC nodes are 29 and 50) and the
-        cutoffs are 3.569 / 7.138 GHz; the DECLARED 40 mm guide would
-        give 3.747 / 7.495 GHz. Hence the mask read below.
+        2.498 GHz, the cutoffs of the 120 mm DOMAIN. The second version
+        scanned the primal CELL mask for the first masked node on each
+        side and read 42.0000 mm (nodes 29 and 50 at dx = 2 mm, cutoffs
+        3.569 / 7.138 GHz) on a fixture whose walls are DRAWN 40 mm
+        apart — the #868 class: the cell mask never contains a volume's
+        far face. Under the lattice ownership contract (#931 §1.2) the
+        lower Box ``[0, 0.04]`` realizes its far-face wall AT y = 40 mm
+        (node 20) and the upper Box its near face at y = 80 mm (node
+        40), so the realized guide is 40.0000 mm = declared and the
+        cutoffs are 3.747 / 7.495 GHz. Hence the wall-plane read below:
+        the guide is the distance between the two realized wall planes
+        that bracket the aperture on the port's own transverse line,
+        read from ``realized_wall_planes`` — the same function the
+        solver's edge masks come from, so this number cannot disagree
+        with the solve.
 
         ``aperture`` can land on either side of ``declared``:
         :meth:`_range_to_slice`'s explicit branch rounds range endpoints
@@ -2033,38 +2309,35 @@ class _PreflightMixin:
                               and f"{axis_name}_hi" in conformal)
 
             wall_lo = wall_hi = None
-            if pec_np is not None and plane_idx is not None:
+            if realized is not None and plane_idx is not None:
                 other_idx = "xyz".index(other)
                 o_lo, o_hi = slices[other]
                 mid_other = (o_lo + o_hi - 1) // 2
                 idx = [0, 0, 0]
                 idx[normal_idx] = plane_idx
                 idx[other_idx] = mid_other
-                if all(0 <= idx[k] < pec_np.shape[k]
+                shape = realized.edges[0].shape
+                if all(0 <= idx[k] < shape[k]
                        for k in (normal_idx, other_idx)):
-                    line = pec_np[
-                        idx[0] if 0 != axis_idx else slice(None),
-                        idx[1] if 1 != axis_idx else slice(None),
-                        idx[2] if 2 != axis_idx else slice(None),
-                    ]
-                    line = np.asarray(line).reshape(-1)
-                    # Scan OUTWARD from the aperture's own edge nodes,
-                    # INCLUSIVE: on a sub-aperture port a wall can sit on
-                    # the aperture's own edge node (measured on
-                    # _tj_device: the upper Box's first PEC node IS the
-                    # aperture's last node, index 50), so an exclusive
-                    # scan would step straight past it.
-                    for i in range(min(lo_idx, len(line) - 1),
-                                   interior_lo - 1, -1):
-                        if line[i]:
-                            wall_lo = i
-                            break
-                    for i in range(max(hi_idx - 1, 0), interior_hi + 1):
-                        if i >= len(line):
-                            break
-                        if line[i]:
-                            wall_hi = i
-                            break
+                    # Realized wall planes on the port's own transverse
+                    # line (#931 §1.9): the node-plane indices along this
+                    # axis where a tangential wall exists at column
+                    # ``ij`` = the two other indices in axis order.
+                    ij = tuple(idx[k] for k in range(3) if k != axis_idx)
+                    planes = realized.wall_planes(axis_idx, ij=ij)
+                    # Bracket the aperture INCLUSIVELY: on a sub-aperture
+                    # port a wall can sit on the aperture's own edge node
+                    # (on _tj_device the upper Box's near face IS the
+                    # aperture's last node), so an exclusive bracket
+                    # would step straight past it.
+                    below = [k for k in planes
+                             if interior_lo <= k <= min(lo_idx, shape[axis_idx] - 1)]
+                    above = [k for k in planes
+                             if max(hi_idx - 1, 0) <= k <= interior_hi]
+                    if below:
+                        wall_lo = max(below)
+                    if above:
+                        wall_hi = min(above)
 
             if wall_lo is not None and wall_hi is not None and wall_hi > wall_lo:
                 rec["guide"] = float((wall_hi - wall_lo) * grid.dx)
@@ -2078,7 +2351,7 @@ class _PreflightMixin:
             # else: guide stays == rasterized aperture, source "aperture".
         return out
 
-    def _check_waveguide_port_aperture_snap(self, grid, pec_np) -> None:
+    def _check_waveguide_port_aperture_snap(self, grid, realized) -> None:
         """Warn when the DECLARED port width is not what the grid rasterizes.
 
         Issue #738 (family #737). Fires on exactly one condition — the
@@ -2104,7 +2377,7 @@ class _PreflightMixin:
         import warnings as _w
 
         for entry in self._waveguide_ports:
-            spans = self._port_transverse_spans(entry, grid, pec_np)
+            spans = self._port_transverse_spans(entry, grid, realized)
             for axis_name in sorted(spans):
                 rec = spans[axis_name]
                 declared = rec["declared"]
@@ -2170,23 +2443,31 @@ class _PreflightMixin:
         no check said so (the fixture's only structural test asserted
         pin-column PEC continuity, trivially true through a solid sheet).
 
-        What is measured: on the PRODUCTION assembly's ``pec_mask``
-        (:meth:`_port_pec_mask`, sim.add geometry only — the coax stub the
-        compute_coaxial_* / compute_coax_msl_transition methods stamp
-        into eps/sigma is not registered geometry and is not read here),
-        at the port's junction plane ``k = position_to_index(position)
-        [axis]``, the count of PEC cells in the FIRST dielectric ring
-        outside the pin. The ring is defined ON THE LATTICE:
-        ``a + dx/2 < r <= min(a + 3dx/2, shell_inner)`` with ``r`` the
-        node distance from the port centre and ``shell_inner = b -
-        min(dx, (b - a)/2)`` the radius ``stamp_coaxial_line`` realizes
-        for the shell. Half-cell bounds are deliberate (design review of
-        #589, blocker 2): a bare ``r > a`` counted the pin's OWN
-        knife-edge footprint cells at r == a exactly (the registered pin
-        Cylinder realizes an asymmetric 11-of-13-cell disk at a = 2dx)
-        and fired 2/16 on the CORRECTLY built hole; with half-cell bounds
-        a lattice radius can never sit on the boundary and the fixed
-        geometry reads 0/16 while the shorted one reads 16/16.
+        What is measured: on the PRODUCTION assembly's REALIZED conductor
+        set (:meth:`_port_realized_edges`, sim.add geometry and thin
+        conductors only — the coax stub the compute_coaxial_* /
+        compute_coax_msl_transition methods stamp into eps/sigma is not
+        registered geometry and is not read here), at the port's
+        junction plane ``k = position_to_index(position)[axis]``, the
+        count of NODES CARRYING A TANGENTIAL WALL in the FIRST dielectric
+        ring outside the pin. "Carries a wall" is the lattice ownership
+        contract's own test (#931 §1.9): some E edge tangential to the
+        port axis and incident to the node is PEC — which is what a sheet
+        ground at plane ``k`` and a volume ground whose face lies on
+        plane ``k`` both put there, and what a primal CELL mask never
+        marked for a volume's far face (the #868 class). The ring is
+        defined ON THE LATTICE: ``a + dx/sqrt(2) < r <= min(a +
+        dx/sqrt(2) + dx, shell_inner)`` with ``r`` the node distance from
+        the port centre and ``shell_inner = b - min(dx, (b - a)/2)`` the
+        radius ``stamp_coaxial_line`` realizes for the shell. The inner
+        bound is the pin's own reach: a PEC volume is centre-sampled
+        (§1.1) and every node of an occupied cell carries its wall, so
+        the pin's OWN nodes extend to at most ``a + dx/sqrt(2)`` (half
+        the cell diagonal past its radius); a node beyond that cannot be
+        a corner of a pin cell, so anything there is OTHER registered
+        conductor. The earlier ``a + dx/2`` bound was calibrated to the
+        pre-#931 node-sampled knife-edge footprint and would count the
+        pin's own realized rim.
 
         Deliberately NOT the full ``a < r < shell_inner`` annulus: a
         clearance hole narrower than the shell (the fixture's predeclared
@@ -2217,8 +2498,8 @@ class _PreflightMixin:
         grid = self._build_grid()
         if getattr(grid, "is_2d", False):
             return
-        pec_np = self._port_pec_mask(grid)
-        if pec_np is None:
+        realized = self._port_realized_edges(grid)
+        if realized is None:
             return
         dx = float(grid.dx)
         pads = (int(grid.pad_x_lo), int(grid.pad_y_lo), int(grid.pad_z_lo))
@@ -2241,9 +2522,11 @@ class _PreflightMixin:
             c1 = (np.arange(grid.shape[t1]) - pads[t1]) * dx - pos[t1]
             c2 = (np.arange(grid.shape[t2]) - pads[t2]) * dx - pos[t2]
             r = np.hypot(c1[:, None], c2[None, :])
-            plane = np.take(pec_np, k, axis=axis)
-            r_lo = a + 0.5 * dx
-            r_hi = min(a + 1.5 * dx, shell_inner)
+            if not (0 <= k < grid.shape[axis]):
+                continue
+            plane = realized.wall_nodes_on_plane(axis, k)
+            r_lo = a + dx / math.sqrt(2.0)
+            r_hi = min(r_lo + dx, shell_inner)
             ring = (r > r_lo) & (r <= r_hi)
             n_ring = int(np.count_nonzero(ring))
             if n_ring == 0:
@@ -2259,19 +2542,21 @@ class _PreflightMixin:
                     f"{a * 1e6:.0f} um, outer r={b * 1e6:.0f} um): at its "
                     f"junction plane ({axis_names[axis]}="
                     f"{pos[axis] * 1e3:.3f} mm, node {k - pads[axis]}) "
-                    f"{n_pec}/{n_ring} cells of the FIRST dielectric ring "
+                    f"{n_pec}/{n_ring} nodes of the FIRST dielectric ring "
                     f"outside the pin ({r_lo * 1e6:.0f} < r <= "
                     f"{r_hi * 1e6:.0f} um; lattice-based bounds, so the "
-                    f"pin's own footprint at r = {a * 1e6:.0f} um is "
-                    f"excluded) are REGISTERED PEC — the first registered "
-                    f"PEC outside the pin sits at r = {r_first * 1e6:.1f} "
-                    f"um. The pin is terminated in a short by registered "
-                    f"geometry at this plane. _assemble_materials is "
-                    f"PEC-OR-only: a ground sheet declared as a full plane "
-                    f"with a dielectric 'hole' declared AFTER it stays "
-                    f"solid (issue #589: S00 = -0.9928 at 6 GHz measured on "
-                    f"exactly that fixture). If a clearance aperture was "
-                    f"intended, build the conductor WITH the hole; if this "
+                    f"pin's own realized rim, at most r = {a * 1e6:.0f} um "
+                    f"+ dx/sqrt(2), is excluded) carry a REALIZED PEC wall "
+                    f"— the first registered conductor outside the pin "
+                    f"sits at r = {r_first * 1e6:.1f} um. The pin is "
+                    f"terminated in a short by registered geometry at this "
+                    f"plane. The assembly is PEC-OR-only: a ground sheet "
+                    f"declared as a full plane with a dielectric 'hole' "
+                    f"declared AFTER it stays solid (issue #589: S00 = "
+                    f"-0.9928 at 6 GHz measured on exactly that fixture). "
+                    f"If a clearance aperture was intended, build the "
+                    f"conductor WITH the hole (a patterned sheet shape via "
+                    f"add_thin_conductor, or an annular volume); if this "
                     f"short is the intended calibration standard, no "
                     f"action is needed (report-only).",
                     code="coaxial_port_junction_short",
@@ -2466,8 +2751,8 @@ class _PreflightMixin:
           ``tests/unit/ports/test_port_aperture_rasterization.py``), so this is not
           a one-directional relaxation.
         - the 0.90 x fc_next margin heuristic is evaluated on the GUIDE,
-          i.e. the wall-to-wall extent measured on the assembled
-          ``pec_mask`` along the port's own transverse line, because
+          i.e. the distance between the realized wall planes that
+          bracket the aperture on the port's own transverse line, because
           higher-order modes are supported by the walled guide rather
           than by the port's aperture alone. When no walls can be
           established (the transverse axis is open, or the mask is
@@ -2500,11 +2785,11 @@ class _PreflightMixin:
             return
 
         grid = self._build_grid()
-        pec_np = self._port_pec_mask(grid)
-        self._check_waveguide_port_aperture_snap(grid, pec_np)
+        realized = self._port_realized_edges(grid)
+        self._check_waveguide_port_aperture_snap(grid, realized)
 
         for entry in self._waveguide_ports:
-            spans = self._port_transverse_spans(entry, grid, pec_np)
+            spans = self._port_transverse_spans(entry, grid, realized)
             axes = sorted(spans)
             # UNRASTERIZABLE (aperture=None) must not silence the cutoff
             # checks below: fall back to the DECLARED width, which is the
@@ -3044,33 +3329,73 @@ class _PreflightMixin:
             faces.append(("lo", axis, corner_lo[axis], tang))
             faces.append(("hi", axis, corner_hi[axis], tang))
 
-        # CHECK 2: strict PEC intersection
-        pec_entries = (
-            [e for e in self._geometry if e.material_name == "pec"]
-            if include_pec_overlap_error else []
-        )
+        # CHECK 2: PEC intersection, CLOSED on the REALIZED wall planes
+        # (#931 §1.7). A PEC volume drawn z_a -> z_b realizes walls at
+        # BOTH planes, so an NTFF face lying exactly ON a wall plane sits
+        # on a conductor surface (tangential E zeroed there) and is an
+        # overlap; a sheet (thin conductor or zero-thickness Box) is one
+        # plane and is in the census too. Bounds along the normal axis are
+        # the entry's own realized wall planes in physical units, read
+        # through the shared context; the tangential overlap uses the
+        # declared bounds. A traced mesh has no concrete planes, so that
+        # lane keeps the declared-bounds test (closed).
+        has_pec_geom = any(
+            self._resolve_material(e.material_name).sigma
+            >= self._PEC_SIGMA_THRESHOLD
+            for e in self._geometry
+            if e.material_name in self._materials or True
+        ) if self._geometry else False
+        realized_entries = []
+        if include_pec_overlap_error and (
+                has_pec_geom or getattr(self, "_thin_conductors", None)):
+            ctx = _CampaignStaticsContext(self)
+            if ctx.error is None:
+                shape = tuple(ctx.grid.shape)
+                for e in ctx.pec_entries():
+                    if e.kind == "wire" or e.lo is None:
+                        continue
+                    walls = []
+                    for a in range(3):
+                        planes = e.wall_planes(a, ctx.periodic, shape)
+                        if not planes:
+                            walls = None
+                            break
+                        nodes = ctx.nodes[a]
+                        walls.append((float(nodes[min(planes)]),
+                                      float(nodes[max(planes)]),
+                                      ctx.local_spacing(a, float(nodes[min(planes)]))))
+                    if walls is not None:
+                        realized_entries.append((e, walls))
+            else:
+                for e in ctx.entry_realizations():
+                    if e.kind in ("wire", "lossy") or e.lo is None:
+                        continue
+                    realized_entries.append((e, [
+                        (float(e.lo[a]), float(e.hi[a]), 0.0)
+                        for a in range(3)]))
         for side, axis, coord, tang in faces:
-            for entry in pec_entries:
-                try:
-                    c1, c2 = entry.shape.bounding_box()
-                except (NotImplementedError, TypeError, AttributeError):
+            for e, walls in realized_entries:
+                w_lo, w_hi, d_loc = walls[axis]
+                tol = 1e-9 * d_loc
+                if not (w_lo - tol <= coord <= w_hi + tol):
                     continue
-                # Strict interior along normal axis
-                if not (c1[axis] < coord < c2[axis]):
-                    continue
-                # Tangential overlap along the other two axes
+                # Tangential overlap along the other two axes (declared)
                 other = [a for a in range(3) if a != axis]
                 overlap = True
                 for idx, (tlo, thi) in zip(other, tang):
-                    if c2[idx] <= tlo or c1[idx] >= thi:
+                    if e.hi[idx] <= tlo or e.lo[idx] >= thi:
                         overlap = False
                         break
                 if overlap:
                     raise PreflightConfigError(
                         f"NTFF face {'xyz'[axis]}_{side} at {coord*1e3:.2f}mm "
-                        f"intersects PEC geometry '{entry.material_name}' "
-                        f"(bbox {c1}–{c2}). NTFF box must enclose all radiators "
-                        f"with no PEC crossing any face. Shrink or move the NTFF box.",
+                        f"lies on or inside PEC {e.label} '{e.name}' "
+                        f"(realized as a {e.kind}: {'xyz'[axis]} walls at "
+                        f"[{w_lo*1e3:.3f}, {w_hi*1e3:.3f}] mm; declared "
+                        f"bbox {tuple(e.lo)}–{tuple(e.hi)}). NTFF box must "
+                        f"enclose all radiators with no conductor surface "
+                        f"on or crossing any face. Shrink or move the NTFF "
+                        f"box.",
                         code="ntff_pec_overlap",
                         source="_validate_ntff_inverse_design",
                     )
@@ -3100,6 +3425,18 @@ class _PreflightMixin:
                 bboxes.append((entry.material_name, c1, c2))
             except (NotImplementedError, TypeError, AttributeError):
                 continue
+        # #931: PEC thin conductors are sheets — conductors in the census.
+        from rfx.materials.thin_conductor import sheet_bounds as _sheet_bounds
+        for _ti, tc in enumerate(getattr(self, "_thin_conductors", ())):
+            if not getattr(tc, "is_pec", False):
+                continue
+            try:
+                c1, c2 = _sheet_bounds(tc.shape)
+            except (NotImplementedError, TypeError, AttributeError):
+                continue
+            if c1 is None or c2 is None:
+                continue
+            bboxes.append((f"thin_conductor[{_ti}]", tuple(c1), tuple(c2)))
         points: list[tuple[str, tuple]] = []
         for pe in self._ports:
             points.append(("port/source", tuple(pe.position)))
@@ -3217,6 +3554,11 @@ class _PreflightMixin:
             return
 
         best = None  # (lateral_area, L_small, L_big, c1, c2)
+        # #931: a ground plane is canonically a SHEET declaration
+        # (add_thin_conductor / zero-thickness Box), so PEC thin
+        # conductors are in the census beside PEC geometry entries.
+        from rfx.materials.thin_conductor import sheet_bounds as _sheet_bounds
+        candidates = []
         for entry in self._geometry:
             if entry.material_name != "pec":
                 continue
@@ -3224,6 +3566,18 @@ class _PreflightMixin:
                 c1, c2 = entry.shape.bounding_box()
             except (NotImplementedError, TypeError, AttributeError):
                 continue
+            candidates.append((c1, c2))
+        for tc in getattr(self, "_thin_conductors", ()):
+            if not getattr(tc, "is_pec", False):
+                continue
+            try:
+                c1, c2 = _sheet_bounds(tc.shape)
+            except (NotImplementedError, TypeError, AttributeError):
+                continue
+            if c1 is None or c2 is None:
+                continue
+            candidates.append((tuple(c1), tuple(c2)))
+        for c1, c2 in candidates:
             ext = [c2[a] - c1[a] for a in range(3)]
             thin = min(range(3), key=lambda a: ext[a])
             lat = [a for a in range(3) if a != thin]
@@ -3470,20 +3824,24 @@ class _PreflightMixin:
         # Sample positions must be the ones the RUN uses, and the occupancy
         # rule must be the run's rule. This validator previously modelled both
         # by hand — cell centres plus a bare half-open span — and was wrong on
-        # each count: coordinates are E-NODES (cell edges) since #562, and
-        # ``Box.mask_on_coords`` has a THIN-SHEET branch that snaps a box no
-        # thicker than its local cell onto a single nearest node (#48/#75/#371).
-        # With the hand model this check diverged from the rasterizer on boxes
-        # straddling a grading transition — the #325 signature it exists to
-        # catch — and went SILENT on one of them (#562 review, F2). So call the
-        # production path instead of imitating it: node positions through the
-        # same two steps the grid builder composes, and the shape's own mask.
-        # x/y are passed as single-sample arrays because only the z profile is
-        # needed here; either mask branch admits the box's own midpoint, so the
-        # combined mask's z profile is the z-axis mask.
+        # each count: dielectric coordinates are E-NODES (cell edges) since
+        # #562 (the node sampler's thin-sheet branch snaps a sub-cell
+        # dielectric Box onto its nearest node, #48/#75/#371). With the hand
+        # model this check diverged from the rasterizer on boxes straddling a
+        # grading transition — the #325 signature it exists to catch — and
+        # went SILENT on one of them (#562 review, F2). So call the production
+        # path instead of imitating it: node positions through the same two
+        # steps the grid builder composes, and the shape's own mask for a
+        # dielectric; for a PEC Box the production rule is the #931 §1.1
+        # CENTRE-sampled volume rule (half-open on cell centres), spelled by
+        # ``rasterize_grid._box_axis_volume`` and called here. x/y are passed
+        # as single-sample arrays because only the z profile is needed here;
+        # the mask admits the box's own midpoint, so the combined mask's z
+        # profile is the z-axis mask.
         from rfx.nonuniform import node_positions_from_profile
         z_nodes = np.asarray(node_positions_from_profile(dz), dtype=np.float64)
 
+        z_centres = z_nodes[:-1] + 0.5 * np.diff(z_nodes)
         for entry in self._geometry:
             if not isinstance(entry.shape, Box):
                 continue
@@ -3495,8 +3853,21 @@ class _PreflightMixin:
 
             x_mid = np.array([0.5 * (float(c1[0]) + float(c2[0]))])
             y_mid = np.array([0.5 * (float(c1[1]) + float(c2[1]))])
-            mask = np.asarray(entry.shape.mask_on_coords(x_mid, y_mid, z_nodes))
-            actual = int(np.count_nonzero(mask))
+            try:
+                is_pec = (self._resolve_material(entry.material_name).sigma
+                          >= self._PEC_SIGMA_THRESHOLD)
+            except KeyError:
+                is_pec = False
+            if is_pec:
+                # #931 §1.1: a PEC VOLUME is centre-sampled, half-open on
+                # the cell centres — the production rule
+                # (rasterize_grid._box_axis_volume), not the node sampler.
+                from rfx.geometry.rasterize_grid import _box_axis_volume
+                actual = int(np.count_nonzero(
+                    np.asarray(_box_axis_volume(z_centres, z_lo, z_hi))))
+            else:
+                mask = np.asarray(entry.shape.mask_on_coords(x_mid, y_mid, z_nodes))
+                actual = int(np.count_nonzero(mask))
             local = (edges[:-1] < z_hi) & (edges[1:] > z_lo)
             if not np.any(local):
                 continue
@@ -4150,7 +4521,11 @@ class _PreflightMixin:
                         f"boundary makes the ground plane cover the entire domain "
                         f"face, which changes the physics (cavity vs radiating "
                         f"antenna). If you need a finite ground plane, remove "
-                        f"pec_faces and use an explicit PEC Box instead.",
+                        f"pec_faces and declare it: a foil is a SHEET "
+                        f"(add_thin_conductor, or a zero-thickness PEC Box — "
+                        f"one node plane, normal E through it live); a thick "
+                        f"plate is a PEC Box VOLUME (walls on both faces, "
+                        f"lattice ownership contract #931).",
                         code="pec_faces_finite_pec",
                         source="_validate_cfg_pec_faces_with_finite_pec",
                     ),
@@ -4732,131 +5107,75 @@ class _PreflightMixin:
                 )
 
     def _validate_cfg_port_inside_pec(self, _w, dx: float) -> None:
-        """P1.8: Port/source/probe inside PEC geometry.
+        """P1.8: Port/source/probe frozen by realized PEC.
 
-        FP4 refinement (2026-05-06): tangential H is non-zero on a
-        PEC surface and well-defined within a thin (≤ 1.5·dx) PEC
-        sheet — for example, an MSL diagnostic Hy probe placed at
-        z = h_sub + 0.5·dx (the centre of a 1-cell trace) measures
-        the trace surface current and must not warn.  Inside a thick
-        PEC volume H still decays to zero, so the warning still
-        fires there.
+        Lattice ownership contract (#931 §1.7 / #929): every question this
+        check asks is answered by the run's REALIZED edge set, read once
+        from the production assembly with the sheet/wire collectors:
+
+        * a wire-port extent cell is DEAD iff the port component's own E
+          edge at that index is PEC (``_wire_port_live_cells``, the same
+          primitive the assembler uses — issue #544 made the two share
+          it, and #931 made the primitive read edges, so a sheet trace,
+          which owns no cell, is visible here);
+        * a point port / source / probe on an E component is dead iff its
+          own edge is PEC; on an H component iff all four E edges of its
+          curl loop are PEC (``curl E = 0`` freezes it). Half a cell above
+          a SHEET only one loop edge is PEC, so an MSL diagnostic Hy probe
+          at the trace plane stays live; inside a one-cell VOLUME all four
+          are PEC and H is frozen, which is what a volume declaration
+          means. The former ``<= 1.5 dx`` thickness exemption inferred
+          sheet-ness from a bounding box — the #929 class — and is gone;
+        * the #556 end-gap advisory uses ONE definition of galvanic
+          contact: the wire's end node lies on a realized wall plane of
+          its own column (``realized_wall_planes(ij=)``). A port that
+          starts ON a ground (sheet plane, or a volume's face) is in
+          contact by that definition and draws no advisory; the remedy
+          text never tells a user to move a galvanic feed off its ground.
+
+        Non-uniform lane: the wire-port primitive cannot index a
+        ``NonUniformGrid`` (no ``position_to_index``), so the wire-port
+        advisories emit a "classification unavailable" note there rather
+        than guess (issue #544 review item 6; #303 class); the point
+        port/probe rule runs on both lanes through the shared context.
         """
-        # Issue #314: for a WIRE port (extent set) the V/I reference plane
-        # is the MIDPOINT probe cell of the production rasterization, not
-        # the start position — a midpoint landing inside PEC silently
-        # corrupts S-parameters (measured on the 2-port thru fixture:
-        # forward |S21| collapses to ~0.005-0.01 while the reverse channel
-        # reads over-unity ~1.06-1.15, because the voltage probe samples a
-        # PEC-shorted environment and the port column punches a hole in
-        # the trace). Check the exact cell production will use.
-        #
-        # Issue #319 generalization: test EVERY rasterized extent cell, not
-        # just the midpoint. A non-midpoint cell inside PEC is a DEAD cell:
-        # it is shorted by the surrounding conductor, so it carries no port
-        # current. Since the issue-#318 fix, dead cells are EXCLUDED from
-        # the port's sigma distribution, drive injection, and Z0c wave
-        # normalization (the port terminates at Z0 across its live cells;
-        # pre-fix versions counted all n cells and physically terminated at
-        # Z0*(n_live/n) — the issue-#313 33.3-ohm finding). This advisory
-        # remains because a port extent overlapping a conductor is usually
-        # a geometry mistake worth confirming. Behavior when the midpoint
-        # AND another cell are dead: BOTH warnings fire (the midpoint one
-        # for probe-cell corruption, the dead-extent one for the geometry/
-        # normalization consequence), and the dead-extent live-cell count
-        # includes every dead cell — midpoint included — because the live
-        # split does not care which cell holds the probe.
-        #
-        # Issue #544: the dead/live classification below is derived from
-        # the SAME primitive the assembler uses to compute ``n_live_lw``
-        # (``_wire_port_live_cells`` against the actual assembled
-        # ``pec_mask``) — not a standalone bounding-box-vs-cell-center
-        # approximation, which is what this advisory used before and which
-        # had DRIFTED from the assembler. The approximation compared a
-        # CENTER coordinate (node position + 0.5*dx along the component
-        # axis) against a closed-interval ``[lo, hi]`` PEC bounding box;
-        # the real rasterization (``Box.mask``, ``rfx/geometry/csg.py``)
-        # evaluates occupancy at NODE coordinates with a half-open
-        # interval ``[lo, hi)`` (or the thin-sheet nearest-node rule for a
-        # sub-cell-thick box) — a different reference point that can, and
-        # on the #488 mixed lumped/wire<->MSL fixture did, put the "dead"
-        # node one cell away from what the approximation assumed: the
-        # advisory reported n_live/n=3/4 while the assembler's
-        # ground-truth count (and the measured passive-port Z_in = Z0/4 =
-        # 12.5 ohm, PR #543) was 4/4 — every cell live. Sharing the
-        # primitive makes the two paths unable to drift again by
-        # construction ON THE UNIFORM-MESH PATH — see the NU disclosure
-        # immediately below; the shared primitive itself never runs on a
-        # non-uniform mesh, so the invariant does not (and is not claimed
-        # to) extend there.
-        #
-        # Known limitation (issue #544 adversarial review; same
-        # non-regression disclosure pattern as the #510 review nit A —
-        # grep this file for "issue #510 review nit A" to find that
-        # comment; citing it by line number/direction rots as the file
-        # grows, which is exactly what happened to an earlier draft of
-        # this comment): ``self._build_grid()`` /
-        # ``self._assemble_materials(grid)`` are unconditionally UNIFORM.
-        # A ``dz_profile``/``dx_profile``/``dy_profile`` (NU) sim's REAL
-        # run instead uses ``_build_nonuniform_grid()`` +
-        # ``_assemble_materials_nu()`` — a different ``Grid`` class with
-        # different shape/padding (measured: uniform PEC node k=[4] vs NU
-        # PEC node(s) k=[4,5] on the same nominal geometry), and
-        # ``_wire_port_live_cells`` cannot even run against a
-        # ``NonUniformGrid`` (no ``position_to_index``). Building a
-        # uniform substitute for an NU sim would therefore MISCLASSIFY
-        # cells rather than reflect the real run, so this advisory does
-        # NOT attempt that — it emits a "classification unavailable" note
-        # (issue #544 review item 6: a silent skip here is the #303
-        # silently-skipped-check-family class) instead of either guessing
-        # or going fully silent. This is the SAME pre-existing scope limit
-        # the OLD (pre-#544) advisory had (it was equally NU-blind:
-        # ``_wire_port_cell_centers`` also calls ``self._build_grid()``)
-        # — not a new limitation, just now disclosed instead of silent.
-        grid = None
-        pec_mask = None
-        pec_entry_masks: list[tuple[str, np.ndarray]] | None = None
-        materials_attempted = False
+        ctx = _CampaignStaticsContext(self)
+        is_nonuniform = ctx.lane == "nonuniform"
+        realized = None
         classification_unavailable_reason: str | None = None
-        is_nonuniform = (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        )
+        if ctx.error == "traced-mesh":
+            classification_unavailable_reason = (
+                "traced mesh (mesh-as-design-variable) -- no concrete "
+                "node positions")
+        elif ctx.error is not None:
+            classification_unavailable_reason = ctx.error
+        elif is_nonuniform:
+            classification_unavailable_reason = (
+                "non-uniform mesh (dz_profile/dx_profile/"
+                "dy_profile set) -- the shared wire-port primitive "
+                "only covers the uniform-grid path (issue #544)"
+            )
+        if ctx.error is None:
+            realized = ctx.realized()
+            if realized is None:
+                classification_unavailable_reason = ctx.assembly_error
+        grid = ctx.grid
+        entries = ctx.entry_realizations() if ctx.error is None else []
+        shape = tuple(grid.shape) if grid is not None else None
 
-        def _ensure_pec_entry_masks(grid):
-            # Lazy (issue #544 review item 8): only rasterize per-entry
-            # masks the first time any port actually needs a conductor
-            # NAME -- a dead cell to attribute (#319) or an adjacent-
-            # conductor gap to attribute (#556) -- so the common clean
-            # case (no dead cells, no gap anywhere) never pays for it.
-            # Covers BOTH ``self._geometry`` PEC entries AND
-            # ``self._thin_conductors`` PEC sheets (issue #544 review
-            # item 3: thin conductors also feed the assembled
-            # ``pec_mask`` -- ``rfx/api/_compile.py``:232-238 -- and were
-            # missing here, which produced an empty ``dead_names`` and a
-            # false ``'pec'`` fallback label for a thin-conductor-only
-            # dead cell).
-            nonlocal pec_entry_masks
-            if pec_entry_masks is not None:
-                return pec_entry_masks
-            pec_entry_masks = []
-            for entry in self._geometry:
-                mat = self._resolve_material(entry.material_name)
-                if mat.sigma < self._PEC_SIGMA_THRESHOLD:
+        def _owners(component, idx):
+            """Names of the declarations whose OWN realized edges freeze
+            ``component`` at ``idx`` (attribution through the same
+            function, never through a per-entry cell mask)."""
+            names = []
+            for e in entries:
+                if not e.is_pec:
                     continue
-                pec_entry_masks.append(
-                    (entry.material_name,
-                     np.asarray(entry.shape.mask(grid)))
-                )
-            for _tc_i, tc in enumerate(self._thin_conductors):
-                if not tc.is_pec:
-                    continue
-                pec_entry_masks.append(
-                    (f"thin_conductor[{_tc_i}]",
-                     np.asarray(tc.shape.mask(grid)))
-                )
-            return pec_entry_masks
+                if _component_is_dead(e.edges(ctx.periodic, shape),
+                                      component, idx):
+                    if e.name not in names:
+                        names.append(e.name)
+            return names or ["unknown"]
 
         for pe in self._ports:
             if not getattr(pe, "extent", None):
@@ -4867,76 +5186,9 @@ class _PreflightMixin:
             centers, mid_idx = rasterized
             mid_center = centers[mid_idx]
 
-            if not materials_attempted:
-                materials_attempted = True
-                if is_nonuniform:
-                    classification_unavailable_reason = (
-                        "non-uniform mesh (dz_profile/dx_profile/"
-                        "dy_profile set) -- the shared ground-truth "
-                        "primitive only covers the uniform-grid path "
-                        "(issue #544)"
-                    )
-                else:
-                    try:
-                        grid = self._build_grid()
-                        _, _, _, pec_mask, _, _, _ = \
-                            self._assemble_materials(grid)
-                    except (ValueError, TypeError, NotImplementedError,
-                            KeyError, AttributeError, IndexError) as exc:
-                        # Defensive (matches ``_wire_port_cell_centers``):
-                        # preflight must never crash a run over a
-                        # diagnostics helper -- but this tuple is
-                        # DELIBERATELY NOT ``except Exception`` (CI
-                        # incident on PR #555's own head: a broad
-                        # ``except Exception`` here caught
-                        # ``rfx.experiments.worker.RunTimedOut`` (at the
-                        # time, a ``TimeoutError`` subclass) a SIGALRM
-                        # handler raises asynchronously while this exact
-                        # call is in flight -- ``execute_run`` arms the
-                        # alarm BEFORE calling ``compiled.preflight()``,
-                        # so a slow ``_assemble_materials`` here is
-                        # squarely inside the timeout window. Swallowing
-                        # it here meant the worker's top-level
-                        # ``except RunTimedOut`` handler never ran, so a
-                        # 1-second-timeout experiment kept simulating for
-                        # its full 500k-step run instead of exiting —
-                        # the worker process hung rather than dying,
-                        # timing out the parent's ``subprocess.wait``
-                        # (tests/studio/test_durable_worker_lifecycle.py
-                        # ::test_worker_timeout_is_durable_failed_outcome,
-                        # 60s). ``rfx/api`` must not import
-                        # ``rfx.experiments`` to name that exception type
-                        # directly (wrong dependency direction), so the
-                        # first fix here was this narrow, purpose-scoped
-                        # tuple: only the errors ``_build_grid``/
-                        # ``_assemble_materials`` are actually documented
-                        # to raise for a malformed config (bad domain,
-                        # unresolved material -- ``_resolve_material``
-                        # raises ``KeyError`` -- unsupported shape
-                        # method). Any signal-driven exception
-                        # (``TimeoutError``, ``RuntimeError``-based
-                        # cancellation, ``KeyboardInterrupt``,
-                        # ``MemoryError``, ...) propagates through this
-                        # advisory untouched, exactly like it did before
-                        # this advisory existed. Issue #482 added a
-                        # second, general-purpose layer underneath this
-                        # tuple: ``RunTimedOut`` and
-                        # ``RunCancelled`` now derive from
-                        # ``BaseException``, not ``TimeoutError``/
-                        # ``RuntimeError``, so no ``except Exception``
-                        # anywhere in ``rfx/api`` (this narrow tuple
-                        # included) can catch them even if a future edit
-                        # here widens it back to ``Exception`` by
-                        # mistake. Keep this tuple narrow anyway -- it is
-                        # still the only thing distinguishing a genuine
-                        # malformed-config error from everything else.
-                        grid = None
-                        pec_mask = None
-                        classification_unavailable_reason = str(exc)
-
             dead_indices: list[int] = []
             dead_names: list[str] = []
-            if grid is not None and pec_mask is not None:
+            if realized is not None and not is_nonuniform:
                 from rfx.sources.sources import (
                     WirePort, _wire_port_cells, _wire_port_live_cells,
                 )
@@ -4947,21 +5199,9 @@ class _PreflightMixin:
                     start=tuple(pe.position), end=tuple(end),
                     component=pe.component, impedance=pe.impedance,
                 )
-                # NOT THIS AGENT'S FILE (#931 stage C): the smallest
-                # change that keeps this check working. Since #931
-                # ``_wire_port_live_cells`` reads the REALIZED edge masks
-                # (a cell is dead iff the port component's own edge is
-                # PEC), not a primal-cell mask; handing it ``pec_mask``
-                # here would raise IndexError. The preflight owner should
-                # take the sheets/wires collectors too, so a
-                # sheet-declared conductor is visible to this check.
-                from rfx.boundaries.pec import (
-                    realized_pec_edge_masks as _rpem_pf,
-                )
-                _pf_edges = _rpem_pf(pec_mask)
                 try:
                     cells, live_flags, _ = _wire_port_live_cells(
-                        grid, wp, _pf_edges)
+                        grid, wp, realized.edges)
                 except ValueError:
                     # Every extent cell is dead: _wire_port_live_cells
                     # raises there (issue #318 — such a port has no live
@@ -4973,106 +5213,97 @@ class _PreflightMixin:
                     idx for idx, live in enumerate(live_flags) if not live
                 ]
                 if dead_indices:
-                    # Build (or reuse) the per-entry PEC masks -- see
-                    # ``_ensure_pec_entry_masks`` above for the laziness
-                    # and thin-conductor rationale (issue #544).
-                    _ensure_pec_entry_masks(grid)
                     for idx in dead_indices:
-                        ci, cj, ck = cells[idx]
-                        for name, mask_arr in pec_entry_masks:
-                            if (bool(mask_arr[ci, cj, ck])
-                                    and name not in dead_names):
+                        for name in _owners(pe.component, cells[idx]):
+                            if name not in dead_names:
                                 dead_names.append(name)
-                    if not dead_names:
-                        # Defensive net only: pec_mask is exactly the OR
-                        # of the per-entry masks above, so this should be
-                        # unreachable -- kept honest (an explicit
-                        # "unknown" label) rather than silently inventing
-                        # a specific, possibly wrong material name.
-                        dead_names = ["unknown"]
 
                 # Issue #556 (D5 follow-up, #488 arc): the OPPOSITE
                 # failure mode of the #314/#319 advisories above. There,
-                # a port extent cell lands ON PEC (false contact / dead
-                # cell). Here, the port terminates one cell SHORT of a
-                # rasterized conductor: its own end cell is live (not
-                # PEC), but the cell immediately beyond it along the port
-                # axis IS PEC in the assembled ``pec_mask`` -- read via
-                # the SAME ground-truth arrays the #544 fix reads
-                # (``_wire_port_live_cells`` against the assembled mask;
-                # no geometric re-derivation from shapes). On the D5
-                # "end-fed trace" fixture (dx=80um, h_sub=254um,
-                # h_sub/dx=3.175 in the [0.10,0.40] mixed-cell danger
-                # zone) the trace's rasterization snapped to the node one
-                # full cell above the wire's rasterized top, so the feed
-                # never galvanically reached the conductor and coupled
-                # only capacitively (measured: |S21| RISING with
-                # frequency, docs/research_notes/
+                # a port extent cell lands ON PEC (dead cell). Here, the
+                # port terminates one cell SHORT of a conductor. On the
+                # D5 "end-fed trace" fixture (dx=80um, h_sub=254um) the
+                # trace's realization landed one full cell above the
+                # wire's top, so the feed never galvanically reached the
+                # conductor and coupled only capacitively (measured:
+                # |S21| RISING with frequency, docs/research_notes/
                 # 20260728_i488_falsifier_ledger.md, D5). No cell is dead
-                # in that geometry, so #314/#319 are correctly silent --
-                # nothing warned.
+                # in that geometry, so #314/#319 are correctly silent.
                 #
-                # Gating (the mis-gated-guard class the LLM-footgun audit
-                # documents): fire ONLY on the exact one-cell-short-of-
-                # adjacent-PEC signature. A wire port that legitimately
-                # ends in open vacuum (dipole feed, nothing PEC in the
-                # adjacent cell) has no adjacent-PEC hit and stays
-                # silent; a port whose end cell IS on/in PEC has galvanic
-                # contact (and #319 above already flags it as a dead
-                # cell), so the live-end-cell requirement keeps this
-                # silent there. BOTH ends of the extent are candidates
-                # and both are checked (a port can miss a trace at its
-                # far end or a ground plane at its near end). Pure numpy
-                # reads of already-built arrays -- no new exception-prone
-                # calls inside a try (PR #555 lesson: nothing here may
-                # swallow an async worker-timeout exception).
+                # ONE definition of contact (#931 §1.9, #929): the wire's
+                # END NODE lies on a realized wall plane of the wire's
+                # own column. The wire's last edge on the + side runs
+                # from node ``cells[-1]`` to ``cells[-1] + 1``, so its end
+                # node is ``cells[-1] + 1``; on the - side the end node
+                # is ``cells[0]``. "Fires" = the end edge is live, the
+                # end node carries NO wall, and the node one cell further
+                # along the axis DOES — the exact one-cell-short
+                # signature. A wire that starts on a ground plane (its
+                # start node IS a wall plane) is in contact and stays
+                # silent; a dipole ending in open vacuum stays silent.
                 if cells and live_flags:
-                    mask_np = np.asarray(pec_mask)
                     axis_letter = "xyz"[axis]
                     d_ax = (grid.dx, getattr(grid, "dy", grid.dx),
                             getattr(grid, "dz", grid.dx))[axis]
                     for end_idx, step in ((0, -1), (len(cells) - 1, +1)):
-                        # Degenerate 1-cell rasterization: both loop
-                        # iterations share end_idx 0 but probe DIFFERENT
-                        # neighbor cells (nb-1 vs nb+1), so no duplicate
-                        # warning is possible by construction.
                         if not live_flags[end_idx]:
                             continue
-                        nb = list(cells[end_idx])
-                        nb[axis] += step
-                        if not (0 <= nb[axis] < mask_np.shape[axis]):
+                        end_node = list(cells[end_idx])
+                        if step > 0:
+                            end_node[axis] += 1
+                        ij = tuple(end_node[t] for t in range(3)
+                                   if t != axis)
+                        if not all(0 <= end_node[t] < shape[t]
+                                   for t in range(3)):
                             continue
-                        if not bool(mask_np[nb[0], nb[1], nb[2]]):
+                        planes = set(realized.wall_planes(axis, ij=ij))
+                        if end_node[axis] in planes:
+                            continue            # galvanic contact
+                        beyond = end_node[axis] + step
+                        if not (0 <= beyond < shape[axis]):
                             continue
-                        adj_names = [
-                            name for name, mask_arr
-                            in _ensure_pec_entry_masks(grid)
-                            if bool(mask_arr[nb[0], nb[1], nb[2]])
-                        ] or ["unknown"]
+                        if beyond not in planes:
+                            continue
+                        node_beyond = list(end_node)
+                        node_beyond[axis] = beyond
+                        adj_names = []
+                        for e in entries:
+                            if not e.is_pec:
+                                continue
+                            if beyond in e.wall_planes(axis, ctx.periodic,
+                                                       shape):
+                                foot = e.footprint_on_plane(
+                                    axis, beyond, ctx.periodic, shape)
+                                if bool(foot[ij]) and e.name not in adj_names:
+                                    adj_names.append(e.name)
+                        adj_names = adj_names or ["unknown"]
                         side = ("+" if step > 0 else "-") + axis_letter
+                        nodes_ax = ctx.nodes[axis]
                         _w.warn(
                             PreflightWarning(
                                 f"Wire port at {pe.position} (extent "
                                 f"{pe.extent}, component {pe.component}): "
-                                f"its {side}-side end cell "
-                                f"{tuple(cells[end_idx])} is live "
-                                f"(vacuum/dielectric), but the cell "
-                                f"immediately beyond it "
-                                f"({tuple(nb)}) is PEC {adj_names} in "
-                                f"the assembled geometry. The port "
-                                f"terminates in vacuum/dielectric one "
-                                f"cell (gap = 1 cell = {d_ax:g} m) short "
-                                f"of a rasterized conductor, so the feed "
-                                f"never galvanically reaches it and "
-                                f"coupling is capacitive only (measured "
-                                f"signature: |S21| rising with "
-                                f"frequency; issue #556, the #488-lane "
-                                f"D5 finding). Remedy: extend the port "
-                                f"extent by one cell so its end lands on "
-                                f"the conductor's rasterized node, or "
-                                f"refine dx so the conductor interface "
-                                f"aligns with a grid node (e.g. dx = h/N "
-                                f"for an interface at height h).",
+                                f"its {side}-side end node "
+                                f"{tuple(end_node)} ({axis_letter} = "
+                                f"{_fmt_len(float(nodes_ax[end_node[axis]]))}) "
+                                f"carries no realized PEC wall, but the "
+                                f"node one cell further "
+                                f"({axis_letter} = "
+                                f"{_fmt_len(float(nodes_ax[beyond]))}) is a "
+                                f"realized wall plane of {adj_names}. The "
+                                f"port terminates in vacuum/dielectric "
+                                f"one cell (gap = {d_ax:g} m) short of the "
+                                f"conductor, so the feed never "
+                                f"galvanically reaches it and coupling is "
+                                f"capacitive only (measured signature: "
+                                f"|S21| rising with frequency; issue #556, "
+                                f"the #488-lane D5 finding). Remedy: "
+                                f"extend the port extent by one cell so "
+                                f"its end node lands on that wall plane, "
+                                f"or draw the conductor so its face (a "
+                                f"volume) or its plane (a sheet) lands on "
+                                f"the wire's end node — e.g. dx = h/N for "
+                                f"an interface at height h.",
                                 code="wire_port_end_gap_to_conductor",
                                 source="_validate_cfg_port_inside_pec",
                             ),
@@ -5128,7 +5359,8 @@ class _PreflightMixin:
                     PreflightWarning(
                         f"Wire port at {pe.position} (extent {pe.extent}) "
                         f"rasterizes to n={n} cells of which "
-                        f"{len(dead_indices)} land inside PEC geometry "
+                        f"{len(dead_indices)} have their {pe.component} "
+                        f"edge inside realized PEC "
                         f"{dead_names} (n_live/n = {n_live}/{n}). Dead "
                         f"cells are shorted by the PEC and are excluded "
                         f"from the port's resistance distribution, drive "
@@ -5141,52 +5373,60 @@ class _PreflightMixin:
                         f"Verify the extent was MEANT to end on/inside "
                         f"the conductor, and keep the midpoint V/I probe "
                         f"cell live; to silence, shorten the extent or "
-                        f"move the port so none of its rasterized cells "
-                        f"land on PEC (per the assembled geometry -- not "
-                        f"a cell-center guess; a thin PEC sheet snaps to "
-                        f"its nearest grid NODE, which can be a full cell "
-                        f"away from the sheet's midpoint).",
+                        f"move the port so none of its cells has its "
+                        f"{pe.component} edge inside a conductor (per the "
+                        f"realized edge set -- a volume shorts every edge "
+                        f"between its two faces, a sheet shorts only the "
+                        f"edges IN its plane and leaves the normal edge "
+                        f"through it live).",
                         code="wire_port_dead_extent_cells",
                         source="_validate_cfg_port_inside_pec",
                     ),
                     stacklevel=3,
                 )
 
+        if realized is None:
+            return
         _internal = getattr(self, "_internal_probe_indices", frozenset())
         _probe_entries = [
             pe for _pi, pe in enumerate(self._probes) if _pi not in _internal
         ]  # skip library-internal witness probes (issue #470; see
         #    _validate_cfg_absorber_placement for the rationale)
         for pe in list(self._ports) + _probe_entries:
-            pos = pe.position
+            if getattr(pe, "extent", None):
+                continue        # wire ports: the per-cell rule above
+            pos = tuple(float(v) for v in pe.position)
             component = (getattr(pe, "component", "") or "").lower()
-            is_h_component = component in ("hx", "hy", "hz")
-            for entry in self._geometry:
-                if entry.material_name != "pec":
-                    continue
-                if hasattr(entry.shape, "bounding_box"):
-                    try:
-                        c1, c2 = entry.shape.bounding_box()
-                        inside = all(c1[ax] <= pos[ax] <= c2[ax] for ax in range(3))
-                        if inside:
-                            pec_min_thickness = min(
-                                c2[i] - c1[i] for i in range(3)
-                            )
-                            is_thin_pec = pec_min_thickness <= 1.5 * dx
-                            if is_h_component and is_thin_pec:
-                                continue
-                            _w.warn(
-                                PreflightWarning(
-                                    f"Port/source at {pos} is inside PEC geometry "
-                                    f"'{entry.material_name}'. Field will be zero. "
-                                    f"Move source outside PEC.",
-                                    code="port_in_pec",
-                                    source="_validate_cfg_port_inside_pec",
-                                ),
-                                stacklevel=3,
-                            )
-                    except (NotImplementedError, TypeError):
-                        pass
+            if component not in ("ex", "ey", "ez", "hx", "hy", "hz"):
+                continue
+            try:
+                if is_nonuniform:
+                    from rfx.nonuniform import position_to_index as _nu_p2i
+                    idx = tuple(int(v) for v in _nu_p2i(grid, pos))
+                else:
+                    idx = tuple(int(v) for v in grid.position_to_index(pos))
+            except (ValueError, TypeError, IndexError, AttributeError):
+                continue
+            if not realized.component_is_dead(component, idx):
+                continue
+            names = _owners(component, idx)
+            what = ("its own E edge is a realized PEC edge"
+                    if component[0] == "e" else
+                    "all four E edges of its curl loop are realized PEC "
+                    "edges, so curl E = 0 and the component never moves")
+            _w.warn(
+                PreflightWarning(
+                    f"Port/source/probe at {pos} ({component}) is frozen "
+                    f"by realized PEC geometry {names}: {what} (lattice "
+                    f"ownership contract, #931). Field will be zero. "
+                    f"Move it off the conductor, or drive/read a "
+                    f"component the conductor leaves live (the normal E "
+                    f"through a sheet plane; tangential H beside a sheet).",
+                    code="port_in_pec",
+                    source="_validate_cfg_port_inside_pec",
+                ),
+                stacklevel=3,
+            )
 
     def _wire_port_cell_centers(self, pe):
         """Per-cell physical sample centers of a wire port's rasterization.
@@ -5285,17 +5525,32 @@ class _PreflightMixin:
                 tuple(pos[i] + (nudge if i == comp_axis else 0.0) for i in range(3)),
                 tuple(pos[i] - (nudge if i == comp_axis else 0.0) for i in range(3)),
             )
+            # #931: a pin / ground may be a SHEET declaration
+            # (add_thin_conductor); sheets are conductors in this census.
+            from rfx.materials.thin_conductor import sheet_bounds as _sb
+            adjacent_bounds = []
+            for entry in self._geometry:
+                if entry.material_name != "pec":
+                    continue
+                if not hasattr(entry.shape, "bounding_box"):
+                    continue
+                try:
+                    c1, c2 = entry.shape.bounding_box()
+                except (NotImplementedError, TypeError):
+                    continue
+                adjacent_bounds.append((c1, c2))
+            for tc in getattr(self, "_thin_conductors", ()):
+                if not getattr(tc, "is_pec", False):
+                    continue
+                try:
+                    c1, c2 = _sb(tc.shape)
+                except (NotImplementedError, TypeError, AttributeError):
+                    continue
+                if c1 is not None and c2 is not None:
+                    adjacent_bounds.append((tuple(c1), tuple(c2)))
             has_adjacent_pec = False
             for apos in adj_positions:
-                for entry in self._geometry:
-                    if entry.material_name != "pec":
-                        continue
-                    if not hasattr(entry.shape, "bounding_box"):
-                        continue
-                    try:
-                        c1, c2 = entry.shape.bounding_box()
-                    except (NotImplementedError, TypeError):
-                        continue
+                for c1, c2 in adjacent_bounds:
                     if all(c1[ax] <= apos[ax] <= c2[ax] for ax in range(3)):
                         has_adjacent_pec = True
                         break
@@ -5556,9 +5811,15 @@ class _PreflightMixin:
         agrees. This check surfaces the case that does not agree.
 
         Advisory tier, concrete profiles only, LOSSY sheets only — a PEC thin
-        sheet goes into ``pec_mask`` and folds no sigma, so it has no sheet
-        resistance to normalize. Threshold: adjacent cells differing by more
-        than 10%.
+        sheet is a :class:`~rfx.boundaries.pec.SheetSpec` (#931 §1.3) and
+        folds no sigma, so it has no sheet resistance to normalize.
+        Threshold: adjacent cells differing by more than 10%.
+
+        The node is located through the lossy fold's OWN production path
+        (node positions + the shape's node mask): the sigma-fill sheet is
+        fenced out of the #931 contract (design note §1.8 — a lossy volume
+        model, unchanged), so mirroring its mask here IS reading what the
+        run realizes, not a re-derivation.
         """
         from rfx.nonuniform import node_positions_from_profile
         from rfx.materials.thin_conductor import sheet_bounds
@@ -6693,17 +6954,17 @@ class _PreflightMixin:
                              for a in ("_dx_profile", "_dy_profile", "_dz_profile"))
             if nonuniform:
                 grid = self._build_nonuniform_grid()
-                from rfx.runners.nonuniform import assemble_materials_nu
-                mats = assemble_materials_nu(self, grid)[0]
                 sizes = (np.asarray(grid.dx_arr, dtype=float),
                          np.asarray(grid.dy_arr, dtype=float),
                          np.asarray(grid.dz, dtype=float))
             else:
                 grid = self._build_grid()
-                mats = self._assemble_materials(grid)[0]
                 d = float(grid.dx)
                 sizes = tuple(np.full(int(n), d) for n in grid.shape)
-            return grid, mats, sizes, bool(nonuniform)
+            # #931: assembled WITH the sheet/wire collectors, so the
+            # realized ground (a sheet owns no cell) is known here.
+            realized = self._assemble_realized(grid, nonuniform=bool(nonuniform))
+            return grid, realized.materials, sizes, bool(nonuniform), realized
         except Exception:
             return None
 
@@ -6749,13 +7010,22 @@ class _PreflightMixin:
         ground plane at 800 um over an eps_r 9 filler read back n=10,
         h_real=800 um, never seeing the 254 um / eps_r 3.66 substrate above
         it). The #752 class, reintroduced in a new form -- fixed here.
+
+        Lattice ownership contract (#931 §1.9): the walk starts at the
+        first cell ABOVE the realized ground. A sheet ground at the port
+        plane owns no cell, so that is the port's own cell; a VOLUME
+        ground drawn upward from the port plane (``Box(z_g, z_g + t)``)
+        occupies the cells ``k0 .. k0+n-1`` and its top face is a wall at
+        ``k0+n`` — the substrate begins there, and the returned dict says
+        how many conductor cells were skipped (``ground_cells``) so the
+        caller can name a port that sits UNDER its own ground.
         """
         try:
             if assembled is None:
                 assembled = self._msl_assemble_once()
             if assembled is None:
                 return None
-            grid, mats, sizes, nonuniform = assembled
+            grid, mats, sizes, nonuniform, realized = assembled
             pos = tuple(float(v) for v in pe.position)
             if nonuniform:
                 from rfx.nonuniform import position_to_index as _nu_p2i
@@ -6764,6 +7034,14 @@ class _PreflightMixin:
                 idx = list(grid.position_to_index(pos))
             eps = np.asarray(mats.eps_r, dtype=float)
             k0 = int(idx[inr])  # the port's own ground plane, NOT pads[inr]
+            ground_cells = 0
+            if realized.pec_mask is not None:
+                sl = [int(idx[0]), int(idx[1]), int(idx[2])]
+                sl[inr] = slice(k0, None)
+                occ = np.asarray(realized.pec_mask[tuple(sl)], dtype=bool).ravel()
+                while ground_cells < occ.size and occ[ground_cells]:
+                    ground_cells += 1
+                k0 += ground_cells
             sl = [int(idx[0]), int(idx[1]), int(idx[2])]
             sl[inr] = slice(k0, None)
             col = np.asarray(eps[tuple(sl)], dtype=float).ravel()
@@ -6784,7 +7062,8 @@ class _PreflightMixin:
             if frac > 1.0 - 1e-9:  # numerical dust just below the next node
                 frac = 0.0
             return dict(n=int(n), h_real=h_real, frac=float(frac),
-                        d_iface=d_iface, nonuniform=bool(nonuniform))
+                        d_iface=d_iface, nonuniform=bool(nonuniform),
+                        ground_cells=int(ground_cells))
         except Exception:
             return None
 
@@ -7210,10 +7489,13 @@ class _PreflightMixin:
             # fractional part in [0.10, 0.40], the substrate-air
             # interface lands in the lower portion of a Yee cell that
             # ALSO contains the trace at z=h_sub..h_sub+dx; the cell is
-            # mixed substrate + PEC.  Hard-PEC ``Box(material="pec")``
-            # avoids the specific bug below ON THE DEFAULT RUN PATH,
-            # because there it occupies WHOLE cells and never enters
-            # ``pec_occupancy_override``.
+            # mixed substrate + PEC.  A hard-PEC ``Box(material="pec")``
+            # VOLUME avoids the specific bug below ON THE DEFAULT RUN
+            # PATH: under the lattice ownership contract (#931 §1.2) it
+            # occupies WHOLE primal cells with walls on BOTH faces and
+            # never enters ``pec_occupancy_override``; a trace declared
+            # as a SHEET (zero-thickness Box / add_thin_conductor) is one
+            # node plane with no cell at all and enters nothing either.
             #
             # #766 review B3: this used to say "this build has no
             # anisotropic/subpixel eps assembly — rfx/api/__init__.py's
@@ -7353,11 +7635,15 @@ class _PreflightMixin:
                         f"and produces unphysical |S21|² > 1 in this regime "
                         f"(cited, not remeasured on this checkout: runs "
                         f"#563/#567, 2026-05-08, dx∈[75,82]µm h_sub=254µm). "
-                        f"Hard ``Box(material='pec')`` avoids that specific "
-                        f"bug ON THE DEFAULT RUN PATH "
+                        f"A hard ``Box(material='pec')`` avoids that "
+                        f"specific bug ON THE DEFAULT RUN PATH "
                         f"(subpixel_smoothing=False and no conformal PEC "
-                        f"face — the shipped defaults): there the PEC box "
-                        f"occupies whole cells and never enters "
+                        f"face — the shipped defaults): a PEC Box is a "
+                        f"VOLUME that occupies whole primal cells with "
+                        f"walls on both faces (lattice ownership contract "
+                        f"#931), and a foil trace declared as a SHEET "
+                        f"(zero-thickness Box / add_thin_conductor) is one "
+                        f"node plane; neither enters "
                         f"``pec_occupancy_override``. That is NOT a blanket "
                         f"exemption — two opt-in lanes DO give a hard PEC "
                         f"box fractional cell occupancy: "
