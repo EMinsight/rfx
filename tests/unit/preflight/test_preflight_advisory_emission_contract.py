@@ -295,8 +295,24 @@ def _enumerate_emission_sites():
 # Net: +6 sites, +6 -1 = +5 literal codes. _FROZEN_DYNAMIC_SITES_BY_FUNCTION
 # is unchanged. EMISSION_CLASSIFICATION is unchanged: no entry point gained or
 # lost a preflight call.
-_FROZEN_TOTAL_SITES = 105
-_FROZEN_LITERAL_CODE_COUNT = 71
+#
+# 105 -> 106 sites / 71 -> 72 literal codes, issue #931 (design note §6, the
+# 2026-09-07 cv11 pec-short adjudication):
+#   + pec_face_short_of_domain_wall (1 site, warning) — a PEC VOLUME's
+#     realized face sits exactly one node inside a non-absorbing domain wall.
+#     Grid realizes a declared domain by ceil(extent/dx) and a volume's face
+#     rounds to the nearest node, so a plug drawn to the DECLARED
+#     cross-section stops short of the realized wall and the cell between
+#     them is a parallel-plate line. A new check family speaking a
+#     conductor-to-BOUNDARY relation — the other §3 findings all speak about
+#     one declaration in isolation — so it does not reuse one of their slugs.
+#     Input-side by construction: it reads the entry's own realized wall
+#     planes and the grid's interior slices, never a solved field.
+# _FROZEN_DYNAMIC_SITES_BY_FUNCTION is unchanged (no new bare except).
+# EMISSION_CLASSIFICATION is unchanged: the check hangs off the same
+# _validate_cfg_campaign_statics umbrella as the other §3 findings.
+_FROZEN_TOTAL_SITES = 106
+_FROZEN_LITERAL_CODE_COUNT = 72
 # Dynamic sites are frozen by ENCLOSING FUNCTION and count, not by line
 # number. What this test exists to catch is a new bare ``except`` path
 # emitting PreflightIssue(code=getattr(exc, "code", "uncoded")) — a site

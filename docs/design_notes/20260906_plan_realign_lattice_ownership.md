@@ -408,7 +408,15 @@ to reach a domain wall is drawn to the grid's REALIZED wall plane
 (`tests/_realized_geometry.domain_wall_positions`), and a shorting plug
 asserts a full-cross-section front wall at build time. Owed by the preflight
 stage: a finding for a conductor face drawn within a cell of a domain wall
-that rounds away from it. The validation battery's `test_pec_short_s11_magnitude`
+that rounds away from it — **landed 2026-09-07** as
+`pec_face_short_of_domain_wall` (WARNING,
+`_validate_cfg_pec_face_short_of_domain_wall`): a PEC VOLUME whose own realized
+wall plane sits exactly one node inside a NON-absorbing domain face, computed
+from `realized_wall_planes` on the entry's own edges against the grid's
+`interior` slices. On the cv11 drawing at dx = 1 mm it fires once, on `z_hi`
+(10.16 mm rounds DOWN off the 11 mm wall) and not on `y_hi` (22.86 mm rounds UP
+onto the 23 mm wall) — which is why it reads realized planes instead of
+comparing declared numbers. The validation battery's `test_pec_short_s11_magnitude`
 (auto mesh, same slot) is green again with its gate untouched; the chain
 battery's `pec_short` DUT is on-lattice at every rung and its T6 red
 (max|ΔS| 0.938) is a different reading — S22's phase, the far face one cell
