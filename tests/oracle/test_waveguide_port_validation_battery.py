@@ -33,6 +33,7 @@ import pytest
 from rfx.api import Simulation
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
+from tests._realized_geometry import assert_wall_planes
 
 
 # =============================================================================
@@ -48,6 +49,9 @@ PORT_LEFT_X = 0.01
 PORT_RIGHT_X = 0.09
 F_CUTOFF_HZ = 3.75e9
 TARGET_CPML_M = 0.030  # 30 mm physical CPML absorber target
+#: whole cells of the PEC short (#931: a Box is a volume; a sub-cell
+#: extent is refused, and this module does not pin dx).
+SHORT_CELLS = 2
 
 
 def _build_sim(
@@ -102,12 +106,30 @@ def _build_sim(
         sim.add(Box(lo, hi), material=name)
 
     if pec_short_x is not None:
-        # Thin PEC wall spanning the full cross-section.
-        thickness = 0.002  # 2 mm — a few cells
+        # Full-cross-section PEC short, drawn as a VOLUME on the node line
+        # (lattice ownership contract #931 §1.2/§1.5).
+        #
+        # It used to be a hard-coded 0.002 m against a cell this module
+        # never pins: with dx=None the Simulation picks lambda_min/20 =
+        # c/7e9/20 = 2.1414 mm, so the "2 mm — a few cells" comment
+        # described a body 0.93 of ONE cell thick. The old sheet rule
+        # realized any non-empty cell set as at least one wall, so the
+        # sub-cell body passed silently; the contract refuses it (a Box is
+        # a volume, and nothing is inferred from raster thickness).
+        #
+        # Drawn from the nearest node for SHORT_CELLS whole cells it is a
+        # solid short with walls on BOTH drawn planes. The incident wave
+        # meets the LEADING plane, which is what every gate here measures,
+        # so the redraw moves the reflector by at most half a cell.
+        d = float(sim._build_grid().dx)
+        k_lo = int(round(pec_short_x / d))
+        x_lo, x_hi = k_lo * d, (k_lo + SHORT_CELLS) * d
         sim.add(
-            Box((pec_short_x, 0.0, 0.0), (pec_short_x + thickness, DOMAIN[1], DOMAIN[2])),
+            Box((x_lo, 0.0, 0.0), (x_hi, DOMAIN[1], DOMAIN[2])),
             material="pec",
         )
+        # What the fixture declares, for the build-time realization check.
+        sim._pec_short_faces_m = (x_lo, x_hi)
 
     port_freqs = jnp.asarray(freqs)
     sim.add_waveguide_port(
@@ -514,6 +536,11 @@ def test_pec_short_s11_magnitude():
         pec_short_x=0.085,
         waveform="modulated_gaussian",
     )
+    # Build-time realization check (#931): the short is a VOLUME, so its
+    # two drawn faces are two electric walls with the interior shorted.
+    # No solve; this fails before the 40-period run if the geometry ever
+    # drifts off the node line again.
+    assert_wall_planes(sim, 0, sim._pec_short_faces_m, what="PEC short")
     # Full-window DFT: the single PEC->CPML round trip fits inside
     # num_periods=40 and there is no resonator to build up late-time.
     # Phase 2 cleanup (2026-04-25) removed the num_periods_dft early
