@@ -569,8 +569,13 @@ def test_aperture_nodes_match_the_reference_dimensions_and_the_builder(fixture):
     """
     cells = fixture["config"]["gated_cells_per_a"]
     dx = A / cells
-    nodes = fixture["gated_rfx"]["aperture_nodes"]
+    nodes = fixture["gated_rfx"]["aperture_wall_nodes"]
     aps_mm = fixture["reference"]["apertures_mm"]
+    # #931: these are the two innermost realized WALL planes, so the aperture
+    # is hi - lo cells exactly and lo is the fin's inner face. Until #931 the
+    # committed pair was the first and last OPEN node (lo = fin_c + 1,
+    # hi = fin_c + d_c - 1), which is the same geometry counted one cell in
+    # from each wall.
     assert len(nodes) == len(aps_mm) == 5
     # This zips POSITIONALLY, and should stay that way: Aghanim's aperture set is
     # symmetric ([10.27, 6.65, 6.18, 6.65, 10.27]), so a permutation preserves
@@ -586,10 +591,10 @@ def test_aperture_nodes_match_the_reference_dimensions_and_the_builder(fixture):
         d_c = round(d_mm * 1e-3 / dx)
         d_c += (cells - d_c) % 2          # the builder's parity bump
         fin_c = (cells - d_c) // 2
-        assert lo == fin_c + 1, ("aperture start is not where the builder puts it",
-                                 lo, fin_c + 1, d_mm)
-        assert hi == lo + d_c - 2, ("aperture width does not match the reference",
-                                    hi, lo + d_c - 2, d_mm)
+        assert lo == fin_c, ("aperture wall is not where the builder puts it",
+                             lo, fin_c, d_mm)
+        assert hi == lo + d_c, ("realized aperture width does not match the "
+                                "reference", hi, lo + d_c, d_mm)
 
 
 def test_gated_traces_are_bit_pinned(fixture):
@@ -760,18 +765,24 @@ def test_zero_count_gate_is_robust_across_the_thickness_ambiguity_band(fixture):
 
 
 def test_electrical_geometry_is_rederived_from_committed_node_indices(fixture):
-    """Re-derive the oracle's lengths from the rasterised metal, independently.
+    """Re-derive the oracle's lengths from the realized wall planes, independently.
 
-    The electrical length of a region is the distance between its bounding
-    zeroed node planes, so a cavity drawn with L_c cells of clear space is
-    (L_c + 1)*dx and an iris drawn t_c cells thick is (t_c - 1)*dx. Total
-    length is a face-continuity check across region types (NOT a uniqueness
-    argument -- it holds for every interface offset sigma); what it catches is
-    mixing conventions between region types.
+    #931 lattice ownership contract: a PEC volume drawn on node planes
+    realizes tangential walls at BOTH faces and shorts every normal edge
+    between them, so the distance between an iris's two bounding wall planes
+    IS its drawn cell count, and the clear space between consecutive irises IS
+    the drawn cavity. This test asserts that identity from the committed node
+    indices, with no rule of its own.
+
+    Until #931 the far face was never a wall, so a cavity drawn with L_c cells
+    realized (L_c + 1)*dx and an iris drawn t_c cells realized (t_c - 1)*dx;
+    the case compensated in the drawn counts and this test hard-coded the
+    -1/+1. That is what made a rule change invisible: the pin agreed with the
+    compensation instead of with the geometry.
     """
     eg = fixture["electrical_geometry"]
     row = fixture["gated_rfx"]
-    x_runs = [tuple(r) for r in row["iris_x_nodes"]]
+    x_runs = [tuple(r) for r in row["iris_wall_nodes"]]
     assert len(x_runs) == 5
 
     th_cells = [hi - lo for lo, hi in x_runs]
@@ -781,40 +792,71 @@ def test_electrical_geometry_is_rederived_from_committed_node_indices(fixture):
 
     drawn_t = eg["drawn_iris_thickness_cells"]
     drawn_L = list(eg["drawn_cavity_cells"])
-    assert th_cells == [drawn_t - 1] * 5
-    assert cav_cells == [v + 1 for v in drawn_L]
+    assert th_cells == [drawn_t] * 5, "realized iris thickness != drawn"
+    assert cav_cells == drawn_L, "realized cavity != drawn"
 
+    # Total length is now plain addition, and so is the outer extent: five
+    # irises plus four cavities, first wall plane to last. The pre-#931 form
+    # carried a `span - 1` and a face-continuity argument to close.
     span = drawn_t * 5 + sum(drawn_L)
-    assert sum(th_cells) + sum(cav_cells) == span - 1, "total length not conserved"
+    assert sum(th_cells) + sum(cav_cells) == span
+    assert x_runs[-1][1] - x_runs[0][0] == span, "outer extent not conserved"
 
 
-def test_drawn_counts_are_the_electrical_space_compensation(fixture):
-    """t_c = round(t/dx) + 1 and L_c = round(L/dx) - 1, from the reference dims."""
+def test_no_compensation_is_applied_anywhere_in_the_case(fixture, script_src):
+    """Drawn counts are the plain roundings — the +1/-1 is gone, and stays gone.
+
+    Replaces ``test_drawn_counts_are_the_electrical_space_compensation``, which
+    asserted ``round(t/dx) + 1`` and ``round(L/dx) - 1`` as the rule. Under the
+    contract there is nothing to compensate, so the pin inverts: the drawn
+    counts must be the plain roundings, the realized geometry must equal them,
+    and the SOURCE must not reintroduce a compensating term.
+    """
     eg = fixture["electrical_geometry"]
     ref = fixture["reference"]
     cfg = fixture["config"]
     dx = A / cfg["gated_cells_per_a"]
     assert eg["drawn_iris_thickness_cells"] == round(
-        ref["iris_thickness_mm"] * 1e-3 / dx) + 1
+        ref["iris_thickness_mm"] * 1e-3 / dx)
     assert list(eg["drawn_cavity_cells"]) == [
-        round(v * 1e-3 / dx) - 1 for v in ref["cavities_mm"]]
-    # and the aperture needs no correction: d_c*dx already IS the electrical width
-    for (lo, hi), d_mm in zip(fixture["gated_rfx"]["aperture_nodes"],
+        round(v * 1e-3 / dx) for v in ref["cavities_mm"]]
+    assert eg["compensation"].lower().startswith("none")
+
+    # the realized dimensions are the drawn ones, on every leg
+    assert eg["iris_thickness_cells"] == eg["drawn_iris_thickness_cells"]
+    assert list(eg["cavity_cells"]) == list(eg["drawn_cavity_cells"])
+    assert list(eg["aperture_cells"]) == list(eg["drawn_aperture_cells"])
+
+    # and the aperture, from the wall planes, matches the paper to the
+    # producer's own rounding bound (dx/2). A dx bound admitted an
+    # outer-aperture +1-node mutation that would have improved d_lo from
+    # 17.08 to 6.76 MHz.
+    for (lo, hi), d_mm in zip(fixture["gated_rfx"]["aperture_wall_nodes"],
                               ref["apertures_mm"]):
-        n_open = hi - lo + 1
-        realized_mm = (n_open + 1) * dx * 1e3
-        # the producer rounds, so the bound is dx/2. A dx bound admitted an
-        # outer-aperture +1-node mutation that would have improved d_lo from
-        # 17.08 to 6.76 MHz.
+        realized_mm = (hi - lo) * dx * 1e3
         assert abs(realized_mm - d_mm) <= 0.5 * dx * 1e3 + 1e-9, (realized_mm, d_mm)
 
+    # No compensating term may come back into the builder.
+    src = script_src
+    for banned in ("round(T_IRIS_NOM / dx)) + 1", "round(t/dx) + 1",
+                   "astype(int) - 1", "round(L/dx) - 1"):
+        assert banned not in src, (
+            "a drawn-count compensation reappeared in the builder", banned)
 
-def test_using_drawn_counts_would_bias_f0_and_is_recorded_as_such(fixture):
-    """The comparator-input bias is re-measured here, not asserted in prose.
 
-    This is the test that would have caught the original defect. It runs the
-    INDEPENDENT oracle twice -- once on the realised geometry, once on the drawn
-    cell counts -- and confirms the recorded cost of confusing them.
+def test_the_pre_931_drawn_vs_realized_confusion_is_recorded_as_history(fixture):
+    """The +107.5 MHz cost stays in the record; the mechanism that caused it does not.
+
+    Replaces ``test_using_drawn_counts_would_bias_f0_and_is_recorded_as_such``,
+    whose premise is now vacuous: drawn == realized, so evaluating the oracle
+    on "the drawn counts" and "the realized geometry" gives the same number by
+    construction, and the test would pass at bias 0 while asserting 107.5.
+
+    What survives is the historical figure and the reason it mattered — a
+    +107.5 MHz f0 bias is five times the reference's own CST-vs-HFSS spread,
+    and an envelope-times-1.5 gate bounds SCATTER, not BIAS. The check here is
+    that the record still says so, and that the two legs really are identical
+    now.
     """
     eg = fixture["electrical_geometry"]
     cfg = fixture["config"]
@@ -830,21 +872,30 @@ def test_using_drawn_counts_would_bias_f0_and_is_recorded_as_such(fixture):
                                [eg["drawn_iris_thickness_cells"] * dx] * 5,
                                [c * dx for c in eg["drawn_cavity_cells"]], f)
                    for f in freqs], freqs)
-    bias_mhz = (drawn["f0"] - real["f0"]) / 1e6
-    assert bias_mhz == pytest.approx(eg["cost_of_using_intended_counts_mhz"], abs=1.0)
+    assert drawn["f0"] == real["f0"], (
+        "drawn and realized geometry no longer agree — the contract is broken "
+        "somewhere upstream of this fixture")
+
     spread_mhz = fixture["reference"]["digitized_scalars"][
         "solver_spread_f0_hz"] / 1e6
-    assert abs(bias_mhz) > 2 * spread_mhz, (
-        "the recorded bias no longer exceeds the reference's own solver spread, "
-        "so the prose justifying this test is stale")
+    recorded = eg["cost_of_using_intended_counts_mhz"]
+    assert abs(recorded) > 2 * spread_mhz
+    assert "HISTORICAL" in eg["cost_note"]
 
 
 def _aps_offs(fixture, dx):
-    """Apertures and their left offsets, from the committed node indices."""
+    """Apertures and their left offsets, from the committed WALL-plane indices.
+
+    #931: an aperture is the distance between its two bounding realized wall
+    planes, so the width is (hi - lo)*dx and the left offset is lo*dx. The
+    pre-#931 form read a first/last OPEN node pair and added the two half
+    cells back by hand ((hi - lo + 2), (lo - 1)); same geometry, one index
+    convention fewer.
+    """
     aps, offs = [], []
-    for lo, hi in fixture["gated_rfx"]["aperture_nodes"]:
-        aps.append((hi - lo + 2) * dx)
-        offs.append((lo - 1) * dx)
+    for lo, hi in fixture["gated_rfx"]["aperture_wall_nodes"]:
+        aps.append((hi - lo) * dx)
+        offs.append(lo * dx)
     return aps, offs
 
 
@@ -1649,7 +1700,10 @@ def test_claim_scope_prose_matches_the_committed_numbers(fixture):
     low = scope.lower()
     for phrase in ("topology first", "not exonerated", "snapped",
                    "as-snapped", "experimental", "regression lock",
-                   "bounding zeroed node planes"):
+                   # #931: the claim_scope no longer derives lengths from a
+                   # local rule, so what is pinned is the contract's source of
+                   # truth and the fact that realized equals drawn.
+                   "realized_pec_edge_masks", "realized == drawn"):
         assert phrase in low, phrase
 
 
@@ -1666,11 +1720,18 @@ def test_non_gated_quantities_are_declared_non_gated(fixture, script_src):
 
 
 def test_setup_conventions_are_content_pinned(script_src):
-    """The facts a future edit must not quietly drop."""
+    """The facts a future edit must not quietly drop.
+
+    #931: the two pins that named the compensation ("round(t/dx) + 1",
+    "round(L/dx) - 1") are replaced by pins on what the case does INSTEAD —
+    it reads the realized edge set and states the identity — plus a
+    grep-style refusal in :func:`test_no_compensation_is_applied_anywhere_in_the_case`
+    for the compensation itself.
+    """
     for phrase in (
-            "bounding zeroed node planes",
-            "round(t/dx) + 1",
-            "round(L/dx) - 1",
+            "realized_pec_edge_masks",
+            "realized == drawn",
+            "no compensation",
             "NOT a monotone",
             "EXTERIOR to the requested domain",
             "interpolated in dB",
@@ -1683,7 +1744,7 @@ def test_operating_point_is_grid_exact_on_every_row(fixture):
         cells = row["cells_per_a"]
         dx_mm = round(A / cells * 1e3, 4)
         assert row["dx_mm"] == dx_mm, (row["cells_per_a"], row["dx_mm"])
-        for lo, hi in row["aperture_nodes"]:
+        for lo, hi in row["aperture_wall_nodes"]:
             assert hi > lo, "empty aperture"
 
 
