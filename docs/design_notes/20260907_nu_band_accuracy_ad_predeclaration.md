@@ -1082,3 +1082,136 @@ Replay: `test_second_pass_constants_pinned_verbatim`,
 `test_replay_a2_extension`, `test_replay_a3_extension`,
 `test_replay_ad3_second_attempt` added to the replay file before the
 runs (skipped while the keys are absent); `test_replay_ad3` unchanged.
+
+### Second-pass measurements (2026-09-07 07:24-07:26 UTC)
+
+Pre-declaration commit `ca8290c1`; every second-pass row carries that
+sha, `git_dirty = false`, `git_modified_tracked` = the results JSON only,
+`git_untracked = 0`; `rfx.__file__` under the worktree printed by every
+call; no `rfx/` source touched; one attempt per key; no window edited.
+Selfcheck: oracle (i) 1.81e-16 / (i') 1.88e-16 / (i'') 1.31e-16 over 5
+LSM roots; `ad1_loss_dtype`: loss **float32** with and without the x64
+context (`x64_context_raises_solver_precision = false`).
+
+#### A2 run-length extension (frozen windows, `judge_ext`)
+
+| arm | steps | T ns | f GHz | err % | model % | resid | err_unif % | diff pt | model diff pt | spatial diff pt | model spatial diff pt |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| cap 1.3 | 24000 | 13.8 | 5.784999 | -0.02030 | -0.02146 | +1.2e-5 | -0.01134 | -0.00895 | -0.01004 | +0.00926 | +0.00817 |
+| cap 1.3 | 48000 | 27.6 | 5.784938 | -0.02134 | -0.02146 | +1.1e-6 | -0.01140 | -0.00994 | -0.01004 | +0.00827 | +0.00817 |
+| cap 1.4 | 24000 | 13.8 | 5.784639 | -0.02651 | -0.02766 | +1.2e-5 | -0.01134 | -0.01517 | -0.01624 | +0.00304 | +0.00197 |
+| cap 1.4 | 48000 | 27.6 | 5.784580 | -0.02754 | -0.02766 | +1.2e-6 | -0.01140 | -0.01614 | -0.01624 | +0.00207 | +0.00197 |
+| uniform | 24000 | 45.8 | 5.785517 | -0.01134 | -0.01142 | +7.7e-7 | | | | | |
+| uniform | 48000 | 91.5 | 5.785513 | -0.01140 | -0.01142 | +1.9e-7 | | | | | |
+
+- **A2-F1 HELD** at both caps and both counts: worst |err| 0.02754 %
+  (cap 1.4, 48000) <= 0.10 %.
+- **A2-F2 HELD**: worst |diff| 0.01614 pt (cap 1.4, 48000) <= 0.05 pt;
+  the model's difference is -0.01004 / -0.01624 pt, met to 0.0001 pt at
+  48000 steps.
+- **A2-V HELD**: |f(24000) - f(48000)| / f = 0.00105 % (cap 1.3),
+  0.00103 % (cap 1.4) <= 0.017 %; separation (d_second 2.90 GHz) and
+  anti-vacuity pass on all six units.
+- Spatial split (reported): e_t = +0.00182 % graded, +0.02003 % uniform;
+  spatial parts -0.02316 % (cap 1.3, 48000), -0.02936 % (cap 1.4) against
+  -0.03143 % uniform — the graded meshes have the smaller spatial error
+  by +0.008 / +0.002 pt (model +0.00817 / +0.00197 pt). The first-pass
+  differences (-0.0019 to -0.0126 pt at 8000 / 12000) were run-length
+  artefacts of 0.005-0.009 pt; the residual to the exact-operator model
+  fell from 4-9e-5 (first pass) to 1.2e-5 at 13.8 ns and 1.2e-6 at
+  27.6 ns. Wallclock 1.7-4.9 s per unit.
+
+#### A3 run-length extension
+
+| arm | steps | T ns | f GHz | err % | model % | resid | err_unif % | diff pt | model diff pt | spatial diff pt | model spatial diff pt |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| graded | 24000 | 11.4 | 7.048925 | -0.03495 | -0.03488 | -7.2e-7 | -0.00130 | -0.03365 | -0.03390 | -0.00576 | -0.00601 |
+| graded | 48000 | 22.9 | 7.048979 | -0.03417 | -0.03488 | +7.1e-6 | -0.00102 | -0.03315 | -0.03390 | -0.00525 | -0.00601 |
+| uniform | 24000 | 45.8 | 7.051298 | -0.00130 | -0.00098 | -3.2e-6 | | | | | |
+| uniform | 48000 | 91.5 | 7.051317 | -0.00102 | -0.00098 | -4.7e-7 | | | | | |
+
+- **A3-F1 HELD**: |err| 0.03495 % <= 0.20 % (model 0.03488 %).
+- **A3-F2 HELD**: |diff| 0.03365 pt <= 0.10 pt (model 0.03390 pt).
+- **A3-V HELD**: invariance 0.00078 % <= 0.033 %; separation (d_second
+  1.36 GHz) and anti-vacuity pass. The 48000-step graded line sits 0.55
+  MHz (7.8e-6) above the 24000-step one and the reviewer's 40000-step
+  scratch value sat 0.7 kHz below it; the three counts decimate the
+  extractor by 2 / 3 / 4, so this 1e-5-class scatter is the committed
+  extractor's, recorded, inside the window by 40x.
+- Spatial split: e_t +0.00186 % graded, +0.02975 % uniform; spatial
+  excess of the graded mesh -0.00576 / -0.00525 pt (model -0.00601 pt);
+  the remaining -0.028 pt of the F2 difference is the 1 mm control's
+  leapfrog term. First-pass graded err -0.04042 % is superseded by
+  -0.03495 % (run length: 3.8 ns -> 11.4 ns). Wallclock 2.3-6.8 s.
+
+#### AD3 second attempt (`ad3_second_attempt`; attempt 1 kept under `ad3`, FIRED)
+
+f32, 120 steps, A3 vectors, loss0 = 0.13063086569 (ulp 1.49e-8), dt
+4.766e-13 s; 142 cells x (4 FD steps x 2 + 1 jvp) forward runs; 26.8 s.
+
+| axis | h (gate) | dominant | resolved (>= 50 quanta) | worst resolved rel | median | signs | unresolved (k: quanta, rel FD, rel jvp) | rev-vs-jvp, all cells | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| x | 1e-2 | 3 (k = 29, 30, 31; 491-4446 quanta) | 3 | **0.0059** | 2.9e-3 | yes | — | 8.4e-3 (a cell at |g| 1e-3; 1.6e-5 on tied) | HELD |
+| y | 1e-2 | 16 (k = 11-18, 27-34; 69-508 quanta) | 16 | **0.0358** | 4.7e-3 | yes | — | 1.9e-5 | HELD |
+| z | 1e-2 | 11 (k = 13-18, 27-31; 21-180 quanta) | 8 | **0.0479** | 1.2e-2 | yes | 13: 21, 0.019, 1.7e-6; 16: 24, 0.271, 2.5e-6; 31: 21, 0.262, 1.1e-5 | 3.1e-5 | HELD |
+
+- **AD3-F (second attempt) HELD on x, y, z**; no axis INCONCLUSIVE
+  (resolved > unresolved on each); every AD value finite; no exact zero;
+  signs agree on every resolved cell. `fired = false`.
+- The same record at h = 1e-3 reproduces attempt 1 under the attempt-1
+  rule: worst 0.0043 x / **0.5224** y / **0.9924** z, `fired_attempt1_rule
+  = true` on y and z — and under the second-attempt rule those rows are
+  INCONCLUSIVE (y: 2 resolved of 18; z: 0 of 12): the declared FD of
+  attempt 1 could not gate what it gated. Per h, attempt-1-rule worst
+  (all dominant cells): x 0.0043 / 0.0027 / 0.0059 / 0.0207, y 0.522 /
+  0.156 / 0.0358 / 0.078, z 0.992 / 0.831 / 0.271 / 0.0419 at h = 1e-3 /
+  3e-3 / 1e-2 / 3e-2 — monotone in the quantum on y and z down to the
+  3e-2 row where every dominant cell of every axis is inside 0.15 even
+  under the attempt-1 rule; on x the 3e-2 row (0.0207 against 0.0059 at
+  1e-2) is the FD truncation term beginning to show, which is why the
+  gate was declared at 1e-2 and not larger.
+- Forward-mode jvp agrees with the reverse gradient on every cell of
+  every axis, tied cells included (worst 1.9e-5 y, 3.1e-5 z, 8.4e-3 x on
+  one cell at |g| ~ 1e-3); on the three unresolved z cells the jvp value
+  agrees with the reverse value to <= 1.1e-5 while the FD reference at
+  21-24 quanta sits 2-27 % away. The unresolved cells carry 0.0012-0.0042 %
+  of the z gradient's L2 norm each (|g| 0.012-0.040 against 946 on the
+  tied centre cell).
+- AD5 tie tables (h = 1e-2, split column): on tied cells with |g| > 1 the
+  split model `FD+ + (FD- - FD+)/8` matches g_ad to 4.9 % (x), 4.6 % (y),
+  0.7 % (z).
+
+Reading: the joint (dx, dy, dz) gradient on the three-axis builder mesh
+agrees with a resolvable central-FD reference to <= 4.8 % on 27 of 30
+dominant cells and with forward-mode differentiation to <= 3.1e-5 on
+all 142 cells; the y / z FIRED rows of attempt 1 were the FD reference
+reading its own round-off (3-17 quanta), as the reviewer diagnosed. The
+attempt-1 record stays FIRED in the JSON and `test_replay_ad3` stays
+red; `test_replay_ad3_second_attempt` is green. The first-pass request
+for a PI decision on "an x64-loss AD3" is withdrawn (no such arm exists
+without an `rfx/` dtype change). What remains for the PI: whether the
+second attempt is accepted as the AD3 record, in which case the red
+attempt-1 replay is retired by a recorded decision, not by this lane.
+
+#### Validity domain, corrected rows (supersede the first-pass table where they differ)
+
+| claim | inside (measured) | outside / not measured |
+|---|---|---|
+| Stratified-dielectric cavity on a builder MB mesh: order 2, amplitude <= 1.9x uniform | as the first-pass row; add: the 16.2 % isolation is conditional on the equal-sign source pair (kills Ey m = 2, 3, 4, 6) and Ey polarisation (never excites Hy) — the nearest unexcited eigenmodes are Hy m = 1 at -0.49 % and Ey m = 4 at +0.60 % | a single or unequal source, or an Ex / Ez source, on this box |
+| In-plane two-band grading, TM110 | caps 1.3 and 1.4, 4:1, 5.79 GHz, 13.8-27.6 ns: \|err\| <= 0.0275 % (model 0.0215 / 0.0277 %), graded - uniform -0.010 / -0.016 pt of which the SPATIAL part is +0.008 / +0.002 pt (the graded mesh is spatially more accurate than the 1 mm control; the sign of the total is the control's leapfrog term) | caps > 1.4; more than two bands per axis; dielectric loading in-plane; the first-pass 8000 / 12000-step numbers (run-length artefacts of 0.005-0.009 pt) |
+| Three axes graded at once, TM111 | cap ~1.3 all axes, 4:1, 7.05 GHz, 11.4-22.9 ns: err -0.0350 / -0.0342 % (model -0.0349 %); graded - uniform -0.034 pt, of which spatial -0.006 pt (model -0.006) | the first-pass -0.041 % / -0.039 pt (3.8-5.7 ns) |
+| Profile gradient (dz), material gradient (eps by index) | AD1 1.3e-3, AD2 3.8e-3 at f32, 120 steps, dominant cells at >= 1500 quanta; the AD1 "x64 context" row is the same float32 solve (3 ulp apart), not an x64 measurement | an x64 solve (needs an `rfx/` dtype change) |
+| Joint (dx, dy, dz) gradient on a three-axis MB mesh | second attempt, h = 1e-2: x / y / z HELD on 3 / 16 / 8 reference-resolved dominant cells at 0.006 / 0.036 / 0.048; rev-vs-jvp <= 3.1e-5 on all 142 cells; tied cells follow the equal-split convention to <= 5 % | cells whose FD reference is < 50 quanta (3 z cells at 21-24 quanta: jvp-checked only); attempt 1 at h = 1e-3 is on record as FIRED / reference-limited |
+| Tracer path of `make_nonuniform_grid`, `cpml_layers = 0`, builder family | 20 stacks, nz 6-580, dz_min 1.85 um: dt > 0, trace and gradient finite — a dt-path plus near-source statement (20 steps reach 37-900 um, 2-20 % of the stack on 14 stacks; the gradient is exactly zero beyond the causal cone) | cells outside the causal cone of a 20-step run; more than 6 layers; dz below 1.85 um |
+
+#### Tests after the second pass
+
+`tests/unit/nonuniform/test_band_accuracy_ad_replay.py` +
+`tests/unit/autodiff/test_nonuniform_gradient.py` +
+`test_nonuniform_forward_grad.py`: **33 passed, 1 failed**
+(`test_replay_ad3`, red by design; `test_replay_a2_extension`,
+`test_replay_a3_extension`, `test_replay_ad3_second_attempt` green);
+`tests/contracts/test_example_fidelity_contract.py`: 175 passed; ruff
+(the CI command) clean. Wallclock of the second pass: A2 / A3 extension
+50 s of solver, AD3 second attempt 27 s, selfcheck 10 s per call.
+
