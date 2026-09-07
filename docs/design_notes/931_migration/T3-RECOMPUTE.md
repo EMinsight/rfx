@@ -125,3 +125,80 @@ Both read this worktree
 (`/root/workspace/byungkwan-workspace/research/rfx-931-T3-nu-runners-grid-subgrid`)
 as it stands on disk, so a later commit on this branch is NOT in them — check
 `commit.txt` in the run's output directory before reading a verdict.
+
+---
+
+## Phase 2b — ingest on the merged base (2026-09-07)
+
+The base branch `feat/931-lattice-ownership` was merged in (fast-forward:
+the merge agent had already taken this branch's tip at `53a5602f`, so the
+worktree simply moved to the base head `770c4e6c`). Two things on the base
+reach this group's directories.
+
+### The seam xfails are gone — the fix landed, not the marker
+
+`feat/931-core-distributed-seam` is merged into the base (`b096d464`, fix
+`ac782d4f`). It deletes the two `xfail(strict=True)` markers in
+`tests/unit/runners/test_distributed_nu_kernel.py` in the same commit that
+makes them pass, and the one-cell fixtures stay one cell. Nothing to do at
+ingest but confirm it: the xfail count in the four directories went from 6
+to 4 between run 369367259223 and run 369367259276.
+
+### R8 (half-open extent) put two closed-form port oracles one cell out
+
+`6d66ac65` made a wire port's extent HALF-OPEN in edges. Nine tests in
+`tests/unit/nonuniform` went red against it — measured, VESSL run
+369367259276 (`rfx-931-post-t3-pytest-r4`, commit `770c4e6c`):
+**10 failed, 861 passed, 4 xfailed in 35.7 min**, the tenth red being the
+pre-existing `test_runner_import_binding.py` slow-lane brittleness.
+
+Both failures are the test's side, and both are fixed in `9ca7d595`:
+
+1. `test_nu_wire_port_lane_parity.py::_n_live` carried a SECOND COPY of the
+   rasterization rule and kept the retired endpoint-inclusive `+ 1`. It now
+   reads `rfx.sources.sources.wire_port_edge_span`, and a new build-time
+   gate pins it against `sim._wire_port_cell_centers`. No gate constant
+   moved — that file computes its gates from `_n_live`, not from literals.
+2. `test_nu_port_sigma_dual_spacing.py`'s oracle-2 extents each lost a
+   realized cell and tripped the fixture's own `assert n_live >= 2`. The
+   extents were re-declared to realize the counts the oracle was built on
+   (per component, since the port sits in the coarse run): ez 2D->5D,
+   ez 6D->9D, ex 2D->3D, ey 2D->4D, all measured from the stamped array.
+   The guard stays at `>= 2`; at `n_live = 1` the closed form is `S11 = 0`,
+   which any wrong cell resistance satisfies, so lowering it would have
+   left a green test that no longer discriminates.
+
+### Run 3 — `rfx-931-post-t3-measure-r2` (369367259274)
+
+Read commit `770c4e6c`, rc 0, output
+`.../issue931-post-t3-measure-20260907T191140Z/t3_remeasure.json`. This is
+the run that caught R8's effect on the docstring table: the solved `S11`
+had moved to the closed form for the SMALLER count while the JSON's own
+`n_live` column — which calls the stale helper — still said 6 / 4.
+
+| case | 369367259209 (7b8d9921) | 369367259274 (770c4e6c) |
+|---|---|---|
+| WR-90 iris, uniform | `\|S11\|max` 2.1695750 | 2.1695750 (unchanged) |
+| WR-90 iris, graded-dy | `\|S11\|max` 1.8067741 | 1.8067743 (unchanged) |
+| wire port, 5 mm gap, vacuum / PEC plates | n_live 6, -0.7142854 / -0.7142860 | n_live 5, -0.6666666 / -0.6666666 |
+| wire port, 3 mm gap, vacuum / eps_r=10 | n_live 4, -0.6000000 / -0.6000003 | n_live 3, -0.4999999 / -0.5000007 |
+| MSL thru, `\|S21\|` 2-18 GHz | 0.99999 flat | 0.99999 flat (unchanged) |
+
+The iris and MSL rows do not move: neither fixture has a wire port. Every
+wire-port row still sits on `(1-n)/(1+n)` for its own count to seven digits
+and still does not move with the load, which is the module's actual claim.
+
+### Run 4 — `rfx-931-post-t3-measure-r3` (369367259294)
+
+Same yaml, name changed, submitted 2026-09-07 19:32 UTC from commit
+`9ca7d595`. It re-runs the three docstring cases on the fixed tree AND a
+fourth case added to the producer for
+`test_nu_port_sigma_dual_spacing`'s oracle-2 table, whose extents changed.
+Read `commit.txt` before reading its numbers.
+
+### Run 5 — `rfx-931-post-t3-pytest-r5` (369367259300)
+
+Same yaml, name changed, submitted 2026-09-07 20:00 UTC from commit
+`9ca7d595`. The four-directory verdict on the fixed tree. Expected: the
+nine oracle reds gone, the one `test_runner_import_binding.py` red left,
+4 xfailed, ~35 min.
