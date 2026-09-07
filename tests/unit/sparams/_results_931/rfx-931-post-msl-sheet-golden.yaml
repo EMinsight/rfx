@@ -1,5 +1,5 @@
 name: rfx-931-post-msl-sheet-golden
-description: "#931 post-change recapture of the MSL sheet-threading golden. The 13de212 golden records a board this tree no longer builds (one-cell PEC Box trace on a bisecting dx=80um mesh, single wall at node 4); under the lattice ownership contract the foil is a sheet on an on-lattice board (dx=h_sub/3, wall at node 3 = 254um). Runs the module's own documented capture procedure twice to confirm determinism. Branch feat/931-t2-sparams-ports."
+description: "#931 post-change recapture of the MSL sheet-threading golden. The 13de212 golden records a board this tree no longer builds (one-cell PEC Box trace on a bisecting dx=80um mesh, single wall at node 4 = 320um); under the lattice ownership contract the foil is a sheet on an on-lattice board (dx=h_sub/3, one wall at node 3 = 254um). Runs the module's own documented capture procedure twice and refuses to write unless the two are byte-equal. Branch feat/931-t2-sparams-ports. Submit: vessl run create -f rfx-931-post-msl-sheet-golden.yaml"
 tags: [rfx, issue-931, post, msl-sheet-golden, cpu]
 resources:
   cluster: remilab-c0
@@ -43,65 +43,16 @@ run: |-
   export MPLBACKEND=Agg
   export JAX_PLATFORMS=cpu
   "$PY" -c "import jax, rfx, os; print('probe ok | jax', jax.__version__, '| backend', jax.default_backend(), '| rfx', getattr(rfx, '__version__', '?'), '| from', os.path.dirname(rfx.__file__))"
-
   echo "=== capture (twice, determinism check) ==="
   set +e
-  timeout 5400 "$PY" -u - > "$OUT/capture.log" 2>&1 <<'PYEOF'
-  import warnings
-  import numpy as np
-  from pathlib import Path
-
-  import tests.unit.sparams.test_msl_sheet_threading as M
-  from tests._realized_geometry import realized
-
-  out = Path("tests/fixtures")
-  out.mkdir(parents=True, exist_ok=True)
-
-  # Build-time witness first: state the geometry the golden will record.
-  sim = M.build_msl_thru(sheet=None)
-  rz = realized(sim)
-  print("dx            =", rz.grid.dx)
-  print("h_sub/dx      =", M.H_SUB / rz.grid.dx)
-  print("sheet planes  =", rz.sheet_planes)
-  print("wall planes z =", rz.wall_planes(2))
-  print("pec_mask      =", None if rz.pec_mask is None else bool(np.asarray(rz.pec_mask).any()))
-  assert rz.sheet_planes.get(2), "the trace must be declared as a sheet"
-
-  caps = []
-  for i in range(2):
-      s = M.build_msl_thru(sheet=None)
-      with warnings.catch_warnings(record=True) as caught:
-          warnings.simplefilter("always")
-          r = s.compute_msl_s_matrix(freqs=M.FREQS, num_periods=12.0)
-      for w in caught:
-          print(f"[capture {i}] WARN {w.message}")
-      print(f"[capture {i}] settling_db = {np.asarray(r.settling_db)}")
-      caps.append((np.asarray(r.S), np.asarray(r.freqs)))
-
-  S0, F0 = caps[0]
-  S1, _ = caps[1]
-  same = bool(np.array_equal(S0, S1))
-  print("deterministic (two captures byte-equal):", same)
-  print("max |cap0 - cap1| =", float(np.max(np.abs(S0 - S1))))
-  assert same, "capture is not deterministic on this platform; do not commit"
-
-  np.save(out / "golden_msl_sheet_thread_s_931.npy", S0)
-  np.save(out / "golden_msl_sheet_thread_freqs_931.npy", F0)
-  print("wrote golden_msl_sheet_thread_{s,freqs}_931.npy", S0.dtype, S0.shape)
-
-  old = out / "golden_msl_sheet_thread_s_13de212.npy"
-  if old.exists():
-      S_old = np.load(old)
-      print("max |new - pre931 golden| =", float(np.max(np.abs(S0 - S_old))))
-      print("|S11| pre-931:", np.abs(S_old[0, 0]).round(5))
-      print("|S11| post   :", np.abs(S0[0, 0]).round(5))
-  PYEOF
+  timeout 5400 "$PY" -u tests/unit/sparams/_results_931/capture_msl_sheet_thread_golden.py > "$OUT/capture.log" 2>&1
   rc=$?
   set -e
   echo "$rc" > "$OUT/capture.rc"
   tail -n 60 "$OUT/capture.log" || true
+  echo "capture_rc=$rc"
 
-  echo "=== harvest ==="
+  echo "=== harvest: every file the run wrote into the staged checkout ==="
   mkdir -p "$OUT/produced"
   find "$WORK" -type f -newer "$OUT/.tstamp" \
       -not -path "*/.git/*" -not -path "*/__pycache__/*" -not -name "*.pyc" \

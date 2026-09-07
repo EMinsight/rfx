@@ -39,15 +39,27 @@ is, so the branch must be committed before submitting.
 * Cost: ~3 min CPU per capture, captured twice to confirm determinism.
 * Outputs: `tests/fixtures/golden_msl_sheet_thread_s_931.npy` and
   `..._freqs_931.npy`, plus the two pre-#931 files kept beside them as history.
-* **VESSL run id: 369367259166** (submitted 2026-09-07 10:26 UTC,
-  https://app.vessl.ai/remilab/runs/byungkwan/369367259166).
+* Producer script, on the branch and reviewable:
+  `tests/unit/sparams/_results_931/capture_msl_sheet_thread_golden.py`. Two
+  refusals, not warnings: it will not capture unless the trace is actually
+  declared as a z-normal sheet realizing ONE wall plane, and it will not write
+  unless the two captures are byte-equal.
+* **VESSL run 369367259166 FAILED** (submitted 10:26 UTC, dead at 10:26:48
+  before one line of the job ran):
+  `/opt/vessl/scripts/<id>.sh: line 208: syntax error: unexpected end of file
+  (expecting ")")`. Cause, verified: the first yaml carried the capture
+  procedure as a `<<'PYEOF'` heredoc inside the `run:` block. The block itself
+  is valid (`sh -n` on the extracted `run:` string exits 0), and none of the
+  27 baseline yamls in `scratchpad/vessl_baseline/` uses a heredoc — VESSL's
+  own run wrapper rewrites the block and the terminator stops terminating.
+  Do not put a heredoc in a VESSL `run:` block; put the program in a file.
+* **VESSL run id: 369367264022** (resubmitted 2026-09-07 14:31 UTC,
+  https://app.vessl.ai/remilab/runs/byungkwan/369367264022).
   Command: `vessl run create -f rfx-931-post-msl-sheet-golden.yaml` (the yaml
   sits beside this file; submit it from a non-git directory — the CLI cannot
   read a worktree's `.git` file). Run name `rfx-931-post-msl-sheet-golden`,
   preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`. Expected wall clock ~12 min
-  (env install + two captures + a diff against the old golden). It asserts
-  the trace really is declared as a sheet, and refuses to write a golden if
-  the two captures are not byte-equal.
+  (env install + two captures + a diff against the old golden).
   Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-msl-sheet-golden-<ts>/`.
 * Ingest: copy the two `.npy` files onto the branch, point the test's
   `_FIXTURES` load at them, and quote the max deviation against the pre-#931
