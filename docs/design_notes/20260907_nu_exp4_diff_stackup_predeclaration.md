@@ -425,3 +425,224 @@ Two records for #931 (geometry -> lattice ownership), neither changed here:
 - The tie is handled by the design variable moving all four tied cells
   together (the task's second option), with the per-cell one-sided table
   recorded; no softmin.
+
+## Results
+
+Measured 2026-09-07 (KST) on the shared machine (load 5-8, a GPU lane
+running elsewhere), CPU only. Instrument commit for both arms
+`694fdd2b`; `rfx.__file__ =
+/Users/byungkwankim/Documents/rfx-nu-exp4/rfx/__init__.py` printed by every
+call; `git_dirty = false`, `git_modified_tracked = []` on both arm rows; no
+`rfx/` source touched. One attempt per arm, no re-run, no window edited.
+Everything below is read from
+`validation/research/multiband_nu/results/e4_diff_stackup.json`
+(commit `b5aac939`).
+
+### Bring-up record (before any measurement, as section 4 prescribes)
+
+Three instrument defects and one test defect were found and fixed by
+commits before the arms ran; none touches a window:
+
+1. `654028cb` -> `6fae8d59`: the first `--selfcheck` raised `KeyError`
+   (W7's `oracle_selfcheck` returns `i_pass / ip_pass / ipp_pass`, not
+   `all_pass`).
+2. `6fae8d59`: the E4-M map windows (1e-9 m on a 44 mm column) were
+   evaluated in JAX's default float32, where 1e-9 m is 0.27 ulp
+   (`f32_ulp_of_column_m = 3.73e-9`) — unsatisfiable by any map; the
+   largest miss was 1.62e-9 m (length) / 2.12e-9 m (interface), i.e.
+   0.44 / 0.57 ulp. The gated rows now run under the scoped x64 context
+   (W7 pattern): length error 1.4e-17 m, interface error 2.4e-17 m. The
+   float32 rows are recorded alongside (`rows_f32`) as the solver's view:
+   the f32 column is 44 mm to 3.7e-8 relative.
+3. `694fdd2b`: the 200-step L2 smoke (190 ps; the drive starts at
+   t0 = 1 ns) has zero probe energy, S = 0/0, and `int(np.sign(nan))`
+   raised in the judge; signs now go through a NaN-safe helper and a
+   non-finite S is a FIRED row.
+4. `b5aac939` (after the arms, on the test's first run): the fast test's
+   interior-node eps assertion used exact float equality on a computed
+   quotient (`(3 d + 3 d)/(2 d)` = 3.0000000000000004 under x64); now
+   1e-12. Not a note window.
+
+Two `--smoke` calls were made (the second after fix 3); both are in the
+JSON under `smoke` and were used for nothing but "the path runs" (L1
+0.8 s, L2 1.2 s; the L2 smoke row is all zeros / INCONCLUSIVE / FIRED-S
+by construction of its 190 ps length, never judged).
+
+### Selfcheck (auto-run before every arm; all_pass on every call)
+
+Map E4-M all pass (Jacobian worst 1.5e-8 relative in f32, sum
+-1.5e-8; four thin cells bitwise equal at every h; only the thin cells
+attain the minimum). Oracle (i)/(i')/(i'') of W7 pass; `f_res` =
+10 561 719 600.896 Hz (3.6e-14 relative to W7's `F_TRUE_DECLARED`).
+Oracle slopes reproduced (declared vs measured): h_thin +2.22751e10
+Hz/m, eps_thin -2.37789e7 Hz, eps_core -8.35994e8 Hz (all <= 1e-4).
+Kottke column 2.825 / 2.825 / 2.65 (section 1b, to 5e-8). Mask gradient
+probe: no exception, all finite, `max |g| = 0.0` (section 1c). Loss and
+gradient dtype float32.
+
+The discrete line (W7 exact stratified model, dual eps, dx = 0.5 mm):
+**f_c = 10 532 692 515.097 Hz = f_res - 29.027 MHz** (W7 at dx = 0.25 mm:
+-30.097 MHz; the 1.07 MHz difference is e_x at the coarser transverse
+cell). `Delta = 65.563 MHz`, `T = 7.626 ns`, dt 9.53287e-13 s (f32 grid
+9.53287450e-13). Flank frequencies 10 598 255 112.191 / 10 467 129 918.004
+Hz. The discrete model's own slopes: d f_c / d h_thin = +2.43770e10 Hz/m
+(1.094x the oracle: the leapfrog term and the dual weights),
+d f_c / d eps_thin = -2.46371e7 (1.036x), d f_c / d eps_core = -8.40028e8
+(1.005x).
+
+### L1 — probe energy, 120 steps (114 ps), loss0 = 0.0344856 (f32 ulp 3.7e-9)
+
+| parameter | FD step | g_ad | g_fd (central) | FD+ | FD- | rel | sign | quanta | kink | E4-F1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| h_thin | 2 um | -85.02122 | -85.02696 | -84.8118 | -85.2421 | **6.75e-5** | yes | 91 297 | 5.06e-3 | **HELD** |
+| eps_thin | 0.03 | -1.04497e-4 | -1.02508e-4 | +8.07e-6 | -2.131e-4 | **1.94e-2** | yes | 1 651 | 2.157 | **HELD** |
+| eps_core | 0.043 | +1.105828e-2 | +1.106325e-2 | +1.10467e-2 | +1.10798e-2 | **4.49e-4** | yes | 255 400 | 2.99e-3 | **HELD** |
+
+**E4-T (L1, h_thin): kink 5.06e-3 <= 0.15, HELD.** The eps_thin row is
+at a near-stationary point of L1 (its gradient is 100x smaller than
+eps_core's): at the task's 0.03 step the one-sided slopes straddle zero
+(FD+ +8e-6, FD- -2.1e-4) while AD agrees with the central difference to
+1.9 % — curvature at the declared step (curvature scale 0.03 / 2.16 =
+0.014 in eps, 0.5 %), resolved at 1651 quanta; E4-T is declared on
+h_thin only and this row is recorded as is. Wallclock 1.7 s.
+
+**Tie table (AD5 knowledge output, n_tied = 4, cells 20-23 at 0.5 mm;
+the same L1 on the dz vector, cell eps by index, node eps re-assembled):**
+
+| k | g_ad (per cell) | FD+ (one cell) | FD- (one cell) | central | equal-split model FD+ + (FD- - FD+)/4 | AD vs split |
+|---|---|---|---|---|---|---|
+| 20 | -91.6622 | -75.8618 | -139.073 | -107.467 | -91.6645 | 2.5e-5 |
+| 21 | -93.7067 | -77.9554 | -141.099 | -109.527 | -93.7413 | 3.7e-4 |
+| 22 | -90.7755 | -75.0348 | -138.171 | -106.603 | -90.8189 | 4.8e-4 |
+| 23 | -50.7482 | -34.9879 | -98.1316 | -66.5598 | -50.7738 | 5.0e-4 |
+
+On every tied cell the per-cell AD equals the equal-split model to
+<= 5e-4, where the per-cell central FD is off by 15-31 % — the W7 second
+pass's split law, now separated from the mean (n_tied = 4; W7's AD1 had
+n_tied = 2 and could not tell them apart). The chain-rule composition
+`J^T g_dz = -85.021171` against the direct `d L1 / d h_thin =
+-85.021217` (5.4e-7); the design variable moves all four cells together
+and its one-sided differences agree to 5e-3 (E4-T above). Per-cell
+gradients elsewhere: core-1 max |g| 30.6, core-2 58.2, air 4e-19 (the
+pulse does not reach the air in 114 ps: true zeros, W7 AD4 class).
+
+### L2 — narrowband DFT power, 8000 steps (7.626 ns), checkpoint_every 100
+
+`P_nom = 4.91578e-21`, `P_up = 2.84614e-21`, `P_dn = 2.78386e-21`
+(f32 ulp 4.0e-28 / 2.0e-28), `S0 = 0.0110625`. All nine jacobian entries
+finite. Wallclock 11.6 s (one forward + jacrev + 10 FD forwards + compile).
+
+E4-F2 on `P_nom` (FD step 1e-3 relative on every parameter):
+
+| parameter | g_ad | g_fd | FD+ | FD- | rel | sign | quanta | kink | E4-F2 |
+|---|---|---|---|---|---|---|---|---|---|
+| h_thin | +3.70528e-18 | +3.71575e-18 | +3.40889e-18 | +4.02261e-18 | **2.82e-3** | yes | 36 799 | **0.1652** | **HELD** |
+| eps_thin | -9.94690e-23 | -9.93586e-23 | -1.01917e-22 | -9.68006e-23 | **1.11e-3** | yes | 1 476 | 0.0515 | **HELD** |
+| eps_core | -2.75445e-20 | -2.75042e-20 | -2.96099e-20 | -2.53985e-20 | **1.46e-3** | yes | 585 635 | 0.1531 | **HELD** |
+
+The flank rows (reported): `P_up` h_thin 1.31e-2 / eps_thin 4.3e-5 /
+eps_core 1.37e-3; `P_dn` 1.90e-2 / 2.3e-5 / 1.07e-3; all signs agree,
+all resolved (24 177 to 2.39e6 quanta).
+
+**E4-S (physics sign on S):**
+
+| parameter | dS/dp AD | dS/dp FD | s(+h) | s(-h) | sign AD / FD / oracle | quanta | E4-S |
+|---|---|---|---|---|---|---|---|
+| h_thin | **+50.263** | +58.097 | 0.01112972 | 0.01089734 | + / + / + | 249 525 | **HELD** |
+| eps_thin | **-0.590492** | -0.590475 | 0.00929066 | 0.01283351 | - / - / - | 3.80e6 | **HELD** |
+| eps_core | **-18.4898** | -18.4629 | -0.06842000 | +0.09036113 | - / - / - | 1.70e8 | **HELD** |
+
+The line moves up with h_thin and down with either eps, in the solver
+as in the oracle. The literal line the task asked for, reported not
+gated: `sign(d P_nom / d h_thin) = +` and the oracle's `+` agree
+(`P_nom` sits 29 MHz up the lower flank of the discrete line, not at its
+peak, which is why the sign is defined here).
+
+Reported beside E4-S — the sinc^2 / line-shift prediction of dS/dp
+(`dS/d delta = 3.0505e-8 per Hz` at `Delta T = 0.5`, times the slope of
+the line): eps_thin AD / prediction **0.814** (oracle) / 0.786
+(discrete); eps_core **0.725** / 0.722; h_thin **0.074** / 0.068. And the
+FD of S in h_thin is itself one-sided-asymmetric by 2.5x (FD+ 33.6, FD-
+82.6 about a central 58.1, AD 50.3, AD-vs-central 13.5 %) where the eps
+rows are symmetric to 3 % and agree with AD to <= 1.5e-3. Recorded
+as an open observation (section "What is not explained").
+
+Reported 1e-2 rows on L2 (the task's eps step): eps_thin `P_nom` rel
+9.5e-5 at 14 775 quanta, kink 0.581 (11.3x the 1e-3 value for a 10x
+step); eps_core rel **0.157** at 5.07e6 quanta, kink 1.623 (10.6x) —
+the reference is nonlinear at 1e-2 exactly as section 1a predicted (the
+line moves 36 MHz per step, 55 % of Delta), the row is reported not
+gated, and the same AD value agrees with the 1e-3 reference to 1.5e-3.
+`S` at 1e-2: eps_thin FD -0.5903 (AD -0.5905), eps_core FD -16.15 (AD
+-18.49).
+
+**E4-T (L2, h_thin): kink = |FD+ - FD-| / |g_fd| = 0.1652 > 0.15 —
+FIRED.** Recorded as a result, not re-run, window not edited. What the
+recorded numbers say about it (arithmetic on the JSON, no new FDTD):
+
+- a kink would place AD at one of the one-sided slopes or at the split
+  convention's point; on this row AD sits at the MIDPOINT of FD+ and
+  FD- to 1.7 % of their gap (`(g_ad - mid) / (FD+ - FD-) = +0.017`),
+  where the four-way equal split would sit at +0.25 and the tie cannot
+  bite in h_thin at all (all four cells move together; L1 on the same
+  mesh has kink 5.1e-3);
+- the same observable's one-sided asymmetry on the two eps parameters
+  scales LINEARLY with the FD step (eps_thin 0.0515 -> 0.581, eps_core
+  0.153 -> 1.623 for 10x): the signature of a second derivative, not of a
+  discontinuity in the first;
+- so the fired value is curvature of the resonant observable: `h L'' /
+  L' = 0.165` at h = 2 um means `P_nom` changes character over
+  2 um / 0.165 = 12 um of h_thin (0.6 %), against 400 um (14 %) for L1.
+  The window as declared was a kink detector with no curvature allowance
+  for an 8000-step resonant observable; it fired on curvature. The
+  gradient itself HELD (2.8e-3).
+
+### What is not explained (recorded for the next lane, no re-run here)
+
+`dS / d h_thin` from the solver is 0.07 of the line-shift prediction
+that the eps rows meet to 0.7-0.8, and S(h_thin) is strongly nonlinear
+at the 2 um scale (FD+ / FD- = 0.41) where S(eps) is linear. h_thin is
+the only design variable that changes dt (by 3.3e-4 relative per 1e-3
+step: T, the CFL number, the leapfrog term) and the dual weights at the
+interface nodes at the same time; at `Delta T = 0.5` the sinc^2 slope is
+stationary in T to first order, and the discrete model's own `d f_c /
+d h_thin` (+2.44e10, which contains the leapfrog term) is what the
+prediction used. The sign HELD; the magnitude in h_thin is not accounted
+for by the line-shape model and this note does not choose a mechanism. A
+falsifiable next step: the same L2 with dt pinned to the nominal value
+(a constant, outside the map) would separate the dt path from the
+geometry path in one run.
+
+### The question, answered (validity domain)
+
+| claim | inside (measured) | outside / not measured |
+|---|---|---|
+| Thickness h_thin as a design variable through fixed-topology mesh stretching (4 thin cells, both cores absorb) with dual-cell interface eps: jax.grad = central FD in h_thin | A1 stack (4.3 \| 3.0 \| 4.3 \| 1), h_thin = 2 mm, dx = 0.5 mm, PEC, f32; probe energy at 120 steps **6.8e-5**; DFT power at f_res at 8000 steps **2.8e-3**; sign of the resonance proxy correct (+) | h_thin far from 2 mm (the map is linear but the cap-1.4 seam ratio moves with h: 1.4 at 2 mm, 1.53 at 1.8 mm, 1.29 at 2.2 mm); more than one movable layer; a thin layer whose cells stop being the dt minimum (the tie convention then changes which cells split) |
+| Layer permittivity eps_thin / eps_core as design variables (eps by node index, dual-cell weights at interfaces) | L1 **1.9e-2 / 4.5e-4**; L2 **1.1e-3 / 1.5e-3**; signs of the resonance proxy correct (- / -) | lossy / dispersive eps; the eps step 1e-2 on a resonant observable (reference nonlinear: eps_core 0.157 at 1e-2 vs 1.5e-3 at 1e-3) |
+| The four-way dt tie is harmless for the design variable | E4-T HELD on L1 (5.1e-3); per-cell AD = equal-split model to 5e-4 on all four tied cells | one tied cell moved alone (the per-cell central FD is off by 15-31 %, the W7 AD5 record) |
+| Smoothness of the observables in h_thin at a 2 um step | L1 5.1e-3 | **L2 `P_nom` FIRED at 0.165 — curvature, not a kink, by the recorded AD position (midpoint to 1.7 %) and the eps step scaling (linear)**; `S(h_thin)` FD+/FD- = 0.41 |
+| The physics proxy S reads the line shift | eps_thin 0.81, eps_core 0.72 of the sinc^2 prediction | **h_thin 0.07 — unexplained** |
+| Tracer path: `make_nonuniform_grid` + `run_nonuniform(checkpoint_every=100)` + `jax.jacrev` on a 27 755-node grid at 8000 steps | finite, 11.6 s, no exception | GPU; larger grids (memory not measured) |
+| Production geometry paths as differentiation paths | `Box.mask_on_coords`: gradient identically zero (1c); `compute_smoothed_eps_nonuniform`: 2.825 at a 4.3 \| 3.0 node-aligned interface (1b) | — (#931 records) |
+
+Answer to the question of section 0: **yes, today, on the committed NU
+solver** — substrate thickness and layer permittivity are design
+variables with gradients that agree with finite differences in the
+design variable to 6.8e-5 / 1.9e-2 / 4.5e-4 (probe energy) and 2.8e-3 /
+1.1e-3 / 1.5e-3 (narrowband DFT power at the resonance), with the
+resonance moving in the physical direction for all three — PROVIDED the
+materials are attached by node index on a fixed topology and the
+interface eps is the dual-cell fill fraction assembled by the caller,
+neither of which the production geometry path does (1b, 1c, #931). The
+one fired window (E4-T on L2) is curvature of the resonant observable at
+the 2 um step, and one magnitude (dS/dh_thin) is unexplained.
+
+Wallclock: selfcheck 6.5 s per call, L1 1.7 s, L2 11.6 s, the fast test
+3.7 s (2 passed).
+
+### Fast test
+
+`tests/unit/nonuniform/test_e4_diff_stackup.py`: **2 passed in 2.9 s**
+(3.7 s wall). Live L1 at 40 steps on the 6 x 3 mm box: h_thin 1.1e-4
+(28 421 quanta), eps_thin 3.1e-3 (8 197), eps_core 8.7e-5 (95 741), all
+resolved, all within 15 % with sign.
