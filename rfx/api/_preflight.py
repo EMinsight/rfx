@@ -5209,7 +5209,18 @@ class _PreflightMixin:
                 "dy_profile set) -- the shared wire-port primitive "
                 "only covers the uniform-grid path (issue #544)"
             )
-        if ctx.error is None:
+        # A model with no conductor declaration has nothing that can
+        # freeze a port: skip the production assembly (the expensive part
+        # of the context) rather than run it to read an all-False set.
+        has_conductor = bool(getattr(self, "_thin_conductors", None))
+        if not has_conductor:
+            try:
+                has_conductor = any(
+                    self._resolve_material(e.material_name).sigma
+                    >= self._PEC_SIGMA_THRESHOLD for e in self._geometry)
+            except KeyError:
+                has_conductor = False
+        if ctx.error is None and has_conductor:
             realized = ctx.realized()
             if realized is None:
                 classification_unavailable_reason = ctx.assembly_error
