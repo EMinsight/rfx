@@ -384,6 +384,64 @@ def _run_guide(sigma_bulk=SIGMA_BULK, *, f0_mode=True, thickness=THICKNESS,
 # Comparator-first: validate the measurement chain with no FDTD involved
 # ---------------------------------------------------------------------------
 
+def test_the_guide_plates_realize_two_planes_spanning_the_cross_section():
+    """Build-time (no solve): where the plates are, and how wide.
+
+    Every alpha here is a per-unit-length quantity measured between two
+    surface-impedance plates, so the plates' realized planes and footprint
+    ARE the fixture. The declaration is a zero-extent Box on each of
+    z = 0.5 mm and 5.5 mm spanning the full cross-section; this reads back
+    what the lattice ownership contract realizes for it (#931 §1.3).
+
+    WHAT THE CONTRACT CHANGED HERE, measured: the footprint is now sampled
+    CLOSED on the in-plane axes, so each plate gains the rim node it used
+    to drop — x nodes 10..390 (381) where the old half-open rule gave 380,
+    and all 5 y nodes where it gave 4. Neither rim can carry dissipation:
+    the extra x node sits at the terminated hi-x PEC end, outside the fit
+    window, and the y rims are PMC faces where the tangential H the sheet
+    operator dissipates is zero by construction. Alpha is therefore
+    expected to be unchanged — expected, and re-measured rather than
+    assumed (RECOMPUTE.md names the run).
+
+    A note for whoever generalizes ``tests/_realized_geometry.realized``:
+    it cannot be used here. This fixture declares f0 sheets and dielectric
+    Boxes only, so there is no cell mask, no PEC sheet and no wire, and
+    ``realized_pec_edge_masks`` refuses an empty realization by design.
+    """
+    import warnings as _w
+
+    sim = _build_guide()
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        grid = sim._build_grid()
+        specs = []
+        _m, _d, _l, pec, *_rest = sim._assemble_materials(
+            grid, sheet_specs=specs)
+    assert pec is None or not bool(np.asarray(pec).any()), (
+        "the plates are f0 sheets and the graded absorber is dielectric; "
+        "nothing here is a conductor VOLUME")
+    assert len(specs) == 2, len(specs)
+
+    z_nodes = np.asarray(grid.z if hasattr(grid, "z") else None, dtype=float) \
+        if getattr(grid, "z", None) is not None else None
+    planes = sorted(int(sp.plane) for sp in specs)
+    if z_nodes is not None:
+        expect = sorted(int(np.argmin(np.abs(z_nodes - z)))
+                        for z in (Z_SHEET_LO, Z_SHEET_HI))
+        assert planes == expect, (planes, expect)
+    assert planes[1] - planes[0] == int(round((Z_SHEET_HI - Z_SHEET_LO) / DX)), \
+        planes
+
+    for sp in specs:
+        m = np.asarray(sp.mask, dtype=bool)
+        occ = np.argwhere(m)
+        assert int(occ[:, 1].max() - occ[:, 1].min() + 1) == m.shape[1], (
+            "a plate must span the whole y cross-section; the closed "
+            "footprint includes both PMC rim rows")
+        assert int(occ[:, 2].max()) == int(occ[:, 2].min()) == sp.plane, (
+            "a sheet occupies exactly its own plane")
+
+
 def test_comparator_quadrature_reproduces_closed_form():
     """alpha from the analytic TEM field + Rs0 by hand quadrature over the
     actual grid sampling == Rs0/(eta0*b) to rtol 1e-6 (contract)."""

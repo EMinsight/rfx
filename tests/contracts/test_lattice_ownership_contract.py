@@ -959,3 +959,73 @@ def test_degenerate_sheet_and_wire_declarations_are_refused():
 
     with pytest.raises(ValueError, match="at least two nodes"):
         wire_path_edge_masks([(1, 1, 1)], (6, 6, 6))
+
+
+# ---------------------------------------------------------------------------
+# the sigma-fill fence (§1.8)
+# ---------------------------------------------------------------------------
+
+def test_a_sigma_fill_conductor_is_not_a_pec_body():
+    """§1.8: the raw high-sigma ``rasterize`` path is OUT of the contract.
+
+    Three oracle modules (``tests/oracle/test_rcs.py``,
+    ``test_oblique_rcs_specular.py``, ``test_rcs_mie_fixture.py``), cv16,
+    cv21 and the coax stamp model metal as a LOSSY VOLUME: they call
+    ``rasterize(grid, [(shape, eps, 1e7)])`` and hand the resulting
+    ``sigma`` array straight to the kernel. Fields decay INSIDE such a
+    cell; nothing is zeroed on an edge. That is a different operator from
+    PEC realization, and the two must not drift into each other — if a
+    future change routed sigma fills through ``realized_pec_edge_masks``,
+    every RCS gate in the tree would move without a word.
+
+    Two independent differences, measured on the same 12 mm sphere at
+    dx = 2 mm, so the fence is checkable rather than asserted:
+
+    * the sigma path produces NO realized PEC edges at all (it owns no
+      edge, only cell conductivity);
+    * the two paths do not even select the same cells — ``rasterize``
+      samples a shape at NODES while a PEC volume is sampled at cell
+      CENTRES (§1.1), giving 910 vs 912 cells here. Equal counts would be
+      a coincidence, not a contract.
+
+    The threshold that separates the two is
+    ``Simulation._PEC_SIGMA_THRESHOLD`` (1e6 S/m) applied in
+    ``rfx/api/_compile.py`` to a MATERIAL on a geometry entry. A raw
+    ``rasterize`` call never passes through it.
+    """
+    from rfx import Simulation
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    from rfx.geometry.csg import Sphere, rasterize
+    from rfx.grid import Grid
+
+    domain, dx = (0.06, 0.06, 0.06), 2e-3
+    sphere = Sphere(center=(0.03, 0.03, 0.03), radius=0.012)
+
+    grid = Grid(freq_max=10e9, domain=domain, dx=dx, cpml_layers=0)
+    _eps, sigma = rasterize(grid, [(sphere, 1.0, 1e7)])
+    sigma_cells = np.asarray(sigma) > 1e6
+    assert sigma_cells.any()
+
+    sim = Simulation(freq_max=10e9, domain=domain, dx=dx, boundary="pec")
+    sim.add(sphere, material="pec")
+    sheets, wires = [], []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        g2 = sim._build_grid()
+        _m, _d, _l, pec, *_rest = sim._assemble_materials(
+            g2, pec_sheets=sheets, pec_wires=wires)
+    volume_cells = np.asarray(pec, dtype=bool)
+
+    assert not np.array_equal(volume_cells, sigma_cells), (
+        "the sigma-fill and PEC-volume cell selections coincided; they are "
+        "sampled differently (nodes vs centres) and equating them would "
+        "hide the fence")
+    assert int(sigma_cells.sum()) == 910 and int(volume_cells.sum()) == 912, (
+        int(sigma_cells.sum()), int(volume_cells.sum()))
+
+    # the sigma array alone realizes no PEC edge
+    empty = realized_pec_edge_masks(jnp.zeros(g2.shape, dtype=bool))
+    for c in range(3):
+        assert not np.asarray(empty[c]).any()
+    edges = realized_pec_edge_masks(pec, sheets=sheets, wires=wires)
+    assert all(np.asarray(m).any() for m in edges)
