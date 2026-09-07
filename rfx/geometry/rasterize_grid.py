@@ -472,6 +472,35 @@ def sheet_spec_from_shape(shape, coords: GridCoords, cell_sizes=None, *,
     return SheetSpec(normal_axis=a, plane=plane, footprint=jnp.asarray(fp), name=name)
 
 
+def sheet_footprint_traced(shape, coords: GridCoords, normal_axis: int):
+    """Sheet footprint on a TRACED mesh (mesh-as-design-variable), no plane.
+
+    The plane of a sheet is a static integer under the contract, which a
+    traced node line cannot provide, so a PEC sheet is refused there
+    (:func:`sheet_spec_from_shape`). The f0 sheet only needs the footprint
+    mask; this is the traced twin of the concrete rule — a Box footprint is
+    CLOSED on the in-plane axes and one-hot at the nearest node along the
+    normal (``argmin`` first occurrence = the lower plane on an exact tie),
+    any other shape is its own ``mask_on_coords`` — so eager and traced
+    builds agree on the footprint.
+    """
+    from rfx.materials.thin_conductor import sheet_bounds
+    lo, hi = sheet_bounds(shape)
+    if getattr(shape, "corner_lo", None) is None or lo is None:
+        return shape.mask_on_coords(coords.x, coords.y, coords.z)
+    a = int(normal_axis)
+    axes = []
+    for t, nodes in enumerate((coords.x, coords.y, coords.z)):
+        c = jnp.asarray(nodes)
+        if t == a:
+            mid = 0.5 * (float(lo[a]) + float(hi[a]))
+            axes.append(jnp.zeros(c.shape, dtype=bool).at[
+                jnp.argmin(jnp.abs(c - mid))].set(True))
+        else:
+            axes.append((c >= float(lo[t])) & (c <= float(hi[t])))
+    return axes[0][:, None, None] & axes[1][None, :, None] & axes[2][None, None, :]
+
+
 def _box_zero_axes(lo, hi):
     return [i for i in range(3) if float(hi[i]) - float(lo[i]) == 0.0]
 
@@ -510,16 +539,20 @@ def classify_pec_entry(shape, coords: GridCoords, centres: GridCoords,
             return None, sheet_spec_from_shape(
                 shape, coords, cell_sizes, normal_axis=zero[0], name=name), None
         if not traced:
+            subcell = []
             for i in range(3):
                 ext = float(hi[i]) - float(lo[i])
                 mid = 0.5 * (float(lo[i]) + float(hi[i]))
                 d_local = _local_cell(node_axes[i], cell_sizes[i], mid)
                 if 0.0 < ext < d_local * (1.0 - _REL_TOL):
-                    raise ValueError(
-                        f"PEC Box {name!r} is {ext:.6g} m thick along "
-                        f"{'xyz'[i]} against a local cell of {d_local:.6g} m: "
-                        "a Box is a volume; declare a sheet (a zero-thickness "
-                        "Box or add_thin_conductor) or resolve the thickness.")
+                    subcell.append(f"{'xyz'[i]} ({ext:.6g} m against a local "
+                                   f"cell of {d_local:.6g} m)")
+            if subcell:
+                raise ValueError(
+                    f"PEC Box {name!r} is thinner than one cell along "
+                    f"{'; '.join(subcell)}: a Box is a volume; declare a "
+                    "sheet (a zero-thickness Box or add_thin_conductor) or "
+                    "resolve the thickness.")
         mask = pec_volume_cell_mask(shape, centres)
         if not traced and not bool(jnp.any(mask)):
             _refuse_zero_cells(shape, name, "PEC volume")

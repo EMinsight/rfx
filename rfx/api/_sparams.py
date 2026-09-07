@@ -2989,7 +2989,10 @@ class _SparamMixin:
         # REFERENCE runs never receive the ctx (explicit strip at the
         # extractor call sites).
         from rfx.materials.thin_conductor import build_sheet_impedance_ctx as _build_sheet_ctx
-        _wg_sheet_ctx = _build_sheet_ctx(_wg_sheet_specs, pec_mask=pec_mask_wg)
+        from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+        _wg_sheet_ctx = _build_sheet_ctx(
+            _wg_sheet_specs,
+            pec_edge_masks=None if pec_mask_wg is None else _rpem(pec_mask_wg))
         if _wg_sheet_ctx is not None and subpixel_smoothing:
             raise ValueError(
                 "surface-impedance (surface_impedance_f0) sheets are not "

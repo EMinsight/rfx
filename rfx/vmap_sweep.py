@@ -264,7 +264,12 @@ def _apply_batched_thin_conductors(
             # material arrays by design — the sheet is a per-step operator
             # ctx now, and sims carrying one never reach the fast path
             # (has_f0_sheets ineligibility in _build_full_scan_fn).
-            mats, _ = apply_thin_conductor(grid, tc, mats, pec_mask=None)
+            # #931: a PEC thin conductor is a SheetSpec, a no-op on the
+            # material arrays; the batched lane's PEC realization (edge
+            # masks incl. sheets) is wired in the runner (stage C), so the
+            # collector here is deliberately discarded.
+            mats, _ = apply_thin_conductor(grid, tc, mats, pec_mask=None,
+                                           sheets=[])
         return mats.eps_r, mats.sigma, mats.mu_r
 
     return jax.vmap(_one)(eps_r, sigma, mu_r)

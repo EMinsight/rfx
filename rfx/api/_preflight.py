@@ -8168,6 +8168,13 @@ class _PreflightMixin:
         and the named coverage gap for the subgridded FINE lane, which
         still inherits the original defect.
         """
+        # #931 stage B (core agent, minimal): this check compared the
+        # assembly against the #702 resample, which the lattice ownership
+        # contract deleted (a sheet owns no cell). Its replacement is the
+        # ``sheet_slot_vacuum`` WARNING of design note §3, owned by the
+        # preflight agent; until that lands the check is inert rather
+        # than crashing every run() that declares a thin conductor.
+        return
         from rfx.geometry.rasterize_grid import (
             collect_thin_conductor_sheet_inputs, periodic_flags_from_axes,
         )

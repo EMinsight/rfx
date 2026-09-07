@@ -129,6 +129,69 @@ def _assembled_as_pec(sim, entry):
     return float(getattr(mat, "sigma", 0.0) or 0.0) >= thr
 
 
+def _contract_coords(sim, grid, nonuniform):
+    """(node coords, per-cell sizes) on the grid the report audits."""
+    from rfx.geometry.rasterize_grid import (
+        GridCoords, cell_sizes_from_nonuniform_grid, cell_sizes_from_uniform_grid,
+        coords_from_nonuniform_grid)
+    if nonuniform:
+        return coords_from_nonuniform_grid(grid), cell_sizes_from_nonuniform_grid(grid)
+    from rfx.geometry.csg import _grid_coords
+    x, y, z = _grid_coords(grid)
+    return (GridCoords(x=x, y=y, z=z, shape=tuple(grid.shape)),
+            cell_sizes_from_uniform_grid(grid))
+
+
+def _pec_sheet_spec(sim, entry, kind_src, grid, nonuniform):
+    """The :class:`SheetSpec` this entry realizes as under #931, or None
+    when the entry is not a sheet declaration (a PEC volume, a dielectric,
+    a lossy sheet)."""
+    from rfx.geometry.rasterize_grid import sheet_spec_from_shape
+    if kind_src == "thin_conductor":
+        if not getattr(entry, "is_pec", False):
+            return None
+        normal = None
+    else:
+        if not _assembled_as_pec(sim, entry):
+            return None
+        lo = getattr(entry.shape, "corner_lo", None)
+        hi = getattr(entry.shape, "corner_hi", None)
+        if lo is None or hi is None:
+            return None
+        zero = [i for i in range(3) if float(hi[i]) - float(lo[i]) == 0.0]
+        if len(zero) != 1:
+            return None
+        normal = zero[0]
+    coords, sizes = _contract_coords(sim, grid, nonuniform)
+    try:
+        return sheet_spec_from_shape(
+            entry.shape, coords, sizes, normal_axis=normal,
+            refuse_thick=(kind_src == "thin_conductor"))
+    except ValueError:
+        return None
+
+
+def _contract_refusals(sim, grid, nonuniform):
+    """PEC geometry entries the #931 classifier refuses (sub-cell Box, a
+    line/point Box, a zero-cell volume): ``{index: message}``.  The report
+    is input-fidelity-only and must not crash on the very input it exists
+    to explain, so these entries are excluded from the audited assembly
+    and carry a finding instead."""
+    from rfx.geometry.rasterize_grid import cell_centres_from_nodes, classify_pec_entry
+    out = {}
+    coords, sizes = _contract_coords(sim, grid, nonuniform)
+    centres = cell_centres_from_nodes(coords, sizes)
+    for i, entry in enumerate(sim._geometry):
+        if not _assembled_as_pec(sim, entry):
+            continue
+        try:
+            classify_pec_entry(entry.shape, coords, centres, sizes,
+                               name=entry.material_name)
+        except ValueError as exc:
+            out[i] = str(exc)
+    return out
+
+
 def _max_run_length(mask, axis):
     """Longest contiguous run of True along `axis` over occupied lines.
 
@@ -178,13 +241,19 @@ def fidelity_report(sim, print_report: bool = True):
     """
     nonuniform = any(getattr(sim, a, None) is not None
                      for a in ("_dx_profile", "_dy_profile", "_dz_profile"))
+    grid = sim._build_nonuniform_grid() if nonuniform else sim._build_grid()
+    refused = _contract_refusals(sim, grid, nonuniform)
+    sim_audit = sim
+    if refused:
+        import copy
+        sim_audit = copy.copy(sim)
+        sim_audit._geometry = [e for i, e in enumerate(sim._geometry)
+                               if i not in refused]
     if nonuniform:
-        grid = sim._build_nonuniform_grid()
         from rfx.runners.nonuniform import assemble_materials_nu
-        out = assemble_materials_nu(sim, grid)
+        out = assemble_materials_nu(sim_audit, grid)
     else:
-        grid = sim._build_grid()
-        out = sim._assemble_materials(grid)
+        out = sim_audit._assemble_materials(grid)
     mats, pec_mask = out[0], out[3]
     eps = np.asarray(mats.eps_r, dtype=float)
     sigma_arr = np.asarray(mats.sigma, dtype=float)
@@ -622,6 +691,33 @@ def fidelity_report(sim, print_report: bool = True):
         # a PEC mask. Keying on the literal name "pec" made every sheet
         # finding invisible on exactly such a model (the CST board,
         # 2026-08-27) — the tool's whole purpose, silently skipped.
+        if kind_src == "geometry" and i in refused:
+            item["realization"] = "REFUSED by the lattice ownership contract"
+            item["findings"].append(dict(
+                kind="refused-by-contract",
+                detail=refused[i],
+                remedy="declare a sheet (a zero-thickness Box, or "
+                       "add_thin_conductor), a PolylineWire for a filament, "
+                       "or resolve the thickness with the mesh"))
+        sheet_spec = _pec_sheet_spec(sim, entry, kind_src, grid, nonuniform)
+        if sheet_spec is not None:
+            # #931 §1.3: a sheet owns no cell and is not in pec_mask; it is
+            # realized on ONE node plane with a closed footprint.
+            a, k = sheet_spec.normal_axis, sheet_spec.plane
+            z_k = float(nodes[a][k])
+            n_nodes = int(np.asarray(sheet_spec.footprint).sum())
+            mid = 0.5 * (item["declared_lo"][a] + item["declared_hi"][a])
+            item["realization"] = (
+                f"PEC sheet on node plane {_axis_names()[a]} = "
+                f"{z_k * 1e6:.2f} um ({n_nodes} nodes, closed footprint, "
+                "zero thickness, no cell; in-plane E zeroed on that plane, "
+                "normal E live)")
+            item["realized_plane"] = dict(axis=_axis_names()[a], index=int(k),
+                                          coordinate=z_k,
+                                          declared_midplane=float(mid),
+                                          offset_um=(z_k - mid) * 1e6)
+            report.append(item)
+            continue
         pec_frac_self = float(np.mean(pec_mask[mask]))
         realized_conductor = pec_frac_self > 0.5
         declared_sigma = float(item["material"].get("sigma", 0.0) or 0.0)

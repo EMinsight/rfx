@@ -93,7 +93,7 @@ def assemble_materials_nu(
     from rfx.geometry.rasterize_grid import (
         rasterize_geometry, coords_from_nonuniform_grid, extend_cpml_pad_materials,
         cell_sizes_from_nonuniform_grid, centres_from_nonuniform_grid,
-        sheet_spec_from_shape,
+        sheet_footprint_traced, sheet_spec_from_shape,
     )
 
     coords = coords_from_nonuniform_grid(grid)
@@ -250,7 +250,7 @@ def assemble_materials_nu(
                 # variable) has no static plane; there the footprint keeps
                 # the shape's own traced node sampler, as before #931.
                 if any(is_tracer(c) for c in (coords.x, coords.y, coords.z)):
-                    m = tc.shape.mask_on_coords(coords.x, coords.y, coords.z)
+                    m = sheet_footprint_traced(tc.shape, coords, n_axis)
                 else:
                     _spec = sheet_spec_from_shape(
                         tc.shape, coords, cell_sizes, normal_axis=n_axis,
@@ -262,8 +262,6 @@ def assemble_materials_nu(
                 # sheet normal, so the rasterized sheet must occupy exactly
                 # one layer there — and must not have vaporized.
                 check_sheet_occupancy(m, n_axis, lane="non-uniform")
-            else:
-                m = tc.shape.mask_on_coords(coords.x, coords.y, coords.z)
                 # Leontovich band-centre surface-impedance mode (#669/#677):
                 # since #677 the sheet does NOT fold into materials.sigma
                 # (that realized it as a full-cell slab and moved resonances
@@ -272,10 +270,10 @@ def assemble_materials_nu(
                 # node — d_norm the LOCAL E-node dual spacing along the
                 # sheet normal (#671), so sigma_sheet * Rs0 * d_norm == 1 on
                 # every layer of a graded mesh — and realized NODE-THIN by
-                # the per-step operator on the apply_pec_mask tangential
-                # edge set. Thickness deliberately does not enter
-                # (Leontovich loss is thickness-independent). eps_r stays at
-                # background (a sheet is a surface, not a dielectric fill).
+                # the per-step operator on the sheet edge set. Thickness
+                # deliberately does not enter (Leontovich loss is
+                # thickness-independent). eps_r stays at background (a sheet
+                # is a surface, not a dielectric fill).
                 #
                 # Invariant (NU two-run S reference): the sheet is NOT
                 # resident in materials.sigma, so the reference run's
@@ -295,6 +293,7 @@ def assemble_materials_nu(
                         mask=m, normal_axis=n_axis, g_sheet=g_sheet,
                         sigma_sheet=sigma_sheet, plane=_plane))
                 continue
+            m = tc.shape.mask_on_coords(coords.x, coords.y, coords.z)
             sigma_eff = tc.sigma_bulk * (tc.thickness / d_norm.reshape(bshape))
             materials = MaterialArrays(
                 eps_r=jnp.where(m, tc.eps_r, materials.eps_r),

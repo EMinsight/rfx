@@ -169,7 +169,7 @@ def test_refplane_call_site_sees_the_sheet():
     specs: list = []
     _mats, _, _, pec_mask, _, _, _ = sim._assemble_materials(
         grid, sheet_specs=specs)
-    ctx = build_sheet_impedance_ctx(specs, pec_mask=pec_mask)
+    ctx = build_sheet_impedance_ctx(specs)
     assert ctx is not None
     assert pec_mask is None, "fixture must have no PEC at all"
 
@@ -305,7 +305,7 @@ def test_driver_drive_pass_registers_planes_on_the_sheet_trace():
     mats, dsp, lsp, pec_mask, _, _, _ = sim._assemble_materials(
         grid, sheet_specs=specs)
     assert pec_mask is None, "fixture must carry NO pec_mask at all"
-    ctx = build_sheet_impedance_ctx(specs, pec_mask=pec_mask)
+    ctx = build_sheet_impedance_ctx(specs)
     assert ctx is not None
 
     raw = sim._forward_from_materials(

@@ -3,8 +3,9 @@
 Pins the three finding classes the tool exists for, on a fixture built to
 contain each trap exactly once:
 
-* a one-cell PEC ground with dielectric ABOVE it — the sheet's own cell is
-  vacuum inside the cavity ("sheet-own-cell-live", the #693/#702 class);
+* a one-cell PEC ground with dielectric ABOVE it — under the lattice
+  ownership contract (#931) a one-cell PEC volume with walls on BOTH of its
+  bounding node planes and its interior shorted;
 * a patch with deliberately off-lattice x-faces ("off-lattice-face");
 * a dielectric later overwritten by another entity
   ("materialization-overridden");
@@ -70,9 +71,9 @@ def test_finding_classes_are_detected():
     rep = _fixture().fidelity_report(print_report=False)
 
     ground = _geo(rep, 0)
-    assert "one-plane sheet" in ground["realization"]
-    assert "sheet-own-cell-live" in _kinds(ground)
-    assert ground["own_cell_eps_r"][1] <= 1.0 + 1e-6, "ground own-cell must read vacuum"
+    assert "one-cell PEC volume" in ground["realization"]
+    assert "BOTH" in ground["realization"]
+    assert "sheet-own-cell-live" not in _kinds(ground)
 
     patch = _geo(rep, 2)
     assert "off-lattice-face" in _kinds(patch)
@@ -184,20 +185,21 @@ def test_body_inside_the_absorber_is_caught():
     assert "inside-absorber" in kinds
 
 
-def test_inert_two_plane_request_is_reported():
-    sim = _plain()
-    sim.add(Box((2e-3, 2e-3, 3e-3), (8e-3, 8e-3, 6e-3)), material="pec",
-            two_plane=True)
-    item = _geo(sim.fidelity_report(print_report=False), 0)
-    assert "volumetric" in item["realization"]
-    assert "two-plane-inert" in [f["kind"] for f in item["findings"]]
-
-
-def test_multi_axis_thin_body_names_every_thin_axis():
+def test_sub_cell_pec_box_is_reported_as_refused_naming_every_thin_axis():
+    """#931 §1.5: a PEC Box thinner than one cell (here 0.5 mm on a 1 mm
+    grid, along y AND z) is not realized at all — the assembly refuses it.
+    The report must say so on that entity's row, name every sub-cell axis,
+    and still audit the rest of the model instead of crashing."""
     sim = _plain()
     sim.add(Box((2e-3, 5e-3, 5e-3), (8e-3, 5.5e-3, 5.5e-3)), material="pec")
-    item = _geo(sim.fidelity_report(print_report=False), 0)
-    assert "y+z" in item["realization"], item["realization"]
+    sim.add(Box((2e-3, 2e-3, 2e-3), (8e-3, 4e-3, 4e-3)), material="pec")
+    rep = sim.fidelity_report(print_report=False)
+    item = _geo(rep, 0)
+    assert "REFUSED" in item["realization"], item["realization"]
+    f = [x for x in item["findings"] if x["kind"] == "refused-by-contract"]
+    assert f and "along y" in f[0]["detail"] and "; z" in f[0]["detail"], f
+    assert "add_thin_conductor" in f[0]["remedy"]
+    assert "volumetric" in _geo(rep, 1)["realization"]
 
 
 def test_dispersive_material_states_that_poles_are_not_verified():
