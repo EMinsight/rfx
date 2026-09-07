@@ -1,4 +1,4 @@
-"""The node-thin surface-impedance (Leontovich, ``surface_impedance_f0``) sheet:
+"""The surface-impedance (Leontovich, ``surface_impedance_f0``) SHEET:
 operator, identities, lane fences, stacked-layer gap veto, non-Box shapes.
 
 One file for the #677 sheet realization (tier 3b of the 2026-09 test-corpus
@@ -15,7 +15,7 @@ Sections, each formerly its own file:
    registers exactly one live ``SheetImpedanceSpec``, de-PECs the sheet and
    no longer overwrites ``eps_r``. O7: one f0-mode case through the
    ``vmap_sweep`` batched material build vs the serial assembly.
-2. **#677 node-thin sheet operator — unit + limit gates** — was
+2. **#677 sheet operator — unit + limit gates** — was
    ``test_sheet_impedance_operator.py``. Design B (exponential stepping):
    ``E^{n+1} = A*E^n + B*curlH`` with ``A = exp(-x2)``,
    ``B = -expm1(-x2)/sigma_tot``, ``x2 = sigma_tot*dt/(eps0*eps_r)``,
@@ -175,7 +175,7 @@ def test_default_off_identity_and_negative_control_o6():
         d_on, mats_on, pec_on, specs_on = _digests(sim_on)
         assert d_on["sigma"] == _sha(jnp.zeros_like(mats_on.sigma)), (
             f"{kind}: f0 mode wrote into materials.sigma — the #677 "
-            f"node-thin realization must not fold the sheet into arrays")
+            f"sheet realization must not fold the sheet into arrays")
         assert d_on["eps_r"] == _sha(jnp.ones_like(mats_on.eps_r)), (
             f"{kind}: f0 mode overwrote eps_r (removed by #677)")
         assert int(np.asarray(pec_on).sum()) == 0, (

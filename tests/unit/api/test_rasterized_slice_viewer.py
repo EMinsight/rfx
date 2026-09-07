@@ -79,7 +79,7 @@ def test_one_cell_metal_is_invisible_in_permittivity_but_present_in_the_mask():
 
 
 def test_surface_impedance_sheet_is_in_neither_pec_mask_nor_sigma():
-    """#677 made the f0 sheet a node-thin operator.
+    """#677 made the f0 sheet a per-step operator on one node plane.
 
     A viewer that draws ``pec_mask | (sigma > thr)`` shows NOTHING for a board
     whose traces are all surface-impedance sheets. conductor_mask() is the

@@ -1,7 +1,7 @@
 """Issue #695 — one accessor for the WHOLE conductor footprint.
 
-Since #677 a ``surface_impedance_f0`` thin conductor is a node-thin
-per-step operator: it appears in NEITHER ``pec_mask`` NOR
+Since #677 a ``surface_impedance_f0`` thin conductor is a per-step
+operator on ONE node plane: it appears in NEITHER ``pec_mask`` NOR
 ``materials.sigma``.  A conductor-connectivity check written the obvious
 way (``pec_mask | (sigma > 1e3)``) therefore finds nothing and reports a
 healthy model as disconnected.  ``Simulation.conductor_mask()`` /

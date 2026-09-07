@@ -14,12 +14,19 @@ from rfx.visualize3d import (
 
 @pytest.fixture
 def simple_sim():
-    """Create a simple simulation with geometry."""
+    """A simple board: ground foil, substrate, trace foil.
+
+    Ownership (#931 §1.5): ground and trace are foil, declared as SHEETS —
+    zero-thickness Boxes on the substrate's two faces. Drawn one cell thick
+    they were volumes, and the ground's cell then overlapped the substrate's,
+    which is exactly the stack-up ambiguity #702 was about: under the contract
+    a sheet owns no cell, so the substrate keeps the whole 0 .. 2 mm.
+    """
     sim = Simulation(freq_max=5e9, domain=(0.02, 0.02, 0.01), dx=0.001)
     sim.add_material("substrate", eps_r=4.4, sigma=0.01)
-    sim.add(Box((0, 0, 0), (0.02, 0.02, 0.001)), material="pec")
+    sim.add(Box((0, 0, 0), (0.02, 0.02, 0)), material="pec")
     sim.add(Box((0, 0, 0), (0.02, 0.02, 0.002)), material="substrate")
-    sim.add(Box((0.005, 0.005, 0.002), (0.015, 0.015, 0.003)), material="pec")
+    sim.add(Box((0.005, 0.005, 0.002), (0.015, 0.015, 0.002)), material="pec")
     sim.add_port(
         position=(0.01, 0.01, 0.001),
         component="ez",
@@ -76,3 +83,28 @@ def test_save_screenshot_with_field(simple_sim, tmp_path):
                           dpi=72)
     assert os.path.exists(out)
     assert out.endswith(".png")
+
+
+def test_the_two_foils_realize_as_sheets_and_leave_the_substrate_whole(simple_sim):
+    """Build-time (no solve) ownership check for the fixture above (#931 §1.7).
+
+    Two sheets on the substrate's two faces, no PEC cell anywhere, and the
+    substrate's permittivity written at the ground plane too — which is the
+    "a sheet owns no cell" clause read on a stack-up whose dielectric and
+    metal were drawn overlapping.
+    """
+    import numpy as np
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+
+    grid = simple_sim._build_grid()
+    sheets: list = []
+    mats, _, _, pec_mask, _, _, _ = simple_sim._assemble_materials(
+        grid, pec_sheets=sheets)
+    assert pec_mask is None, "foil declared as a sheet owns no cell"
+    planes = sorted(sp.plane for sp in sheets)
+    assert planes == [grid.position_to_index((0.0, 0.0, 0.0))[2],
+                      grid.position_to_index((0.0, 0.0, 0.002))[2]]
+    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
+    assert realized_wall_planes(edges, 2) == planes
+    i, j = grid.shape[0] // 2, grid.shape[1] // 2
+    assert float(np.asarray(mats.eps_r)[i, j, planes[0]]) == pytest.approx(4.4)

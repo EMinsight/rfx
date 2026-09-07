@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from rfx import Box, GaussianPulse, Simulation
+from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
 from rfx.config import (
     execution_to_run_kwargs,
     shape_from_config,
@@ -24,6 +25,15 @@ from rfx.config._waveforms import WAVEFORM_REGISTRY
 
 # A small microstrip-thru config (mirrors examples/config/microstrip_thru.yaml
 # but smaller / shorter so construction is instant).
+#
+# Ownership (#931 §1.5): the ground and the signal trace are FOIL, so they are
+# declared as sheets — zero-thickness Boxes on the two substrate faces. They
+# used to be one cell thick, which the contract reads as filled slabs with a
+# wall on each bounding plane, shortening the substrate cavity by a node plane
+# at each face. A zero-extent axis on a PEC Box IS the sheet declaration, so
+# the entries stay in ``geometry`` and the config schema needs no new field for
+# this spelling; ``thin_conductors:`` (tested at the bottom of this file) is
+# the other spelling, for a lossy or an explicitly-named sheet.
 _CFG = {
     "frequency": {"freq_max": 12e9},
     "domain": {"x": 0.020, "y": 0.012, "z": 0.006},
@@ -33,13 +43,13 @@ _CFG = {
     "materials": {"fr4": {"eps_r": 4.4, "sigma": 0.02}},
     "geometry": [
         {"shape": "box",
-         "bounds": [[0.0, 0.0, 0.0015], [0.020, 0.012, 0.002]],
+         "bounds": [[0.0, 0.0, 0.002], [0.020, 0.012, 0.002]],
          "material": "pec"},
         {"shape": "box",
          "bounds": [[0.0, 0.0, 0.002], [0.020, 0.012, 0.003]],
          "material": "fr4"},
         {"shape": "box",
-         "bounds": [[0.006, 0.0055, 0.003], [0.014, 0.0065, 0.0035]],
+         "bounds": [[0.006, 0.0055, 0.003], [0.014, 0.0065, 0.003]],
          "material": "pec"},
     ],
     "sources": [
@@ -69,9 +79,9 @@ def _build_direct() -> Simulation:
         dx=0.0005,
     )
     sim.add_material("fr4", eps_r=4.4, sigma=0.02)
-    sim.add(Box((0.0, 0.0, 0.0015), (0.020, 0.012, 0.002)), material="pec")
+    sim.add(Box((0.0, 0.0, 0.002), (0.020, 0.012, 0.002)), material="pec")
     sim.add(Box((0.0, 0.0, 0.002), (0.020, 0.012, 0.003)), material="fr4")
-    sim.add(Box((0.006, 0.0055, 0.003), (0.014, 0.0065, 0.0035)), material="pec")
+    sim.add(Box((0.006, 0.0055, 0.003), (0.014, 0.0065, 0.003)), material="pec")
     sim.add_port(
         (0.006, 0.006, 0.002), "ez", impedance=50.0, extent=0.001,
         waveform=GaussianPulse(f0=6e9, bandwidth=0.9, amplitude=1.0),
@@ -126,6 +136,19 @@ def test_dict_vs_direct_equivalence():
 
     # Grid shape is identical
     assert sim_cfg._build_grid().shape == sim_dir._build_grid().shape
+
+    # ... and so is the REALIZED conductor (#931 §1.7): both foils are sheets
+    # on the two substrate faces, neither owns a cell, on either spelling.
+    for sim in (sim_cfg, sim_dir):
+        grid = sim._build_grid()
+        sheets: list = []
+        pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
+        assert pec_mask is None, "foil declared as a sheet owns no cell"
+        planes = sorted(sp.plane for sp in sheets)
+        assert planes == [grid.position_to_index((0.0, 0.0, 0.002))[2],
+                          grid.position_to_index((0.0, 0.0, 0.003))[2]]
+        edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
+        assert realized_wall_planes(edges, 2) == planes
 
 
 def test_yaml_matches_dict(tmp_path):
