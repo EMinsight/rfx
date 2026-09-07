@@ -25,8 +25,12 @@ run: |-
   echo "staged commit: $(cat "$SRC/.staged-commit" 2>/dev/null || echo unknown)"
   python -c "import jax, rfx; print('backend', jax.default_backend(), jax.devices(), '| rfx', rfx.__file__)"
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv || true
-  python scripts/diagnostics/gpu_throughput_bench.py 2>&1 | tee "$OUT/gpu_throughput_bench.log"
-  cp scripts/diagnostics/gpu_throughput_bench_results.json "$OUT/gpu_throughput_bench_results.json"
+  # The bench writes its JSON next to itself; the rsync-staged checkout is
+  # not writable by the container (PermissionError on the baseline run
+  # 369367259061 — numbers were in the log, JSON lost), so run a copy of
+  # the script from $OUT and let it write there.
+  cp scripts/diagnostics/gpu_throughput_bench.py "$OUT/gpu_throughput_bench.py"
+  python "$OUT/gpu_throughput_bench.py" 2>&1 | tee "$OUT/gpu_throughput_bench.log"
   cat "$SRC/.staged-commit" > "$OUT/staged-commit" 2>/dev/null || true
   echo "artifacts: $OUT"
   echo "=== DONE ==="

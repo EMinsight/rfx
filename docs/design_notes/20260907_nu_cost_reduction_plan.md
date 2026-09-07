@@ -105,7 +105,28 @@ report (`SimConfig.summary`) so the user sees the steps x cells price before
 running. No default changes until the law is measured; the preset numbers are
 derived from A1's table and cited.
 
-### Not pursued
+#### G1 baseline — measured (RTX 4090, VESSL run 369367259061, staged 5992675a, 2026-09-07)
+
+Log: `~/Documents/vessl-run-logs/369367259061_rfx-nu-cost-gpu-bench-baseline.log`
+(run deleted after harvest). Marginal-cost differencing, steps 64 -> 1088,
+median of 3 windows:
+
+| n^3 | bare Mcells/s | nu-z Mcells/s | nu-z / bare |
+|---|---|---|---|
+| 100 | 2509 (spread 1165) | 2465 (spread 1517) | 0.98 (noise-dominated) |
+| 200 | 1761 (spread 934) | 1667 (spread 80) | 0.95 |
+| 300 | 2210 (spread 225) | 1788 (spread 83) | **0.81** |
+| 400 | 1736 (spread 78) | 1569 (spread 59) | **0.90** |
+| 512 | OOM | OOM | — |
+
+Consistent with the 2026-08-25 table on this card (2119 / 1784 at 300^3).
+The G1 comparator is the 300^3 and 400^3 rows (spreads < 5 %); the 100^3
+and 200^3 bare rows have spreads of 40-50 % and are not usable as a gate.
+The JSON was lost to a PermissionError (checkout not writable by the
+container); the yaml now runs a copy of the bench from the writable run
+directory.
+
+## Not pursued
 
 Local time stepping / domain-wise dt — excluded by the support matrix (late-
 time interface instability, Xiao et al. TAP 55(7):1981, 2007). Not revisited
