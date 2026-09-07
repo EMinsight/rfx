@@ -637,6 +637,12 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         or getattr(sim, "_dx_profile", None) is not None
         or getattr(sim, "_dy_profile", None) is not None
     )
+    # PRE-EXISTING GAP, not a #931 regression (verified 2026-09-07): this
+    # lane assembles ``pec_mask`` and never applies it. Its step body only
+    # calls the DOMAIN-FACE PEC (``_apply_pec_shmap``); no geometry PEC —
+    # volume, sheet or wire — reaches the field update here. #931 did not
+    # introduce this and does not fix it; threading sheets in would only
+    # make the drop harder to see. Tracked separately.
     if is_nu:
         # dz-profile synthesis happens locally inside
         # _build_nonuniform_grid() — no sim-state mutation here.

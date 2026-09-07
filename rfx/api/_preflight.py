@@ -4947,9 +4947,21 @@ class _PreflightMixin:
                     start=tuple(pe.position), end=tuple(end),
                     component=pe.component, impedance=pe.impedance,
                 )
+                # NOT THIS AGENT'S FILE (#931 stage C): the smallest
+                # change that keeps this check working. Since #931
+                # ``_wire_port_live_cells`` reads the REALIZED edge masks
+                # (a cell is dead iff the port component's own edge is
+                # PEC), not a primal-cell mask; handing it ``pec_mask``
+                # here would raise IndexError. The preflight owner should
+                # take the sheets/wires collectors too, so a
+                # sheet-declared conductor is visible to this check.
+                from rfx.boundaries.pec import (
+                    realized_pec_edge_masks as _rpem_pf,
+                )
+                _pf_edges = _rpem_pf(pec_mask)
                 try:
                     cells, live_flags, _ = _wire_port_live_cells(
-                        grid, wp, pec_mask)
+                        grid, wp, _pf_edges)
                 except ValueError:
                     # Every extent cell is dead: _wire_port_live_cells
                     # raises there (issue #318 — such a port has no live

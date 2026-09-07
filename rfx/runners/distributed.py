@@ -1347,6 +1347,12 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
     )
 
     # Build grid and materials (full domain)
+    # PRE-EXISTING GAP, not a #931 regression (verified 2026-09-07): this
+    # lane assembles ``pec_mask`` and never applies it. Its step body only
+    # calls the DOMAIN-FACE PEC (``_apply_pec_local``); no geometry PEC —
+    # volume, sheet or wire — reaches the field update here. #931 did not
+    # introduce this and does not fix it; threading sheets in would only
+    # make the drop harder to see. Tracked separately.
     grid = sim._build_grid()
     base_materials, debye_spec, lorentz_spec, pec_mask, pec_shapes, *_ = (
         sim._assemble_materials(grid)
