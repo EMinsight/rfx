@@ -96,7 +96,7 @@ setting:
 RETRACTED: an earlier revision FENCED normalize=True modal extraction on the
 strength of a measured column power 1.112-1.164. On the corrected setup modal
 extraction is passivity-CLEAN at every aperture and both rungs (max column
-power 1.0207 at d=7.62/a-30, 1.0013 at d=18.288, ZERO extractor warnings), so
+power 1.0200 at d=7.62/a-30, 1.0012 at d=18.288, ZERO extractor warnings), so
 that non-passivity was a symptom of defects (1)-(3) rather than a
 reflector-inflation property of the extractor. The fence is withdrawn and the
 measurement is committed as modal_extraction_witness.
@@ -181,8 +181,18 @@ CANONICAL = (0.20, 0.50)
 # gates = round-UP(measured envelope x 1.5); the gate test hard-pins these,
 # recomputes the envelopes from the committed data, and regex-binds these
 # constants (PR #475 D1/D2 + #476 prose-binding discipline).
-GATE_FINE_ABS = 0.04    # = round-up(POOLED fine envelope 0.0232 x 1.5)
-GATE_RICH_ABS = 0.01    # = round-up(measured Richardson envelope 0.0051 x 1.5)
+# #931 RE-DERIVED from VESSL run 369367259159 (pass 1 on the migrated
+# builder). The iris now realizes its drawn thickness at both rungs instead of
+# (t_c - 1)*dx, so the oracle is fed the geometry that was actually built and
+# every measured envelope shrank. Nothing here is tuned: each gate is the
+# repo rule applied to the new envelope, and the write-fixture self-check
+# re-derives it and demands exact equality.
+#   fine       envelope 0.0232 -> 0.0106 : round-up(0.0106 x 1.5 = 0.0159) at
+#              quantum 100 = 0.02   (0.04  -> 0.02, TIGHTER by 2x)
+#   Richardson envelope 0.0051 -> 0.0046 : round-up(0.0046 x 1.5 = 0.0069) at
+#              quantum 100 = 0.01   (0.01  -> 0.01, unchanged)
+GATE_FINE_ABS = 0.02    # = round-up(POOLED fine envelope 0.0106 x 1.5)
+GATE_RICH_ABS = 0.01    # = round-up(measured Richardson envelope 0.0046 x 1.5)
 
 # --- issue #812 re-gate (G18-A): PER-CONFIGURATION fine gates -------------
 # The pooled GATE_FINE_ABS above is set by the WORST of eight configurations
@@ -191,15 +201,19 @@ GATE_RICH_ABS = 0.01    # = round-up(measured Richardson envelope 0.0051 x 1.5)
 # envelope x 1.5) -- applied to each configuration's OWN committed envelope,
 # at quantum 1000 (precedent: tests/unit/sparams/test_msl_port_integration.py):
 #
-#   d(mm)   glen  frac   committed gap   gate
-#   18.288  0.20  0.50   0.0122          0.019
-#   12.192  0.20  0.50   0.0223          0.034
-#    7.620  0.20  0.50   0.0097          0.015
-#   18.288  0.20  0.42   0.0145          0.022
-#   12.192  0.20  0.42   0.0232          0.035
-#    7.620  0.20  0.42   0.0097          0.015
-#   12.192  0.16  0.50   0.0222          0.034
-#   12.192  0.24  0.50   0.0222          0.034
+#   d(mm)   glen  frac   pre-#931 gap   gate   #931 gap   #931 gate
+#   18.288  0.20  0.50   0.0122         0.019  0.0079     0.012
+#   12.192  0.20  0.50   0.0223         0.034  0.0101     0.016
+#    7.620  0.20  0.50   0.0097         0.015  0.0034     0.006
+#   18.288  0.20  0.42   0.0145         0.022  0.0102     0.016
+#   12.192  0.20  0.42   0.0232         0.035  0.0106     0.016
+#    7.620  0.20  0.42   0.0097         0.015  0.0035     0.006
+#   12.192  0.16  0.50   0.0222         0.034  0.0100     0.015
+#   12.192  0.24  0.50   0.0222         0.034  0.0100     0.015
+#
+# The #931 column is VESSL run 369367259159 on the corrected thickness, and
+# every gate in it is round-up(that row's own gap x 1.5) at quantum 1000 --
+# the same rule, re-applied, never widened: all eight moved DOWN.
 #
 # GATE_FINE_ABS is RETAINED UNCHANGED (nothing is widened); the per-config
 # gate is strictly tighter and is the binding one.  Why it matters: the audit
@@ -210,14 +224,14 @@ GATE_RICH_ABS = 0.01    # = round-up(measured Richardson envelope 0.0051 x 1.5)
 # predeclaration.md section 2.3/2.4, in a commit PRECEDING the measurement
 # that judges them.
 GATE_FINE_ABS_PER_CONFIG = {
-    "18.288|0.20|0.50": 0.019,
-    "12.192|0.20|0.50": 0.034,
-    "7.620|0.20|0.50": 0.015,
-    "18.288|0.20|0.42": 0.022,
-    "12.192|0.20|0.42": 0.035,
-    "7.620|0.20|0.42": 0.015,
-    "12.192|0.16|0.50": 0.034,
-    "12.192|0.24|0.50": 0.034,
+    "18.288|0.20|0.50": 0.012,
+    "12.192|0.20|0.50": 0.016,
+    "7.620|0.20|0.50": 0.006,
+    "18.288|0.20|0.42": 0.016,
+    "12.192|0.20|0.42": 0.016,
+    "7.620|0.20|0.42": 0.006,
+    "12.192|0.16|0.50": 0.015,
+    "12.192|0.24|0.50": 0.015,
 }
 
 
@@ -513,10 +527,29 @@ def thickness_sweep(oracle_cache=None):
     (a/30, dx = 0.762 mm) at the worst-gap aperture, seven thicknesses,
     roughly 66 s each.
 
-    The residual is not expected to be FLAT in t — discretization error at a
-    fixed dx varies with the obstacle — so the witness is stated as: the t = 1
-    residual lies inside the range spanned by t = 2..8, and no thickness is a
-    step-change outlier against its neighbours.
+    THE CRITERION, and why it is not the one this function shipped with.
+    The witness was first stated as "the t = 1 residual lies inside the range
+    spanned by t = 2..8".  VESSL run 369367259159 measured the residual to be
+    MONOTONE DECREASING in t (0.0312, 0.0246, 0.0207, 0.0179, 0.0157, 0.0139,
+    0.0109 for t = 1,2,3,4,5,6,8), and for any monotone family the t = 1 point
+    is necessarily the extremum, hence necessarily outside the range its own
+    t >= 2 rungs span.  That criterion therefore fails for EVERY outcome: a
+    t = 1 residual of 0.0000 — a perfect one-cell iris — fails it too.  A test
+    that cannot pass carries no information about the physics, so it is
+    retired for vacuity, not because of the answer it gave.  Its verdict is
+    kept in the record (``monotone_range_criterion``) so the retirement is
+    auditable.
+
+    THE REPLACEMENT is an identification test with no tunable constant.  The
+    question the contract actually poses at one cell is *which* thickness the
+    lattice built, and the lattice-blind oracle can be asked directly: for
+    each swept rung, evaluate the oracle at t-1, t and t+1 cells and take the
+    argmin of the residual.  The witness passes when every rung identifies its
+    OWN drawn thickness.  It can fail three ways per rung, and at t = 1 the
+    t-1 alternative is exactly the pre-#931 realization — one wall, a
+    zero-thickness screen — so this is a direct discriminator between the two
+    rules at the one place they disagree.  The margins are reported with the
+    verdict; they are not a gate, because argmin needs no threshold.
     """
     dx = A_WR90 / THICK_SWEEP_RUNG
     rows = []
@@ -525,7 +558,23 @@ def thickness_sweep(oracle_cache=None):
         orc = (oracle_cache or {}).get(t_c) or oracle_s11(THICK_SWEEP_D, t_phys)
         r = run_point(THICK_SWEEP_D, THICK_SWEEP_RUNG, t_cells=t_c)
         gap = max(_gaps(r, orc))
+        # identification: which realized thickness does this trace match?
+        # t-1 at t = 1 is the pre-#931 realization (one wall, zero thickness).
+        ident = {}
+        for n in (t_c - 1, t_c, t_c + 1):
+            o_n = (oracle_cache or {}).get(n) or oracle_s11(THICK_SWEEP_D, n * dx)
+            ident[n] = round(max(abs(a_ - b_) for a_, b_ in zip(r["s11"], o_n)), 4)
+        best = min(ident, key=lambda n: ident[n])
+        runner_up = min(v for n, v in ident.items() if n != best)
         rows.append({"t_cells": t_c, "t_mm": round(t_phys * 1e3, 4),
+                     "identification": {
+                         "gap_at_t_minus_1": ident[t_c - 1],
+                         "gap_at_t": ident[t_c],
+                         "gap_at_t_plus_1": ident[t_c + 1],
+                         "argmin_t_cells": int(best),
+                         "identified_own_thickness": bool(best == t_c),
+                         "margin_vs_runner_up_x": round(
+                             runner_up / max(ident[best], 1e-12), 3)},
                      "realized_aperture_cells": r["realized_aperture_cells"],
                      "realized_thickness_cells": r["realized_thickness_cells"],
                      "iris_wall_nodes": r["iris_wall_nodes"],
@@ -744,11 +793,30 @@ def main(argv):
                   flush=True)
         multi = [r["max_gap_abs"] for r in thick_rows if r["t_cells"] >= 2]
         one = next(r["max_gap_abs"] for r in thick_rows if r["t_cells"] == 1)
+        # RETIRED criterion, still measured and recorded: see the
+        # thickness_sweep docstring for why it can never pass.
         one_cell_on_curve = min(multi) <= one <= max(multi)
-        print(f"  t=1 residual {one:.4f} vs the t=2..8 range "
-              f"[{min(multi):.4f}, {max(multi):.4f}]: "
+        print(f"  [retired, vacuous] t=1 residual {one:.4f} vs the t=2..8 "
+              f"range [{min(multi):.4f}, {max(multi):.4f}]: "
               f"{'ON the curve' if one_cell_on_curve else 'OUTLIER'}")
-        ok &= one_cell_on_curve
+        for r in thick_rows:
+            idn = r["identification"]
+            print(f"  t={r['t_cells']}: oracle gaps at t-1/t/t+1 = "
+                  f"{idn['gap_at_t_minus_1']:.4f}/{idn['gap_at_t']:.4f}/"
+                  f"{idn['gap_at_t_plus_1']:.4f} -> identifies t="
+                  f"{idn['argmin_t_cells']} "
+                  f"({idn['margin_vs_runner_up_x']:.2f}x) "
+                  f"{'OK' if idn['identified_own_thickness'] else 'MISIDENTIFIED'}")
+        identified = all(r["identification"]["identified_own_thickness"]
+                         for r in thick_rows)
+        one_ident = next(r["identification"] for r in thick_rows
+                         if r["t_cells"] == 1)
+        print(f"  GATED: every rung identifies its own thickness -> "
+              f"{'PASS' if identified else 'FAIL'}; at t = 1 the pre-#931 "
+              f"one-wall alternative is "
+              f"{one_ident['gap_at_t_minus_1'] / max(one_ident['gap_at_t'], 1e-12):.2f}x "
+              f"worse than the two-wall one")
+        ok &= identified
 
         payload = {
             "schema": "rfx.wr90_iris_modematch",
@@ -770,22 +838,23 @@ def main(argv):
                 "the oracle with a formulation-independent 2-D H-plane "
                 "FDFD to 6e-4 and measured rfx's same-geometry agreement "
                 "at <= 0.02 — attributed, not imported). GATED: fine rung "
-                "dx = a/60 within 0.04 abs = round-up(measured envelope "
-                "0.0232 x 1.5) over 8 configs (3 apertures x {centred, "
+                "dx = a/60 within 0.02 abs = round-up(measured envelope "
+                "0.0106 x 1.5) over 8 configs (3 apertures x {centred, "
                 "iris off-centre at 0.42 of the guide} + 2 extra guide "
-                "lengths; every config lands within 0.023, so no single "
+                "lengths; every config lands within 0.011, so no single "
                 "configuration sets the envelope), and the Richardson "
                 "extrapolation 2*S(a/60) - S(a/30) on the oracle within "
-                "0.01 abs (envelope 0.0051) at EVERY one of those 8 pairs, "
+                "0.01 abs (envelope 0.0046) at EVERY one of those 8 pairs, "
                 "which cross-confirms the oracle and the first-order "
-                "attribution (gap ratios 0.527-0.604 = textbook first "
+                "attribution (gap ratios 0.407-0.440 = textbook first "
                 "order). REPORTED, NOT GATED: the coarse rung dx = a/30 "
-                "(0.018-0.043 abs); the raw normalize=False record, which "
-                "is WORSE than flux (gaps 0.021-0.054) with a pointwise "
-                "|raw - flux| difference up to 0.033 at the wide aperture; "
+                "(0.008-0.025 abs); the raw normalize=False record, which "
+                "is WORSE than flux (gaps 0.009-0.025) with a pointwise "
+                "|raw - flux| difference up to 0.0068 at the wide "
+                "aperture; "
                 "residual detrended ripple, i.e. a quadratic detrend of "
                 "|S11| MINUS the oracle so the oracle's own curvature is not "
-                "counted (fine <= 0.0077, coarse <= 0.0158, both at the wide "
+                "counted (fine <= 0.0076, coarse <= 0.0152, both at the wide "
                 "aperture with the iris off-centre, down from the 0.0706 the "
                 "PR #480 review measured on the same basis before the "
                 "absorber fix); "
@@ -831,13 +900,22 @@ def main(argv):
                 "lattice-blind mode-matching oracle, so that a one-cell "
                 "PEC body standing two walls has an independent check "
                 "rather than a thin-limit anchor that only speaks about "
-                "t -> 0. "
+                "t -> 0. Each rung is asked to IDENTIFY its own thickness "
+                "-- the oracle at t-1, t and t+1 cells, argmin on t -- and "
+                "all seven do; at t = 1 the pre-#931 one-wall alternative "
+                "(a zero-thickness screen) is 4.33x worse than the two-wall "
+                "one, so the contract's rule at one cell is measured rather "
+                "than assumed. The witness's first-stated criterion (t = 1 "
+                "inside the t = 2..8 range) is RETIRED as vacuous and its "
+                "verdict kept: the residual is monotone in t, so t = 1 is "
+                "the extremum whatever the physics does, and a perfect "
+                "0.0000 would fail it too. "
                 "RETRACTED: an earlier revision fenced normalize=True "
                 "modal extraction on the strength of a measured column "
                 "power 1.112-1.164; on the corrected setup modal "
                 "extraction is passivity-CLEAN at every aperture and both "
-                "rungs (max column power 1.0207 at d = 7.62 mm / a-30, "
-                "1.0013 at d = 18.288 mm, ZERO extractor warnings), so "
+                "rungs (max column power 1.0200 at d = 7.62 mm / a-30, "
+                "1.0012 at d = 18.288 mm, ZERO extractor warnings), so "
                 "that non-passivity was a symptom of defects (1)-(3) and "
                 "not a reflector-inflation property of the extractor — the "
                 "fence is withdrawn and the measurement is committed as "
@@ -848,7 +926,7 @@ def main(argv):
                 "carries the gate. Palace WavePort corroboration (stage S2) "
                 "and a published multi-iris filter (stage S3) are follow-on "
                 "stages, not claimed here. "
-                "APERTURE RESOLUTION (issue #812 re-gate, 2026-09-01): the fine gate is now per-CONFIGURATION -- gate = round-up(that configuration's own committed envelope x 1.5) at quantum 1000, giving 0.019/0.034/0.015/0.022/0.035/0.015/0.034/0.034 for the eight configs -- because the pooled 0.04 was set by the worst configuration and then spent at all eight. Measured against those gates, a one-cell aperture error at each rung (the smallest the grid-snapped geometry can express, and the campaign's own setup defect (3) at half its size) is detected as an OVER-aperture at every configuration and as an UNDER-aperture at only two of the eight, both at the weak aperture and both below the repo's own 1.5x margin. Those counts, the margins and the per-configuration oracle distances are COMMITTED rather than restated here: validation/crossval/_18_wr90_iris_results/aperture_resolution.json, keys summary.over_aperture_detected, summary.over_aperture_min_margin_x, summary.under_aperture_detected, summary.under_aperture_detected_configs and summary.under_aperture_max_margin_x, with the per-configuration rows under pairs[*] (pairs[2] is d = 7.620 mm centred); each one is re-derived from the committed traces by an INDEPENDENT oracle in tests/crossval/test_wr90_iris_modematch_gates.py. A one-cell under-aperture is therefore NOT resolved with margin at any configuration, and at d = 12.192 and d = 7.620 mm it is not resolved at all: at both d = 7.620 configurations the modelled under-aperture defect scores BETTER than the undefected committed row (summary.under_aperture_scores_better_configs; pairs[*].one_cell_defect.under.scores_better_than_undefected), because the fine rung's own staircase error is an effective aperture WIDER than nominal rather than narrower -- over the declared offset grid the committed fine trace's NEAREST oracle sits at d PLUS half a fine cell at all eight configurations (summary.nearest_offset_fine_cells_values; pairs[*].oracle_distance_abs) -- so narrowing the geometry by one cell moves it TOWARD the trace instead of away. CORRECTION (issue #812 round 2): an earlier revision of this paragraph asserted the opposite sign, that the committed fine trace sat closer to the oracle one fine cell NARROW, quoting the under-aperture DEFECT metric as if it were that distance; that claim was mis-sourced and sign-inverted, and aperture_resolution.json is now the only source for this class. The Richardson witness is blind to this whole class in both signs at all eight configurations BY CONSTRUCTION: an aperture error of one cell at each rung is proportional to dx, which is exactly what 2*S(a/60) - S(a/30) is built to remove, so no tightening of its 0.01 gate can catch it and none is attempted. The calibration this case supplies to any downstream multi-iris filter is aperture-resolved to +1 fine cell, NOT to -1. The three declared apertures are now pinned as claims (G18-C): each must be an exact and EVEN integer cell count at BOTH rungs, a geometric condition no one-fine-cell relabel can satisfy."
+                "APERTURE RESOLUTION (issue #812 re-gate 2026-09-01, RE-MEASURED under #931 2026-09-07): the fine gate is per-CONFIGURATION -- gate = round-up(that configuration's own committed envelope x 1.5) at quantum 1000, giving 0.012/0.016/0.006/0.016/0.016/0.006/0.015/0.015 for the eight configs -- because the pooled gate is set by the worst configuration and then spent at all eight. All eight moved DOWN when the thickness deficit closed (0.019/0.034/0.015/0.022/0.035/0.015/0.034/0.034 before it), which is a re-derivation of the same rule on a better geometry, not a re-tuning. Measured against those gates, a one-cell aperture error at each rung (the smallest the grid-snapped geometry can express, and the campaign's own setup defect (3) at half its size) is now detected in BOTH signs at every one of the eight configurations, at worst 1.623x the gate for an over-aperture and 2.608x for an under-aperture. Those counts, the margins and the per-configuration oracle distances are COMMITTED rather than restated here: validation/crossval/_18_wr90_iris_results/aperture_resolution.json, keys summary.over_aperture_detected, summary.over_aperture_min_margin_x, summary.under_aperture_detected, summary.under_aperture_detected_configs, summary.under_aperture_min_margin_x and summary.under_aperture_max_margin_x, with the per-configuration rows under pairs[*] (pairs[2] is d = 7.620 mm centred); each one is re-derived from the committed traces by an INDEPENDENT oracle in tests/crossval/test_wr90_iris_modematch_gates.py. WHAT #931 CHANGED HERE, and it is the whole paragraph: before the contract, the committed fine trace's NEAREST oracle over the declared offset grid sat at d PLUS half a fine cell at all eight configurations, an apparent effective aperture WIDER than nominal; a one-cell under-aperture therefore moved the geometry TOWARD the trace, scored BETTER than the undefected row at both d = 7.620 configurations, and was detected at only two of the eight. That half-cell offset was not an aperture property at all -- it was the thickness deficit ((t_c - 1)*dx instead of t) reading out on the aperture axis, the two being the only free dimensions of a symmetric iris. With the realized thickness equal to the drawn one, the nearest oracle sits at the DECLARED d at all eight configurations (summary.nearest_offset_fine_cells_values == [0.0]), no defect scores better than the undefected row (summary.under_aperture_scores_better_configs == []), and the asymmetry between the two signs is gone. CORRECTION HISTORY (issue #812 round 2): an earlier revision of this paragraph asserted that the committed fine trace sat closer to the oracle one fine cell NARROW, quoting the under-aperture DEFECT metric as if it were that distance; that claim was mis-sourced and sign-inverted, and aperture_resolution.json is the only source for this class. The Richardson witness is blind to this whole class in both signs at all eight configurations BY CONSTRUCTION: an aperture error of one cell at each rung is proportional to dx, which is exactly what 2*S(a/60) - S(a/30) is built to remove, so no tightening of its 0.01 gate can catch it and none is attempted. The calibration this case supplies to any downstream multi-iris filter is aperture-resolved to one fine cell in both signs. The three declared apertures are pinned as claims (G18-C): each must be an exact and EVEN integer cell count at BOTH rungs, a geometric condition no one-fine-cell relabel can satisfy."
             ),
             "config": {
                 "a_m": A_WR90, "b_m": B_WR90, "t_m": T_IRIS,
@@ -878,7 +956,7 @@ def main(argv):
                            "extraction is no longer fenced (retracted, see "
                            "provenance) but structures beyond one symmetric "
                            "inductive iris remain fenced, never gated"
-                           "; issue #812 re-gate: the BINDING fine gate is now per-configuration, gate = round-UP(that configuration's own envelope x 1.5) at quantum 1000, with the pooled 0.04 retained unchanged as a ceiling and the one-cell aperture detection table gated as its own claim",
+                           "; issue #812 re-gate: the BINDING fine gate is now per-configuration, gate = round-UP(that configuration's own envelope x 1.5) at quantum 1000, with the pooled 0.02 kept as a ceiling and the one-cell aperture detection table gated as its own claim; #931: pooled 0.04 -> 0.02 and all eight per-config gates re-derived DOWN from the corrected-thickness envelopes (VESSL 369367259159), never widened",
             },
             "gated_fine": fine_rows,
             "one_cell_volume_witness": {
@@ -893,17 +971,36 @@ def main(argv):
                          "one. Here the mode-matching oracle — which takes the "
                          "physical t and knows nothing about the lattice — is "
                          "run against rfx at t = 1..8 cells on the coarse "
-                         "rung at the worst-gap aperture. The witness passes "
-                         "when the t = 1 residual lies inside the range the "
-                         "t = 2..8 rungs span; the residual is not expected "
-                         "to be flat in t, since discretization error at "
-                         "fixed dx varies with the obstacle."),
+                         "rung at the worst-gap aperture. GATE: every swept "
+                         "rung must IDENTIFY its own drawn thickness — the "
+                         "oracle is evaluated at t-1, t and t+1 cells and the "
+                         "residual argmin must land on t. At t = 1 the t-1 "
+                         "alternative is precisely the pre-#931 realization "
+                         "(one wall, a zero-thickness screen), so the rule in "
+                         "dispute is decided by a measurement rather than by "
+                         "a convention. RETIRED, and recorded rather than "
+                         "deleted (monotone_range_criterion): the original "
+                         "statement — the t = 1 residual lies inside the "
+                         "range t = 2..8 spans — turned out to be vacuous "
+                         "once the residual was measured to be monotone "
+                         "decreasing in t, because then t = 1 is the "
+                         "extremum for every possible outcome, a perfect "
+                         "0.0000 included. It was retired for having no "
+                         "power in either direction, not for its verdict."),
                 "aperture_mm": round(THICK_SWEEP_D * 1e3, 3),
                 "cells_per_a": THICK_SWEEP_RUNG,
                 "rows": thick_rows,
                 "one_cell_gap_abs": one,
                 "multi_cell_gap_range_abs": [min(multi), max(multi)],
-                "passed": bool(one_cell_on_curve),
+                "identified_every_thickness": bool(identified),
+                "one_cell_two_wall_vs_one_wall_x": round(
+                    one_ident["gap_at_t_minus_1"]
+                    / max(one_ident["gap_at_t"], 1e-12), 3),
+                "monotone_range_criterion": {
+                    "verdict": bool(one_cell_on_curve),
+                    "status": "RETIRED — vacuous for a monotone residual",
+                },
+                "passed": bool(identified),
             },
             "one_cell_aperture_detection_witness": one_cell,
             "modal_extraction_witness": modal_witness,
@@ -933,8 +1030,8 @@ def main(argv):
                     "runs carried the d + 2*dx electrical aperture and a "
                     "0.5*lambda_g absorber. On the corrected setup the "
                     "same runs are passivity-CLEAN (see "
-                    "modal_extraction_witness: 1.0207 / 1.0101 / 1.0144 / "
-                    "1.0013, zero extractor warnings), so the fence is "
+                    "modal_extraction_witness: 1.0200 / 1.0099 / 1.0150 / "
+                    "1.0012, zero extractor warnings), so the fence is "
                     "RETRACTED: the non-passivity was a setup symptom, not "
                     "an extractor property. Recorded so the withdrawn "
                     "claim stays auditable."
