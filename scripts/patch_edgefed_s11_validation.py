@@ -115,9 +115,12 @@ def main() -> int:
     # Preflight (user directive 2026-05-20: never ignore preflight). What this
     # fixture draws on the on-lattice mesh: the lossless-dielectric infinite-Q
     # advisory (RO4003C is modelled with sigma = 0 here — real, and it is why
-    # the gate below is passivity, not Q), and the sheets-dropped notice, which
-    # is rfx's own plumbing gap (preflight assembles without a PEC-sheet
-    # collector, #931 §6) and not a finding about this geometry.
+    # the gate below is passivity, not Q). The sheets-dropped notice that used
+    # to accompany it is GONE and was never about this geometry: preflight
+    # assembled without a PEC-sheet collector (#931 §6), and it passes one now
+    # (rfx/api/_preflight.py::_assemble_realized, merged ab56f5b2), so the
+    # advisory it stood in for — where each foil actually realized — is the
+    # sheet_plane_realized INFO instead.
     #
     # Three advisories the old drawing produced are gone, and for a reason
     # worth recording: the off-lattice conductor faces, the buried-sheet
