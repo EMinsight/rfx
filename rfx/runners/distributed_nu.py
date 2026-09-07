@@ -460,9 +460,9 @@ def shard_pec_occupancy_x_slab(global_occupancy, sharded_grid: ShardedNUGrid):
     analogue of :func:`shard_pec_mask_x_slab` and mirrors its slab layout
     convention exactly: each rank owns the cells in its real-cell range, and
     the ghost cells at the slab seam carry the neighbour rank's occupancy so
-    that the per-component tangential occupancy (built via
-    ``occ * jnp.maximum(roll(occ, +1), roll(occ, -1))``) sees the correct
-    neighbour at the first / last real cell.
+    that the per-component occupancy (the §1.6 noisy-OR of the four
+    incident cells, from the shared helper) sees the correct neighbour at
+    the first / last real cell.
 
     Parameters
     ----------
@@ -480,13 +480,11 @@ def shard_pec_occupancy_x_slab(global_occupancy, sharded_grid: ShardedNUGrid):
     Notes
     -----
     Ghost cells at physical domain boundaries are padded with ``0.0``
-    (no occupancy).  This differs from :func:`shard_pec_mask_x_slab`,
-    which pads with ``True`` so :func:`apply_pec_mask`'s tangential rule
-    still recognises the boundary face as PEC.  For the occupancy
-    primitive, the boundary face is enforced separately by
-    :func:`_apply_pec_face_nu_shmap`, so the soft-PEC ghost padding stays
-    at ``0.0`` to avoid biasing the soft-occupancy contribution at the
-    domain edge.
+    (no occupancy) — the #689/#931 zero pad.  Since #931
+    :func:`shard_pec_mask_x_slab` pads with ``False`` for the same reason,
+    so the hard and soft twins agree at the domain edge as the contract
+    requires.  The boundary face's own PEC is enforced separately by
+    :func:`_apply_pec_face_nu_shmap`.
     """
     if global_occupancy is None:
         return None
@@ -580,10 +578,16 @@ def shard_pec_mask_x_slab(global_mask, sharded_grid: ShardedNUGrid):
     )
 
     # Build per-device slabs with ghost cells.  Ghost cells at the
-    # physical boundary are PEC=True (matches the high-x pad and is
-    # consistent with apply_pec on the domain face); interior ghosts
-    # carry the neighbour's PEC status so apply_pec_mask sees a
-    # correct neighbour-set when computing tangential masks.
+    # PHYSICAL boundary are False — the #689/#931 zero pad, "no conductor
+    # outside the domain", the same convention the single-device lane and
+    # ``shard_pec_occupancy_x_slab`` use.  They were True until #931,
+    # which was inert under the old neighbour rule (a vacuum cell was
+    # never zeroed however its neighbour read) but under the volume rule
+    # would put a spurious PEC wall on the whole x_lo / x_hi node plane of
+    # the outer ranks, shorting a CPML face.  The domain face's own PEC is
+    # applied by ``_apply_pec_face_nu_shmap``, not by this mask.  INTERIOR
+    # ghosts still carry the neighbour rank's PEC status, which is what
+    # makes the first/last real cell see its true x neighbour.
     slabs = jnp.zeros((n_devices, nx_local, ny, nz), dtype=jnp.bool_)
     for d in range(n_devices):
         lo = d * nx_per
@@ -591,14 +595,10 @@ def shard_pec_mask_x_slab(global_mask, sharded_grid: ShardedNUGrid):
         slabs = slabs.at[d, ghost:ghost + nx_per, :, :].set(global_mask[lo:hi])
         if d > 0:
             slabs = slabs.at[d, 0, :, :].set(global_mask[lo - 1])
-        else:
-            # Domain boundary at x_lo: ghost is PEC=True (matches apply_pec)
-            slabs = slabs.at[d, 0, :, :].set(True)
+        # else: domain boundary at x_lo — ghost stays False (zero pad)
         if d < n_devices - 1:
             slabs = slabs.at[d, -1, :, :].set(global_mask[hi])
-        else:
-            # Domain boundary at x_hi: ghost is PEC=True
-            slabs = slabs.at[d, -1, :, :].set(True)
+        # else: domain boundary at x_hi — ghost stays False (zero pad)
 
     # Reshape to sharded layout: (n_devices * nx_local, ny, nz)
     return slabs.reshape(n_devices * nx_local, ny, nz)
