@@ -371,3 +371,43 @@ def test_cv15_declaring_the_sheets_changes_no_material(capsys):
         "sheet owns no cell and writes no material (#931 §1.3)")
     assert np.array_equal(np.asarray(mats.sigma), np.asarray(bare_mats.sigma)), (
         "declaring the two PEC sheets changed the conductivity array")
+
+
+def test_cv15_feed_decomposition_arm_reproduces_the_pre931_port(capsys):
+    """#931 changed the conductor DECLARATIONS and the FEED in one step, and
+    the measured f0 moved 5.3 % (2.3139 -> 2.4366 GHz). Two changes, one
+    number: the attribution needs a measurement, not an argument.
+
+    ``build_rfx_sim(feed="pre931")`` is that measurement's other arm -- the
+    production sheets with the OLD port, starting 1.0*DX above the substrate
+    floor and spanning 2*DX ("cells strictly between GP & patch"). Pinned here
+    so the arm cannot rot into something that is no longer the old feed, which
+    would make the decomposition meaningless while still producing a number.
+
+    The stack check must pass on BOTH arms: the feed is not supposed to touch
+    the realized walls (a port releases only the one component it drives,
+    design note §6), and if it did, the decomposition would be measuring two
+    things again.
+    """
+    cv15 = _load_cv15()
+    _sim, _ps, geom = cv15.build_rfx_sim(do_gain=False, feed="full_span")
+    assert geom["port_z0"] == pytest.approx(cv15.AIR_BELOW, abs=1e-12)
+    assert geom["port_extent"] == pytest.approx(cv15.H_SUB, abs=1e-12)
+
+    sim, grid, patch_shape = _build_test_sim(cv15, feed="pre931")
+    _s, _p, geom_old = cv15.build_rfx_sim(do_gain=False, feed="pre931")
+    assert geom_old["port_z0"] == pytest.approx(
+        cv15.AIR_BELOW + 1.0 * cv15.DX, abs=1e-12)
+    assert geom_old["port_extent"] == pytest.approx(2.0 * cv15.DX, abs=1e-12)
+
+    sc = cv15.assert_realized_stack(sim, grid, patch_shape)
+    capsys.readouterr()
+    assert sc["ground_realization"] == "sheet"
+    assert sc["patch_realization"] == "sheet"
+    assert sc["n_distinct_eps"] == cv15.N_DISTINCT_EPS_EXPECTED
+
+
+def test_cv15_builder_rejects_an_unknown_feed():
+    cv15 = _load_cv15()
+    with pytest.raises(ValueError, match="feed"):
+        cv15.build_rfx_sim(feed="two_plane")

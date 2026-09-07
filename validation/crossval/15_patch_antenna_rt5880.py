@@ -436,7 +436,7 @@ def assert_realized_stack(sim, grid, patch_shape=None):
 
 
 def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
-                  patch_kind: str = "sheet"):
+                  patch_kind: str = "sheet", feed: str = "full_span"):
     """Build cv15's rfx Simulation WITHOUT solving it -- the production
     geometry, feed, probe and (optionally) NTFF box exactly as ``run_rfx``
     uses them. Returns ``(sim, patch_shape, geom)`` with ``geom`` the
@@ -473,7 +473,21 @@ def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
     ``assert_realized_stack`` has a live falsifier through the PRODUCTION
     builder rather than a test-local mirror (the #740 review's finding): the
     check is only evidence if some reachable declaration makes it fire.
+
+    ``feed`` selects the port span. ``"full_span"`` is the production value:
+    ``z_sub_lo -> z_sub_hi``, standing ON the ground sheet plane, which is
+    what the openEMS ``AddLumpedPort`` spans. ``"pre931"`` is the DECOMPOSITION
+    arm, not a supported configuration: the old feed, starting 1.0*DX above the
+    floor and spanning 2*DX. #931 changed the conductor declarations AND the
+    feed in one step, so the before/after f0 has two candidate causes; running
+    ``feed="pre931"`` with the production sheets isolates them. Keep it: the
+    measured shift is 5.3 %, and an attribution that large may not rest on
+    reasoning alone.
     """
+    if feed not in ("full_span", "pre931"):
+        raise ValueError(
+            f"build_rfx_sim: feed must be 'full_span' (production) or 'pre931' "
+            f"(the decomposition arm), got {feed!r}")
     if patch_kind not in ("sheet", "volume_1cell"):
         raise ValueError(
             f"build_rfx_sim: patch_kind must be 'sheet' (production) or "
@@ -541,8 +555,12 @@ def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
     # PEC" (#929 defect 1). A port also releases only the ONE component it
     # drives (design note §6), so this ez feed cannot punch a hole in the
     # ground sheet's tangential walls.
-    port_z0 = z_sub_lo
-    port_extent = H_SUB
+    if feed == "full_span":
+        port_z0 = z_sub_lo
+        port_extent = H_SUB
+    else:                                    # decomposition arm only
+        port_z0 = z_sub_lo + 1.0 * DX
+        port_extent = 2.0 * DX
     sim.add_port(position=(feed_x, cy, port_z0), component="ez",
                  impedance=50.0, extent=port_extent,
                  waveform=GaussianPulse(f0=F_DESIGN, bandwidth=1.0))
@@ -559,11 +577,13 @@ def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
                          corner_hi=(DOM_X - pad, DOM_Y - pad, DOM_Z - pad),
                          freqs=np.array([2.2e9, 2.3e9, 2.4e9, 2.5e9]))
     geom = dict(z_sub_lo=z_sub_lo, z_sub_hi=z_sub_hi, z_ground=z_ground,
-                patch_kind=patch_kind, feed_x=feed_x, cy=cy)
+                patch_kind=patch_kind, feed=feed, port_z0=port_z0,
+                port_extent=port_extent, feed_x=feed_x, cy=cy)
     return sim, patch_shape, geom
 
 
-def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None):
+def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
+            feed="full_span", out_name="rfx.json"):
     sys.path.insert(0, REPO_ROOT)
     import io
     import contextlib
@@ -575,7 +595,8 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None):
     _geom_banner()
 
     sim, patch_shape, _geom = build_rfx_sim(do_gain=do_gain,
-                                            ground_plane_z=ground_plane_z)
+                                            ground_plane_z=ground_plane_z,
+                                            feed=feed)
     z_sub_lo, z_sub_hi = _geom["z_sub_lo"], _geom["z_sub_hi"]
 
     # ---- Build the actual grid: exact dt + FAITHFUL substrate rasterization ----
@@ -675,8 +696,10 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None):
         f_analytic_hz=fr_an,
         gain_dbi=d_dbi, preflight=preflight_txt,
         stack_check=stack_check,
+        feed=_geom["feed"], port_z0=_geom["port_z0"],
+        port_extent=_geom["port_extent"],
     )
-    with open(os.path.join(RES_DIR, "rfx.json"), "w") as fp:
+    with open(os.path.join(RES_DIR, out_name), "w") as fp:
         json.dump(out, fp, indent=2)
     print(f"\n[rfx] PRIMARY f0 (ring-down Harminv) = "
           f"{f_harminv/1e9 if f_harminv else float('nan'):.4f} GHz "
@@ -684,7 +707,7 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None):
           f"S11 local dip {f_dip/1e9:.4f} GHz @ {s11_dip_db:.2f} dB (shallow, "
           f"secondary) | analytic {fr_an/1e9:.4f} GHz | max|S11|={max_abs:.3f}"
           + (f" | D={d_dbi:.2f} dBi (order-of-mag)" if d_dbi is not None else ""))
-    print(f"saved {os.path.join(RES_DIR, 'rfx.json')}")
+    print(f"saved {os.path.join(RES_DIR, out_name)}")
 
 
 def _harminv_f0(ts, dt_ts):
@@ -1145,6 +1168,17 @@ def main():
     ap.add_argument("--n-freqs", type=int, default=181)
     ap.add_argument("--gain", action="store_true", help="compute NTFF broadside directivity")
     ap.add_argument("--f0-env-pct", type=float, default=8.0)
+    ap.add_argument("--feed", choices=["full_span", "pre931"],
+                    default="full_span",
+                    help="port span. full_span (production, #931) reaches the "
+                         "ground sheet plane; pre931 is the DECOMPOSITION arm "
+                         "-- the old 2*DX feed one cell above the floor -- "
+                         "which separates the feed term from the conductor "
+                         "declaration term in the #931 before/after")
+    ap.add_argument("--out-name", default=None,
+                    help="filename under _15_patch_results for the rfx leg "
+                         "(default rfx.json; the decomposition arm must NOT "
+                         "overwrite the production leg)")
     a = ap.parse_args()
     # Solver-producing modes write a result leg and are not themselves gated;
     # only `compare` evaluates the configured gates and can return 1.
@@ -1155,7 +1189,11 @@ def main():
         run_openems(a.n_freqs, a.gain)
         return 0
     if a.mode == "rfx":
-        run_rfx(a.num_periods, a.n_freqs, a.gain)
+        out_name = a.out_name or (
+            "rfx.json" if a.feed == "full_span"
+            else f"rfx_decomposition_feed_{a.feed}.json")
+        run_rfx(a.num_periods, a.n_freqs, a.gain, feed=a.feed,
+                out_name=out_name)
         return 0
     return 0 if compare(a.f0_env_pct) else 1
 
