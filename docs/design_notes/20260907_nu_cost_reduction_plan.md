@@ -126,6 +126,80 @@ The JSON was lost to a PermissionError (checkout not writable by the
 container); the yaml now runs a copy of the bench from the writable run
 directory.
 
+### G1 ablation — pre-declared (2026-09-07, written BEFORE the first GPU run)
+
+Premise check (lead, 2026-09-07): under the CPML-8 bench condition the
+uniform lane's fused fast path is gated OFF (`_fast_eligible` requires no
+CPML, `rfx/simulation.py` ~2000-2025), so BOTH lanes run their slow
+steppers (`update_h`/`update_e` vs `update_h_nu`/`update_e_nu`) and both
+recompute `sigma_dt_2eps`/`ca`/`cb` every step. Whether XLA hoists that
+loop-invariant arithmetic out of the `lax.scan` body is UNKNOWN. The
+0.81 / 0.90 gap therefore has to be ATTRIBUTED, not assumed, before any
+refactor: the instrument is
+`validation/research/nu_cost/w8_nu_kernel_ablation.py`
+(`scripts/vessl_nu_cost_ablation.yaml`, RTX 4090, same harness as the
+baseline: marginal-cost differencing 64 -> 1088, 3 windows, median +
+spread, fp32, one soft source, `skip_preflight=True` which is host-side
+fixed cost the differencing removes). No `rfx/` source changes; every arm
+is an in-process monkeypatch on the module attribute the step body binds.
+
+Arms and fixtures:
+
+| arm | lane / mesh | patch | reference | bit-identity expected | fixtures |
+|---|---|---|---|---|---|
+| bare | uniform / uniform | — | — | — | cpml8 300, 400; pec 300 |
+| nu-uniform | NU / uniform-valued profile | — | — | — | cpml8 300, 400; pec 300 |
+| nu-z | NU / 4:1 graded | — | — | — | cpml8 300, 400; pec 300 |
+| nu-z-hoist | NU / graded | `update_e_nu` coefficients computed once (`ensure_compile_time_eval`, same expression, same op order) | nu-z | yes | cpml8 300, 400 |
+| bare-hoist | uniform / uniform | same hoist on `update_e` | bare | yes | cpml8 300, 400 |
+| nu-z-nopec | NU / graded | `apply_pec` skipped | nu-z | **no** (physics differs; attribution only) | pec 300 |
+| nu-z-scalar-inv | NU / uniform-valued | six `inv_*` broadcast vectors -> scalars of the same float32 value | nu-uniform | yes | cpml8 300, 400 |
+
+Bit-identity check, mandatory and in-process BEFORE any timing: each
+patched arm runs 64 steps on a 96^3 box of its fixture with and without
+its patch; `np.array_equal` on ex..hz (float32). An arm whose patch moves a
+bit is timed but flagged and can never become an implementation candidate.
+The instrument also records whether the hoist actually produced concrete
+arrays (`hoisted`) and whether the uniform fused fast path was traced
+(`fast_path_seen`; on GPU it will be for `bare` on the pec fixture — that
+arm is then the fused target, not the slow path, and is read as such).
+
+Attribution table (filled from the JSON, cost units c = 1/rate normalised
+by c_bare, one row per fixture/n):
+
+| fixture / n | nu-z / bare | gap = c_nuz/c_bare − 1 | graded access (nu-z − nu-uniform) | NU code path (nu-uniform − bare) | broadcast (nu-uniform − scalar-inv) | hoist total (nu-z − nu-z-hoist) | hoist common (bare − bare-hoist) | hoist NU-specific | PEC pass (nu-z − nopec, pec fixture) | sum check |
+|---|---|---|---|---|---|---|---|---|---|---|
+| cpml8 / 300 | | | | | | | | | — | |
+| cpml8 / 400 | | | | | | | | | — | |
+| pec / 300 | | | | | — | — | — | — | | |
+
+Implementation rule (declared now): an arm becomes an implementation
+candidate only if it is bit-identical AND beats its reference by more than
+2x the larger of the two spreads AND by >= 3 %, on BOTH 300^3 and 400^3
+(cpml8). Anything less is noise or not worth a refactor under the
+bit-identity gate. `nu-z-nopec` is excluded by construction (not physics-
+identical); it only prices the separate pass.
+
+Sum check (declared now): the disjoint pieces graded access + broadcast +
+hoist NU-specific (+ PEC pass on the pec fixture), each clipped at 0, must
+sum to no more than the measured gap (1/0.81 − 1 = 0.23 at 300^3,
+1/0.90 − 1 = 0.11 at 400^3) plus the spread tolerance (sum of the
+contributing rows' spreads in cost units). If they sum to more, the
+instrument is wrong and nothing from it is used. The G1 ceiling stands:
+no arm can be credited with more than the gap itself.
+
+Expectations, not gates: the NU code path piece and the graded-access
+piece together equal the gap exactly (telescoping); the hoist is either a
+common win (bare-hoist moves too) or nothing (XLA already hoists) — the
+instrument decides which; the broadcast piece is expected small (the 1-D
+reads fuse into the elementwise kernel).
+
+Smoke (CPU, `--smoke`, 32^3, 64-step identity check, run before commit):
+nu-z-hoist / bare-hoist / nu-z-scalar-inv bit-identical to their
+references (0 differing elements, `hoisted=True`), nu-z-nopec not identical
+(expected). GPU numbers: none yet — this section is closed to edits once
+the run starts; results go in a new "G1 ablation — measured" section.
+
 ## Not pursued
 
 Local time stepping / domain-wise dt — excluded by the support matrix (late-

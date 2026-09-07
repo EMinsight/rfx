@@ -425,6 +425,9 @@ CLASSIFICATION: dict[str, Entry] = {
     # a builder defect), and three are pure numpy/analysis.
     "validation/research/multiband_nu/__init__.py": Entry(
         "no_simulation", "package marker -- empty file"),
+    "validation/research/nu_cost/__init__.py": Entry(
+        "no_simulation", "package docstring pointing at the W8 instrument -- "
+        "no code, no rfx import"),
     "validation/research/multiband_nu/analytic_dispersion.py": Entry(
         "no_simulation",
         "exact discrete leapfrog eigenfrequency of an empty PEC box on the "
@@ -543,6 +546,12 @@ CLASSIFICATION: dict[str, Entry] = {
         "builder_fused_with_solve",
         "`_tm110_error()`/`_tm111_error()` each build and call .run(...) in "
         "the same function"),
+    "validation/research/nu_cost/w8_nu_kernel_ablation.py": Entry(
+        "builder_fused_with_solve",
+        "W8 G1 kernel-ablation bench (2026-09-07 nu-cost lane): "
+        "`run_fixture()` builds the bench cube and calls .run(...) in the "
+        "same function on purpose -- the arm's monkeypatch must be in place "
+        "when the Simulation compiles"),
     "validation/research/subgrid/13_subgrid_material_validation.py": Entry(
         "builder_fused_with_solve",
         "`run_example()` builds and calls .run(...) in the same function"),
