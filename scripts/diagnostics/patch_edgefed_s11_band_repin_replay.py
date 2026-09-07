@@ -1,16 +1,31 @@
-"""Falsifier F1 replay for the #782 S11-gate re-pin — no FDTD.
+"""Falsifier F1 replay for the #782 S11-gate re-pin — RETIRED BY #931, no FDTD.
 
-Loads the two saved arms from ``docs/design_notes/patch_edgefed_s11_band_repin_results.json``
-(written by ``patch_edgefed_s11_band_repin.py``) and evaluates the COMMITTED gate's own
-``_gate_readings`` + assertion conditions (imported from
-``tests/locks/test_patch_edgefed_s11_passivity.py``, not re-implemented) on each arm:
+WHAT IT WAS. It loaded the two saved arms from
+``docs/design_notes/patch_edgefed_s11_band_repin_results.json`` (written by
+``patch_edgefed_s11_band_repin.py``) and evaluated the COMMITTED gate's own
+``_gate_readings`` + assertion conditions — imported from
+``tests/locks/test_patch_edgefed_s11_passivity.py``, never re-implemented — on
+each arm: the main arm had to pass every condition, and the retired arm had to
+FAIL the in-band crossing (2b) and/or the antiresonance Re(Zin) floor (2c),
+which is what showed the gate discriminated the bit-exact pre-#702 physics.
 
-  * main arm    -> every gate condition must PASS;
-  * retired arm -> the in-band-crossing witness (2b) and/or the antiresonance
-                   Re(Zin) floor (2c) must FAIL — the gate discriminates the
-                   bit-exact pre-#702 physics.
+WHY IT NO LONGER RENDERS THAT VERDICT. The import is the point of the design and
+also what retires it. Under the lattice ownership contract the gate's board was
+redrawn with each foil on the laminate face it bounds, and its band was re-pinned
+on the new board from VESSL 369367259226: ``RES_BAND_GHZ`` went (8.4, 9.2) ->
+(7.4, 8.2). The frozen JSON is the OLD board, whose main-arm antiresonance
+crossing is 8.8189 GHz. Evaluating today's band against that trace asks whether a
+board that no longer exists resonates where a different board does; the answer is
+no, and the honest reading of that "no" is that the question is void — the ~2-point
+error class issue #782 documents, in its cross-board form.
 
-Exit 0 = F1 satisfied, 1 = not.
+So this script now DUMPS the frozen readings and says what they are, and does not
+convert them into a pass/fail. It exits 0: a dated record is not a gate.
+
+The predeclaration F1 stood for is DISCHARGED, not unmet — the #702 re-sample it
+tested is deleted (design note #931 §2) and the geometry it compensated for is
+drawn away. The live discrimination evidence is the re-pin runs (369367259225
+Board H / 369367259226 Board S), not this file.
 """
 from __future__ import annotations
 
@@ -71,14 +86,17 @@ def main() -> int:
             print(f"    {k:15s} {'PASS' if v[k] else 'FAIL'}")
         print(f"    readings: {v['readings']}")
 
-    main_ok = all(v for k, v in verdicts["main"].items() if k != "readings")
-    retired_red = (not verdicts["retired"]["band_crossing"]
-                   or not verdicts["retired"]["band_re_zin"])
-    print(f"\n[F1] main arm all-PASS: {main_ok}")
-    print(f"[F1] retired arm goes RED on the discriminating assertions: {retired_red}")
-    ok = main_ok and retired_red
-    print(f"[F1] VERDICT: {'SATISFIED' if ok else 'NOT SATISFIED'}")
-    return 0 if ok else 1
+    print(f"\n[F1] VERDICT: RETIRED (#931) — not computed.")
+    print("[F1] The PASS/FAIL column above is today's committed band "
+          f"{RES_BAND_GHZ} GHz read against a trace measured on the pre-#931 "
+          "board, whose main-arm antiresonance crossing is 8.8189 GHz. The two "
+          "describe different realized boards, so neither column is a verdict "
+          "about either one; the readings are printed because they are dated "
+          "evidence, not because they were checked.")
+    print("[F1] The predeclaration is DISCHARGED: the #702 re-sample is deleted "
+          "and the reserved-cell geometry is drawn away. Live discrimination "
+          "evidence: VESSL 369367259225 (Board H) / 369367259226 (Board S).")
+    return 0
 
 
 if __name__ == "__main__":
