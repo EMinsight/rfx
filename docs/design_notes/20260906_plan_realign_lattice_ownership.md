@@ -306,9 +306,15 @@ Physics falsifiers, pre-declared before any recompute:
 * **One-cell volume witness (new)**: cv18's iris-thickness sweep gains `t_c = 1`; the
   mode-matching oracle at `t = dx` must sit on the same residual curve as `t_c = 2..8`. Today
   no independent witness says the two-wall rule is right at one cell.
-* **cv16 (PEC sphere Mie)**: recomputed under centre sampling; the realized sphere is now
-  symmetric about its centre. Expected to improve; if #820's translation variance moves,
-  record it, do not claim it.
+* **cv16 (PEC sphere Mie)**: UNCHANGED — its sphere is a `rasterize(Sphere, eps 1, sigma 1e7)`
+  material fill, which §1.8 fences out of this contract, so it is a control, not a recompute
+  (this line previously contradicted §1.8; settled 2026-09-07 with group X-C). Measured
+  price of the other choice, for the follow-up issue: at ka = 0.5 the node-sampled sigma
+  fill occupies N = 1082 cells (a_eff/a 0.988032) while a declared PEC volume of the same
+  sphere is centre-sampled to N = 1123 (a_eff/a 1.000357), 259 cells differing — bringing
+  the RCS family under the contract moves a_eff by ~1.2 % and needs the fixture and both
+  gate constants regenerated (~30 min CPU). #820's translation variance is then the first
+  thing to re-measure.
 * **Dielectric-only cases** (cv04, cv17, cv22, cv23 and every example without a conductor
   body): bit-identical results before/after — the change must not touch them.
 * **Multilayer board A/B (memory 2026-08-28, VESSL 369367256724)**: the old `two_plane` arm
