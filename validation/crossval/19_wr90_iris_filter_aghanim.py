@@ -39,17 +39,22 @@ population, enforced as EXACT equality by the --write-fixture self-check:
     and 22-30 MHz for individual edges), which is why it carries the gate.
   * structural reflection-zero COUNT inside the passband (a depth-independent
     local-minimum count).  This is the topology check.
-  * band EDGES (26.0 MHz) and BANDWIDTH (15.0 MHz), NEW at #931.  Until the
-    contract these were reported for one stated reason: a comparator INPUT
-    uncertainty, since the iris-thickness leg had no settled value and a
-    half-cell input ambiguity is worth 22-40 MHz on these observables, more
-    than any defensible gate.  The ownership contract removes that ambiguity
-    — the realized thickness is the drawn one, exactly — and the regenerated
-    nine-configuration population then supplied the envelope the gate was
-    waiting on, so both halves of the old objection are answered by
-    measurement.  d_bw is identically d_hi - d_lo, so the two gates are ONE
-    fact read twice; neither corroborates the other.
 REPORTED, NOT GATED:
+  * band edges and bandwidth.  Until #931 the stated reason was a comparator
+    INPUT uncertainty: the iris-thickness leg had no settled value, and a
+    half-cell input ambiguity is worth 22-40 MHz on these observables, more
+    than any defensible gate.  The ownership contract removes that ambiguity,
+    and the regenerated record removes the second blocker by MEASURING the
+    envelope (edges 17.0553, BW 9.9024 MHz over the nine-configuration
+    population; a gate would be 26.0 and 15.0 MHz, committed under
+    `gates.edge_bw_gate_would_be_mhz` and NOT applied).  What is left is
+    lattice rounding, still dominant for these two at 22-40 MHz per cell
+    against f0's ~2.4 MHz, and the population is single-mesh, so a lock over
+    it would pin the mesh choice rather than bound the solver.  Re-gating them
+    needs its own pre-declaration and a cross-mesh sensitivity measurement —
+    separate work, not a side effect of this migration, as this case's gate
+    file states in its own refusal.  d_bw is identically d_hi - d_lo, so they
+    remain one fact whichever way that lands.
   * worst in-band return loss.  The reference is NOT self-consistent here:
     HFSS ripple peaks are -19.3/-14.9/-18.4 dB and CST's are
     -24.9/-18.7/-14.2 dB, and the two tools disagree on WHICH peak is worst.
@@ -235,24 +240,31 @@ GATE_F0_MHZ = 19.0        # centre-frequency agreement, rfx vs oracle@as-realize
 # the constant is UNCHANGED. That is the falsifier passing, not a gate left
 # alone: the redraw was geometry-preserving and d_f0 moved by 0.04 MHz.
 #
-# BAND EDGES AND BANDWIDTH ARE NOW GATED TOO (#931). They were reported for
-# one stated reason -- the half-cell input uncertainty in what the lattice
-# actually built, which made an edge gate a gate on a convention -- and the
-# ownership contract removes exactly that. The gate then waited only on a
-# measured envelope, and run 369367259160 supplies one over the SAME
+# BAND EDGES AND BANDWIDTH STAY REPORTED, and #931 changes the REASON, not the
+# posture. The original reason was a comparator-INPUT uncertainty: the
+# iris-thickness leg was unsettled at the half-cell level, so a gate on
+# observables worth 22-40 MHz per cell would have been a gate on a convention.
+# The ownership contract settles that leg, and the second blocker -- that a
+# gate needs a measured envelope, which only the regenerated record could
+# supply -- is discharged here: run 369367259160 measured, over the SAME
 # nine-configuration population and the SAME settling criterion the f0 gate
-# uses, so the two are derived alike:
-#   edges: envelope max(|d_lo|, |d_hi|) = 17.0553 MHz over 9 configs
-#          -> ceil(17.0553 x 1.5) = ceil(25.583) = 26.0
-#   BW:    envelope |d_bw| = 9.9024 MHz over 9 configs
-#          -> ceil(9.9024 x 1.5) = ceil(14.854) = 15.0
-# Read them the way the f0 gate is read: the population spread is 0.02 MHz
-# while every member sits about 17 MHz from the oracle, so these are
-# REGRESSION LOCKS with 50% headroom on a reproducible systematic difference,
-# not independent accuracy bounds. d_bw == d_hi - d_lo identically, so the
-# edge and BW gates are two readings of one fact and are recorded as such.
-GATE_EDGE_MHZ = 26.0      # = ceil(9-config edge envelope 17.0553 x 1.5)
-GATE_BW_MHZ = 15.0        # = ceil(9-config BW envelope 9.9024 x 1.5)
+# uses, an edge envelope max(|d_lo|, |d_hi|) = 17.0553 MHz and a BW envelope
+# |d_bw| = 9.9024 MHz, which would give ceil(x 1.5) = 26.0 and 15.0 MHz. Those
+# numbers are COMMITTED (gates.edge_measured_envelope_mhz,
+# gates.bw_measured_envelope_mhz, gates.edge_bw_envelope_population) so the
+# decision needs no further solve.
+#
+# They are still NOT applied, for the reason this case's gate file states in
+# its own refusal (tests/crossval/test_wr90_iris_filter_gates.py, module
+# docstring and test_gate_is_hard_pinned_and_equals_the_derived_relation):
+# what remains after the contract is LATTICE ROUNDING, which is smaller than
+# the retired convention ambiguity but still dominant for these two
+# quantities, and the nine-configuration population is single-mesh -- every
+# member is a/90 -- so a 1.5x lock over it would pin the mesh choice rather
+# than bound the solver. Re-gating them needs its own pre-declaration and a
+# sensitivity measurement ACROSS meshes, which is separate work and not a side
+# effect of this migration. The envelope above is what that pre-declaration
+# starts from.
 MAX_SPAN_HOLES_GATED = 1  # contiguity REGRESSION LOCK on the gated rung. The
 # committed record has exactly one interior -10 dB excursion bin (10 MHz at
 # 9.84 dB) inside the 341 MHz span. The f0 gate alone cannot see a split
@@ -906,14 +918,15 @@ def main(argv):
     # half-cell corner recipe produced, not as a residual physical property.
     # The sweep below is re-centred on the exact realized value and now
     # measures a hypothetical perturbation, not an input ambiguity.
-    # f0 and the zero count stay gated, unchanged. Edges and bandwidth are
-    # GATED from this revision: the reason for not gating them is removed by
-    # the contract, and run 369367259160 measured the envelope over the
-    # regenerated nine-configuration population, which is the other half the
-    # decision was waiting on. 17.0553 -> 26.0 MHz, 9.9024 -> 15.0 MHz.
+    # f0 and the zero count stay gated, unchanged. Edges and bandwidth stay
+    # REPORTED — but for a different reason than before #931. Both stated
+    # blockers are discharged (the contract settles the input ambiguity; run
+    # 369367259160 measured the envelope, 17.0553 -> would-be 26.0 MHz and
+    # 9.9024 -> would-be 15.0 MHz, committed). What stands is that the
+    # population is single-mesh and lattice rounding dominates these two, so
+    # the lock would pin the mesh; that wants its own pre-declaration.
     print(f"\n== GATED rfx a/{GATED_CELLS} vs oracle@as-rasterized "
-          f"(f0 {GATE_F0_MHZ} / edges {GATE_EDGE_MHZ} / BW {GATE_BW_MHZ} MHz "
-          f"+ zero count) ==")
+          f"(f0 {GATE_F0_MHZ} MHz + zero count; edges/BW reported) ==")
     row = measure(geo_g, 400.0)
     meas = band_analysis(row["s11"])
     d_f0 = (meas["f0"] - ras["f0"]) / 1e6
@@ -945,16 +958,11 @@ def main(argv):
           f"({'PASS' if zeros_ok else 'FAIL'}), span holes "
           f"{meas['span_holes']} (max {MAX_SPAN_HOLES_GATED}, "
           f"{'PASS' if contig_ok else 'FAIL'})")
-    edges_ok = max(abs(d_lo), abs(d_hi)) <= GATE_EDGE_MHZ
-    bw_ok = abs(d_bw) <= GATE_BW_MHZ
-    print(f"  GATED edges {d_lo:+.1f}/{d_hi:+.1f} MHz (gate "
-          f"{GATE_EDGE_MHZ}, {'PASS' if edges_ok else 'FAIL'}), BW "
-          f"{d_bw:+.1f} MHz (gate {GATE_BW_MHZ}, "
-          f"{'PASS' if bw_ok else 'FAIL'}) "
-          f"[d_bw == d_hi - d_lo identically, so the edge asymmetry and the "
-          f"BW deficit are ONE fact read twice, not two facts]")
-    print(f"  REPORTED (not gated): colpow {row['max_colpow']:.4f}")
-    ok &= f0_ok and zeros_ok and contig_ok and edges_ok and bw_ok
+    print(f"  REPORTED (not gated): edges {d_lo:+.1f}/{d_hi:+.1f} MHz "
+          f"[d_bw == d_hi - d_lo identically, so the edge asymmetry and the BW "
+          f"deficit are ONE fact, not two], BW {d_bw:+.1f} MHz, "
+          f"colpow {row['max_colpow']:.4f}")
+    ok &= f0_ok and zeros_ok and contig_ok
 
     coarse = ring = binv = clearance = absorber = fdfd = tz = None
     if write_fixture:
@@ -1296,15 +1304,14 @@ def main(argv):
         for e in edge_rows:
             print(f"    {e['config']:24s} d_lo = {e['d_lo_mhz']:+7.2f}  "
                   f"d_hi = {e['d_hi_mhz']:+7.2f}  d_bw = {e['d_bw_mhz']:+7.2f} MHz")
-        print(f"  envelope edges {env_edge:.2f} MHz -> gate {GATE_EDGE_MHZ} "
-              f"MHz; BW {env_bw:.2f} MHz -> gate {GATE_BW_MHZ} MHz")
-        for name, gate, env in (("edges", GATE_EDGE_MHZ, env_edge),
-                                ("bw", GATE_BW_MHZ, env_bw)):
-            required = gate_from_envelope(max(env, 1e-9), quantum=1)
-            if abs(gate - required) > 1e-9:
-                print(f"  ENVELOPE/GATE MISMATCH ({name}): gate {gate} must "
-                      f"equal round-up(env x 1.5) = {required}")
-                ok = False
+        # REPORTED, not enforced: what a gate WOULD be if the pre-declaration
+        # this case's gate file asks for is ever done. Printed and committed so
+        # the decision needs no further solve; nothing here sets ok.
+        print(f"  envelope edges {env_edge:.2f} MHz (a gate would be "
+              f"{gate_from_envelope(max(env_edge, 1e-9), quantum=1)} MHz); "
+              f"BW {env_bw:.2f} MHz (would be "
+              f"{gate_from_envelope(max(env_bw, 1e-9), quantum=1)} MHz) — "
+              f"NOT applied: single-mesh population, see the module header")
 
         print("\n== ORACLE iris-thickness zero-count sweep (zero-count gate "
               "robustness, joint-review N3) ==")
@@ -1425,14 +1432,14 @@ def main(argv):
                            "the node planes. Both are gone. The gated observable is still chosen by "
                            "SENSITIVITY -- per cell of iris thickness, f0 moves about 2.4 MHz, "
                            "bandwidth about 40 MHz, individual band edges 22-30 MHz -- so f0 and the "
-                           "zero count lead the ordering. Band edges and bandwidth are now GATED as "
-                           "well, and the decision came from the measured envelope rather than from "
-                           "the disappearance of an excuse: the input uncertainty that made a gate on "
-                           "them dishonest is exactly what the contract removes, and the regenerated "
-                           "nine-configuration population puts the edge envelope at 17.0553 MHz and "
-                           "the BW envelope at 9.9024 MHz, so the repo rule gives 26.0 and 15.0 MHz. "
-                           "Their higher sensitivity is why f0 leads; it is no longer a reason to "
-                           "leave them unlocked. Handing the oracle "
+                           "zero count carry the gates. Band edges and bandwidth stay REPORTED, and "
+                           "#931 replaces the reason rather than the posture: the input uncertainty "
+                           "that made a gate on them dishonest is removed by the contract and the "
+                           "envelope a gate needs is now measured (17.0553 and 9.9024 MHz over the "
+                           "nine-configuration population), but that population is single-mesh while "
+                           "lattice rounding dominates these two, so the standing objection is "
+                           "sensitivity, not ambiguity, and it wants its own pre-declaration. "
+                           "Handing the oracle "
                            "drawn counts under the old realization biased f0 by +107.5 MHz, five times "
                            "the reference's own 21.9 MHz CST-vs-HFSS spread, and the "
                            "envelope-times-1.5 rule does NOT catch that class because the rule bounds "
@@ -1451,19 +1458,23 @@ def main(argv):
                            "wall planes, same cavities, same apertures. Snapping is still "
                            "nearest-representable rounding with zero free parameters and no reference "
                            "number entering, and it is still NOT a monotone improvement across meshes: "
-                           "a/60 and a/90 land on opposite sides of the nominal design. NEWLY GATED AT #931: individual band edges (+17.05 / +7.20 MHz, "
-                           "gate 26.0) and bandwidth (-9.85 MHz, gate 15.0), derived from the SAME "
-                           "nine-configuration population and the same round-up(envelope x 1.5) "
-                           "rule as f0 - envelope 17.0553 and 9.9024 MHz. They are ONE fact and not "
-                           "two - d_bw is identically d_hi - d_lo - so the earlier framing of an "
-                           "\"unexplained asymmetric edge residual\" separate from a bandwidth "
-                           "deficit was an algebraic error, and the two gates are one reading taken "
-                           "twice rather than two independent checks. What changed is not the "
-                           "physics but the argument: the half-cell comparator-input uncertainty "
-                           "that made a gate on them dishonest is what the contract removes, and "
-                           "the regenerated population supplies the envelope; read them as "
-                           "regression locks with 50 percent headroom, exactly like f0. REPORTED, "
-                           "NEVER GATED: worst in-band return loss; individual ripple levels; "
+                           "a/60 and a/90 land on opposite sides of the nominal design. REPORTED, NEVER GATED: individual band edges (+17.05 / +7.20 MHz) "
+                           "and bandwidth (-9.85 MHz), which are ONE fact and not two - d_bw is "
+                           "identically d_hi - d_lo - so the earlier framing of an \"unexplained "
+                           "asymmetric edge residual\" separate from a bandwidth deficit was an "
+                           "algebraic error. #931 discharges BOTH stated blockers on gating them "
+                           "and still does not gate them: the half-cell comparator-input "
+                           "uncertainty is removed by the contract, and the envelope a gate needs "
+                           "is now measured over the nine-configuration population (17.0553 and "
+                           "9.9024 MHz, so a gate would be 26.0 and 15.0 MHz, committed as "
+                           "gates.edge_bw_gate_would_be_mhz with applied=false). What is left is "
+                           "lattice rounding, which is dominant for these two at 22-40 MHz per cell "
+                           "against f0's 2.4, and the population is single-mesh - every member is "
+                           "a/90 - so a 1.5x lock over it would pin the mesh choice rather than "
+                           "bound the solver. Re-gating them needs its own pre-declaration and a "
+                           "cross-mesh sensitivity measurement, which is separate work; the "
+                           "envelope committed here is what that pre-declaration starts from. Also "
+                           "reported: worst in-band return loss; individual ripple levels; "
                            "every reflection-zero DEPTH (four nominally identical equiripple zeros "
                            "bottom out across a wide spread in the published figure, so the paper's "
                            "frequency step and not physics sets those depths - zero FREQUENCIES are "
@@ -1661,15 +1672,28 @@ def main(argv):
                     "power exceeds 1.02; membership is a criterion, not a value "
                     "list, so a future failing row cannot be dropped by naming it"),
                 # RENAMED at #931, because the meaning changed: these were
-                # the gated row's own residual under a REPORTED posture; they
-                # are now the nine-configuration envelope the edge and BW
-                # gates are derived from. A same-named key with a new meaning
-                # is read wrong exactly once.
-                "edge_gate_mhz": GATE_EDGE_MHZ,
+                # the gated row's own residual, they are now the
+                # nine-configuration ENVELOPE. A same-named key with a new
+                # meaning is read wrong exactly once. No *_gate_mhz key is
+                # emitted for them -- edges and bandwidth are still reported,
+                # and the gate file refuses a record that gates them without a
+                # pre-declaration.
                 "edge_measured_envelope_mhz": round(env_edge, 4),
-                "bw_gate_mhz": GATE_BW_MHZ,
                 "bw_measured_envelope_mhz": round(env_bw, 4),
                 "edge_bw_envelope_population": edge_rows,
+                "edge_bw_gate_would_be_mhz": {
+                    "edges": gate_from_envelope(max(env_edge, 1e-9), quantum=1),
+                    "bw": gate_from_envelope(max(env_bw, 1e-9), quantum=1),
+                    "applied": False,
+                    "why_not": (
+                        "the population is single-mesh (every member a/90) "
+                        "while lattice rounding is the dominant term for "
+                        "these two observables at 22-40 MHz per cell, so a "
+                        "1.5x lock over it would pin the mesh choice rather "
+                        "than bound the solver; re-gating needs its own "
+                        "pre-declaration and a cross-mesh sensitivity "
+                        "measurement"),
+                },
                 "posture": ("gate = round-UP(measured envelope x 1.5) over a MULTI-CONFIGURATION "
                             "population, enforced as EXACT equality by the write-fixture self-check. "
                             "That makes the envelope robust rather than resting on one datum, but it "
@@ -1686,15 +1710,17 @@ def main(argv):
                             "contiguity as a "
                             "regression lock (span_holes <= 1, the committed envelope -- the f0 gate "
                             "alone cannot see a split passband because band edges are the outermost "
-                            "crossings); and, NEW at #931, band edges and bandwidth -- 26.0 MHz on the "
-                            "individual edges, 15.0 MHz on the bandwidth -- derived from the same nine-configuration "
-                            "population by the same rule -- the half-cell input uncertainty that "
-                            "was the stated reason for leaving them ungated is what the ownership "
-                            "contract removes, and the regenerated population supplies the envelope "
-                            "the gate was waiting on. d_bw is identically d_hi - d_lo, so the edge "
-                            "and BW gates are ONE fact read twice and neither is independent "
-                            "evidence for the other; read both as regression locks, like f0. All "
-                            "against the oracle on as-realized geometry. REPORTED, never gated: "
+                            "crossings), against the oracle on as-realized geometry. REPORTED, never "
+                            "gated: individual band edges and bandwidth -- #931 removes the "
+                            "half-cell input uncertainty that was the original reason, and the "
+                            "regenerated record now MEASURES their envelope (17.0553 and 9.9024 MHz "
+                            "over the nine-configuration population, a gate would be 26.0 and 15.0, "
+                            "committed as edge_bw_gate_would_be_mhz with applied=false), but the "
+                            "population is single-mesh while lattice rounding dominates these two at "
+                            "22-40 MHz per cell, so a lock over it would pin the mesh rather than "
+                            "bound the solver; re-gating needs its own pre-declaration and a "
+                            "cross-mesh sensitivity measurement. d_bw is identically d_hi - d_lo so "
+                            "they are one fact. Also reported: "
                             "worst-case RL, ripple levels, zero depths, "
                             "contiguity detail beyond the span_holes lock, the coarse rung and phase"),
             },
