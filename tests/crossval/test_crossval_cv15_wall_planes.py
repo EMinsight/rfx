@@ -1,30 +1,50 @@
-"""Regression test for issue #740: cv15's mandatory geometry self-check must
-assert the REALIZED electric-wall PLANES, not the declared Box extents.
+"""cv15's mandatory geometry self-check: the REALIZED electric-wall PLANES
+must be exactly the declared ones, measured through the contract's one edge
+set.
 
-``validation/crossval/15_patch_antenna_rt5880.py``'s pre-#740 ``#325
-AVOIDANCE (mandatory)`` self-check asserted only the substrate's z EXTENT
-(``n_sub_raster == N_SUB``, from ``round(z/DX)`` cell counting) and kept
-PASSING while the one-cell one-plane ground ``Box`` realized its electric
-wall one full cell BELOW the declared substrate floor (the #693 "vacuum
-ground cell" trap, closed on the canonical patch lane by PRs #716/#718) --
-a live vacuum cell inside the modelled cavity, undetected.
+History. Issue #740: cv15's ``#325 AVOIDANCE (mandatory)`` self-check asserted
+only the substrate's z EXTENT (``n_sub_raster == N_SUB``, from ``round(z/DX)``
+cell counting) and kept PASSING while the ground conductor realized its
+electric wall one full cell BELOW the declared substrate floor (the #693
+"vacuum ground cell" trap) -- a live vacuum cell inside the modelled cavity,
+undetected, +55.0% of the cavity's electrical thickness.
+
+Issue #931 (the lattice ownership contract): the ground and the patch are FOIL
+and are now DECLARED as sheets -- zero-thickness PEC ``Box``es on the two
+substrate faces, the same structure both openEMS legs build. The check they
+are under is no longer a hand-copied edge rule; ``assert_realized_stack`` reads
+``rfx.boundaries.pec.realized_pec_edge_masks`` through ``realized_wall_planes``
+and asserts three things: a wall at each declared plane, NO wall anywhere else
+(in particular none at ``k_patch + 1``), and that the sheets wrote no material.
 
 The geometry under test is built through cv15's OWN production builder,
-``build_rfx_sim(*, do_gain, two_plane)`` -- separated from ``run_rfx()`` for
-the #740 review (cv15 is classified ``audited`` in
-``tests/_example_fidelity_lib.py`` on that builder). The positive tests pass
-NO ``two_plane`` argument, so the script's default is what is under test:
-flip that default and ``test_cv15_committed_geometry_realizes_declared_walls``
-goes red (verified: 1 failed / 6 passed). The first version of this file
-mirrored the geometry in a test-local copy that hardcoded ``two_plane=True``,
-and deleting the fix from the script left it green -- the reviewer's
-finding, and why the builder exists. ``assert_realized_stack`` and
-``_stack_check_ok`` -- the actual #740 fix -- are called UNMODIFIED from the
-script itself, never copied.
+``build_rfx_sim(*, do_gain, ground_plane_z, patch_kind)`` -- separated from
+``run_rfx()`` for the #740 review (cv15 is classified ``audited`` in
+``tests/_example_fidelity_lib.py`` on that builder). The positive tests pass NO
+declaration arguments, so the script's own declarations are what is under test.
+The first version of this file mirrored the geometry in a test-local copy that
+hardcoded the fix, and deleting the fix from the script left it green -- the
+reviewer's finding, and why the builder exists. ``assert_realized_stack`` and
+``_stack_check_ok`` are called UNMODIFIED from the script itself, never copied.
+
+Both negative controls run through that same production builder:
+
+* ``ground_plane_z = z_sub_lo - DX`` -- the ground sheet declared one node
+  plane low. It reproduces the pre-#740 realization (one wall below the floor,
+  a live vacuum cell in the cavity) and keeps the geometry behind
+  ``_15_patch_results/rfx_one_plane_ground_b29f9de7.json`` -- the +6.09%
+  blindness evidence two public documents cite -- reachable through the public
+  API after ``two_plane`` is deleted.
+* ``patch_kind = "volume_1cell"`` -- the pre-#931 patch spelling, a one-cell
+  PEC ``Box``. Under the contract a one-cell Box is a filled slab with BOTH
+  faces, so it grows a wall at ``k_patch + 1`` (11.9062 mm) that the openEMS
+  zero-thickness patch has no counterpart for. Without this arm the
+  no-extra-wall assertion is decoration: nothing reachable would make it fire.
 
 cv15 is guarded by ``if __name__ == "__main__":`` (see its final lines), so
 importing it (to reach its module constants and the two functions above)
-executes no simulation.
+executes no simulation. Every test here is build-time -- ``_build_grid`` +
+``_assemble_materials`` + the edge masks. No solve.
 """
 
 from __future__ import annotations
@@ -49,36 +69,29 @@ def _load_cv15():
     return module
 
 
-def _build_test_sim(cv15, *, two_plane=None):
+def _build_test_sim(cv15, **kw):
     """Build cv15's geometry through the PRODUCTION builder,
-    ``cv15.build_rfx_sim`` -- not a test-local mirror (#740 review, item 1:
-    the mirrored copy hardcoded ``two_plane=True``, so deleting the fix from
-    the script left every test green).
+    ``cv15.build_rfx_sim`` -- not a test-local mirror (#740 review, item 1).
 
-    ``two_plane=None`` (the default, used by every positive test) passes NO
-    toggle, so the script's own default is what is under test: flip that
-    default -- or drop ``two_plane`` from the ground Box -- and the positive
-    tests go red (verified: default forced to False -> the positive
-    wall-plane test fails, 1 failed / 6 passed; the gate tests use synthetic
-    dicts by design and the negative control passes False itself). Only the
-    negative control passes ``two_plane=False`` explicitly. Returns
-    ``(sim, grid, patch_shape)`` so the caller can run the script's OWN
-    ``assert_realized_stack`` against it, cheaply (no solve)."""
-    kw = {} if two_plane is None else dict(two_plane=two_plane)
+    No keyword (what every positive test passes) means the script's own
+    declarations are under test: change either conductor's declaration in the
+    script and the positive tests below go red. Only the negative controls
+    pass a keyword. Returns ``(sim, grid, patch_shape)`` so the caller can run
+    the script's OWN ``assert_realized_stack`` against it, cheaply (no solve).
+    """
     sim, patch_shape, _geom = cv15.build_rfx_sim(do_gain=False, **kw)
     grid = sim._build_grid()
     return sim, grid, patch_shape
 
 
 # ---------------------------------------------------------------------------
-# assert_realized_stack: the actual #740 fix, on the real rasterized
-# geometry (cheap -- _build_grid + _assemble_materials, no solve).
+# assert_realized_stack: on the real rasterized geometry, via the contract's
+# one edge set (cheap -- _build_grid + _assemble_materials, no solve).
 # ---------------------------------------------------------------------------
 
 def test_cv15_committed_geometry_realizes_declared_walls(capsys):
-    """The committed (post-#740-fix) geometry must realize its electric
-    walls exactly at the declared z_sub_lo/z_sub_hi planes, across the
-    whole patch footprint -- watched PASS on today's tree."""
+    """The committed geometry must realize its electric walls exactly at the
+    declared z_sub_lo/z_sub_hi planes, across the whole patch footprint."""
     cv15 = _load_cv15()
     sim, grid, patch_shape = _build_test_sim(cv15)
     stack_check = cv15.assert_realized_stack(sim, grid, patch_shape)
@@ -92,39 +105,126 @@ def test_cv15_committed_geometry_realizes_declared_walls(capsys):
     assert all(e == pytest.approx(cv15.EPS_R, abs=1e-6)
                for e in stack_check["eps_between"])
     # Recorded provenance, not the thing gated on (see _stack_check_ok).
-    assert stack_check["ground_realization"] == "two_plane"
+    assert stack_check["ground_realization"] == "sheet"
+    assert stack_check["patch_realization"] == "sheet"
 
 
-def test_cv15_negative_control_one_plane_ground_raises(capsys):
-    """NEGATIVE CONTROL (issue #740 review, required change 5): build the
-    pre-fix one-plane ground through the PRODUCTION builder
-    (``build_rfx_sim(two_plane=False)``) and confirm the script's OWN
+def test_cv15_both_conductors_are_declared_sheets(capsys):
+    """#931 §1.3: a sheet owns NO cell. Both conductors must come back as
+    DECLARED sheets on the two substrate faces, and NEITHER may contribute a
+    cell -- the substrate is the only body that occupies cells here, so a
+    conductor leaking into the cell mask would give the realized stack a face
+    the openEMS zero-thickness reference has no counterpart for.
+
+    Read through ``tests/_realized_geometry`` -- the branch's one spelling of
+    the build-time realization check -- rather than a local ``argwhere`` over a
+    mask, which is the drift the single-owner rule (§1.7) exists to stop. The
+    sheet-declaration check and the wall-plane check below fail independently:
+    one reads the declarations, the other the realized edge set.
+    """
+    import numpy as np
+
+    from tests._realized_geometry import assert_sheet_planes, realized
+
+    cv15 = _load_cv15()
+    sim, _grid, _ps = _build_test_sim(cv15)
+    z_sub_lo = cv15.AIR_BELOW
+    z_sub_hi = cv15.AIR_BELOW + cv15.H_SUB
+
+    assert_sheet_planes(sim, 2, [z_sub_lo, z_sub_hi],
+                        what="cv15 ground and patch foil")
+    rz = realized(sim)
+    capsys.readouterr()
+    assert not rz.wires
+    assert rz.pec_mask is None or not bool(np.asarray(rz.pec_mask).any()), (
+        "a declared sheet occupied cells -- it must own none (#931 §1.3)")
+
+
+def test_cv15_no_wall_above_the_patch_plane(capsys):
+    """The negative half of the stack check, asserted directly: over the patch
+    footprint the realized z-wall planes are EXACTLY the two declared ones. A
+    wall at ``k_patch + 1`` is the thing cv15 measured and rejected in 2026-08
+    (11.9062 mm, no counterpart in the openEMS zero-thickness patch); before
+    #931 its absence rested on a realization DEFAULT, and defaults are not
+    evidence.
+
+    Checked at the patch footprint's centre column AND its four rims -- the rim
+    is where a closed-vs-half-open footprint disagreement would show, because
+    the edge leaving the rim node points out of the patch.
+    """
+    import numpy as np
+
+    from tests._realized_geometry import assert_wall_planes, node_index, realized
+
+    cv15 = _load_cv15()
+    sim, _grid, _ps = _build_test_sim(cv15)
+    rz = realized(sim)
+    capsys.readouterr()
+
+    z_sub_lo = cv15.AIR_BELOW
+    z_sub_hi = cv15.AIR_BELOW + cv15.H_SUB
+    k_patch = node_index(rz.grid, 2, z_sub_hi)
+
+    patch_fp = np.zeros(tuple(rz.grid.shape)[:2], dtype=bool)
+    for sp in rz.sheets:
+        if sp.normal_axis == 2 and sp.plane == k_patch:
+            patch_fp |= np.asarray(sp.footprint).any(axis=2)
+    assert patch_fp.any()
+
+    ii, jj = np.nonzero(patch_fp)
+    columns = {(int(ii.mean()), int(jj.mean())),
+               (int(ii.min()), int(jj.min())), (int(ii.max()), int(jj.max())),
+               (int(ii.min()), int(jj.max())), (int(ii.max()), int(jj.min()))}
+    for (i, j) in columns:
+        assert_wall_planes(sim, 2, [z_sub_lo, z_sub_hi], ij=(i, j),
+                           what=f"cv15 patch footprint column ({i}, {j})")
+
+
+def test_cv15_negative_control_ground_sheet_one_plane_low_raises(capsys):
+    """NEGATIVE CONTROL 1 (issue #740 review, required change 5; #931 respelt):
+    declare the ground sheet one node plane BELOW the substrate floor through
+    the PRODUCTION builder and confirm the script's OWN
     ``assert_realized_stack`` -- not a test-local copy -- raises, naming
     z_sub_lo.
 
-    This is the fail-before-fix witness for THIS PR: on the pre-#740-fix
-    source (ground ``Box`` built with no ``two_plane=True``, and no
-    ``assert_realized_stack`` at all -- confirmed by running this whole
-    file against the unmodified script via the copy-aside/git-checkout
-    protocol: AttributeError on every test, 0 passed; see this PR's
-    fail-before-fix run log) this exact scenario -- an all-one-plane
-    ground wall -- is what silently passed. Forcing the flag back off
-    here and calling the FIXED script's ``assert_realized_stack``
-    reproduces that same displaced-wall geometry and confirms the NEW
-    check catches it.
+    This is the fail-before-fix witness. Before #740 this exact geometry -- an
+    all-one-plane ground wall a cell below the floor -- silently passed every
+    check in the file and produced ``rfx_one_plane_ground_b29f9de7.json``'s
+    +6.09% vs openEMS. Under #931 it is reachable as a wrong DECLARATION
+    rather than as a different realization rule for the same declaration,
+    which is the point of the contract.
     """
     cv15 = _load_cv15()
-    # Through the PRODUCTION path: build_rfx_sim(two_plane=False) is the
-    # pre-fix one-plane ground. If someone deletes the two_plane default
-    # from the script, the positive tests above fail; this one proves the
-    # check would have caught the original geometry.
-    sim, grid, patch_shape = _build_test_sim(cv15, two_plane=False)
-    assert sim._geometry[0].material_name == "pec"
-    assert sim._geometry[0].two_plane is False
-
+    sim, grid, patch_shape = _build_test_sim(
+        cv15, ground_plane_z=cv15.AIR_BELOW - cv15.DX)
     with pytest.raises(RuntimeError, match="z_sub_lo"):
         cv15.assert_realized_stack(sim, grid, patch_shape)
     capsys.readouterr()
+
+
+def test_cv15_negative_control_patch_as_one_cell_volume_raises(capsys):
+    """NEGATIVE CONTROL 2 (#931): the pre-#931 patch spelling -- a one-cell PEC
+    ``Box`` -- is a filled slab with BOTH faces under the contract, so it grows
+    an unreferenced wall at ``k_patch + 1``. The check must refuse to quote f0
+    and must NAME that plane, because the number a reader needs is which wall
+    appeared, not that something was wrong.
+    """
+    cv15 = _load_cv15()
+    sim, grid, patch_shape = _build_test_sim(cv15, patch_kind="volume_1cell")
+    with pytest.raises(RuntimeError, match="one-cell VOLUME") as exc:
+        cv15.assert_realized_stack(sim, grid, patch_shape)
+    capsys.readouterr()
+    # 11.9062 mm = z_sub_hi + DX, the plane this file measured and rejected in
+    # 2026-08; printed as physical z, with the CPML pad offset removed.
+    assert "11.9062" in str(exc.value), str(exc.value)
+
+
+def test_cv15_builder_rejects_an_unknown_patch_kind():
+    """The falsifier arm is a declaration switch, not a free-text field: a
+    typo'd value must raise rather than silently fall back to production."""
+    cv15 = _load_cv15()
+    with pytest.raises(ValueError, match="patch_kind"):
+        cv15.build_rfx_sim(patch_kind="one_plane")
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +238,9 @@ def _good_stack_check(cv15):
         patch_wall_z=cv15.AIR_BELOW + cv15.H_SUB,
         n_sub_cells=cv15.N_SUB,
         eps_between=[cv15.EPS_R] * cv15.N_SUB,
-        ground_realization="two_plane",
+        n_distinct_eps=cv15.N_DISTINCT_EPS_EXPECTED,
+        ground_realization="sheet",
+        patch_realization="sheet",
     )
 
 
@@ -176,12 +278,130 @@ def test_stack_check_ok_rejects_wrong_eps_between():
     assert not ok, detail
 
 
+def test_stack_check_ok_rejects_a_leg_that_never_measured_the_materials():
+    """#931: ``n_distinct_eps`` is the witness that the sheets wrote no
+    material (the deleted #702 own-cell resample). A leg recorded before that
+    key existed FAILS -- same reasoning as a missing ``stack_check``: the
+    property was not measured, so it is not evidence. This is what makes the
+    committed pre-#931 ``rfx.json`` fail compare() until it is regenerated,
+    rather than passing on a stack nobody checked."""
+    cv15 = _load_cv15()
+    sc = _good_stack_check(cv15)
+    del sc["n_distinct_eps"]
+    ok, detail = cv15._stack_check_ok(sc)
+    assert not ok, detail
+    assert "n_distinct_eps" in detail
+
+
+def test_stack_check_ok_rejects_a_third_material():
+    """A third distinct eps means something re-sampled a conductor's own cell
+    or a partial fill appeared -- either way the cavity is not the declared
+    stack."""
+    cv15 = _load_cv15()
+    sc = _good_stack_check(cv15)
+    sc["n_distinct_eps"] = cv15.N_DISTINCT_EPS_EXPECTED + 1
+    ok, detail = cv15._stack_check_ok(sc)
+    assert not ok, detail
+
+
 def test_stack_check_ok_ignores_realization_label():
-    """required change 1: `ground_realization` is recorded PROVENANCE only.
-    A leg whose walls are correct but whose label says something else (a
-    different mechanism landed the same planes) must still PASS."""
+    """required change 1: ``ground_realization``/``patch_realization`` are
+    recorded PROVENANCE only. A leg whose walls are correct but whose label
+    says something else (a different mechanism landed the same planes) must
+    still PASS."""
     cv15 = _load_cv15()
     sc = _good_stack_check(cv15)
     sc["ground_realization"] = "some_future_mechanism"
+    sc["patch_realization"] = "some_future_mechanism"
     ok, detail = cv15._stack_check_ok(sc)
     assert ok, detail
+
+
+def test_cv15_declaring_the_sheets_changes_no_material(capsys):
+    """#931 §1.3: a sheet owns no cell and writes no material. Asserted the
+    strong way -- the assembled ``eps_r`` array with both sheets declared must
+    be BIT-IDENTICAL to the same build with the conductors removed, not merely
+    "still two distinct values".
+
+    This is cv17's G17-B pattern (``17_dielectric_sphere_mie.py``:
+    ``check_realized_material``, exactly two eps values or the run is not about
+    the declared material) carried onto the sheet side, and it is the witness
+    for the DELETED #702 family -- "re-sample a 1-node sheet's own cell at its
+    live edge", which existed precisely because the old ground conductor DID
+    own a cell whose material had to be patched afterwards.
+
+    The conductor-free build here is a deliberate test-local control: it is the
+    thing WITHOUT the declarations, so it cannot go stale when the script's
+    declarations change (the #740 review's objection was to mirroring the thing
+    UNDER TEST, which this file does not do -- every other test drives
+    ``build_rfx_sim``).
+    """
+    import numpy as np
+
+    from rfx import Box, Simulation
+    from rfx.boundaries.spec import BoundarySpec
+
+    cv15 = _load_cv15()
+    sim, grid, _ = _build_test_sim(cv15)
+    mats, *_ = sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])
+
+    cx, cy = cv15.DOM_X / 2, cv15.DOM_Y / 2
+    z_sub_lo = cv15.AIR_BELOW
+    z_sub_hi = (10 + cv15.N_SUB) * cv15.DX
+    bare = Simulation(
+        freq_max=4e9, domain=(cv15.DOM_X, cv15.DOM_Y, cv15.DOM_Z), dx=cv15.DX,
+        boundary=BoundarySpec.uniform("cpml"), cpml_layers=cv15.N_CPML,
+    )
+    bare.add_material("sub", eps_r=cv15.EPS_R, sigma=cv15.SIGMA_SUB)
+    bare.add(Box((cx - cv15.GP_X / 2, cy - cv15.GP_Y / 2, z_sub_lo),
+                 (cx + cv15.GP_X / 2, cy + cv15.GP_Y / 2, z_sub_hi)),
+             material="sub")
+    bare_mats, *_ = bare._assemble_materials(
+        bare._build_grid(), pec_sheets=[], pec_wires=[])
+    capsys.readouterr()
+
+    assert np.array_equal(np.asarray(mats.eps_r), np.asarray(bare_mats.eps_r)), (
+        "declaring the two PEC sheets changed the permittivity array -- a "
+        "sheet owns no cell and writes no material (#931 §1.3)")
+    assert np.array_equal(np.asarray(mats.sigma), np.asarray(bare_mats.sigma)), (
+        "declaring the two PEC sheets changed the conductivity array")
+
+
+def test_cv15_feed_decomposition_arm_reproduces_the_pre931_port(capsys):
+    """#931 changed the conductor DECLARATIONS and the FEED in one step, and
+    the measured f0 moved 5.3 % (2.3139 -> 2.4366 GHz). Two changes, one
+    number: the attribution needs a measurement, not an argument.
+
+    ``build_rfx_sim(feed="pre931")`` is that measurement's other arm -- the
+    production sheets with the OLD port, starting 1.0*DX above the substrate
+    floor and spanning 2*DX ("cells strictly between GP & patch"). Pinned here
+    so the arm cannot rot into something that is no longer the old feed, which
+    would make the decomposition meaningless while still producing a number.
+
+    The stack check must pass on BOTH arms: the feed is not supposed to touch
+    the realized walls (a port releases only the one component it drives,
+    design note §6), and if it did, the decomposition would be measuring two
+    things again.
+    """
+    cv15 = _load_cv15()
+    _sim, _ps, geom = cv15.build_rfx_sim(do_gain=False, feed="full_span")
+    assert geom["port_z0"] == pytest.approx(cv15.AIR_BELOW, abs=1e-12)
+    assert geom["port_extent"] == pytest.approx(cv15.H_SUB, abs=1e-12)
+
+    sim, grid, patch_shape = _build_test_sim(cv15, feed="pre931")
+    _s, _p, geom_old = cv15.build_rfx_sim(do_gain=False, feed="pre931")
+    assert geom_old["port_z0"] == pytest.approx(
+        cv15.AIR_BELOW + 1.0 * cv15.DX, abs=1e-12)
+    assert geom_old["port_extent"] == pytest.approx(2.0 * cv15.DX, abs=1e-12)
+
+    sc = cv15.assert_realized_stack(sim, grid, patch_shape)
+    capsys.readouterr()
+    assert sc["ground_realization"] == "sheet"
+    assert sc["patch_realization"] == "sheet"
+    assert sc["n_distinct_eps"] == cv15.N_DISTINCT_EPS_EXPECTED
+
+
+def test_cv15_builder_rejects_an_unknown_feed():
+    cv15 = _load_cv15()
+    with pytest.raises(ValueError, match="feed"):
+        cv15.build_rfx_sim(feed="two_plane")
