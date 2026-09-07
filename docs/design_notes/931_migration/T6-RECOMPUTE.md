@@ -132,6 +132,11 @@ worse than a red gate.
 | `msl-nu-gate` | **369367259227** | the same, and the two lanes agree within one DFT bin (#834) | 1-3 h |
 | `refplane-thru` | **369367259228** | the 6 physics legs run for the first time at HEAD; Zc and beta/(w/c) are re-derived from this run against the Phase-0 closed-box flux referee | 20-40 min |
 
+| `sheet-resonance-ab` | **369367259230** | the peak census this commit added says whether the modes moved or the two-loudest picker swapped peaks. If the length-scaled 23.45 / 26.85 GHz pair appears in the census, the picker swapped | 30-60 min |
+| `sheet-perturbation-q` | **369367259231** | same instrument, same question, on the single-patch sibling (measured 25.3992 against a length-scaled 23.63) | 1-2 h |
+| `leontovich-alpha` | **369367259232** | re-measure at HEAD with the full log kept: the pod reproduces the 3 failures, so "alpha unchanged" is falsified and the size of the move has to be read off the run, not argued | 1-2 h |
+| `pec-short-sweep` | **369367259233** | the PRE-DECLARED separation: `_vessl931/pec_short_thickness_sweep.py` re-solves at SHORT_CELLS = 1, 2, 4. A total reflector's abs S11 cannot depend on its thickness, so a spread > 0.005 means the REDRAW owns the 0.9670 and the module re-pins from the thickness it declares; a flat sweep means stage C's realized-edge lane owns it and it belongs with the chain-battery re-measure | 20-40 min |
+
 `vessl run create -f /tmp/t6vessl2/<case>.yaml`, submitted from a plain
 directory (the worktree crash above still applies). The band constants in
 those three lock modules are re-pinned FROM these runs, never from the
