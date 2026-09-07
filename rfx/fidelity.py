@@ -157,12 +157,10 @@ def fidelity_report(sim, print_report: bool = True):
     * rasterization — occupied cell count (0 = the entity is silently
       ABSENT from the solve), realized bounds from the run's own node
       coordinates, per-axis face residuals and extent deltas;
-    * realization class for conductors — volumetric / one-plane sheet
-      (electric wall on the LOWER node plane only) / two-plane sheet —
-      with the wall coordinates, and the sheet's OWN-cell permittivity
-      (a one-plane sheet's cell volume stays live inside adjacent
-      cavities: eps_r 1.0 there means declared metal is realized as a
-      vacuum layer plus one wall);
+    * realization class for conductors (#931 lattice ownership contract)
+      — volumetric PEC / one-cell PEC volume (walls on BOTH bounding node
+      planes, interior shorted); a zero-thickness Box or a PEC thin
+      conductor is a sheet and owns no cell;
     * materialization for dielectrics — the assembled eps_r/sigma inside
       the entity's cells vs the declared values (later entities may have
       overwritten earlier ones);
@@ -640,43 +638,22 @@ def fidelity_report(sim, print_report: bool = True):
                        "or the sheet operator); if not, declare 'pec' so the "
                        "model states what it solves"))
         if realized_conductor:
+            # Lattice ownership contract (#931): a PEC geometry entry is a
+            # VOLUME — every E edge incident to an occupied cell is shorted,
+            # so a body one cell thick along an axis still realizes walls on
+            # BOTH of its bounding node planes with its interior shorted.
+            # (The drawn-vs-realized wall-plane table per axis is the
+            # follow-up of this report; a zero-thickness Box is a SHEET and
+            # is not in pec_mask, so it does not reach this branch.)
             runs = [_max_run_length(mask, a) for a in range(3)]
             thin_axes = [a for a, r in enumerate(runs) if r == 1]
             if not thin_axes:
                 item["realization"] = "volumetric PEC (>= 2 cells on every axis)"
-                if getattr(entry, "two_plane", False):
-                    item["findings"].append(dict(
-                        kind="two-plane-inert",
-                        detail="two_plane=True was declared, but this body is "
-                               ">= 2 cells thick on every axis, so the rule "
-                               "adds nothing — the request has no effect",
-                        remedy="drop the flag here, or check whether the body "
-                               "was meant to be a one-cell sheet"))
             else:
                 aname = "+".join(_axis_names()[a] for a in thin_axes)
-                if getattr(entry, "two_plane", False):
-                    item["realization"] = (
-                        f"two-plane sheet (normal {aname}): electric walls on "
-                        "BOTH bounding node planes; interior enclosed")
-                else:
-                    item["realization"] = (
-                        f"one-plane sheet (normal {aname}): electric wall on "
-                        "the LOWER node plane ONLY")
-                    own_eps = eps[mask]
-                    e_lo, e_hi = float(own_eps.min()), float(own_eps.max())
-                    item["own_cell_eps_r"] = (e_lo, e_hi)
-                    item["findings"].append(dict(
-                        kind="sheet-own-cell-live", axis=aname,
-                        detail=(f"the declared metal's cell volume stays live "
-                                f"with eps_r {e_lo:.2f}"
-                                + (f"..{e_hi:.2f}" if e_hi - e_lo > 1e-6 else "")
-                                + " inside adjacent cavities"
-                                + (" — VACUUM substituted for declared metal"
-                                   if e_hi < 1.0 + 1e-6 else "")),
-                        remedy="two_plane=True on this entry (walls on both "
-                               "faces), or extend the abutting dielectric "
-                               "across this cell, or resolve the thickness "
-                               "with >= 2 cells"))
+                item["realization"] = (
+                    f"one-cell PEC volume (thin along {aname}): electric "
+                    "walls on BOTH bounding node planes, interior shorted")
         else:
             m = item["material"]
             if m["kind"] == "dielectric":

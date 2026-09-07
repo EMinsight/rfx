@@ -1,4 +1,4 @@
-"""Contract tests for the ``rfx-design-ir/v1`` design document.
+"""Contract tests for the ``rfx-design-ir/v2`` design document.
 
 These tests are pure: they build ``Simulation`` objects with the real public
 API, serialise them, rebuild them, and compare builder state.  No FDTD runs.
@@ -969,7 +969,7 @@ def test_refuses_a_one_shot_iterator_shape_parameter():
 
     The failure this pins is a whole document, not a message: the first export
     consumed the iterator, so the SECOND export emitted ``points: []`` and
-    produced a complete, schema-valid ``rfx-design-ir/v1`` document with the
+    produced a complete, schema-valid ``rfx-design-ir/v2`` document with the
     wire simply absent — which then survived re-import. ``_SHAPE`` delegates to
     the shape codec and does not re-validate, so the document inherited the
     hole; it is closed in ``rfx/interop/_validate.check_sequence``. This test
@@ -1382,7 +1382,7 @@ def test_non_portable_annotation_cannot_be_stripped():
 
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[2]
-    / "docs/design_notes/schemas/rfx-design-ir-v1.schema.json"
+    / "docs/design_notes/schemas/rfx-design-ir-v2.schema.json"
 )
 
 

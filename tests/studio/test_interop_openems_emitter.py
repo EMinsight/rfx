@@ -419,7 +419,7 @@ def test_header_itemises_provenance_and_every_approximation():
     import rfx
 
     assert f"source rfx       : {rfx.__version__}" in header
-    assert "design IR schema : rfx-design-ir/v1" in header
+    assert "design IR schema : rfx-design-ir/v2" in header
     assert f"emitter          : {OPENEMS_EMITTER_VERSION}" in header
     assert "APPROXIMATIONS APPLIED" in header
     assert "WHAT THIS SCRIPT DOES NOT PROVE" in header

@@ -393,7 +393,6 @@ class _ExecuteMixin:
         s_param_n_steps=None,
     ):
         """Run simulation using SBP-SAT subgridding (JIT-compiled)."""
-        self._refuse_two_plane("subgridded (SBP-SAT)")  # #706
         self._reject_refplane_ports_off_uniform_lane("subgridded (SBP-SAT)",
                                                      compute_s_params)
         from rfx.runners.subgridded import run_subgridded_path
@@ -1149,7 +1148,6 @@ class _ExecuteMixin:
         return_state: bool = True,
     ):
         """Run the integrated ADI solver path (2D TMz or 3D)."""
-        self._refuse_two_plane("ADI")  # #706
         import copy
 
         self._validate_adi_configuration(materials, debye_spec, lorentz_spec)
@@ -1384,11 +1382,6 @@ class _ExecuteMixin:
         sources = []
         probes = []
         pec_mask_local = pec_mask
-        # #706: opt-in two-plane slab mask (None when nothing is flagged).
-        # Same grid as pec_mask; the rule intersects with the live mask
-        # inside apply_pec_mask, so later .at[].set(False) clearing is
-        # honoured automatically.
-        pec_two_plane_mask = self._two_plane_cell_mask(grid)
         pec_occupancy_local = pec_occupancy
         lumped_port_sparam_specs: list = []
         wire_port_sparam_specs: list = []
@@ -1969,7 +1962,6 @@ class _ExecuteMixin:
             checkpoint=checkpoint,
             checkpoint_segments=checkpoint_segments,
             pec_mask=pec_mask_local,
-            pec_two_plane_mask=pec_two_plane_mask,
             pec_occupancy=pec_occupancy_for_run,
             aniso_inv_eps=aniso_inv_eps_run,
             aniso_inv_eps_smooth=(aniso_inv_eps_run is not None),
@@ -2261,8 +2253,6 @@ class _ExecuteMixin:
         # Defense-in-depth: the distributed-NU runner does not honour
         # stencil_order (both distributed and non-uniform are unsupported).
         self._check_stencil_order_supported(distributed=True)
-        # #706: the sharded PEC kernel does not thread the two-plane mask.
-        self._refuse_two_plane("distributed non-uniform")
         if self._flux_monitors:
             raise NotImplementedError(
                 "add_flux_monitor() is not supported on the distributed "
@@ -3263,8 +3253,10 @@ class _ExecuteMixin:
         # #677: node-thin sheet ctx against the final forward pec_mask
         # (PEC wins on overlapping edges).
         from rfx.materials.thin_conductor import build_sheet_impedance_ctx
+        from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
         _fwd_sheet_ctx = build_sheet_impedance_ctx(
-            _fwd_sheet_specs, pec_mask=pec_mask)
+            _fwd_sheet_specs,
+            pec_edge_masks=None if pec_mask is None else _rpem(pec_mask))
         # #679: the same UPML refusal run_uniform carries. forward() reaches
         # the solver by its own route (it never enters run_uniform), so
         # WITHOUT this the eps_override / forward() channel silently ran the
