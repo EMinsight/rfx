@@ -182,21 +182,22 @@ def test_advisory_surfaces_through_run_not_just_preflight():
 def test_the_two_foils_realize_on_the_planes_they_were_drawn_on():
     """Build-time (no solve) ownership check for the fixture above.
 
-    Read through the one realized-edge source: both foils are sheets, own no
-    cell, and land on the node planes they were drawn on — one cell apart, so
-    the substrate the advisory talks about is really there.
+    Read through the shared helper, which reads the single realized-edge
+    source: both foils are sheets, own no cell, and land on the node planes
+    they were drawn on — one cell apart, so the substrate the advisory talks
+    about is really there.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, node_index, realized)
 
     sim = _patch_sim(60e-3, 55e-3)
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert pec_mask is None, "foil declared as a sheet owns no cell"
-    assert len(sheets) == 2
-    k_gp = grid.position_to_index((0.0, 0.0, 0.010))[2]
-    k_patch = grid.position_to_index((0.0, 0.0, 0.010 + H_SUB))[2]
+    rz = realized(sim)
+    assert rz.pec_mask is None, "foil declared as a sheet owns no cell"
+    assert len(rz.sheets) == 2
+    k_gp = node_index(rz.grid, 2, z_of_gp := 0.010)
+    k_patch = node_index(rz.grid, 2, z_of_gp + H_SUB)
     assert k_patch == k_gp + 1
-    assert sorted(sp.plane for sp in sheets) == [k_gp, k_patch]
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k_gp, k_patch]
+    assert_sheet_planes(sim, 2, expected_m=(z_of_gp, z_of_gp + H_SUB),
+                        what="ground and patch foils")
+    assert_wall_planes(sim, 2, expected_m=(z_of_gp, z_of_gp + H_SUB),
+                       what="ground and patch foils")

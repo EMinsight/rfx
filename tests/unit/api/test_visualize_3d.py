@@ -75,18 +75,13 @@ def test_visualize_farfield_requires_ntff_data():
 def test_the_two_foils_realize_as_sheets_on_the_substrate_faces():
     """Build-time (no solve) ownership check for the fixture above (#931 §1.7).
 
-    Read through the one realized-edge source: two sheets, no cell, on the
-    two node planes the substrate spans.
+    Read through the shared helper, which reads the single realized-edge
+    source: two sheets, no cell, on the two node planes the substrate spans.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, realized)
 
     sim = _patch_sim()
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert pec_mask is None, "foil declared as a sheet owns no cell"
-    planes = sorted(sp.plane for sp in sheets)
-    assert planes == [grid.position_to_index((0.0, 0.0, 0.012))[2],
-                      grid.position_to_index((0.0, 0.0, 0.014))[2]]
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == planes
+    assert realized(sim).pec_mask is None, "foil declared as a sheet owns no cell"
+    assert_sheet_planes(sim, 2, expected_m=(0.012, 0.014), what="ground and patch")
+    assert_wall_planes(sim, 2, expected_m=(0.012, 0.014), what="ground and patch")

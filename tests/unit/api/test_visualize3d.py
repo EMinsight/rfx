@@ -96,20 +96,21 @@ def test_the_two_foils_realize_as_sheets_and_leave_the_substrate_whole(simple_si
     Two sheets on the substrate's two faces, no PEC cell anywhere, and the
     substrate's permittivity written at the ground plane too — which is the
     "a sheet owns no cell" clause read on a stack-up whose dielectric and
-    metal were drawn overlapping.
+    metal were drawn on the same plane.
     """
     import numpy as np
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, node_index, realized)
+
+    rz = realized(simple_sim)
+    assert rz.pec_mask is None, "foil declared as a sheet owns no cell"
+    assert_sheet_planes(simple_sim, 2, expected_m=(0.001, 0.003),
+                        what="ground and trace")
+    assert_wall_planes(simple_sim, 2, expected_m=(0.001, 0.003),
+                       what="ground and trace")
 
     grid = simple_sim._build_grid()
-    sheets: list = []
-    mats, _, _, pec_mask, _, _, _ = simple_sim._assemble_materials(
-        grid, pec_sheets=sheets)
-    assert pec_mask is None, "foil declared as a sheet owns no cell"
-    planes = sorted(sp.plane for sp in sheets)
-    assert planes == [grid.position_to_index((0.0, 0.0, 0.001))[2],
-                      grid.position_to_index((0.0, 0.0, 0.003))[2]]
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == planes
+    mats = simple_sim._assemble_materials(grid, pec_sheets=[])[0]
     i, j = grid.shape[0] // 2, grid.shape[1] // 2
-    assert float(np.asarray(mats.eps_r)[i, j, planes[0]]) == pytest.approx(4.4)
+    k_gnd = node_index(grid, 2, 0.001)
+    assert float(np.asarray(mats.eps_r)[i, j, k_gnd]) == pytest.approx(4.4)

@@ -46,11 +46,7 @@ import pytest
 import jax.numpy as jnp
 
 from rfx import Box, Simulation
-from rfx.boundaries.pec import (
-    SheetSpec,
-    realized_pec_edge_masks,
-    realized_wall_planes,
-)
+from rfx.boundaries.pec import SheetSpec, realized_pec_edge_masks
 
 
 # --------------------------------------------------------------------------
@@ -192,19 +188,17 @@ def test_two_identical_slot_levels_stay_vacuum_and_agree():
 
 @pytest.mark.parametrize("lane", ["uniform", "nu"])
 def test_the_realized_sheet_plane_equals_the_declared_one(lane):
-    """Build-time check (no solve): realized == declared, read from the one
-    realized-edge source, with the normal edge left live."""
+    """Build-time check (no solve): realized == declared, through the shared
+    helper, with the normal edge left live."""
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, node_index, realized)
+
     sim = _stack(with_sheet=True, lane=lane)
-    grid, _mats, pec_mask, sheets = _assemble(sim, lane)
-    (spec,) = sheets
-    if lane == "nu":
-        k_declared = sim._pos_to_nu_index(grid, (0.5e-3, 0.5e-3, Z_SHEET))[2]
-    else:
-        k_declared = grid.position_to_index((0.5e-3, 0.5e-3, Z_SHEET))[2]
-    assert spec.plane == k_declared
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k_declared]
-    assert not bool(np.asarray(edges[2])[:, :, k_declared].any()), (
+    rz = realized(sim)
+    assert_sheet_planes(sim, 2, expected_m=(Z_SHEET,), what=f"{lane} lane")
+    assert_wall_planes(sim, 2, expected_m=(Z_SHEET,), what=f"{lane} lane")
+    k = node_index(rz.grid, 2, Z_SHEET)
+    assert not bool(np.asarray(rz.edge_masks[2])[:, :, k].any()), (
         "the normal E through a sheet stays live (§1.3)")
 
 
@@ -262,19 +256,18 @@ def test_two_d_sheet_keeps_its_out_of_plane_component():
 
 def test_two_d_sheet_through_the_api_is_one_plane_and_no_cell():
     """The same clause through ``sim.add`` on a ``2d_tmz`` run."""
+    from tests._realized_geometry import realized
+
     dx = 1e-3
     sim = Simulation(freq_max=20e9, domain=(0.02, 0.02, dx), dx=dx,
                      boundary="pec", mode="2d_tmz")
     sim.add(Box((0.008, 0.008, 0.0), (0.014, 0.014, 0.0)), material="pec")
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert grid.shape[2] == 1
-    assert pec_mask is None or not bool(jnp.any(pec_mask))
-    (spec,) = sheets
+    rz = realized(sim)
+    assert rz.grid.shape[2] == 1
+    assert rz.pec_mask is None or not bool(jnp.any(rz.pec_mask))
+    (spec,) = rz.sheets
     assert spec.normal_axis == 2 and spec.plane == 0
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    np.testing.assert_array_equal(np.asarray(edges[2]),
+    np.testing.assert_array_equal(np.asarray(rz.edge_masks[2]),
                                   np.asarray(spec.footprint))
 
 

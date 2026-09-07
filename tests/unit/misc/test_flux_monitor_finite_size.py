@@ -256,8 +256,7 @@ def test_the_short_realizes_walls_on_both_drawn_planes():
     off. This is a 2-D (nz == 1) run, where the sheet and volume rules coincide
     for a rectangle (see tests/unit/materials/test_conductor_ownership.py).
     """
-    import numpy as np
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import assert_wall_planes, node_index, realized
 
     dx = 1.0e-3
     nx, ny = 100, 28
@@ -268,13 +267,11 @@ def test_the_short_realizes_walls_on_both_drawn_planes():
     short_x = domain[0] * 0.72
     sim.add(Box((short_x, 0, 0), (short_x + dx, domain[1], dx)), material="pec")
 
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert sheets == [], "a wall one cell thick is a volume, not a sheet"
-    assert pec_mask is not None and bool(np.asarray(pec_mask).any())
-    i0 = grid.position_to_index((short_x, 0.0, 0.0))[0]
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 0) == [i0, i0 + 1]
+    rz = realized(sim)
+    assert rz.sheets == [], "a wall one cell thick is a volume, not a sheet"
+    assert rz.pec_mask is not None and bool(np.asarray(rz.pec_mask).any())
+    assert_wall_planes(sim, 0, expected_m=(short_x, short_x + dx),
+                       what="the transverse short")
     # the normal component between the two walls is shorted
-    assert bool(np.asarray(edges[0])[i0, grid.shape[1] // 2, 0])
+    i0 = node_index(rz.grid, 0, short_x)
+    assert bool(np.asarray(rz.edge_masks[0])[i0, rz.grid.shape[1] // 2, 0])

@@ -97,17 +97,12 @@ def test_the_plate_realizes_on_the_plane_it_was_drawn_on():
     """Build-time (no solve) ownership check: one sheet, one wall plane at
     z = 50 mm, no cell — the geometry every clearance number above is
     measured against."""
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, realized)
 
     sim = Simulation(freq_max=FREQ, domain=DOMAIN, dx=2e-3,
                      boundary="cpml", cpml_layers=4)
     sim.add(Box(SHEET_LO, SHEET_HI), material="pec")
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert pec_mask is None
-    (spec,) = sheets
-    k = grid.position_to_index(SHEET_LO)[2]
-    assert spec.plane == k
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k]
+    assert realized(sim).pec_mask is None, "a sheet owns no cell"
+    assert_sheet_planes(sim, 2, expected_m=(SHEET_LO[2],), what="the plate")
+    assert_wall_planes(sim, 2, expected_m=(SHEET_LO[2],), what="the plate")

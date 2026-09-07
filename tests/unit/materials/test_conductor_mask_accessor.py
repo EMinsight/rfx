@@ -367,41 +367,36 @@ def test_conductor_mask_is_a_cell_footprint_not_the_realized_edge_set():
     Both directions are asserted, so collapsing either object into the other
     turns this red.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import node_index, realized
 
     dx = 0.5e-3
     sim = Simulation(freq_max=20e9, domain=(4e-3, 4e-3, 4e-3), dx=dx,
                      boundary="pec")
     sim.add(Box((1e-3, 1e-3, 1e-3), (3e-3, 3e-3, 2e-3)), material="pec")
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert sheets == []
-    cells = np.asarray(sim.conductor_mask(grid), dtype=bool)
-    np.testing.assert_array_equal(cells, np.asarray(pec_mask, dtype=bool))
-    k_lo = grid.position_to_index((0.0, 0.0, 1e-3))[2]
-    k_hi = grid.position_to_index((0.0, 0.0, 2e-3))[2]
+    rz = realized(sim)
+    assert rz.sheets == []
+    cells = np.asarray(sim.conductor_mask(rz.grid), dtype=bool)
+    np.testing.assert_array_equal(cells, np.asarray(rz.pec_mask, dtype=bool))
+    k_lo = node_index(rz.grid, 2, 1e-3)
+    k_hi = node_index(rz.grid, 2, 2e-3)
     occupied = sorted(set(np.nonzero(cells.any(axis=(0, 1)))[0].tolist()))
     assert occupied == list(range(k_lo, k_hi))          # cells: lo .. hi-1
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == list(range(k_lo, k_hi + 1))
-    assert len(realized_wall_planes(edges, 2)) == len(occupied) + 1, (
+    assert rz.wall_planes(2) == list(range(k_lo, k_hi + 1))
+    assert len(rz.wall_planes(2)) == len(occupied) + 1, (
         "a volume's far face is a wall with no conductor cell on it")
 
     # the sheet half: footprint one index WIDER than the in-plane edge set
     sim_s = Simulation(freq_max=20e9, domain=(4e-3, 4e-3, 4e-3), dx=dx,
                        boundary="pec")
     sim_s.add(Box((1e-3, 1e-3, 2e-3), (3e-3, 3e-3, 2e-3)), material="pec")
-    grid_s = sim_s._build_grid()
-    sheets_s: list = []
-    pec_s = sim_s._assemble_materials(grid_s, pec_sheets=sheets_s)[3]
-    assert pec_s is None, "a sheet owns no cell"
-    (spec,) = sheets_s
-    foot = np.asarray(sim_s.conductor_mask(grid_s), dtype=bool)
+    rs = realized(sim_s)
+    assert rs.pec_mask is None, "a sheet owns no cell"
+    (spec,) = rs.sheets
+    foot = np.asarray(sim_s.conductor_mask(rs.grid), dtype=bool)
     np.testing.assert_array_equal(foot, np.asarray(spec.footprint, dtype=bool))
     n_i = int(foot.any(axis=(1, 2)).sum())
     n_j = int(foot.any(axis=(0, 2)).sum())
-    ex, ey, ez = realized_pec_edge_masks(pec_s, sheets=sheets_s)
+    ex, ey, ez = rs.edge_masks
     assert int(np.asarray(ex).sum()) == (n_i - 1) * n_j
     assert int(np.asarray(ey).sum()) == n_i * (n_j - 1)
     assert not bool(np.asarray(ez).any()), "the normal edge stays live"

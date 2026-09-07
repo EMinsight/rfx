@@ -1223,7 +1223,8 @@ def test_five_line_patch_declares_a_sheet_not_a_volume():
     rather than left implied by the run above: the patch owns no cell, it
     realizes on one node plane, and the normal E through it stays live.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, node_index, realized)
 
     sim = rfx.Simulation(
         freq_max=4e9, domain=(0.08, 0.06, 0.02),
@@ -1232,17 +1233,15 @@ def test_five_line_patch_declares_a_sheet_not_a_volume():
     sim.add(Box((-19e-3, -14.5e-3, 0.8e-3), (19e-3, 14.5e-3, 0.8e-3)),
             material="pec")
     sim.add(Box((-30e-3, -25e-3, 0), (30e-3, 25e-3, 1.6e-3)), material="fr4")
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert pec_mask is None, "a sheet owns no cell"
-    (spec,) = sheets
-    assert spec.normal_axis == 2
-    k = grid.position_to_index((0.0, 0.0, 0.8e-3))[2]
-    assert spec.plane == k
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 2) == [k]
-    assert not bool(np.asarray(edges[2])[:, :, k].any())
+
+    rz = realized(sim)
+    assert rz.pec_mask is None, "a sheet owns no cell"
+    assert len(rz.sheets) == 1 and rz.sheets[0].normal_axis == 2
+    assert_sheet_planes(sim, 2, expected_m=(0.8e-3,), what="the patch")
+    assert_wall_planes(sim, 2, expected_m=(0.8e-3,), what="the patch")
+    k = node_index(rz.grid, 2, 0.8e-3)
+    assert not bool(np.asarray(rz.edge_masks[2])[:, :, k].any()), (
+        "the normal E through a sheet stays live (§1.3)")
 
 
 def test_four_port_septum_realizes_walls_on_both_drawn_faces():
@@ -1253,19 +1252,17 @@ def test_four_port_septum_realizes_walls_on_both_drawn_faces():
     #931 the y = 60 mm face was never a wall, so the upper guide was one cell
     wider than drawn — the #868 class this contract removes.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from tests._realized_geometry import assert_wall_planes, node_index, realized
 
     sim = Simulation(freq_max=10e9, domain=(0.12, 0.10, 0.02),
                      boundary="cpml", cpml_layers=10, dx=0.002)
     sim.add(Box((0.0, 0.04, 0.0), (0.12, 0.06, 0.02)), material="pec")
-    grid = sim._build_grid()
-    sheets: list = []
-    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-    assert sheets == [], "a 10-cell septum is a volume, not a sheet"
-    j_lo = grid.position_to_index((0.0, 0.04, 0.0))[1]
-    j_hi = grid.position_to_index((0.0, 0.06, 0.0))[1]
-    edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-    assert realized_wall_planes(edges, 1) == list(range(j_lo, j_hi + 1))
+    rz = realized(sim)
+    assert rz.sheets == [], "a 10-cell septum is a volume, not a sheet"
+    j_lo = node_index(rz.grid, 1, 0.04)
+    j_hi = node_index(rz.grid, 1, 0.06)
+    assert_wall_planes(sim, 1, expected_planes=range(j_lo, j_hi + 1),
+                       what="the septum")
     # every normal Ey strictly inside the septum is shorted
-    ey = np.asarray(edges[1])
-    assert ey[grid.shape[0] // 2, j_lo:j_hi, grid.shape[2] // 2].all()
+    ey = np.asarray(rz.edge_masks[1])
+    assert ey[rz.grid.shape[0] // 2, j_lo:j_hi, rz.grid.shape[2] // 2].all()

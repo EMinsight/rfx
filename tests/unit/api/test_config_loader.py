@@ -13,7 +13,8 @@ import numpy as np
 import pytest
 
 from rfx import Box, GaussianPulse, Simulation
-from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+from tests._realized_geometry import (
+    assert_sheet_planes, assert_wall_planes, realized)
 from rfx.config import (
     execution_to_run_kwargs,
     shape_from_config,
@@ -139,16 +140,11 @@ def test_dict_vs_direct_equivalence():
 
     # ... and so is the REALIZED conductor (#931 §1.7): both foils are sheets
     # on the two substrate faces, neither owns a cell, on either spelling.
-    for sim in (sim_cfg, sim_dir):
-        grid = sim._build_grid()
-        sheets: list = []
-        pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
-        assert pec_mask is None, "foil declared as a sheet owns no cell"
-        planes = sorted(sp.plane for sp in sheets)
-        assert planes == [grid.position_to_index((0.0, 0.0, 0.002))[2],
-                          grid.position_to_index((0.0, 0.0, 0.003))[2]]
-        edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
-        assert realized_wall_planes(edges, 2) == planes
+    for sim, who in ((sim_cfg, "from the config"), (sim_dir, "direct")):
+        assert realized(sim).pec_mask is None, (
+            f"{who}: foil declared as a sheet owns no cell")
+        assert_sheet_planes(sim, 2, expected_m=(0.002, 0.003), what=who)
+        assert_wall_planes(sim, 2, expected_m=(0.002, 0.003), what=who)
 
 
 def test_yaml_matches_dict(tmp_path):
