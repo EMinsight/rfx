@@ -1,0 +1,546 @@
+"""#931 lattice ownership contract — the pre-declared battery (design note §5).
+
+Normative source: ``docs/design_notes/20260906_plan_realign_lattice_ownership.md``.
+One sentence covers every conductor: **an E component is PEC iff its own
+location is inside the closed conductor region**, evaluated for a 3-D
+(volume), 2-D (sheet) and 1-D (wire) region on the Yee lattice.
+
+Index conventions (§1.1): node ``i`` is the LOWER corner of primal cell
+``i``; ``Ex[i,j,k]`` sits at ``(x_{i+1/2}, y_j, z_k)`` and cyclically. A
+Box drawn ``z_a -> z_b`` on node planes occupies cells ``a .. b-1`` and
+must realize tangential walls at BOTH ``z_a`` and ``z_b``.
+
+The slab battery goes through ``apply_pec_mask`` (present in the old code
+too) so that the far-face assertions FAIL on the pre-#931 neighbour rule
+rather than erroring at import: on the old rule a 1-cell slab is a single
+plane at ``lo`` and its far face at ``hi`` is never a wall.
+
+Sections that need the rasterizer side of the contract (sheet
+declarations through ``add_thin_conductor``, the sub-cell refusal, the
+``two_plane`` grep) are marked in their docstrings; they stay red until
+that stage lands.
+"""
+
+from __future__ import annotations
+
+import itertools
+import re
+import subprocess
+from pathlib import Path
+
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from rfx.boundaries.pec import apply_pec_mask
+from rfx.core.yee import init_state
+
+RFX_ROOT = Path(__file__).resolve().parents[2]
+
+SHAPE = (7, 8, 9)
+LO = (2, 2, 2)          # first occupied cell per axis
+HI = (5, 6, 7)          # one past the last occupied cell per axis
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+def _ones_state(shape):
+    ones = jnp.ones(shape, jnp.float32)
+    return init_state(shape)._replace(ex=ones, ey=ones, ez=ones)
+
+
+def _zeroed(state):
+    """Boolean per-component 'this edge was zeroed' masks from a ones state."""
+    return tuple(np.asarray(getattr(state, c)) == 0.0 for c in ("ex", "ey", "ez"))
+
+
+def _box_cells(shape, lo, hi):
+    m = np.zeros(shape, dtype=bool)
+    m[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]] = True
+    return m
+
+
+def _slab_cells(shape, axis, k0, t, foot_lo=(1, 1, 1), foot_hi=None):
+    """Cells of a slab ``t`` cells thick along ``axis`` starting at cell k0."""
+    lo = list(foot_lo)
+    hi = list(foot_hi) if foot_hi is not None else [s - 1 for s in shape]
+    lo[axis] = k0
+    hi[axis] = k0 + t
+    return _box_cells(shape, lo, hi)
+
+
+def _expected_volume_edges(shape, lo, hi):
+    """Closed-region reading of the contract for a node-aligned Box.
+
+    Written directly from §1.1 (where each component sits), NOT from the
+    §1.2 formula, so the test is an independent statement of the rule.
+    Ex[i,j,k] at (x_{i+1/2}, y_j, z_k) is inside the closed box iff
+    lo_x <= i < hi_x (its centre), lo_y <= j <= hi_y, lo_z <= k <= hi_z.
+    """
+    ex = np.zeros(shape, dtype=bool)
+    ey = np.zeros(shape, dtype=bool)
+    ez = np.zeros(shape, dtype=bool)
+    ex[lo[0]:hi[0], lo[1]:hi[1] + 1, lo[2]:hi[2] + 1] = True
+    ey[lo[0]:hi[0] + 1, lo[1]:hi[1], lo[2]:hi[2] + 1] = True
+    ez[lo[0]:hi[0] + 1, lo[1]:hi[1] + 1, lo[2]:hi[2]] = True
+    return ex, ey, ez
+
+
+def _interior_slab_case(axis, t):
+    lo = [2, 2, 2]
+    hi = [5, 6, 7]
+    lo[axis] = 3
+    hi[axis] = 3 + t
+    return tuple(lo), tuple(hi)
+
+
+# ---------------------------------------------------------------------------
+# §5 slab battery — volume: walls at lo AND hi, no live normal edge inside
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("t", [1, 2, 3])
+def test_slab_realizes_both_faces_and_shorts_its_interior(axis, t):
+    lo, hi = _interior_slab_case(axis, t)
+    cells = _box_cells(SHAPE, lo, hi)
+    got = _zeroed(apply_pec_mask(_ones_state(SHAPE), jnp.asarray(cells)))
+    tangential = [c for c in range(3) if c != axis]
+    k_lo, k_hi = lo[axis], hi[axis]
+    for c in tangential:
+        m = got[c]
+        wall_lo = np.take(m, k_lo, axis=axis)
+        wall_hi = np.take(m, k_hi, axis=axis)
+        assert wall_lo.any(), f"axis={axis} t={t}: no wall at lo plane {k_lo} for E{'xyz'[c]}"
+        assert wall_hi.any(), (
+            f"axis={axis} t={t}: FAR FACE MISSING — no wall at hi plane "
+            f"{k_hi} for E{'xyz'[c]} (old one-plane-per-cell rule)")
+        # the two faces carry the same footprint
+        np.testing.assert_array_equal(wall_lo, wall_hi)
+        # nothing outside the closed extent
+        outside = [k for k in range(SHAPE[axis]) if k < k_lo or k > k_hi]
+        for k in outside:
+            assert not np.take(m, k, axis=axis).any(), (axis, t, c, k)
+    # normal component: every edge inside the closed slab (cells and the
+    # lateral rim nodes) is shorted, none outside
+    n = got[axis]
+    exp_n = _expected_volume_edges(SHAPE, lo, hi)[axis]
+    for k in range(SHAPE[axis]):
+        plane = np.take(n, k, axis=axis)
+        if k_lo <= k < k_hi:
+            assert np.all(plane[np.take(cells, k, axis=axis)]), \
+                f"live normal edge inside slab k={k}"
+            np.testing.assert_array_equal(plane, np.take(exp_n, k, axis=axis))
+        else:
+            assert not plane.any(), (axis, t, k)
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("t", [1, 2, 3])
+def test_slab_realized_thickness_equals_drawn(axis, t):
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    lo, hi = _interior_slab_case(axis, t)
+    masks = realized_pec_edge_masks(jnp.asarray(_box_cells(SHAPE, lo, hi)))
+    planes = realized_wall_planes(masks, axis)
+    assert planes == list(range(lo[axis], hi[axis] + 1)), (axis, t, planes)
+    assert planes[-1] - planes[0] == t
+
+
+def test_one_cell_box_is_a_filled_slab_with_no_flag():
+    """A 1-cell PEC Box realizes two faces on every axis — no ``two_plane``."""
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    lo, hi = (3, 3, 3), (4, 4, 4)
+    got = realized_pec_edge_masks(jnp.asarray(_box_cells(SHAPE, lo, hi)))
+    exp = _expected_volume_edges(SHAPE, lo, hi)
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(got[c]), exp[c], err_msg="xyz"[c])
+    # 4 edges per component: the 12 edges of one cube
+    assert [int(np.asarray(g).sum()) for g in got] == [4, 4, 4]
+
+
+# ---------------------------------------------------------------------------
+# §5 footprint battery — a patch Box realizes its drawn rectangle (closed)
+# ---------------------------------------------------------------------------
+
+def test_volume_box_realizes_its_closed_extent_exactly():
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    got = realized_pec_edge_masks(jnp.asarray(_box_cells(SHAPE, LO, HI)))
+    exp = _expected_volume_edges(SHAPE, LO, HI)
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(got[c]), exp[c], err_msg="xyz"[c])
+
+
+def test_volume_box_through_the_api_has_walls_on_both_drawn_planes():
+    """Node-aligned Box via ``sim.add(..., material='pec')`` — cell set is
+    the same under node and centre sampling, so this holds with either
+    rasterizer; the wall planes are what the contract adds."""
+    from rfx import Box, Simulation
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    dx = 1e-3
+    sim = Simulation(freq_max=10e9, domain=(0.010, 0.010, 0.010),
+                     boundary="pec", dx=dx)
+    lo = (0.002, 0.003, 0.004)
+    hi = (0.006, 0.007, 0.005)      # z: 1 cell thick
+    sim.add(Box(lo, hi), material="pec")
+    grid = sim._build_grid()
+    pec_mask = sim._assemble_materials(grid)[3]
+    assert pec_mask is not None
+    masks = realized_pec_edge_masks(pec_mask)
+    i_lo = grid.position_to_index(lo)
+    i_hi = grid.position_to_index(hi)
+    for ax in range(3):
+        assert realized_wall_planes(masks, ax) == list(range(i_lo[ax], i_hi[ax] + 1)), ax
+    exp = _expected_volume_edges(grid.shape, i_lo, i_hi)
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(masks[c]), exp[c], err_msg="xyz"[c])
+
+
+# ---------------------------------------------------------------------------
+# §5 sheet battery — one plane, live normal edge, closed footprint
+# ---------------------------------------------------------------------------
+
+def _sheet(shape, axis, plane, foot_lo, foot_hi):
+    """SheetSpec with a closed node footprint [foot_lo, foot_hi] in-plane."""
+    from rfx.boundaries.pec import SheetSpec
+    f = np.zeros(shape, dtype=bool)
+    sl = [slice(foot_lo[a], foot_hi[a] + 1) for a in range(3)]
+    sl[axis] = slice(plane, plane + 1)
+    f[tuple(sl)] = True
+    return SheetSpec(normal_axis=axis, plane=plane, footprint=jnp.asarray(f))
+
+
+def _expected_sheet_edges(shape, axis, plane, foot_lo, foot_hi):
+    """§1.3 read directly: E_t (t != axis) at plane, both end nodes in F."""
+    out = [np.zeros(shape, dtype=bool) for _ in range(3)]
+    for t in range(3):
+        if t == axis:
+            continue
+        sl = [slice(foot_lo[a], foot_hi[a] + 1) for a in range(3)]
+        sl[axis] = slice(plane, plane + 1)
+        sl[t] = slice(foot_lo[t], foot_hi[t])          # edges i .. i+1, last node excluded
+        out[t][tuple(sl)] = True
+    return tuple(out)
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_sheet_realizes_one_plane_and_leaves_the_normal_edge_live(axis):
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    plane = 4
+    foot_lo, foot_hi = (1, 2, 1), (4, 5, 6)
+    spec = _sheet(SHAPE, axis, plane, foot_lo, foot_hi)
+    got = realized_pec_edge_masks(None, sheets=[spec])
+    exp = _expected_sheet_edges(SHAPE, axis, plane, foot_lo, foot_hi)
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(got[c]), exp[c], err_msg="xyz"[c])
+    assert not bool(jnp.any(got[axis])), "sheet-normal E must stay live"
+    assert realized_wall_planes(got, axis) == [plane]
+
+
+def test_sheet_with_a_cell_mask_of_none_or_zeros_is_the_same():
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    spec = _sheet(SHAPE, 2, 3, (1, 1, 0), (5, 5, 0))
+    a = realized_pec_edge_masks(None, sheets=[spec])
+    b = realized_pec_edge_masks(jnp.zeros(SHAPE, bool), sheets=[spec])
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(a[c]), np.asarray(b[c]))
+
+
+def test_abutting_sheets_on_one_plane_union_before_the_edge_rule():
+    """Two footprints sharing a node row realize seamlessly — no slit."""
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    left = _sheet(SHAPE, 2, 3, (1, 1, 0), (3, 5, 0))
+    right = _sheet(SHAPE, 2, 3, (3, 1, 0), (5, 5, 0))
+    whole = _sheet(SHAPE, 2, 3, (1, 1, 0), (5, 5, 0))
+    two = realized_pec_edge_masks(None, sheets=[left, right])
+    one = realized_pec_edge_masks(None, sheets=[whole])
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(two[c]), np.asarray(one[c]))
+
+
+def test_sheets_on_adjacent_planes_keep_a_live_normal_edge_between_them():
+    """#690 semantics: two films one cell apart, the gap edge stays live."""
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    a = _sheet(SHAPE, 2, 3, (1, 1, 0), (5, 5, 0))
+    b = _sheet(SHAPE, 2, 4, (1, 1, 0), (5, 5, 0))
+    got = realized_pec_edge_masks(None, sheets=[a, b])
+    assert realized_wall_planes(got, 2) == [3, 4]
+    assert not bool(jnp.any(got[2]))
+
+
+def test_sheet_footprint_is_the_closed_rectangle():
+    """The hi row of the footprint carries a wall edge (closed sampling)."""
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    foot_lo, foot_hi = (1, 2, 0), (4, 5, 0)
+    got = realized_pec_edge_masks(None, sheets=[_sheet(SHAPE, 2, 3, foot_lo, foot_hi)])
+    ex, ey, _ = (np.asarray(g) for g in got)
+    assert ex[1:4, 5, 3].all()          # hi row j=5 carries Ex edges
+    assert ey[4, 2:5, 3].all()          # hi column i=4 carries Ey edges
+    assert not ex[4, :, 3].any()        # no edge leaves the footprint
+    assert not ey[:, 5, 3].any()
+
+
+def test_sheet_spec_validates_its_layer():
+    from rfx.boundaries.pec import SheetSpec
+    f = np.zeros(SHAPE, dtype=bool)
+    f[1:3, 1:3, 2] = True
+    f[1:3, 1:3, 4] = True       # a second layer
+    with pytest.raises(ValueError):
+        SheetSpec(normal_axis=2, plane=2, footprint=jnp.asarray(f))
+
+
+# ---------------------------------------------------------------------------
+# §5 mirror / axis-permutation invariance
+# ---------------------------------------------------------------------------
+
+def _random_body(rng, shape):
+    m = np.zeros(shape, dtype=bool)
+    for _ in range(3):
+        lo = [rng.integers(1, s - 2) for s in shape]
+        hi = [rng.integers(l + 1, s - 1) for l, s in zip(lo, shape)]
+        m[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]] = True
+    return m
+
+
+@pytest.mark.parametrize("perm", list(itertools.permutations(range(3))))
+def test_realized_edges_commute_with_axis_permutation(perm):
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    rng = np.random.default_rng(931)
+    cells = _random_body(rng, (8, 8, 8))
+    base = [np.asarray(m) for m in realized_pec_edge_masks(jnp.asarray(cells))]
+    permuted = realized_pec_edge_masks(jnp.asarray(np.transpose(cells, perm)))
+    for new_axis, old_axis in enumerate(perm):
+        np.testing.assert_array_equal(np.asarray(permuted[new_axis]),
+                                      np.transpose(base[old_axis], perm))
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_realized_edges_commute_with_mirror_of_an_interior_body(axis):
+    """Mirroring cells i <-> n-1-i maps the along-axis component index
+    i -> n-1-i and the other two (node-plane) components i -> n-i."""
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    rng = np.random.default_rng(7)
+    cells = _random_body(rng, (8, 8, 8))
+    base = [np.asarray(m) for m in realized_pec_edge_masks(jnp.asarray(cells))]
+    mirrored = [np.asarray(m) for m in
+                realized_pec_edge_masks(jnp.asarray(np.flip(cells, axis)))]
+    for c in range(3):
+        if c == axis:
+            np.testing.assert_array_equal(mirrored[c], np.flip(base[c], axis))
+        else:
+            flipped = np.flip(base[c], axis)            # plane i -> n-1-i
+            shifted = np.roll(flipped, 1, axis=axis)   # -> n-i
+            # plane n (index n) has no array entry; interior bodies never
+            # touch it, so roll wrap carries only zeros
+            np.testing.assert_array_equal(mirrored[c], shifted)
+
+
+# ---------------------------------------------------------------------------
+# §5 soft == hard at binary occupancy
+# ---------------------------------------------------------------------------
+
+def _soft_hard_battery():
+    n = 8
+    shape = (n, n, n)
+    cases = []
+    for axis in range(3):
+        for t in (1, 2, 3):
+            for k0 in (0, 2, n - t):          # face 0, interior, face n-1
+                cases.append((f"slab ax={axis} t={t} k0={k0}",
+                              _slab_cells(shape, axis, k0, t, (1, 1, 1), (n - 1, n - 1, n - 1)),
+                              (False, False, False)))
+    # a seam-straddling body on a periodic axis (cells n-1 and 0)
+    for axis in range(3):
+        m = np.zeros(shape, dtype=bool)
+        sl = [slice(2, 5)] * 3
+        sl[axis] = slice(0, 1)
+        m[tuple(sl)] = True
+        sl[axis] = slice(n - 1, n)
+        m[tuple(sl)] = True
+        per = [False, False, False]
+        per[axis] = True
+        cases.append((f"seam ax={axis}", m, tuple(per)))
+    rng = np.random.default_rng(3)
+    cases.append(("random", rng.random(shape) < 0.35, (False, False, False)))
+    cases.append(("random-periodic-y", rng.random(shape) < 0.35, (False, True, False)))
+    cases.append(("2d-lane", _slab_cells((9, 9, 1), 0, 3, 2, (0, 2, 0), (9, 7, 1)),
+                  (False, False, True)))
+    return cases
+
+
+@pytest.mark.parametrize("case", _soft_hard_battery(), ids=lambda c: c[0])
+def test_soft_occupancy_is_bit_identical_to_hard_mask_at_binary(case):
+    from rfx.boundaries.pec import apply_pec_occupancy
+    name, cells, periodic = case
+    st = _ones_state(cells.shape)
+    hard = apply_pec_mask(st, jnp.asarray(cells), periodic)
+    soft = apply_pec_occupancy(st, jnp.asarray(cells, dtype=jnp.float32), periodic)
+    for c in ("ex", "ey", "ez"):
+        np.testing.assert_array_equal(np.asarray(getattr(hard, c)),
+                                      np.asarray(getattr(soft, c)), err_msg=f"{name} {c}")
+
+
+def test_soft_path_ors_sheet_masks_in_statically():
+    from rfx.boundaries.pec import apply_pec_occupancy, realized_pec_edge_masks
+    spec = _sheet(SHAPE, 2, 3, (1, 1, 0), (5, 5, 0))
+    sheet_masks = realized_pec_edge_masks(None, sheets=[spec])
+    cells = _box_cells(SHAPE, (1, 1, 5), (3, 3, 7))
+    st = _ones_state(SHAPE)
+    hard = apply_pec_mask(st, jnp.asarray(cells), sheets=[spec])
+    soft = apply_pec_occupancy(st, jnp.asarray(cells, jnp.float32),
+                               sheet_edge_masks=sheet_masks)
+    for c in ("ex", "ey", "ez"):
+        np.testing.assert_array_equal(np.asarray(getattr(hard, c)),
+                                      np.asarray(getattr(soft, c)), err_msg=c)
+
+
+def test_soft_occupancy_is_differentiable_and_noisy_or():
+    import jax
+    from rfx.boundaries.pec import apply_pec_occupancy
+    st = _ones_state((5, 5, 5))
+
+    def f(occ):
+        return jnp.sum(apply_pec_occupancy(st, occ).ex)
+
+    occ = 0.5 * jnp.ones((5, 5, 5), jnp.float32)
+    g = jax.grad(f)(occ)
+    assert bool(jnp.all(jnp.isfinite(g))) and float(jnp.max(jnp.abs(g))) > 0
+    # one interior cell at 0.5: the four Ex edges it touches read 1 - (1-0.5) = 0.5
+    occ1 = jnp.zeros((5, 5, 5), jnp.float32).at[2, 2, 2].set(0.5)
+    out = apply_pec_occupancy(st, occ1).ex
+    assert float(out[2, 2, 2]) == pytest.approx(0.5)
+    assert float(out[2, 3, 3]) == pytest.approx(0.5)
+    assert float(out[2, 2, 4]) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# wires (§1.4) and the helpers (§1.7 / §1.9)
+# ---------------------------------------------------------------------------
+
+def test_wire_path_realizes_the_axis_aligned_lattice_edges():
+    from rfx.boundaries.pec import WireSpec, realized_pec_edge_masks, wire_path_edge_masks
+    nodes = [(1, 1, 1), (4, 1, 1), (4, 3, 1), (4, 3, 5)]
+    edges = wire_path_edge_masks(nodes, SHAPE)
+    ex, ey, ez = (np.asarray(e) for e in edges)
+    assert ex[1:4, 1, 1].all() and ex.sum() == 3
+    assert ey[4, 1:3, 1].all() and ey.sum() == 2
+    assert ez[4, 3, 1:5].all() and ez.sum() == 4
+    got = realized_pec_edge_masks(None, wires=[WireSpec(edges=edges)])
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(got[c]), (ex, ey, ez)[c])
+
+
+def test_wire_path_refuses_a_diagonal_segment():
+    from rfx.boundaries.pec import wire_path_edge_masks
+    with pytest.raises(ValueError, match="axis-aligned"):
+        wire_path_edge_masks([(1, 1, 1), (3, 2, 1)], SHAPE)
+
+
+def test_edge_is_pec_and_clear_edges():
+    from rfx.boundaries.pec import clear_edges, edge_is_pec, realized_pec_edge_masks
+    masks = realized_pec_edge_masks(jnp.asarray(_box_cells(SHAPE, LO, HI)))
+    assert edge_is_pec(masks, "ez", 3, 3, 3)
+    assert edge_is_pec(masks, 0, 2, 2, 2)
+    assert not edge_is_pec(masks, "ex", 5, 2, 2)       # x edge past the hi face
+    cleared = clear_edges(masks, [(3, 3, 3)])
+    for c in ("ex", "ey", "ez"):
+        assert not edge_is_pec(cleared, c, 3, 3, 3)
+    assert edge_is_pec(cleared, "ez", 3, 3, 4)
+    as_mask = np.zeros(SHAPE, dtype=bool)
+    as_mask[3, 3, 3] = True
+    cleared2 = clear_edges(masks, jnp.asarray(as_mask))
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(cleared[c]), np.asarray(cleared2[c]))
+
+
+def test_realized_wall_planes_region_and_column():
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    masks = realized_pec_edge_masks(jnp.asarray(_box_cells(SHAPE, LO, HI)))
+    assert realized_wall_planes(masks, 2) == [2, 3, 4, 5, 6, 7]
+    assert realized_wall_planes(masks, 2, ij=(3, 3)) == [2, 3, 4, 5, 6, 7]
+    assert realized_wall_planes(masks, 2, ij=(0, 0)) == []
+    # hi-rim node (i=5, j=6): its incident tangential edges are at i-1 / j-1
+    assert realized_wall_planes(masks, 2, ij=(5, 6)) == [2, 3, 4, 5, 6, 7]
+    region = (slice(0, 2), slice(None), slice(None))
+    assert realized_wall_planes(masks, 2, region=region) == []
+
+
+# ---------------------------------------------------------------------------
+# rasterizer-facing contract (needs the geometry stage; red until it lands)
+# ---------------------------------------------------------------------------
+
+def _patch_sim(**thin_kwargs):
+    from rfx import Box, Simulation
+    sim = Simulation(freq_max=10e9, domain=(0.010, 0.010, 0.006),
+                     boundary="pec", dx=1e-3)
+    sim.add_thin_conductor(Box((0.002, 0.003, 0.003), (0.006, 0.007, 0.003)),
+                           **thin_kwargs)
+    return sim
+
+
+def test_pec_thin_conductor_is_a_sheet_not_a_cell():
+    """A zero-thickness PEC Box via ``add_thin_conductor`` owns no cell and
+    realizes exactly its closed drawn footprint on one plane (§1.3)."""
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    sim = _patch_sim()
+    grid = sim._build_grid()
+    pec_sheets: list = []
+    pec_mask = sim._assemble_materials(grid, pec_sheets=pec_sheets)[3]
+    assert pec_mask is None or not bool(jnp.any(pec_mask))
+    assert len(pec_sheets) == 1
+    spec = pec_sheets[0]
+    assert spec.normal_axis == 2
+    i_lo = grid.position_to_index((0.002, 0.003, 0.003))
+    i_hi = grid.position_to_index((0.006, 0.007, 0.003))
+    assert spec.plane == i_lo[2]
+    masks = realized_pec_edge_masks(pec_mask, sheets=pec_sheets)
+    exp = _expected_sheet_edges(grid.shape, 2, i_lo[2], i_lo, i_hi)
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(masks[c]), exp[c], err_msg="xyz"[c])
+    assert realized_wall_planes(masks, 2) == [i_lo[2]]
+
+
+def test_g4_pec_sheet_and_f0_sheet_share_footprint_and_edge_set():
+    """G4 by construction: the same Box declared PEC and declared lossy
+    (``surface_impedance_f0``) gives one footprint and one edge set."""
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    from rfx.materials.thin_conductor import build_sheet_impedance_ctx
+    pec_sheets: list = []
+    sim_pec = _patch_sim()
+    sim_pec._assemble_materials(sim_pec._build_grid(), pec_sheets=pec_sheets)
+    f0_specs: list = []
+    sim_f0 = _patch_sim(sigma_bulk=1e4, thickness=35e-6, surface_impedance_f0=5e9)
+    sim_f0._assemble_materials(sim_f0._build_grid(), sheet_specs=f0_specs)
+    assert len(pec_sheets) == 1 and len(f0_specs) == 1
+    np.testing.assert_array_equal(np.asarray(pec_sheets[0].footprint),
+                                  np.asarray(f0_specs[0].mask))
+    pec_edges = realized_pec_edge_masks(None, sheets=pec_sheets)
+    ctx = build_sheet_impedance_ctx(f0_specs)
+    for got, exp in zip((ctx.mask_ex, ctx.mask_ey, ctx.mask_ez), pec_edges):
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(exp))
+
+
+def test_sub_cell_pec_box_via_add_is_refused():
+    from rfx import Box, Simulation
+    sim = Simulation(freq_max=10e9, domain=(0.010, 0.010, 0.006),
+                     boundary="pec", dx=1e-3)
+    sim.add(Box((0.002, 0.003, 0.003), (0.006, 0.007, 0.0034)), material="pec")
+    with pytest.raises(ValueError, match="add_thin_conductor"):
+        sim._assemble_materials(sim._build_grid())
+
+
+def test_two_plane_is_gone_from_the_package():
+    """§1.5: no ``two_plane`` and no per-entry realization knob in rfx/.
+    The reference-plane helper ``refplane_zc_two_plane`` is unrelated."""
+    out = subprocess.run(
+        ["grep", "-rn", "two_plane", str(RFX_ROOT / "rfx")],
+        capture_output=True, text=True, check=False).stdout.splitlines()
+    hits = [h for h in out if "refplane_zc_two_plane" not in h]
+    assert hits == [], "\n".join(hits)
+    knob = re.compile(r"\brealization\s*=")
+    bad = []
+    for p in (RFX_ROOT / "rfx" / "api").glob("*.py"):
+        for n, line in enumerate(p.read_text().splitlines(), 1):
+            if knob.search(line):
+                bad.append(f"{p}:{n}: {line.strip()}")
+    assert bad == [], "\n".join(bad)

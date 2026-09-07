@@ -1427,11 +1427,12 @@ def make_core_step(ctx: _StepContext):
                 from rfx.boundaries.pec import apply_pec_mask
                 # #689: the tangential-edge rule keeps the wrap only on
                 # genuinely periodic axes, so hand it the run's flags.
-                st = apply_pec_mask(st, ctx.pec_mask, ctx.periodic,
-                                    two_plane_mask=ctx.pec_two_plane_mask)
+                # TODO(stage C, #931): precompute (Mx,My,Mz) once at setup
+                # via realized_pec_edge_masks and call apply_pec_edges here.
+                st = apply_pec_mask(st, ctx.pec_mask, ctx.periodic)
 
             if ctx.use_pec_occupancy:
-                st = apply_pec_occupancy(st, ctx.pec_occupancy)
+                st = apply_pec_occupancy(st, ctx.pec_occupancy, ctx.periodic)
 
             # #677 node-thin surface-impedance sheet operator. Contract slot:
             # AFTER apply_pec_mask/apply_pec_occupancy (PEC wins on overlap —

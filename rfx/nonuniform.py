@@ -1398,8 +1398,8 @@ def _build_nu_scan(
             # #689: default (non-periodic) is correct here — the NU
             # stepper installs no periodic BC at all, and NU grids are
             # 3-D, so both of the wrap-keeping guards are inert.
-            st = apply_pec_mask(st, pec_mask,
-                                two_plane_mask=pec_two_plane_mask)
+            # TODO(stage C, #931): precompute the edge masks once at setup.
+            st = apply_pec_mask(st, pec_mask)
         if use_pec_occupancy:
             st = apply_pec_occupancy(st, pec_occupancy)
 
