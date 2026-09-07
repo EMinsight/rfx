@@ -134,7 +134,8 @@ accuracy evidence and the case gates none of them.
   is correct against the file as it stands; whoever flips the flag must re-check
   those three line numbers, because `tests/contracts/test_evidence_citation_pointers.py`
   gates them.
-* The cv05 fixture's own reproducibility, VESSL run **369367259288**
-  (`build_cv05_ringdown_spectra.py --check` against the committed file at 1e-6
-  relative). A MISMATCH there invalidates the citations in §A, so the manifest
-  edit should land after that verdict, not before.
+* Nothing else. The one condition this note carried — the cv05 fixture's own
+  reproducibility — is **met**: VESSL run **369367259288** rebuilt all five
+  lengths and reported "OK: committed cv05_ringdown_spectra.json reproduces"
+  against md5 `b9ff9a20520ffcaba19a38e741878abe`, the file `efc9d2b1`
+  committed, with the worktree untouched afterwards. §A is safe to apply.

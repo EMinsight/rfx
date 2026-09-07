@@ -329,10 +329,33 @@ pre-declaration holds end-to-end as well as at build time.
 
 | run | yaml | what it decides |
 |---|---|---|
-| **369367259288** | `scripts/vessl_931/cv05_fixture_check.yaml` | `build_cv05_ringdown_spectra.py --check`: rebuilds all five lengths and compares against the COMMITTED fixture at 1e-6 relative. This is the falsifier for `efc9d2b1`; a MISMATCH means the fixture is not reproducible from the repo and the manifest citations resting on it are not safe to apply. ~20 min. |
+| **369367259288** | `scripts/vessl_931/cv05_fixture_check.yaml` | **RETURNED rc 0: "OK: committed cv05_ringdown_spectra.json reproduces".** See below. |
 | **369367259302** | `scripts/vessl_931/cv05_farfield_envelope.yaml` | Re-derives `D_ABS_TOL_DB`, `F_RES_REL_LO`/`HI` and the mode-pair band for `tests/crossval/test_patch_canonical_farfield_e4.py` by calling that file's own `rfx_run` fixture function on the sheet-declared canonical patch, and writes the arithmetic beside the measurement. Until it returns, `_ENVELOPES_REDERIVED_FOR_931` stays `False` and the three slow gates stay skipped. ~15 min. Replaces run **369367259289**, which died in 40 s on `No module named pytest`: its refusal gate shelled out to pytest and the solver image does not carry it, so the job refused on a missing test runner rather than on the board. The four fast gates now run as plain function calls inside the measuring script and pytest is in the pip line because the gate file imports it at module scope. |
 
 Nothing in those three is a re-solve of a question already answered: the first
 is a reproducibility check on a file just committed, the second is the first
 measurement of a quantity that has never existed on this board, the third is the
 contract's own dielectric control moved from one branch to the merged tree.
+
+## The fixture reproduces — run 369367259288, rc 0
+
+`build_cv05_ringdown_spectra.py --check` rebuilt all five lengths (ten solves)
+on the merged tree at `b798d41f` and compared every mode frequency and Q
+against the committed file at 1e-6 relative:
+
+    tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json b9ff9a20520ffcaba19a38e741878abe
+    OK: committed cv05_ringdown_spectra.json reproduces
+
+The md5 in the run's own record is the file `efc9d2b1` committed, so the check
+is against that file and not a copy of it. The worktree was untouched
+afterwards — `git status --porcelain` empty, the fixture diff empty, zero files
+harvested — which is the second half of the check: `--check` must compare
+without writing, or a "reproduces" verdict could be a file overwriting itself.
+
+Two things follow. The fixture is reproducible from the repo, so the manifest
+citations in `docs/design_notes/931_migration/XA-manifest-2b.md` §A rest on
+something a reader can regenerate; and the sheet-declared board's ring-down is
+deterministic across runs on this image, which is worth knowing separately —
+the round-1 macOS build differed from the cluster build by up to 1.3e-3
+relative at 22.0 mm, and that scatter is what made the 38.0 mm falsifier
+build-dependent in the first place.
