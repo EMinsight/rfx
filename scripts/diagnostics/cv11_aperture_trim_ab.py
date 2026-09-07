@@ -29,10 +29,21 @@ quantity the trim was written to move.
 
     python scripts/diagnostics/cv11_aperture_trim_ab.py [--out-json PATH]
 
-Two solves, ~2 min each on CPU. Read the verdict at the bottom: if the two
-arms' ``|S11|`` deviations differ by about the 0.0146 -> 0.0560 step, the
-trim owns it; if they agree, the #931 core does, and the trim's deletion is
-not what moved the leg.
+Two solves, ~2 min each on CPU. The verdict at the bottom splits the
+observed baseline -> post step into the trim's own contribution (measured
+here, one variable) and the remainder, which is the core's.
+
+MEASURED, run 369367259198 (this branch, both arms):
+
+    trim      cfg.f_cutoff 6.807677 GHz   |S11| [0.9289, 0.9811]  max dev 0.0711
+    no_trim   cfg.f_cutoff 6.512162 GHz   |S11| [0.9440, 0.9888]  max dev 0.0560
+
+So REMOVING the trim improves this leg by 0.0152, and the 0.0146 -> 0.0560
+degradation from the pre-change baseline is NOT the trim's: about +0.057 of
+it is the #931 core's, on the waveguide S-matrix lane. That lane is where
+stage C replaced a sigma = 1e10 cell fill with the realized PEC edges
+(commit 0184d64c) — the fold the inventory critic flagged as belonging to no
+group. Filed for the core, not compensated for here.
 """
 from __future__ import annotations
 
@@ -44,6 +55,11 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+# The pec-short |S11| deviation the pre-change baseline measured (run
+# 369367259004, origin/main d990e18c, trim present). Quoted so the arms
+# below can be compared against the era they are meant to explain.
+BASELINE_MAX_DEV = 0.0146
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CV11 = REPO_ROOT / "validation/crossval/11_waveguide_port_wr90.py"
@@ -133,16 +149,27 @@ def main() -> int:
               f"mean = {arm['mean_dev']:.4f}   ({dt:.1f} s)")
 
     a, b = out["arms"]["trim"], out["arms"]["no_trim"]
-    step = b["max_dev"] - a["max_dev"]
+    trim_own = b["max_dev"] - a["max_dev"]      # removing the trim, this arm
+    observed = b["max_dev"] - BASELINE_MAX_DEV  # baseline -> post, two changes
+    core_own = observed - trim_own              # what the trim does not explain
     out["verdict"] = dict(
-        max_dev_step=step,
-        attributed_to="the aperture trim" if abs(step) > 0.01
-        else "NOT the aperture trim (the #931 core owns it)")
+        baseline_max_dev=BASELINE_MAX_DEV,
+        trim_removal_step=trim_own,
+        baseline_to_post_step=observed,
+        core_step=core_own,
+        reading=("removing the trim IMPROVES this leg; the observed "
+                 "degradation is the #931 core's")
+        if trim_own < 0 else
+        ("removing the trim degrades this leg"))
     print("\n" + "=" * 68)
-    print(f"max||S11|-1|:  trim {a['max_dev']:.4f}  ->  no_trim "
-          f"{b['max_dev']:.4f}   (step {step:+.4f})")
-    print(f"The 0.0146 -> 0.0560 step measured between runs 369367259004 and "
-          f"369367259194 is {out['verdict']['attributed_to']}.")
+    print(f"max||S11|-1| on THIS checkout:  trim {a['max_dev']:.4f}  ->  "
+          f"no_trim {b['max_dev']:.4f}   (removing the trim: {trim_own:+.4f})")
+    print(f"baseline 369367259004 (main d990e18c, trim): "
+          f"{BASELINE_MAX_DEV:.4f}  ->  post {b['max_dev']:.4f}  "
+          f"({observed:+.4f}, TWO variables)")
+    print(f"so the #931 core accounts for {core_own:+.4f} and the trim's own "
+          f"contribution is {trim_own:+.4f}")
+    print(f"reading: {out['verdict']['reading']}")
     print("=" * 68)
 
     if args.out_json:

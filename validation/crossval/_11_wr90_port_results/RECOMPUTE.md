@@ -90,15 +90,28 @@ vessl run create -f scripts/vessl_931_xb/post-cv11.yaml        # from a non-git 
 
    Every phase leg improved, two by more than 2× including the external one;
    the pec-short magnitude leg got worse and crossed its gate, taking the
-   internal round-trip phase gate with it. The two runs differ by TWO things
-   (the trim, and the whole #931 core), so the step is NOT attributed:
-   `scripts/diagnostics/cv11_aperture_trim_ab.py` (run **369367259198**)
-   isolates the trim on one checkout. Independent of that A/B, the untrimmed
-   port solves the guide the walls make (23 cells, 6.512162 GHz) and the
-   trimmed one a 22-cell guide (6.807677 GHz), so the trim is not defensible
-   as the right aperture. A PI decision is wanted on whether cv11 ships with
-   the correct aperture and two failing legs, or the trim is restored while
-   #729 fixes the aperture weighting; the revert is one hunk in `_build_sim`.
+   internal round-trip phase gate with it.
+
+   **ATTRIBUTED — run 369367259198**
+   (`scripts/diagnostics/cv11_aperture_trim_ab.py`, both arms on ONE
+   checkout, the trim as the only variable):
+
+   | arm | `cfg.f_cutoff` | `|S11|` envelope | max dev |
+   |---|---|---|---|
+   | trim | 6.807677 GHz (+4.454 %) | [0.9289, 0.9811] | 0.0711 |
+   | no_trim | 6.512162 GHz (−0.080 %) | [0.9440, 0.9888] | **0.0560** |
+
+   Removing the trim IMPROVES the leg by 0.0152. The 0.0146 → 0.0560
+   degradation is therefore **not the trim's** — about +0.057 of it belongs
+   to the **#931 core**, on the waveguide S-matrix lane, which is where
+   stage C (commit 0184d64c) replaced the `sigma = 1e10` cell fill with the
+   realized PEC edges. That is the fold the inventory critic flagged as
+   owned by no group. **This is a finding for the core owners, not something
+   this case compensates for**, and it is the reason cv11's pec-short
+   magnitude leg is now outside its 0.050 gate.
+
+   The trim stays deleted on both counts: it solves a 22-cell guide where
+   the walls make 23, and it is worse on the magnitude leg as well.
 2. The round-trip phase leg stays near 3.26° max / 1.45° mean: its reference
    cutoff error is unchanged at −0.080 %, and the reflection plane did not
    move.

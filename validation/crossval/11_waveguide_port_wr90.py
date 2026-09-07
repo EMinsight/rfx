@@ -318,16 +318,25 @@ envelope, not here.
       one against an EXTERNAL solver; the pec-short MAGNITUDE leg got worse
       and crossed its 0.050 gate, taking the internal 15 deg round-trip
       phase gate with it. Those two runs differ by two things — the trim and
-      the whole #931 core — so the magnitude step is NOT attributed here.
-      `scripts/diagnostics/cv11_aperture_trim_ab.py` (VESSL 369367259198)
-      runs both arms on one checkout with the trim as the only variable.
-      What does not depend on that A/B: the untrimmed port solves the guide
-      the walls actually make (23 cells, 6.512162 GHz) and the trimmed one a
-      22-cell guide (6.807677 GHz), so the trim cannot be defended as the
-      right aperture whatever the magnitude leg does. If the trim owns the
-      step, the finding is that the CORRECT aperture exposes an
-      aperture-weighting defect at the PEC walls that the wrong one masked —
-      #729's subject, not a reason to restore a compensation.
+      the whole #931 core — so the magnitude step was not attributed from
+      them.
+
+      THE A/B THAT ATTRIBUTES IT (VESSL 369367259198,
+      `scripts/diagnostics/cv11_aperture_trim_ab.py`: both arms on ONE
+      checkout, the trim as the only variable):
+
+        trim     cfg.f_cutoff 6.807677 GHz  |S11| [0.9289, 0.9811]  dev 0.0711
+        no_trim  cfg.f_cutoff 6.512162 GHz  |S11| [0.9440, 0.9888]  dev 0.0560
+
+      Removing the trim IMPROVES this leg by 0.0152. So the 0.0146 -> 0.0560
+      degradation is NOT the trim's: about +0.057 of it belongs to the #931
+      CORE, on the waveguide S-matrix lane — the lane where stage C replaced
+      a sigma = 1e10 cell fill with the realized PEC edges (commit 0184d64c),
+      the fold the inventory critic flagged as owned by no group. That is
+      filed for the core; this case does not compensate for it. The trim
+      stays deleted on both counts: it solves a 22-cell guide (+4.454% in
+      cutoff) where the walls make 23, and it is worse on the magnitude leg
+      too.
 
   (b) THE PEC SHORT STAYS A VOLUME, and its walls are now asserted. It is
       a 2 mm metal plug across the guide — the Meep and openEMS legs this
