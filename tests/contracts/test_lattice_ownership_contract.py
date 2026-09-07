@@ -1029,3 +1029,229 @@ def test_a_sigma_fill_conductor_is_not_a_pec_body():
         assert not np.asarray(empty[c]).any()
     edges = realized_pec_edge_masks(pec, sheets=sheets, wires=wires)
     assert all(np.asarray(m).any() for m in edges)
+
+
+# ---------------------------------------------------------------------------
+# §1.9 — one source, every consumer: the collectors at the assemblers
+#
+# A sheet owns no cell, so it cannot ride out of ``_assemble_materials`` in
+# ``pec_mask``: only a caller that passes ``pec_sheets=`` / ``pec_wires=``
+# receives it at all. A collector-less caller therefore holds a model with
+# the conductor MISSING and cannot tell that from a model that never had
+# one. The tests below pin both halves of the fix: every solve entry point
+# collects AND applies the sheet, and the assembler refuses a caller that
+# would have dropped it.
+# ---------------------------------------------------------------------------
+
+SHEET_PLANE_Z = 5e-3
+SHEET_PROBE = (5e-3, 5e-3, SHEET_PLANE_Z)      # an Ex edge INSIDE the sheet
+CONTROL_PROBE = (5e-3, 5e-3, 4e-3)             # the same Ex edge one plane below
+
+
+def _sheet_and_volume_sim():
+    """One PEC volume and one PEC sheet, with an Ex probe on each.
+
+    Probe 0 sits on a tangential edge of the sheet, probe 1 one node plane
+    below it. Probe 1 is the falsifier: without it, "probe 0 read zero"
+    is also what a simulation that never ran would report.
+    """
+    from rfx import Box, Simulation
+    sim = Simulation(freq_max=15e9, domain=(10e-3, 10e-3, 8e-3), dx=1e-3,
+                     boundary="pec")
+    sim.add(Box((2e-3, 2e-3, 2e-3), (4e-3, 4e-3, 3e-3)), material="pec")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sim.add_thin_conductor(Box((3e-3, 2e-3, SHEET_PLANE_Z),
+                                   (8e-3, 8e-3, SHEET_PLANE_Z)))
+    sim.add_source((5e-3, 5e-3, 3e-3), "ez", amplitude_kind="field")
+    sim.add_probe(SHEET_PROBE, "ex")
+    sim.add_probe(CONTROL_PROBE, "ex")
+    return sim
+
+
+def _run_entry(sim, entry):
+    """Peak |Ex| at (sheet edge, control edge) for one solve entry point."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if entry == "run":
+            ts = np.asarray(sim.run(n_steps=60, skip_preflight=True,
+                                    compute_s_params=False).time_series)
+        elif entry == "forward":
+            ts = np.asarray(sim.forward(n_steps=60,
+                                        skip_preflight=True).time_series)
+        elif entry == "vmap_material_sweep":
+            from rfx.vmap_sweep import vmap_material_sweep
+            ts = np.asarray(vmap_material_sweep(
+                sim, "eps_r", [1.0, 1.0], n_steps=60).time_series)[0]
+        elif entry == "optimize":
+            # optimize()'s step IS sim.forward() under eps_override /
+            # pec_mask_override — the override carries VOLUME cells only,
+            # so a sheet survives it only if forward() re-collects.
+            import jax.numpy as _jnp
+            from rfx.optimize import DesignRegion, optimize
+            region = DesignRegion(corner_lo=(6e-3, 6e-3, 6e-3),
+                                  corner_hi=(8e-3, 8e-3, 7e-3),
+                                  eps_range=(1.0, 4.0))
+            peaks = []
+            for probe in (0, 1):
+                out = optimize(
+                    _sheet_and_volume_sim(), region,
+                    lambda r, i=probe: _jnp.max(_jnp.abs(r.time_series[:, i])),
+                    n_iters=1, n_steps=60, verbose=False, skip_preflight=True)
+                peaks.append(float(out.loss_history[0]))
+            return tuple(peaks)
+        else:  # pragma: no cover - guarded by the parametrization
+            raise AssertionError(entry)
+    return (float(np.max(np.abs(ts[:, 0]))), float(np.max(np.abs(ts[:, 1]))))
+
+
+def test_the_probe_sits_on_a_realized_sheet_edge_and_the_control_does_not():
+    """The premise of the entry-point battery, checked against §1.7.
+
+    If probe 0 were not on a realized sheet edge the "reads zero" assertion
+    below would pass for a model with no conductor at all.
+    """
+    from rfx.boundaries.pec import edge_is_pec, realized_pec_edge_masks
+    sim = _sheet_and_volume_sim()
+    grid = sim._build_grid()
+    sheets: list = []
+    wires: list = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _m, _d, _l, pec, *_rest = sim._assemble_materials(
+            grid, pec_sheets=sheets, pec_wires=wires)
+    assert len(sheets) == 1 and sheets[0].normal_axis == 2
+    assert pec is not None and int(np.asarray(pec).sum()) > 0, (
+        "the volume must be in the cell mask; only the sheet is not")
+    edges = realized_pec_edge_masks(pec, sheets=tuple(sheets),
+                                    wires=tuple(wires),
+                                    periodic=sim._periodic_flags())
+    assert edge_is_pec(edges, "ex", *grid.position_to_index(SHEET_PROBE))
+    assert not edge_is_pec(edges, "ex", *grid.position_to_index(CONTROL_PROBE))
+
+
+@pytest.mark.parametrize(
+    "entry", ["run", "forward", "vmap_material_sweep", "optimize"])
+def test_every_solve_entry_point_applies_a_declared_sheet(entry):
+    """§1.9: a sheet reaches the solve on every lane, or the lane refuses.
+
+    Measured on FIELDS, not masks: the sheet's tangential Ex is exactly
+    zero for every step, while the same component one node plane away is
+    not. A lane that assembles without collectors sees ``pec_mask``
+    without the sheet and both probes ring.
+    """
+    on_sheet, control = _run_entry(_sheet_and_volume_sim(), entry)
+    assert on_sheet == 0.0, (
+        f"{entry}: tangential E on the sheet plane is {on_sheet}, so the "
+        "declared PEC sheet was dropped on this lane")
+    assert control > 1e-3, (
+        f"{entry}: the control edge reads {control} — the model did not "
+        "run, so 'the sheet edge is zero' proves nothing")
+
+
+def test_assembling_without_collectors_is_refused_and_names_the_caller():
+    """The guard that stops a future collector-less caller appearing.
+
+    Passing empty collectors and dropping them is still allowed — that is
+    an explicit "I read cells only" at the call site.
+    """
+    sim = _sheet_and_volume_sim()
+    grid = sim._build_grid()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="pec_sheets/pec_wires") as exc:
+            sim._assemble_materials(grid)
+    msg = str(exc.value)
+    assert "1 PEC sheet(s)" in msg, msg
+    assert "test_lattice_ownership_contract.py" in msg, (
+        "the refusal must name the caller, not just the assembler: " + msg)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])
+
+
+def test_the_non_uniform_assembler_refuses_the_same_way():
+    """Both assemblers share the guard (``runners/nonuniform.py``)."""
+    from rfx.runners.nonuniform import assemble_materials_nu
+    sim = _sheet_and_volume_sim()
+    sim._dz_profile = np.full(8, 1e-3)
+    grid = sim._build_nonuniform_grid()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="non-uniform lane"):
+            assemble_materials_nu(sim, grid)
+
+
+def test_conductor_mask_counts_a_sub_cell_wire():
+    """§1.4 through the read-only accessor: a filament owns no cell either,
+    so a footprint built from cells and sheet planes alone reports metal-free
+    exactly where the wire runs."""
+    from rfx import PolylineWire, Simulation
+    sim = Simulation(freq_max=15e9, domain=(10e-3, 10e-3, 8e-3), dx=1e-3,
+                     boundary="pec")
+    sim.add(PolylineWire(((3e-3, 5e-3, 4e-3), (7e-3, 5e-3, 4e-3)),
+                         radius=0.2e-3), material="pec")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cond = np.asarray(sim.conductor_mask(), dtype=bool)
+    # nodes 3..7 on the path, one row, one plane
+    assert cond.sum() == 5, int(cond.sum())
+    assert np.array_equal(np.flatnonzero(cond.any(axis=(1, 2))),
+                          np.arange(3, 8))
+
+
+def test_validate_subgrid_refuses_the_sheet_the_runner_refuses():
+    """A read-only consumer that must agree with its runner: the SBP-SAT
+    lane raises on a sheet, so the validator cannot call the same model
+    supported."""
+    sim = _sheet_and_volume_sim()
+    sim.add_refinement(z_range=(2e-3, 6e-3), ratio=2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        report = sim.validate_subgrid()
+    codes = [i.code for i in report.issues]
+    assert "subgrid_pec_sheet_or_wire_unsupported" in codes, codes
+    assert not report.supported
+
+
+def test_the_material_only_coaxial_lanes_refuse_a_sheet():
+    """``_build_materials`` drops ``pec_mask`` by construction, so its three
+    S-parameter callers cannot realize a sheet. Refuse instead of solving
+    geometry the model did not declare."""
+    sim = _sheet_and_volume_sim()
+    grid = sim._build_grid()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(NotImplementedError, match="coaxial S-parameter"):
+            sim._build_materials(grid)
+
+
+def test_the_permittivity_viewer_draws_a_sheet_it_cannot_see_in_eps():
+    """A sheet writes no eps, so an eps-only cross-section of a clad board
+    is bare laminate. The viewer collects the sheets, picks the plane that
+    carries the metal, and overlays the realized footprint."""
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    from rfx import Box, Simulation
+    from rfx.visualize import plot_geometry_2d_slice
+
+    def _board(with_metal):
+        sim = Simulation(freq_max=15e9, domain=(10e-3, 10e-3, 8e-3), dx=1e-3,
+                         boundary="pec")
+        sim.add_material("sub", eps_r=4.0)
+        sim.add(Box((0, 0, 0), (10e-3, 10e-3, 3e-3)), material="sub")
+        if with_metal:
+            sim.add_thin_conductor(Box((3e-3, 2e-3, 3e-3), (8e-3, 8e-3, 3e-3)))
+        return sim
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for axis in (0, 1, 2):
+            ax = plot_geometry_2d_slice(_board(True), axis=axis).axes[0]
+            assert len(ax.images) == 2, (axis, len(ax.images))
+            assert ax.get_legend() is not None, axis
+        # control: no metal, no overlay and no legend to explain
+        bare = plot_geometry_2d_slice(_board(False), axis=1).axes[0]
+        assert len(bare.images) == 1
+        assert bare.get_legend() is None

@@ -8163,7 +8163,13 @@ class _SparamMixin:
 
         # Assemble device materials once to learn the full array shape;
         # vacuum reference is shape-matched onto that same array.
-        dev_materials_concrete, _, _, _ = assemble_materials_nu(self, grid)
+        # Shape probe only: the vacuum reference is ones_like/zeros_like of
+        # these arrays. Every drive run below goes through
+        # run_nonuniform_path, which assembles with its own collectors and
+        # realizes the sheets — so the #931 collectors here are passed and
+        # dropped (an explicit "cells only", not an omission).
+        dev_materials_concrete, _, _, _ = assemble_materials_nu(
+            self, grid, pec_sheets=[], pec_wires=[])
         vacuum_eps = jnp.ones_like(dev_materials_concrete.eps_r)
         vacuum_sigma = jnp.zeros_like(dev_materials_concrete.sigma)
 

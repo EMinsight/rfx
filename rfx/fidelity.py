@@ -277,11 +277,20 @@ def fidelity_report(sim, print_report: bool = True):
         sim_audit = copy.copy(sim)
         sim_audit._geometry = [e for i, e in enumerate(sim._geometry)
                                if i not in refused]
+    # #931 §1.9: the assembly's own sheet/wire classification. The report
+    # derives a SheetSpec per entry (``_pec_sheet_spec``) so it can name the
+    # declaration each plane came from; these are the same objects the SOLVE
+    # will realize, and the cross-check after the entry loop is what stops
+    # the two derivations drifting apart unnoticed.
+    assembled_sheets: list = []
+    assembled_wires: list = []
     if nonuniform:
         from rfx.runners.nonuniform import assemble_materials_nu
-        out = assemble_materials_nu(sim_audit, grid)
+        out = assemble_materials_nu(sim_audit, grid, pec_sheets=assembled_sheets,
+                                    pec_wires=assembled_wires)
     else:
-        out = sim_audit._assemble_materials(grid)
+        out = sim_audit._assemble_materials(grid, pec_sheets=assembled_sheets,
+                                            pec_wires=assembled_wires)
     mats, pec_mask = out[0], out[3]
     eps = np.asarray(mats.eps_r, dtype=float)
     sigma_arr = np.asarray(mats.sigma, dtype=float)
@@ -847,6 +856,40 @@ def fidelity_report(sim, print_report: bool = True):
                                "overlap, or reorder if the overlap is "
                                "unintended"))
         report.append(item)
+
+    # Report-vs-assembly cross-check (#931 §1.7: one source, every consumer).
+    # A plane the SOLVE will realize but no report row names, or a row naming
+    # a plane the assembly did not produce, means this report is describing a
+    # different model from the one that runs — the exact failure the single
+    # realized-edge source exists to prevent. Reported, never silently
+    # reconciled.
+    reported_planes = sorted(
+        (it["realized_plane"]["axis"], int(it["realized_plane"]["index"]))
+        for it in report if "realized_plane" in it)
+    assembled_planes = sorted(
+        (_axis_names()[int(sp.normal_axis)], int(sp.plane))
+        for sp in assembled_sheets)
+    if reported_planes != assembled_planes:
+        dom_item["findings"].append(dict(
+            kind="sheet-report-assembly-drift",
+            detail=f"this report names sheet planes {reported_planes} but the "
+                   f"assembly the solve uses classified {assembled_planes} — "
+                   "the audit and the run disagree about which conductors "
+                   "exist and where",
+            remedy="treat the assembly's list as authoritative and re-derive "
+                   "the report's sheet resolution from "
+                   "rfx.geometry.rasterize_grid.sheet_spec_from_shape; do not "
+                   "trust either realization until they agree"))
+    if assembled_wires:
+        dom_item["findings"].append(dict(
+            kind="wire-not-audited",
+            detail=f"{len(assembled_wires)} PEC filament(s) (sub-cell "
+                   "PolylineWire) are realized as lattice edges and own no "
+                   "cell, so this report's per-entity cell audit says nothing "
+                   "about them",
+            remedy="check a filament with "
+                   "rfx.boundaries.pec.realized_pec_edge_masks / edge_is_pec "
+                   "on its declared path"))
 
     # Declared inputs this report does NOT audit — stated rather than omitted,
     # because silence reads as coverage (crossval sweep: cv21 and the ports

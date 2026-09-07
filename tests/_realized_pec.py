@@ -107,9 +107,15 @@ class RealizedPec:  # noqa: D101 - documented below
         from rfx.nonuniform import NonUniformGrid
         with _warnings.catch_warnings():
             _warnings.simplefilter("ignore")
+            # Materials only — the realized conductors are already on
+            # ``self.inner``. The #931 collectors are passed and dropped so
+            # this read states "cells only" instead of tripping the
+            # assembler's refusal on a sheet model.
             if isinstance(self.grid, NonUniformGrid):
-                return self.sim._assemble_materials_nu(self.grid)[0]
-            return self.sim._assemble_materials(self.grid)[0]
+                return self.sim._assemble_materials_nu(
+                    self.grid, pec_sheets=[], pec_wires=[])[0]
+            return self.sim._assemble_materials(
+                self.grid, pec_sheets=[], pec_wires=[])[0]
 
     def nodes(self, axis: int) -> np.ndarray:
         """Node positions along ``axis`` in metres (host float64)."""

@@ -157,7 +157,7 @@ def rasterization_witness(sim: Simulation, grid) -> dict:
     from rfx.sources.sources import WirePort, _wire_port_live_cells
     sheet_specs: list = []
     _m, _d, _l, pec_mask, _a, _b, _c = sim._assemble_materials(
-        grid, sheet_specs=sheet_specs)
+        grid, sheet_specs=sheet_specs, pec_sheets=[], pec_wires=[])
     pec_cells = int(np.asarray(pec_mask).sum()) if pec_mask is not None else -1
     ports = []
     for pe in sim._ports:

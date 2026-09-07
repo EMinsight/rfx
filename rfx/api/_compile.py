@@ -11,7 +11,6 @@ LEAF mixin module — it must NEVER do ``from rfx.api import ...`` or
 from __future__ import annotations
 
 import math  # noqa: F401  (used by moved method bodies)
-import warnings
 
 import jax
 import jax.numpy as jnp
@@ -172,11 +171,14 @@ class _CompileMixin:
             positional return tuple stays unchanged.  Sheets and wires are
             always classified, but they own no cell, so a caller that
             passes no collector gets a ``pec_mask`` with the sheet MISSING
-            — not a mask that contains it.  A caller that STEPS fields must
-            therefore pass collectors (and either realize them or refuse);
-            a caller that only reads cells may omit them, and gets a
-            ``UserWarning`` naming what it did not receive so the omission
-            is visible rather than silent.
+            — not a mask that contains it.  Omitting the collectors on a
+            model that HAS a sheet or a wire is therefore a ``ValueError``
+            naming the caller (:func:`_refuse_uncollected_pec`), not a
+            mask the caller cannot tell from a conductor-free model.  A
+            caller that steps fields realizes what it collected; a caller
+            that only reads cells still passes ``pec_sheets=[],
+            pec_wires=[]`` and drops the result, which makes "I read cells
+            only" an explicit decision at the call site.
         include_thin_conductors : bool, default True
             When False, stop one step short of the finished arrays and
             return the state as it is *before* the ``_thin_conductors``
@@ -451,9 +453,9 @@ class _CompileMixin:
             warn_sheet_planes_inside_dielectric,
         )
         warn_sheet_planes_inside_dielectric(_pec_sheets, materials.eps_r)
-        _warn_uncollected_pec(_pec_sheets if pec_sheets is None else (),
-                              _pec_wires if pec_wires is None else (),
-                              lane="uniform")
+        _refuse_uncollected_pec(_pec_sheets if pec_sheets is None else (),
+                                _pec_wires if pec_wires is None else (),
+                                lane="uniform")
         return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, boundary_pec_shapes, kerr_chi3
 
     @staticmethod
@@ -552,24 +554,57 @@ class _CompileMixin:
                     else self._build_grid())
         sheet_specs: list = []
         pec_sheets: list = []
+        pec_wires: list = []
         if isinstance(grid, NonUniformGrid):
             materials, _, _, pec_mask = self._assemble_materials_nu(
-                grid, sheet_specs=sheet_specs, pec_sheets=pec_sheets)
+                grid, sheet_specs=sheet_specs, pec_sheets=pec_sheets,
+                pec_wires=pec_wires)
         else:
             materials, _, _, pec_mask, _, _, _ = self._assemble_materials(
-                grid, sheet_specs=sheet_specs, pec_sheets=pec_sheets)
+                grid, sheet_specs=sheet_specs, pec_sheets=pec_sheets,
+                pec_wires=pec_wires)
+        # A sub-cell PolylineWire owns no cell either (#931 §1.4), so a
+        # footprint built from cells + sheet planes alone reports a
+        # wire-fed model as metal-free exactly where the wire runs. Its
+        # path NODES are the cell-shaped answer for a 1-D region.
+        from rfx.boundaries.pec import wire_node_footprint
+        wire_nodes = wire_node_footprint(pec_wires)
         return conductor_footprint(
             pec_mask=pec_mask,
             sigma=materials.sigma,
             sheet_masks=[sp.mask for sp in sheet_specs]
-                        + [sp.footprint for sp in pec_sheets],
+                        + [sp.footprint for sp in pec_sheets]
+                        + ([] if wire_nodes is None else [wire_nodes]),
             sigma_threshold=thr,
             shape=grid.shape,
         )
 
     def _build_materials(self, grid: Grid) -> tuple[MaterialArrays, tuple | None, tuple | None]:
-        """Build material arrays and optional Debye/Lorentz coefficients."""
-        materials, debye_spec, lorentz_spec, _, _, _, _ = self._assemble_materials(grid)
+        """Build material arrays and optional Debye/Lorentz coefficients.
+
+        This helper drops ``pec_mask`` by construction — its three
+        callers (the coaxial S-matrix / reflection / two-port lanes in
+        ``rfx/api/_sparams.py``) drive ``_run`` with materials only, and
+        their conductors are the sigma-fill coax shell and pin that
+        design note §1.8 fences out of the ownership contract.  A
+        declared PEC SHEET or WIRE has no material to fall back on: it
+        would simply not exist in the run.  Refuse it here rather than
+        let the lane report an S-matrix for geometry it did not solve.
+        """
+        _bm_sheets: list = []
+        _bm_wires: list = []
+        materials, debye_spec, lorentz_spec, _, _, _, _ = self._assemble_materials(
+            grid, pec_sheets=_bm_sheets, pec_wires=_bm_wires)
+        if _bm_sheets or _bm_wires:
+            raise NotImplementedError(
+                "the coaxial S-parameter lanes (compute_coaxial_s_matrix, "
+                "compute_coaxial_line_reflection, compute_coaxial_two_port) "
+                "do not realize PEC sheets or sub-cell wires (#931): they "
+                "step from material arrays only and a sheet owns no cell, "
+                f"so the {len(_bm_sheets)} declared sheet(s) and "
+                f"{len(_bm_wires)} wire(s) would be absent from the solve. "
+                "Draw the conductor as a volume (a Box at least one cell "
+                "thick) or use run() / forward().")
         _, debye, lorentz = self._init_dispersion(
             materials, grid.dt, debye_spec, lorentz_spec)
         return materials, debye, lorentz
@@ -745,23 +780,57 @@ class _CompileMixin:
         return pos_to_nu_index(grid, pos)
 
 
-def _warn_uncollected_pec(sheets, wires, *, lane: str) -> None:
-    """Say out loud that a classified sheet / wire is not in the return.
+#: The two modules that IMPLEMENT assembly.  Frames in these files are the
+#: guard's own plumbing, never the caller it has to name.
+_ASSEMBLER_MODULES = ("rfx/api/_compile.py", "rfx/runners/nonuniform.py")
+
+
+def _uncollected_pec_caller() -> str:
+    """``file:line in func()`` of the first frame outside the assemblers.
+
+    The guard below is useless if it only says "some caller"; the whole
+    point is that the site which would have stepped or reported a
+    conductor-free model is named in the traceback's first line.
+    """
+    import traceback
+    for frame in reversed(traceback.extract_stack()[:-1]):
+        fn = frame.filename.replace("\\", "/")
+        if any(fn.endswith(mod) for mod in _ASSEMBLER_MODULES):
+            continue
+        return f"{fn}:{frame.lineno} in {frame.name}()"
+    return "<unknown caller>"
+
+
+def _refuse_uncollected_pec(sheets, wires, *, lane: str) -> None:
+    """Refuse to return a ``pec_mask`` that silently omits a sheet or wire.
 
     A sheet owns no cell (#931 §1.3), so it cannot ride out in
-    ``pec_mask``.  Callers that only read cells (preflight's port masks,
-    the sub-grid validator, ``optimize``'s bookkeeping assembly) legitimately
-    pass no collector; this makes what they did not receive visible instead
-    of leaving the model looking conductor-free.  The message is constant so
-    Python's default "once per location" filter collapses it.
+    ``pec_mask``: a caller that passes no collector receives a mask with
+    the conductor MISSING, and nothing downstream can tell that from a
+    model that never had one.  This was a ``UserWarning`` while the
+    consumers were being migrated; every consumer in ``rfx/`` now passes
+    collectors, so the omission becomes an error and a future
+    collector-less caller cannot appear.
+
+    Passing ``pec_sheets=[]`` / ``pec_wires=[]`` and dropping the result
+    is a legitimate, and now explicit, "I read cells only".  A lane that
+    steps fields must realize what it collected with
+    :func:`rfx.boundaries.pec.realized_pec_edge_masks`, or refuse the
+    sheet loudly (``NotImplementedError`` naming the lane).
     """
     if not sheets and not wires:
         return
-    warnings.warn(
-        f"_assemble_materials ({lane} lane): PEC sheets/wires were "
-        "classified but the caller passed no pec_sheets/pec_wires "
-        "collector, so they are absent from the returned pec_mask (a "
-        "sheet owns no cell, #931 §1.3). A caller that steps fields must "
-        "pass collectors and realize them with "
-        "rfx.boundaries.pec.realized_pec_edge_masks.",
-        UserWarning, stacklevel=3)
+    what = []
+    if sheets:
+        what.append(f"{len(sheets)} PEC sheet(s)")
+    if wires:
+        what.append(f"{len(wires)} PEC wire(s)")
+    raise ValueError(
+        f"_assemble_materials ({lane} lane): {' and '.join(what)} were "
+        f"classified, but {_uncollected_pec_caller()} passed no "
+        "pec_sheets/pec_wires collector. A sheet owns no cell (#931 "
+        "§1.3), so it cannot be returned in pec_mask and this caller "
+        "would step or report a model with the conductor MISSING. Pass "
+        "pec_sheets=[] / pec_wires=[]: realize them with "
+        "rfx.boundaries.pec.realized_pec_edge_masks if this path steps "
+        "fields, or drop them deliberately if it only reads cells.")

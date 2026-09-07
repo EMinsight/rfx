@@ -113,30 +113,17 @@ Rows that move because of this stage (all preflight-code rows):
 * `tests/contracts/test_example_fidelity_contract.py:23` lists
   `sheet_cavity_electrical_thickness` among preflight kinds — unchanged name.
 
-## 6. `rfx/api/_compile.py::_warn_uncollected_pec` — NOT flipped to a raise, and why
+## 6. `rfx/api/_compile.py::_warn_uncollected_pec` — flipped to a raise (done)
 
-The brief asked for the flip once preflight passes collectors everywhere.
-Preflight does now, but these collector-less callers remain in files this stage
-does not own (grep `_assemble_materials(` on the branch):
-
-| caller | steps fields? | what a raise would do |
-|---|---|---|
-| `rfx/optimize.py:370` (NU) and `:381` (uniform) | **yes** — `base_pec_mask` feeds the solve | expose a real hole (a sheet is dropped by `optimize()` today); must pass `pec_sheets=/pec_wires=` and realize them, like `topology.py:463` does |
-| `rfx/optimize.py:539` (gradient check, base eps only) | no | breaks the gradient check on sheet models |
-| `rfx/vmap_sweep.py:347` (`include_thin_conductors=False` pre-arrays) | later, yes | PEC geometry sheets (zero-thickness Boxes) are still classified here; must collect |
-| `rfx/fidelity.py:282/284` | no (read-only report) | breaks `fidelity_report` on every sheet model |
-| `rfx/visualize.py:122/464/756` | no | breaks the slice/eps plots on sheet models |
-| `rfx/api/__init__.py:854` (`validate_subgrid_setup`) | no | breaks the subgrid validator on sheet models |
-| `rfx/api/_execute.py:1764` (MSL static eps) | no | breaks MSL port setup on sheet models |
-| `rfx/api/_compile.py:572` (`_build_materials`, three `_sparams` callers) | no | breaks three S-parameter helpers on sheet models |
-| `rfx/api/_sparams.py:8166` (NU vacuum reference) | no | breaks the NU reference on sheet models |
-
-The design note's §6 wording ("gets a UserWarning") is therefore still the
-correct behaviour on this branch. Flip procedure for the merge stage: thread
-`optimize.py:370/381` and `vmap_sweep.py:347` (they step fields), give every
-read-only caller an explicit throw-away collector (`pec_sheets=[], pec_wires=[]`
-— the omission is then a conscious "I read cells only"), and only then turn the
-`warnings.warn` in `_warn_uncollected_pec` into `raise ValueError(...)`.
+This section asked for the flip once preflight passed collectors everywhere,
+and listed the collector-less callers that remained in files this stage did not
+own. Those callers were threaded on branch `feat/931-core-collectors`: the
+helper is now `_refuse_uncollected_pec` and raises `ValueError` naming the
+caller (file, line and function), so a future collector-less caller cannot
+appear. Callers that read cells only pass `pec_sheets=[], pec_wires=[]` and
+drop the result; the two lanes that cannot realize a sheet — the coaxial
+S-parameter lanes behind `_build_materials`, and the SBP-SAT subgrid validator
+— refuse it by name instead. See §1.9 of the design note.
 
 ## 7. CHANGELOG lines (owner: docs)
 

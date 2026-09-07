@@ -287,7 +287,7 @@ def main() -> int:
     js, ks = sorted({c[1] for c in cells}), sorted({c[2] for c in cells})
     jlo, jhi, klo = js[0], js[-1], ks[0]
     jc = (jlo + jhi) // 2
-    pm_mask = np.asarray(sim._assemble_materials(grid)[3])
+    pm_mask = np.asarray(sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])[3])
     kp = np.where(pm_mask[cells[0][0], jc, ks[-1]:])[0]
     ktr = int(ks[-1] + int(kp.min()))
 

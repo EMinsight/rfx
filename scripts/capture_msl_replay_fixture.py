@@ -231,7 +231,7 @@ def _compute_numpy_f64_golden_s1(
         ))
 
     # Analytic Z0 per port (same logic as compute_msl_s_matrix).
-    _msl_assembled = sim_ref._assemble_materials(grid)
+    _msl_assembled = sim_ref._assemble_materials(grid, pec_sheets=[], pec_wires=[])
     _msl_materials = _msl_assembled[0]
     _msl_pec_mask = (
         None if _msl_assembled[3] is None

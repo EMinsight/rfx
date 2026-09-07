@@ -218,6 +218,37 @@ def wire_path_edge_masks(nodes, shape):
     return tuple(jnp.asarray(m) for m in masks)
 
 
+def wire_node_footprint(wires, shape=None):
+    """NODE mask covered by ``wires`` — both end nodes of every path edge.
+
+    A filament owns no cell, so ``pec_mask`` cannot carry it and an
+    occupancy / connectivity read (``Simulation.conductor_mask``, a
+    footprint plot) that unions only cells and sheet footprints reports a
+    wire-fed model as having no metal along the wire.  The node set is the
+    honest cell-shaped answer for a 1-D region: edge ``c`` at index ``i``
+    joins node ``i`` to node ``i+1`` along axis ``c``, so the nodes are
+    ``M_c | shift_bwd(M_c)`` unioned over the three components.
+
+    There is no ``periodic`` argument, for the same reason
+    :func:`wire_path_edge_masks` has none: a path is the list of edges the
+    caller named, and a wire meant to cross a seam is drawn as two legs.
+    The zero-padded shift is therefore exact at both rims — node 0 is an
+    endpoint of edge 0 only, node ``n-1`` of edge ``n-2`` only.
+
+    ``shape`` seeds an all-False result when ``wires`` is empty; without
+    it an empty list returns ``None`` rather than inventing a grid size.
+    """
+    out = None
+    for w in wires or ():
+        for c in range(3):
+            m = jnp.asarray(w.edges[c], dtype=bool)
+            nodes = m | _shift(m, c, (False, False, False), +1)
+            out = nodes if out is None else (out | nodes)
+    if out is None and shape is not None:
+        return jnp.zeros(tuple(shape), dtype=bool)
+    return out
+
+
 def _volume_edge_masks(cell_mask, periodic):
     """§1.2: an edge is PEC iff it is incident to an occupied cell.
 

@@ -768,12 +768,16 @@ class TestVmapBatchedPadByteIdentity:
 
         base_sim = sim_fn(base_value)
         grid = base_sim._build_grid()
-        base_materials, *_ = base_sim._assemble_materials(grid)
+        # eps/sigma/mu only — a PEC sheet owns no cell and writes no
+        # material, so the #931 collectors are passed and dropped here.
+        base_materials, *_ = base_sim._assemble_materials(
+            grid, pec_sheets=[], pec_wires=[])
         vals = np.asarray(values, dtype=np.float32)
         batched = _build_batched_materials(
             base_sim, grid, base_materials, param, jnp.asarray(vals))
         for idx, v in enumerate(vals):
-            want, *_ = sim_fn(float(v))._assemble_materials(grid)
+            want, *_ = sim_fn(float(v))._assemble_materials(
+                grid, pec_sheets=[], pec_wires=[])
             for name in ("eps_r", "sigma", "mu_r"):
                 npt.assert_array_equal(
                     np.asarray(getattr(batched, name)[idx]),

@@ -118,16 +118,21 @@ def test_thin_conductor_api_integration():
 
     # Should build without error
     grid = sim._build_grid()
-    materials, debye, lorentz, pec_mask, pec_shapes, *_ = sim._assemble_materials(grid)
+    pec_sheets: list = []
+    materials, debye, lorentz, pec_mask, pec_shapes, *_ = sim._assemble_materials(
+        grid, pec_sheets=pec_sheets, pec_wires=[])
 
-    # Copper thin conductor is PEC-level → check pec_mask, not sigma
-    tc_box = Box((0.005, 0.005, 0.001), (0.015, 0.015, 0.001))
-    mask = tc_box.mask(grid)
-    inside_idx = np.argwhere(np.array(mask))
-    if len(inside_idx) > 0 and pec_mask is not None:
-        i, j, k = inside_idx[len(inside_idx) // 2]
-        assert bool(pec_mask[i, j, k]), \
-            "Copper thin conductor should be in pec_mask"
+    # #931 §1.3: a copper thin conductor is a SHEET. It owns no cell, so it
+    # is absent from pec_mask by construction and is realized on ONE node
+    # plane. (The previous "should be in pec_mask" assertion sat behind a
+    # guard on a zero-thickness node mask, which is empty — it never ran.)
+    assert pec_mask is None or not bool(np.asarray(pec_mask).any())
+    assert len(pec_sheets) == 1
+    spec = pec_sheets[0]
+    assert spec.normal_axis == 2
+    assert spec.plane == grid.position_to_index((0.005, 0.005, 0.001))[2]
+    assert bool(np.asarray(spec.footprint, dtype=bool)[
+        grid.position_to_index((0.010, 0.010, 0.001))])
 
     print(f"\nThin conductor API integration: OK, grid={grid.shape}")
 
