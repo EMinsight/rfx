@@ -1,25 +1,30 @@
 name: rfx-931-post-thru-sv-ladder-dx4
-description: "#931 R5 rung dx/4 of the THRU singular-value dx ladder, recaptured after the trace was re-declared as a SHEET (it was a one-cell PEC Box, a volume whose realized thickness followed the mesh - the ladder's own independent variable). NEW record, not a value edit: the committed rung JSONs stay as frozen records of VESSL run 369367257803. Board unchanged (H_M/dx = 2/4/8 across the rungs); only the declaration moved. GPU lane, same as 369367257803, and the job REFUSES to run if the backend is not gpu. Branch feat/931-t2-sparams-ports. Submit: vessl run create -f rfx-931-post-thru-sv-ladder-dx4.yaml"
+description: "#931 R5 rung dx/4 of the THRU singular-value dx ladder, ATTEMPT 2. The trace is re-declared as a SHEET (it was a one-cell PEC Box, a volume whose realized thickness followed the mesh - the ladder's own independent variable). NEW record, not a value edit: the committed rung JSONs stay as frozen records of VESSL run 369367257803. Board unchanged (H_M/dx = 2/4/8 across the rungs). Attempt 1 (369367259285/286/287) never reached the solve - the rfx-openems image gives no gpu backend on this preset and the job's own lane assertion stopped it; this attempt uses 369367257803's own image and writes the probe into the artifact dir before asserting. Branch feat/931-t2-sparams-ports. Submit: vessl run create -f rfx-931-post-thru-sv-ladder-dx4.yaml"
 tags: [rfx, issue-931, post, thru-sv-ladder, dx4, gpu]
 resources:
   cluster: remilab-c0
   preset: gpu-rtx4090
-image: ghcr.io/bk-squared/rfx-openems:5b423bdfe0c8
+# The image run 369367257803 used for these same rungs. Attempt 1 of this
+# recapture (runs 369367259285/286/287) ran on ghcr.io/bk-squared/rfx-openems
+# and never reached the solve: that image's CUDA jax does not give a gpu
+# backend on this preset (the working CPU recipe for it, run 369367259234,
+# uninstalls jax-cuda12-plugin/pjrt and installs jax[cpu]), so the job's own
+# backend assertion stopped it -- which is what the assertion is for.
+image: nvcr.io/nvidia/jax:24.10-py3
 env:
   DEBIAN_FRONTEND: noninteractive
   PYTHONUNBUFFERED: "1"
-  OMP_NUM_THREADS: "4"
+  XLA_PYTHON_CLIENT_PREALLOCATE: "false"
   HDF5_USE_FILE_LOCKING: "FALSE"
   LANG: "C.UTF-8"
-  XLA_PYTHON_CLIENT_PREALLOCATE: "false"
   # Precision is part of the ladder's measurement contract: the battery fixture
-  # pins no x64, so every rung runs the fixture as-is (same as run 369367257803).
+  # pins no x64, so every rung runs the fixture as-is (same as 369367257803).
   JAX_ENABLE_X64: "0"
 mount:
   /root/workspace/: volume://remilab-fs/personal-workspaces/
 run: |-
   set -eu
-  echo "=== rfx #931 post-change: THRU sv dx ladder rung dx/4 ==="
+  echo "=== rfx #931 post-change: THRU sv dx ladder rung dx/4 (attempt 2) ==="
   date
   PY=python
   command -v "$PY" >/dev/null 2>&1 || PY=/opt/conda/bin/python
@@ -39,11 +44,19 @@ run: |-
   git rev-parse HEAD > "$OUT/commit.txt" 2>/dev/null || echo "no git" > "$OUT/commit.txt"
   cat "$OUT/commit.txt"
   touch "$OUT/.tstamp"
-  "$PY" -m pip install -q "numpy<2" "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7"
+  "$PY" -m pip install -q "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7" 2>&1 | tail -5 | tee "$OUT/pip.log" || true
   export RFX_REPO_ROOT="$WORK"
   export PYTHONPATH="$WORK"
   export MPLBACKEND=Agg
-  "$PY" -c "import jax, rfx, os; b=jax.default_backend(); print('probe | jax', jax.__version__, '| backend', b, '| rfx from', os.path.dirname(rfx.__file__)); assert b == 'gpu', 'FATAL: this rung is the GPU lane (run 369367257803 was GPU); refusing to change the lane silently, got backend=' + b"
+  # The probe writes to the artifact dir BEFORE it asserts, so a lane failure
+  # is diagnosable from the output dir alone (attempt 1 left nothing to read).
+  set +e
+  "$PY" -u -c "import jax, rfx, os; print('jax', jax.__version__, '| backend', jax.default_backend(), '| devices', jax.devices(), '| rfx from', os.path.dirname(rfx.__file__))" > "$OUT/probe.log" 2>&1
+  probe_rc=$?
+  set -e
+  cat "$OUT/probe.log"
+  test "$probe_rc" -eq 0 || { echo "FATAL: probe failed"; echo "probe" > "$OUT/capture.rc"; exit 3; }
+  grep -q "backend gpu" "$OUT/probe.log" || { echo "FATAL: this rung is the GPU lane (run 369367257803 was GPU); refusing to change the lane silently"; echo "lane" > "$OUT/capture.rc"; exit 3; }
   echo "=== rung: thru_singular_value_dx_ladder --dx-divisor 4 ==="
   mkdir -p tests/fixtures/thru_singular_value_dx_ladder
   set +e
