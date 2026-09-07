@@ -12,12 +12,14 @@ This test couples them. It locks:
 
   1. the script's own mesh convention (`DX == H_SUB / 4`) -- if the mesh
      moves again, this reds first;
-  2. the realized board that convention buys, measured live from
-     `sim.fidelity_report()` (no time stepping): substrate exactly 254.0um,
-     main trace and stub both 635.0um. The 635.0 figure is what the analytic
-     reference and every carrier quote, so it must be measured, not asserted
-     from a formula -- `round(W_TRACE/DX)*DX` gives 571.5um here and is
-     wrong (half-open [lo, hi) node rasterization);
+  2. the realized board that convention buys, measured live on the real
+     build (no time stepping): substrate exactly 254.0um, and the two
+     numbers #931 separated -- the GEOMETRIC realized width of each sheet
+     (571.5um, the node span the contract owns and `fidelity_report`
+     prints) and the ELECTRICAL width the analytic reference takes
+     (635.0um = 10 node rows * dx, unchanged by #931 because the strip's
+     row count is unchanged). Both must be measured, not asserted from a
+     formula;
   3. the committed run log's headline numbers, parsed from the log rather
      than retyped;
   4. each carrier quotes the CURRENT numbers, and carries the superseded
@@ -122,16 +124,19 @@ def test_realized_board_is_measured_not_assumed(cv06b):
         assert item["realized_plane"]["coordinate"] == pytest.approx(
             cv06b.H_SUB, rel=1e-12)
 
-    # The live reader must agree with the realization the solver applies.
-    assert cv06b._realized_trace_width(sim) == pytest.approx(571.5e-6, rel=1e-12)
+    # The ELECTRICAL width the analytic reference takes is n_rows * dx, a
+    # different quantity from the geometric extent above and one cell
+    # bigger. It is unchanged by #931 because the strip's row count is
+    # unchanged; ``_realized_trace_width``'s docstring carries the measured
+    # evidence (Re(Z0) 46.48 ohm vs HJ(635) 46.18 / HJ(571.5) 49.39).
+    assert cv06b._realized_trace_width(sim) == pytest.approx(635.0e-6, rel=1e-12)
 
-    # PRE-#931 this asserted the round() formula gives the WRONG answer.
-    # Under the contract the two agree, because both count the 9 cells the
-    # 600um trace spans. Kept as an assert (not deleted) so a future rule
-    # change that re-separates them is caught here.
+    # PRE-#931 this asserted the round() formula gives the WRONG answer for
+    # the realized width. It gives the GEOMETRIC one, which the contract now
+    # reports; it still does not give the electrical one.
     naive = round(cv06b.W_TRACE / cv06b.DX) * cv06b.DX
     assert naive == pytest.approx(571.5e-6, rel=1e-9)
-    assert cv06b._realized_trace_width(sim) == pytest.approx(naive, rel=1e-9)
+    assert naive != pytest.approx(635.0e-6, rel=1e-6)
 
 
 def test_build_time_assertion_accepts_the_shipped_geometry(cv06b):
@@ -142,7 +147,13 @@ def test_build_time_assertion_accepts_the_shipped_geometry(cv06b):
     assert m["n_volume_cells"] == 0
     assert m["plane_z"] == pytest.approx(cv06b.H_SUB, rel=1e-12)
     assert m["trace_w"] == pytest.approx(m["stub_w"], abs=1e-12)
+    assert m["n_rows"] == m["n_cols"] == 10
+    assert m["trace_w"] == pytest.approx(571.5e-6, rel=1e-12)
+    assert m["trace_w_elec"] == pytest.approx(635.0e-6, rel=1e-12)
+    # Edge-to-edge the stub did not move; from the line CENTRE it lost one
+    # cell, which is the quarter-wave length that sets the notch.
     assert m["stub_len"] == pytest.approx(12.0015e-3, abs=1e-9)
+    assert m["stub_len_centreline"] == pytest.approx(12.28725e-3, abs=1e-9)
 
 
 def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
