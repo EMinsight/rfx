@@ -604,6 +604,20 @@ def _make_dz_profile(
     For each thin z-feature (substrate layer), creates fine cells that
     exactly snap to the feature thickness. Air regions use coarse dx cells.
 
+    Realization order (unchanged since #763 for the first two steps):
+    uniform blocks + air runs -> ``apply_thirds_rule`` at every feature
+    boundary -> smoothing on the band-profile engine
+    (``rfx.nonuniform._build_band_profile``, 2026-09-07 lane). The engine
+    keeps every post-thirds block verbatim, ramps each air run from the
+    ACTUAL block edge cells (ascending and descending) with every
+    adjacent ratio <= 1.3, renormalizes each air run to its declared
+    length exactly, and — new — refines the coarser of two ADJACENT blocks
+    whose seam (the two 1/3 sub-cells) exceeds 1.3, since no ramp can ever
+    sit between two protected blocks. Measured before this lane on a
+    5-layer PCB stack (core|prepreg|core|prepreg|core, 0.8/0.1 mm at
+    dx 0.2 mm): seam ratio 8.000 (66.7 um next to 8.33 um), 25 ratios above
+    1.4; the interfaces were already exact.
+
     Parameters
     ----------
     z_features : list of (z_lo, z_hi, eps_r) for dielectric layers
@@ -631,6 +645,7 @@ def _make_dz_profile(
     # splits, so these coordinates remain cell edges after
     # ``apply_thirds_rule`` and can be mapped back to index ranges there.
     feature_bounds = []
+    block_meta = []  # (thickness, n_feat, dz_feat, lo_index, hi_index)
     running = 0.0
 
     for z_lo, z_hi, eps_r in features:
@@ -642,17 +657,24 @@ def _make_dz_profile(
             running += gap
 
         # Mark the air-to-dielectric boundary
-        boundary_indices.append(len(cells))
+        b_lo = len(cells)
+        boundary_indices.append(b_lo)
 
-        # Feature cells: snap exactly
+        # Feature cells: snap exactly. The ceil carries a 1e-9 relative
+        # tolerance on the float quotient (design note 2026-09-07, R3):
+        # ``2.2e-3 - 1.4e-3`` evaluates to ``8.000000000000002e-4``, which
+        # gave one 0.8 mm core 5 cells while its identical neighbours got 4.
         thickness = z_hi - z_lo
-        n_feat = max(min_cells_per_feature, int(np.ceil(thickness / dx)))
+        n_feat = max(min_cells_per_feature,
+                     int(np.ceil(thickness / dx - 1e-9)))
         dz_feat = thickness / n_feat
         cells.extend([dz_feat] * n_feat)
 
         # Mark the dielectric-to-air boundary
-        boundary_indices.append(len(cells))
+        b_hi = len(cells)
+        boundary_indices.append(b_hi)
         feature_bounds.append((running, running + thickness))
+        block_meta.append((thickness, n_feat, dz_feat, b_lo, b_hi))
         running += thickness
         z_cursor = z_hi
 
@@ -661,46 +683,66 @@ def _make_dz_profile(
         n_air = max(1, int(round(air_height / dx)))
         cells.extend([air_height / n_air] * n_air)
 
+    # Which boundaries will the thirds rule actually split? Same guard as
+    # ``apply_thirds_rule`` (index 0 / len skipped, sub-micron thirds
+    # skipped), read on the pre-thirds array — the rule walks indices in
+    # reverse and each split touches only the two cells at its own index,
+    # so the cells it reads at a boundary are these. A block the seam rule
+    # later refines is re-split with the same flags and arithmetic.
+    pre = list(cells)
+
+    def _will_split(idx: int) -> bool:
+        if idx <= 0 or idx >= len(pre):
+            return False
+        return min(pre[idx - 1], pre[idx]) / 3 >= 1e-7
+
+    split_flags = [(_will_split(b_lo), _will_split(b_hi))
+                   for (_t, _n, _d, b_lo, b_hi) in block_meta]
+
     # P3: Apply thirds rule at material interfaces
     cells = apply_thirds_rule(cells, boundary_indices)
 
-    # P2 + #763: smooth the transitions while (a) preserving every feature
-    # block's cells bit-identically and (b) renormalizing each free (air)
-    # run back to its declared physical length, so the realized profile
-    # keeps every declared interface on a cell edge and the total column
-    # equal to the declared column. Passing the whole array to
-    # ``smooth_grading`` without ``preserve_regions`` inflated the column
-    # (demo fixture: declared 1.754 mm realized as 2.380 mm, substrate-top
-    # interface mid-cell at fraction 0.346) — issue #763.
-    return _smooth_preserving_blocks(cells, feature_bounds, max_ratio=1.3)
+    # P2 + #763 + band engine: smooth while (a) preserving every feature
+    # block's cells bit-identically unless the seam rule must refine it,
+    # (b) realizing every declared interface on a cell edge and the total
+    # column exactly, and (c) holding every adjacent ratio outside a
+    # thirds split at <= 1.3, block-to-block seams included.
+    return _band_smooth_post_thirds(
+        cells, feature_bounds, block_meta, split_flags, dx,
+        min_cells_per_feature, max_ratio=1.3)
 
 
-def _smooth_preserving_blocks(
+def _band_smooth_post_thirds(
     cells: np.ndarray,
-    block_bounds: list[tuple[float, float]],
+    feature_bounds: list[tuple[float, float]],
+    block_meta: list[tuple[float, int, float, int, int]],
+    split_flags: list[tuple[bool, bool]],
+    dx: float,
+    min_cells: int,
     max_ratio: float = 1.3,
 ) -> np.ndarray:
-    """Smooth-grade ``cells`` while keeping protected blocks exact (#763).
+    """Hand the post-thirds auto-z array to the band-profile engine.
 
-    ``block_bounds`` are (lo, hi) cumulative-coordinate pairs that MUST lie
-    on cell edges of ``cells``. Each protected block passes through
-    bit-identically. Each free run between blocks is smoothed against the
-    adjacent block edge cells (identical transitions to
-    ``smooth_grading(..., preserve_regions=...)`` on the full array) and
-    then renormalized back to its pre-smoothing length: duplicated
-    plateau (coarse) cells are removed while the run stays at or above its
-    declared length, and the remaining cells are uniformly rescaled by
-    ``f = L_declared / L_run`` (``f <= 1`` since smoothing only inserts).
-    Renormalization touches only free-run cells, so every declared
-    interface coordinate and the total column length are realized exactly
-    (to float64 accumulation, << 1e-12 m).
+    ``feature_bounds`` are (lo, hi) cumulative-coordinate pairs that MUST
+    lie on cell edges of ``cells`` (the thirds rule preserves them). Each
+    block becomes a PROTECTED segment carrying its post-thirds cells
+    verbatim plus the split flags the engine needs to re-derive the block
+    (same arithmetic as ``apply_thirds_rule``) if the seam rule refines
+    it; each free (air) run becomes a FREE segment with target ``dx``.
+    Successor of ``_smooth_preserving_blocks`` (#763), which could only
+    smooth free runs and left a seam between two adjacent blocks
+    untouched.
     """
+    from rfx.nonuniform import _BandSeg, _build_band_profile
+
     cells = np.asarray(cells, dtype=float)
     edges = np.concatenate([[0.0], np.cumsum(cells)])
 
-    # Map block coordinate bounds to index ranges on the post-thirds array.
-    ranges = []
-    for lo, hi in block_bounds:
+    segs: list[_BandSeg] = []
+    prev_end = 0
+    for (lo, hi), meta, (s_lo, s_hi) in zip(feature_bounds, block_meta,
+                                            split_flags):
+        thickness, n_feat, dz_feat, _b_lo, _b_hi = meta
         i = int(np.argmin(np.abs(edges - lo)))
         j = int(np.argmin(np.abs(edges - hi)))
         if abs(edges[i] - lo) > 1e-12 or abs(edges[j] - hi) > 1e-12:
@@ -709,76 +751,22 @@ def _smooth_preserving_blocks(
                 f"(nearest {edges[i]}, {edges[j]}) — thirds rule no longer "
                 "preserves interface edges?"
             )
-        ranges.append((i, j))
-
-    # Alternating protected / free segments, in order.
-    seg_list: list[tuple[np.ndarray, bool]] = []
-    prev_end = 0
-    for i, j in ranges:
         if i > prev_end:
-            seg_list.append((cells[prev_end:i], False))
-        seg_list.append((cells[i:j], True))
+            segs.append(_BandSeg(
+                length=float(np.sum(cells[prev_end:i])), target=float(dx),
+                protected=False))
+        segs.append(_BandSeg(
+            length=float(thickness), target=float(dz_feat), protected=True,
+            min_cells=int(min_cells), split_lo=bool(s_lo),
+            split_hi=bool(s_hi),
+            verbatim=tuple(float(c) for c in cells[i:j])))
         prev_end = j
     if prev_end < len(cells):
-        seg_list.append((cells[prev_end:], False))
+        segs.append(_BandSeg(
+            length=float(np.sum(cells[prev_end:])), target=float(dx),
+            protected=False))
 
-    out: list[np.ndarray] = []
-    for k, (seg, protected) in enumerate(seg_list):
-        if protected or len(seg) == 0:
-            out.append(np.asarray(seg, dtype=float))
-            continue
-
-        length = float(np.sum(seg))
-
-        # Sentinel cells from the neighbouring protected blocks so the
-        # transitions match a full-array smooth_grading with
-        # preserve_regions (the loop there smooths against the block's
-        # edge cell; blocks pass through verbatim, so the edge cell is
-        # exactly the input edge cell).
-        arr = [float(c) for c in seg]
-        lo_off = 0
-        if k > 0 and len(seg_list[k - 1][0]) > 0:
-            arr = [float(seg_list[k - 1][0][-1])] + arr
-            lo_off = 1
-        hi_off = 0
-        if k + 1 < len(seg_list) and len(seg_list[k + 1][0]) > 0:
-            arr = arr + [float(seg_list[k + 1][0][0])]
-            hi_off = 1
-
-        sm = smooth_grading(arr, max_ratio=max_ratio)
-        run = [float(c) for c in
-               (sm[lo_off:len(sm) - hi_off] if hi_off else sm[lo_off:])]
-
-        # Renormalize the free run back to its declared length. First
-        # drop duplicated plateau cells (a cell equal to the run maximum
-        # with an identical neighbour — removing one keeps the grading
-        # smooth) while the run remains at or above the declared length.
-        run_sum = float(np.sum(run))
-        while run_sum > length:
-            v = max(run)
-            if run_sum - v < length:
-                break
-            idx = None
-            for t in range(len(run) - 1):
-                if run[t] == v and run[t + 1] == v:
-                    idx = t
-                    break
-            if idx is None:
-                break
-            del run[idx]
-            run_sum = float(np.sum(run))
-
-        # Uniform rescale (f <= 1). Internal adjacent-cell ratios are
-        # unchanged; only the seam ratio against a protected block edge
-        # moves (the first-contact step, exempt by the preserve_regions
-        # convention). f == 1.0 when smoothing inserted nothing.
-        if run_sum != length and run_sum > 0.0:
-            f = length / run_sum
-            run = [c * f for c in run]
-
-        out.append(np.asarray(run, dtype=float))
-
-    return np.concatenate([o for o in out if len(o)]) if out else cells
+    return _build_band_profile(segs, float(max_ratio))
 
 
 def apply_thirds_rule(
