@@ -125,15 +125,42 @@ accuracy evidence and the case gates none of them.
   `tests/crossval/test_patch_canonical_farfield_e4.py` and the three constants it
   holds. That file builds its own canonical thirds-rule patch, not cv05's board,
   so run 369367259142 does not measure it. The re-derivation is VESSL run
-  **369367259289** (`scripts/vessl_931/cv05_farfield_envelope.yaml`, producer
-  `scripts/diagnostics/measure_patch_canonical_farfield_e4.py`). `XA-manifest.json.md`
+  **369367259302** (`scripts/vessl_931/cv05_farfield_envelope.yaml`, producer
+  `scripts/diagnostics/measure_patch_canonical_farfield_e4.py`; it replaces
+  369367259289, which died in 40 s on a missing pytest). `XA-manifest.json.md`
   §1's rule stands and needs no change either way: the manifest cites
   `D_ABS_TOL_DB`, `F_RES_REL_LO` and `F_RES_REL_HI` by NAME with no band inline,
   so whatever that run measures flows through without a second hand-edit here.
-  The pointer `tests/crossval/test_patch_canonical_farfield_e4.py:134,140,141`
-  is correct against the file as it stands; whoever flips the flag must re-check
-  those three line numbers, because `tests/contracts/test_evidence_citation_pointers.py`
-  gates them.
+
+  ### What to do with that run's result
+
+  1. The record is `$OUT/canonical_farfield_e4_measured.json`. Read
+     `measured.settling_clears_bar` FIRST. If it is false the run ended while the
+     structure was still ringing, nothing in it is quotable, and the flag stays
+     `False` — raise `NUM_PERIODS` and re-run instead.
+  2. Apply the constants with
+     `python scripts/diagnostics/apply_patch_canonical_farfield_envelope.py
+     <record.json> <repo-root>`. It reads the four values out of the record,
+     rewrites them, and REVERTS itself if `D_ABS_TOL_DB`, `F_RES_REL_LO` or
+     `F_RES_REL_HI` stops sitting on line 134 / 140 / 141 —
+     `validation/crossval/manifest.json` and `validation/README.md` cite those
+     line numbers and `tests/contracts/test_evidence_citation_pointers.py` gates
+     the pointer. Do not hand-type any of the four.
+  3. Read `proposed_constants.*.arithmetic` into the commit message: old value,
+     new value, and the derivation. `D_ABS_TOL_DB` is floored at the pre-#931
+     1.0 dB by the producer, so a rerun can never quietly narrow that gate.
+  4. **Judgement the script does not make.** If the new
+     `[F_RES_REL_LO, F_RES_REL_HI]` straddles zero, the resonance gate stops
+     being a SIGN-locked bias band and becomes a ±band around agreement. That is
+     a change of kind, not a re-tune (`XA-manifest.json.md` §5 says so), and the
+     gate's docstring — which currently states "the sign as part of the
+     characterization" — has to be rewritten to say what the gate now asserts.
+     The mode-pair band `[1.15, 1.30]`, asserted inline in
+     `test_mode_pair_present_with_aspect_ratio`, moves with the same record.
+  5. `validation/README.md`'s cv05 row still reads "directivity within 1.0 dB,
+     resonance inside the documented +6% to +16% coarse-mesh band with the sign
+     locked HIGH". Those literals move with the flip. The manifest's own text
+     does not — it cites the constants by name only, which is the point.
 * Nothing else. The one condition this note carried — the cv05 fixture's own
   reproducibility — is **met**: VESSL run **369367259288** rebuilt all five
   lengths and reported "OK: committed cv05_ringdown_spectra.json reproduces"
