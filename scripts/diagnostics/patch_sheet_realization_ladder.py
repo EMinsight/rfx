@@ -325,8 +325,9 @@ def main():
             continue
         print(f"{r['tag']:<7} {'yes':>8} {t[0]:10.3f} {t[1]:7.1f} "
               f"{(t[0]-TARGET_GHZ)/TARGET_GHZ*100:+8.1f}%")
-    print("\nRead against the pre-declared rule in this file's docstring: "
-          "face2 is the ruler.")
+    print("\nPre-declared rule (docstring): the arm whose TM010 is closest "
+          "to the realized-raster Balanis target wins; a settling witness "
+          "above the bar voids that arm and its numbers are not read.")
     return 0
 
 

@@ -210,3 +210,56 @@ measured finding, not an inference, and it is group **P**'s:
 
 Design note §6 already fences these under "Not yet implemented — preflight".
 This run is the evidence with numbers attached.
+
+## Step 3 — the ladder, read to the end (2026-09-07, same run 369367259157)
+
+`patch_sheet_realization_ladder.log` finished after the section above was
+written (`.rc` = 0, 42 min wall). Stage 2 ran three arms and **all three
+settled**, so all three are read.
+
+Stage 1 (no solve), wall planes from `realized_pec_edge_masks` on the patch
+column, dx = 196.75 µm, physical cavity 787.0 µm of eps_r 3.38:
+
+| arm | realized wall planes (µm) | cavity lo..hi | gap | cells | Σd/ε | vs physical |
+|---|---|---|---|---|---|---|
+| sheet | 4131.8, 4918.8 | 4131.8..4918.8 | 787.0 | 4 | 232.8 | **−0.0 %** |
+| vol1 | 4131.8, 4328.5, 5115.5, 5312.2 | 4328.5..5115.5 | 787.0 | 4 | 232.8 | **−0.0 %** |
+| vol2 | 4131.8, 4328.5, 4525.3, 5312.2, 5509.0, 5705.8 | 4525.3..5312.2 | 787.0 | 4 | 232.8 | **−0.0 %** |
+
+Two walls per one-cell foil, three per two-cell foil, one per sheet — each at
+a drawn face, none anywhere else. The contract's own Stage-1 prediction
+("drawn extent equals realized extent in all three arms, so all three read
+0.0 %") held in all three. Under the pre-2.0 rule the same three arms read
++25.0 %, +84.5 % and 0.0 %; the flag that bought the third is gone and every
+arm now gets it.
+
+Stage 2 (ring-down against the realized-raster Balanis target 9.3305 GHz,
+settling bar −40 dB):
+
+| arm | settled | TM010 | Q | vs 9.3305 |
+|---|---|---|---|---|
+| sheet | yes, −43.2 dB | **8.509 GHz** | 72.6 | **−8.8 %** |
+| vol1 | yes, −43.8 dB | 8.269 GHz | 63.4 | −11.4 % |
+| vol2 | yes, −44.8 dB | 8.267 GHz | 61.2 | −11.4 % |
+
+**By the pre-declared rule — "the arm whose TM010 is closest to 9.3305 wins"
+— the SHEET arm wins**, and it is the best number this ladder has produced:
+the pre-2.0 arms read 8.162 (one-plane), 7.50 (2-cell) and 8.22 (`two_plane`).
+The residual is still −8.8 %, so the sheet declaration does NOT close the
+patch-anchor gap; the isolated-patch refinement ladder already attributed most
+of that residual to the Balanis anchor at this h/λ, and nothing here reopens
+it. What this run does settle is the ordering: declaring the foil a sheet
+beats drawing it as a plate on the same board, by 2.6 pp, with every arm's
+cavity exact.
+
+It also **does not reproduce the direction the step-2 A/B hinted at.** There
+the volume arm's TM010 read Q87 against the sheet arm's Q73, and the note
+above said out loud that a truncated record inflates apparent Q by that sign.
+With all three arms settled, Q goes the other way: 72.6 (sheet) > 63.4 (vol1)
+> 61.2 (vol2). The step-2 hint was the truncation, not the physics. It is
+recorded here rather than quietly dropped, and the step-2 section above stands
+as written — it declined to compute a ratio for exactly this reason.
+
+Stale label fixed in the same commit: the script's closing line still told the
+reader "face2 is the ruler", naming a pre-2.0 arm that no longer exists. It
+now prints the docstring's actual rule.
