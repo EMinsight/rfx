@@ -258,6 +258,27 @@ Both planes are nodes of UC, MB AND AZ at every scale by I1 (verified
 at z = 14 mm is -0.033 (a near-null), which is why the source is not
 there. j = ny // 2. Node indices k(16 mm) / k(30 mm): UC 64/120, 32/60,
 16/30; MB 48/88, 24/44, 12/22; AZ 49/91, 29/53, 29/53 (s = 0.5 / 1 / 2).
+
+> **Reviewer note (second pass, 2026-09-07; no window changed).** The
+> sentence "only the m = 1 family exists below 12.4 GHz" is wrong as a
+> statement about the fixture. In 9-12.5 GHz the box also admits Ey modes
+> with m = 2, 3, 4 (nearest: m = 4 at 10.6254 GHz, **+0.60 %** from
+> f_true — closer than the s = 2 discretisation errors of 64-217 MHz) and
+> the Hy (LSM) family of the same n = 0 sector (nearest: m = 1 at
+> 10.5098 GHz, **-0.49 %**). They are absent from the measurement for two
+> reasons the fixture relies on, not because they do not exist: the
+> equal-sign source pair at a/3, 2a/3 has amplitude sin(m pi/3) +
+> sin(2m pi/3) = 0 for m = 2, 3, 4, 6 (8e-16 in float), and an Ey source
+> excites only the (Ey, Hx, Hz) polarisation of the n = 0 sector, never
+> Hy. So the 16.2 % isolation is conditional on source symmetry and
+> polarisation; the unconditional isolation of the fixture is 0.49 %. The
+> instrument now tabulates both families in the selfcheck
+> (`oracle.other_families`) and checks the Hy determinant against the
+> closed form as (i''); the recorded harminv lines of all 18 A1 units
+> carry no line inside 9.6-11.5 GHz other than the m = 1 mode (and the
+> m = 5 p = 1 line at 12.41-12.44 GHz, as predicted), and G3 (<= 0.059
+> MHz against the exact m = 1 discrete model) rules out a mis-identified
+> line. The measurement stands; the text did not.
 Waveform: Gaussian-modulated sine at f_true, sigma_t = 200 ps, t0 = 5
 sigma_t (W4R3). T = **15 ns**, harminv (`rfx.harminv.harminv`) on the
 trace after 2 t0 over 7-14 GHz; the mode is the in-band (9.6-11.5 GHz)
@@ -353,6 +374,20 @@ band, ~11 ps, and reflects within the cores). Loss `L = sum(ts^2)`.
 (W5's FD_REL_H) on every cell. x64-context arm (`tests._x64_compat
 .enable_x64`) run and reported as in W5, not gated.
 
+> **Reviewer note (second pass).** The x64 context does not raise the
+> solver precision. `rfx.nonuniform` pins every profile and field array
+> to float32 (`_pad_profile`, `_profile_to_inv_arrays`,
+> `make_nonuniform_grid`) and the instrument pins eps and the waveform;
+> `jax.eval_shape` of this loss under the context returns **float32**
+> (input float64, dt float64, gradient float64 only by cast-back). The two
+> committed AD1 rows differ by 8.9e-8 in loss0 = 3 f32 ulp and 1.8e-5 in
+> max relative gradient: the same f32 computation twice. The row is
+> reported, not gated, so nothing changes here — but the first-pass
+> Results asked the PI to decide on "an x64-loss AD3", which does not
+> exist without an `rfx/` dtype change this lane does not make; that
+> question is withdrawn in the second-pass Results. The selfcheck now
+> records the dtype probe (`ad1_loss_dtype`).
+
 ### 2.5 AD2 — material gradient d L / d eps_thin on the A1 MB mesh
 
 Same grid, source, probe, N_STEPS and loss as AD1. `eps_thin` is a scalar
@@ -413,6 +448,19 @@ dominant-cell comparison**, and for each of them `g_ad`, the one-sided
 `FD+` and `FD-` are reported side by side. W5 avoided the question with
 1 % jitter; that is not available here because the vector under test IS
 the builder's.
+
+> **Reviewer note (second pass).** The realized convention is more
+> specific than "between FD+ and FD-": on every committed tied cell with
+> |g| > 1, `g_ad = FD+ + (FD- - FD+) / n_tied` to <= 2.5 % (AD3 x, z;
+> AD1) and <= 7 % (AD3 y, one cell at |g| 1.7), where the central mean
+> is off by 13-88 % on AD3 (n_tied = 8); AD1 (n_tied = 2) cannot separate
+> split from mean, which is why its table looked like a mean. The
+> consequence for an optimizer: moving ONE tied fine cell downward changes
+> dt and meets the slope FD-, which the equal-split value understates by
+> (FD- - FD+)(1 - 1/n_tied) — at n_tied = 8 the AD value sits 1/8 of the
+> way from FD+ to FD- (AD4 stack 4, n_tied 14: AD +59.5 against FD- +891).
+> Knowledge output; no gate. The second-attempt tie tables carry the
+> split model as a column.
 
 ## 3. Falsifiers (frozen; derivations stated; tolerances never widened after measurement)
 
@@ -508,6 +556,41 @@ contains them. Windows, each arm (cap 1.3 and cap 1.4), each n_steps:
   normalization the model does not carry; the residual is recorded as
   the model's validity class on this path).
 
+> **Reviewer note (second pass, 2026-09-07; windows not edited).** Two
+> things this section did not say.
+> (1) **Run length.** 8000 / 12000 steps are 4.6 / 6.9 ns on the graded
+> A2 meshes (dt 5.75e-13 s) and 3.8 / 5.7 ns on graded A3 (4.77e-13 s)
+> against 15.3 / 22.9 ns on the 1 mm controls at the same counts, and
+> the graded frequencies are not converged there: the reviewer's re-run
+> (scratch, same tree) of A3 graded at 24000 steps (11.4 ns) moved f by
+> +0.386 MHz (0.0055 pt) from the 12000-step value while A3-V had
+> recorded 0.0003 %; at 40000 steps it moved a further 0.7 kHz. At 24000
+> steps the graded errors are -0.03495 % (A3) and -0.0203 / -0.0265 %
+> (A2 caps 1.3 / 1.4), each within 1.2e-5 of the exact-operator model
+> (first-pass residuals: 0.004-0.009 pt). A2-V / A3-V were derived as 1/3
+> of F2, not from a convergence criterion, so they passed while the
+> numbers were still moving by 0.005-0.009 pt; the recorded harminv Q of
+> the graded lines swings 26627 -> 5341 between the two counts (the
+> windowing signature). No verdict flips — the converged values are inside
+> every window and closer to the model — but the first-pass A2 / A3
+> numbers are run-length artefacts by 0.005-0.009 pt. A run-length
+> extension at 24000 / 48000 steps on every A2 / A3 arm (uniform
+> included) is declared in the second-pass Results as a second attempt,
+> judged against these same frozen numbers.
+> (2) **What F2 compares.** The leapfrog term `e_t = (leap(k^2, dt) -
+> f) / f` is mesh-independent apart from dt: +0.0200 % (A2) / +0.0298 %
+> (A3) on the 1 mm control against +0.0018 / +0.0019 % on the graded
+> meshes, so "graded minus uniform" carries the CONTROL's e_t. Spatial
+> parts (model - e_t): A2 uniform -0.0315 %, graded cap 1.3 / 1.4
+> -0.0233 / -0.0295 % — the graded meshes have SMALLER spatial error than
+> the control and the positive "excess" is entirely the control's e_t;
+> A3 graded -0.0367 % vs uniform -0.0307 %, a true spatial excess of
+> -0.0060 pt against the -0.0339 pt the model attributed to grading. F2
+> as frozen is not a silent loosening (its model value was pre-declared
+> with it), but its name is wrong; the judge now records e_t and the
+> spatial parts per arm (reported, no gate) and the validity-domain rows
+> are corrected in the second-pass Results.
+
 ### 3.4 A3
 
 Derivation: model graded **-0.03488 %** (e_x -0.0088, e_y -0.0144, e_z
@@ -520,6 +603,13 @@ two — gives:
   model).
 - **A3-V:** separation, anti-vacuity (max/min = 4 on every axis),
   `|f(8000) - f(12000)| / f_111 <= 0.033 %` else INCONCLUSIVE.
+
+> **Reviewer note (second pass).** Both points of the A2 note apply here
+> with the A3 numbers quoted there: 3.8 / 5.7 ns of physical time at the
+> declared counts, +0.386 MHz between 12000 and 24000 steps against a
+> recorded invariance of 0.0003 %, and an F2 "excess" of which 82 % is
+> the control's leapfrog term (-0.0339 pt attributed, -0.0060 pt spatial).
+> Windows not edited; extension declared in the second-pass Results.
 
 ### 3.5 AD1 / AD2 / AD3 / AD4
 
@@ -544,6 +634,40 @@ two — gives:
   `cpml_layers = 0` is a fired AD witness (the committed sentinels use
   cpml_layers 2-4): recorded as such, the arm STOPs, no re-run with a
   different cpml setting.
+
+> **Reviewer note (second pass, 2026-09-07).** **AD3-F** as declared had
+> a defect in its REFERENCE, not its tolerance: a central FD on an f32
+> loss (loss0 = 0.1306, ulp 1.49e-8) cannot resolve a slope finer than
+> `ulp / (2h)` = 7.45e-3 at h = 1e-3 on a 1 mm cell, and on the A3
+> fixture every large gradient sits on the tied fine cells (excluded by
+> AD5; max |g| 992 x / 585 y / 946 z), so the 5 % dominance threshold on
+> the non-tied maximum (10.0 x / 0.78 y / 0.31 z) landed at 5 / 2 quanta
+> on y / z and admitted cells whose reference is round-off. The
+> reviewer's scratch re-run (rfx tree unchanged): reverse-mode grad and
+> forward-mode jvp agree on EVERY cell of every axis, tied included, to
+> 1.9e-5 (y) / 3.1e-5 (z) / 8.4e-3 (x, one cell at |g| 1e-3); central FD
+> at h = 1e-2 (quantum 10x smaller) agrees on every dominant cell with
+> >= 50 quanta to 3.6 % (y) / 4.8 % (z), the two remaining z outliers
+> sitting at 21-24 quanta; and the discrepancy on the fired cells shrinks
+> with h as a fixed few-quanta noise in the loss would (4.2 quanta at
+> h = 3e-3, 1.9 at 1e-2 on z cell 16), i.e. the f32 FDTD's own round-off
+> in the loss is 3-7 ulp, not 1. The FIRED record of attempt 1 stands
+> (a result, not tuned away). A second attempt with the reference fixed —
+> the same loss, fixture, dominance fraction, tolerance and sign rule; FD
+> step 1e-2; a declared resolution floor of 50 quanta below which a
+> dominant cell is "unresolved by the reference" (reported with its AD,
+> FD and jvp values, not gated) and an axis with fewer resolved than
+> unresolved dominant cells is INCONCLUSIVE — is declared in the
+> second-pass Results before it is run.
+> **AD4-F**: `N_STEPS = 20` at the dt of a 1.8-45 um minimum cell
+> propagates 37-900 um, 2-20 % of the stack on 14 of the 20 stacks (the
+> four short stacks 4, 11, 16, 17 are crossed fully), so the finiteness
+> statement covers the dt path plus the near-source cells; the gradient
+> is exactly zero on cells the pulse never reaches (reviewer scratch:
+> 548 of 580 on stack 7, and a 10 % perturbation of such a cell leaves
+> the loss bit-identical, so the zeros are true zeros, not a severed
+> path). HELD as written; the "nz 6-580" domain row is reworded in the
+> second-pass Results as a dt-path statement.
 
 ## 4. Declared commands, outputs, tests
 
@@ -863,3 +987,98 @@ answer is a PI decision, not a tolerance edit.
 Wallclock: A1 482 s of FDTD (18 units; the s = 0.5 units 56-88 s each),
 A2 7.8 s, A3 6.6 s, AD1-4 42 s; the whole lane under 12 minutes of
 solver time plus 9 s of selfcheck per call.
+
+## Results — second pass (review of the first pass, 2026-09-07)
+
+A reviewer read the first-pass Results against the JSON and the tree and
+returned eight findings (three major). Everything below was written
+BEFORE any second-pass measurement; the measured part is appended after
+it under "Second-pass measurements". No frozen window was edited; where
+a window or a statement was shown wrong, a "Reviewer note" now sits under
+it in sections 2 and 3 (2.1 isolation, 2.4 x64, 2.8 tie split, 3.3 / 3.4
+run length and F2, 3.5 AD3 reference and AD4 reach). The first-pass JSON
+is copied verbatim to
+`validation/research/multiband_nu/results/w7_accuracy_ad_first_pass_bb15b072.json`
+before the second-pass runs; the first-pass rows also stay in place in
+the working JSON under their original keys.
+
+### The findings, reproduced before anything was changed
+
+| # | finding | reproduced (scratch, same tree, no rfx change) | class |
+|---|---|---|---|
+| 1 | A2 / A3 graded frequencies not run-length converged at 8000 / 12000 steps; A3-V gave false assurance | A3 graded 8000 steps bit-identical to the JSON (7048539075.253 Hz); at 24000 steps err -0.03495 %, residual -7.2e-7 (JSON -0.04042 %, -5.5e-5) | instrument (run length not matched to graded dt) -> second attempt |
+| 2 | F2 "excess over uniform" is 82 % (A3) / 100 % (A2) the control's leapfrog term | e_t recomputed from the rows: A2 +0.0200 % control / +0.0018 % graded; A3 +0.0298 % / +0.0019 % | reporting -> judge records the spatial split; validity rows corrected |
+| 3 | Isolation statement wrong as a fixture property | instrument's own determinants: Hy m = 1 at -0.492 %, Ey m = 4 at +0.602 %; source-pair amplitude 8e-16 for m = 2, 3, 4, 6; one in-band harminv line on all 18 units | documentation -> note 2.1; selfcheck tabulates both families |
+| 4 | `git_dirty` counted untracked files, uninformative | every first-pass row `true`; the flag's own definition | instrument -> tracked-only outside `results/`, modified list and untracked count recorded |
+| 5 | The AD1 "x64 context" row is a float32 solve | `jax.eval_shape` under the context: loss float32; loss0 differs by 3 f32 ulp | documentation -> the pending "x64-loss AD3" decision is withdrawn (no such arm exists without an rfx dtype change) |
+| 6 | AD3 y / z FIRED rows are an FD-resolution artefact of the dominance rule | AD3 y at h = 1e-3 bit-identical (worst 0.5224, 18 dominant); reviewer's jvp-vs-grad <= 3.1e-5 all cells | instrument (FD reference) -> second attempt |
+| 7 | Tied-min AD value is FD+ + (FD- - FD+)/n_tied | committed tie tables: <= 2.5 % (x, z), <= 7 % (y), mean off by up to 88 % | documentation -> note 2.8; split column in the second attempt |
+| 8 | AD4 finiteness covers the causal cone plus the dt path | reach = 20 c dt: 37-900 um vs stack length 0.4-5.7 mm (2-20 % on 14 stacks) | documentation -> domain row reworded |
+
+### Declared second attempts (written before they were run)
+
+**A2 / A3 run-length extension** (`--arms a2ext,a3ext`). Reason: an
+instrument defect — the declared step counts were the committed
+oracles' counts, which at the graded dt give 3.8-6.9 ns of physical
+time, and the invariance windows were derived from F2, not from
+convergence. Every A2 arm (caps 1.3, 1.4, uniform) and every A3 arm
+(graded, uniform) is run once at **24000 and 48000 steps** (graded A2
+13.8 / 27.6 ns, graded A3 11.4 / 22.9 ns, uniform 45.8 / 91.5 ns), keys
+`<arm>|24000`, `<arm>|48000` in the same JSON, one attempt per key, the
+8000 / 12000 rows untouched. The frozen A2 / A3 windows are re-evaluated
+on the extension pair with the SAME numbers (F1 0.10 / 0.20 %, F2
+0.05 / 0.10 pt, V 0.017 / 0.033 % now as `|f(24000) - f(48000)| / f`,
+separation and anti-vacuity as committed) and recorded as `judge_ext`;
+the judge also records, per arm and reported only, e_t, the spatial part
+`err - e_t`, the spatial difference to the control and the model's
+spatial difference. The committed extractor (`Result.find_resonances`)
+decimates to 10000 post-decay samples (step 2 / 4 at the graded counts;
+Nyquist still > 100 GHz) — that is the committed recipe and is kept.
+What is expected if the diagnosis is right: graded errors within ~1e-5
+of the exact-operator model (-0.02146 / -0.02766 % A2, -0.03488 % A3)
+at both counts, invariance below 1e-5. What would falsify the
+diagnosis: an F1 / F2 / V failure at the extended counts, or a residual
+to the model that does not shrink.
+
+**AD3 second attempt** (`--arms ad3b`, key `ad3_second_attempt`;
+attempt 1 stays under `ad3`, FIRED, and its replay test stays red).
+Reason: the FD reference of attempt 1 could not resolve the slopes it
+was asked to gate (3-17 quanta of `ulp / (2h)` on the fired cells; see
+the note under 3.5). The fix is to the reference, and everything else
+is the frozen rule: same loss, fixture, source, probe, 120 steps, f32;
+dominance = free cells with `|g_fd| > 5 %` of the largest non-tied
+`|g_fd|`; tolerance 0.15 with sign agreement; tied cells excluded and
+tabulated (with the split model as a column). Recorded: central FD (and
+FD+, FD-) at h = 1e-3, 3e-3, 1e-2, 3e-2 on every cell of every axis
+(1e-3 reproduces attempt 1 inside the same record), forward-mode jvp on
+every cell (a second, FD-free reference — reported, not gated), and per
+cell the FD quanta `|g_fd| 2h / ulp(loss0)`. **Gate at h = 1e-2** on the
+dominant cells whose reference has **>= 50 quanta** ("resolved"); a
+dominant cell below the floor is reported as unresolved with its AD,
+FD and jvp values and does not enter the gate; an axis with fewer
+resolved than unresolved dominant cells is INCONCLUSIVE
+(reference-limited), not HELD. Verdict per axis: HELD if every resolved
+dominant cell agrees to 15 % with sign; FIRED otherwise. What this
+attempt cannot say: anything gated about cells below the floor — for
+those the jvp value is the only reference on record. Expected if the
+reviewer's diagnosis holds: y and z HELD on >= 8 resolved cells each,
+x HELD as before; the attempt-1 rule at h = 1e-3 reproducing 0.522 /
+0.992 inside the same JSON. What would falsify it: a resolved cell
+outside 15 %, a sign disagreement, or an INCONCLUSIVE axis.
+
+**Selfcheck additions** (no FDTD, reported): (i'') the Hy determinant
+against the closed form (gated like (i)); the non-excited-family table;
+the AD1 loss dtype probe.
+
+Commands (from the worktree root, `PYTHONPATH` pinned as in section 4):
+
+```
+python -m validation.research.multiband_nu.w7_accuracy_ad --selfcheck --out validation/research/multiband_nu/results/w7_accuracy_ad.json
+python -m validation.research.multiband_nu.w7_accuracy_ad --arms a2ext,a3ext --out validation/research/multiband_nu/results/w7_accuracy_ad.json
+python -m validation.research.multiband_nu.w7_accuracy_ad --arms ad3b --out validation/research/multiband_nu/results/w7_accuracy_ad.json
+```
+
+Replay: `test_second_pass_constants_pinned_verbatim`,
+`test_replay_a2_extension`, `test_replay_a3_extension`,
+`test_replay_ad3_second_attempt` added to the replay file before the
+runs (skipped while the keys are absent); `test_replay_ad3` unchanged.

@@ -163,6 +163,17 @@ AD4_DOMAIN_XY = (3e-3, 3e-3)
 AD4_DX = 1e-3
 AD5_TIE_REL = 0.0                # exact f32 equality with the axis minimum
 # ---------------------------------------------------------------------------
+# Second pass (review of the first Results; note "Second pass" section).
+# Declared before any second-pass measurement; the first-pass constants above
+# are untouched and the first-pass rows stay in the JSON under their keys.
+# ---------------------------------------------------------------------------
+A2_N_STEPS_EXT = (24000, 48000)  # run-length extension: graded 13.8 / 27.6 ns (dt 5.75e-13)
+A3_N_STEPS_EXT = (24000, 48000)  # graded 11.4 / 22.9 ns (dt 4.77e-13); uniform 45.8 / 91.5 ns
+AD3B_FD_REL_HS = (1e-3, 3e-3, 1e-2, 3e-2)   # FD steps recorded (1e-3 reproduces attempt 1)
+AD3B_FD_REL_H_GATE = 1e-2                   # the gated step of the second attempt
+AD_REF_FLOOR_QUANTA = 50.0                  # |g_fd| * 2h / ulp(loss0) below this: reference unresolved
+OTHER_FAMILY_BAND = (9e9, 12.5e9)           # where the non-excited families are tabulated
+# ---------------------------------------------------------------------------
 # Numbers quoted in the note that --selfcheck must reproduce (note 3.1)
 # ---------------------------------------------------------------------------
 A1_MODEL_TABLE_MHZ = {           # (arm, s): (dual, production)   note 1b
@@ -221,15 +232,41 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def _git_dirty() -> bool:
+RESULTS_DIR = "validation/research/multiband_nu/results/"
+
+
+def _git_modified_tracked() -> list[str]:
+    """Tracked files that differ from HEAD (porcelain, untracked excluded)."""
     try:
-        return subprocess.check_output(["git", "status", "--porcelain"], text=True) != ""
+        out = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], text=True)
+        return [ln[3:].strip() for ln in out.splitlines() if ln.strip()]
     except (subprocess.CalledProcessError, OSError):
-        return True
+        return ["<git unavailable>"]
+
+
+def _git_dirty() -> bool:
+    """True when a TRACKED file outside the instrument's own results directory
+    differs from HEAD. Second pass: the first-pass flag was ``git status
+    --porcelain != ''``, which counts untracked files, so the results JSON
+    being written marked every row dirty and the flag carried no provenance.
+    The results JSON is tracked and rewritten after every unit, so it is
+    excluded here and the full modified list is recorded alongside
+    (``git_modified_tracked``); untracked files are counted in
+    ``git_untracked``."""
+    return any(not p.startswith(RESULTS_DIR) for p in _git_modified_tracked())
+
+
+def _git_untracked() -> int:
+    try:
+        out = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard"], text=True)
+        return len([ln for ln in out.splitlines() if ln.strip()])
+    except (subprocess.CalledProcessError, OSError):
+        return -1
 
 
 def provenance() -> dict:
     return {"rfx_file": rfx.__file__, "git_sha": _git_sha(), "git_dirty": _git_dirty(),
+            "git_modified_tracked": _git_modified_tracked(), "git_untracked": _git_untracked(),
             "argv": sys.argv[1:], "started_utc": _dt.datetime.now(_dt.timezone.utc).isoformat()}
 
 
@@ -286,6 +323,68 @@ def lse_roots(kx2: float, edges, eps, f_lo: float, f_hi: float,
     return np.array(roots)
 
 
+def lsm_det(f: float, kx2: float, edges, eps) -> float:
+    """(phi'/eps)(L) for phi(0) = 1, phi'(0) = 0 propagated through the stack.
+
+    The Hy ("LSM") family of the same n = 0 sector: phi'' + (eps_i k0^2 -
+    kx^2) phi = 0 per layer, phi and phi'/eps continuous (Hy and Ex
+    tangential), phi' = 0 at both PEC walls. Not excited by an Ey source
+    (the two n = 0 polarisations decouple); tabulated so the note's
+    isolation statement names every eigenmode, not only the excited ones.
+    """
+    k0 = 2 * np.pi * f / C0
+    phi, u = 1.0 + 0j, 0.0 + 0j          # u = phi' / eps, continuous
+    for i in range(len(eps)):
+        d = edges[i + 1] - edges[i]
+        q = np.sqrt(eps[i] * k0 ** 2 - kx2 + 0j)
+        c = np.cos(q * d)
+        s = np.sin(q * d) / q if abs(q) > 1e-30 else d
+        dphi = eps[i] * u
+        phi, dphi = c * phi + s * dphi, -q * q * s * phi + c * dphi
+        u = dphi / eps[i]
+    return float(u.real)
+
+
+def family_roots(det, kx2: float, edges, eps, f_lo: float, f_hi: float,
+                 n_grid: int = 20000) -> np.ndarray:
+    """Every root of ``det`` in [f_lo, f_hi]: sign scan + Brent (lse_roots
+    generalised to either family)."""
+    fs = np.linspace(f_lo, f_hi, n_grid)
+    vals = np.array([det(f, kx2, edges, eps) for f in fs])
+    roots = []
+    for i in range(len(fs) - 1):
+        if vals[i] == 0.0:
+            roots.append(fs[i])
+        elif vals[i] * vals[i + 1] < 0:
+            roots.append(brentq(det, fs[i], fs[i + 1], args=(kx2, edges, eps),
+                                xtol=1e-6, rtol=1e-15, maxiter=200))
+    return np.array(roots)
+
+
+def other_families(f_true: float) -> dict:
+    """Every eigenmode of the A1 box in OTHER_FAMILY_BAND that the fixture
+    admits but the source does not excite: Ey with m = 2, 3, 4, 6 (killed by
+    the equal-sign pair at a/3, 2a/3: sin(m pi/3) + sin(2m pi/3) = 0) and Hy
+    (LSM) with m = 0..4 (not excited by an Ey source in the n = 0 sector).
+    Reported, no gate: the isolation figure of note 2.1 is conditional on
+    these two suppressions, and this table says by how much."""
+    lo, hi = OTHER_FAMILY_BAND
+    rows = []
+    for m in (2, 3, 4, 6):
+        amp = float(np.sin(m * np.pi / 3) + np.sin(2 * m * np.pi / 3))
+        for r in family_roots(lse_det, (m * np.pi / A1_A_X) ** 2, A1_EDGES, A1_EPS, lo, hi):
+            rows.append({"family": "Ey", "m": m, "f_hz": float(r), "rel_to_f_true": float((r - f_true) / f_true),
+                         "source_pair_amplitude": amp})
+    for m in range(0, 5):
+        for r in family_roots(lsm_det, (m * np.pi / A1_A_X) ** 2, A1_EDGES, A1_EPS, lo, hi):
+            rows.append({"family": "Hy", "m": m, "f_hz": float(r), "rel_to_f_true": float((r - f_true) / f_true),
+                         "source_pair_amplitude": 0.0})
+    rows.sort(key=lambda d: abs(d["rel_to_f_true"]))
+    return {"band_hz": list(OTHER_FAMILY_BAND), "rows": rows,
+            "nearest_any_family": (rows[0] if rows else None),
+            "max_source_pair_amplitude_suppressed": max((abs(d["source_pair_amplitude"]) for d in rows), default=0.0)}
+
+
 def root_near(fn, f_guess: float, rel_span: float = 0.03, n: int = 400) -> float:
     """The root of fn nearest f_guess inside +-rel_span (sign scan + Brent)."""
     fs = np.linspace(f_guess * (1 - rel_span), f_guess * (1 + rel_span), n)
@@ -340,6 +439,16 @@ def oracle_selfcheck() -> dict:
     out["i_pass"] = bool(out["i_worst_rel"] <= ORACLE_REL and out["i_roots"] >= 10
                          and out["i_roots_by_case"]["a=60mm,m=5"] >= 1)
     out["ip_pass"] = bool(out["ip_worst_rel"] <= ORACLE_REL and out["ip_roots"] >= 3)
+    # (i''), second pass: the Hy / LSM determinant reproduces the same closed
+    # form (p >= 0 allowed) for all eps_i = 1, m = 1, 3-16 GHz, a = 30 mm.
+    out["ipp_worst_rel"], out["ipp_roots"] = 0.0, 0
+    kx2 = (np.pi / A1_A_X) ** 2
+    for r in family_roots(lsm_det, kx2, A1_EDGES, [1.0] * 4, 3e9, 16e9):
+        p = int(round(np.sqrt(max((2 * np.pi * r / C0) ** 2 - kx2, 0.0)) * L_Z / np.pi))
+        f_cf = closed_form(1, p, A1_A_X, L_Z)
+        out["ipp_worst_rel"] = max(out["ipp_worst_rel"], abs(r - f_cf) / f_cf)
+        out["ipp_roots"] += 1
+    out["ipp_pass"] = bool(out["ipp_worst_rel"] <= ORACLE_REL and out["ipp_roots"] >= 5)
     # the declared mode and its isolation from EVERY visible family
     f_true = a1_f_true()
     kx2 = (np.pi / A1_A_X) ** 2
@@ -370,6 +479,7 @@ def oracle_selfcheck() -> dict:
         "isolation_matches_declared": bool(abs(iso - A1_ISOLATION) <= 1e-3),
         "psi_at_14_16_30_mm": psi.tolist(),
         "spectrum_5_14_ghz": spec,
+        "other_families": other_families(f_true),
     })
     return out
 
@@ -896,6 +1006,25 @@ def judge_a2(units: dict) -> dict:
     return _judge_inplane(units, A2_CAPS, A2_N_STEPS, A2_ERR_MAX, A2_DIFF_MAX, A2_INV_MAX, a2_key)
 
 
+def judge_a2_ext(units: dict) -> dict:
+    """Second pass: the frozen A2 windows re-evaluated at the extended step
+    pair A2_N_STEPS_EXT (same numbers, longer physical run)."""
+    return _judge_inplane(units, A2_CAPS, A2_N_STEPS_EXT, A2_ERR_MAX, A2_DIFF_MAX, A2_INV_MAX, a2_key)
+
+
+def leapfrog_term(row: dict) -> float:
+    """e_t of a unit: the leapfrog (time-stepping) part of its error, from
+    the exact extents and dt the row records — (leap(k^2, dt) - f) / f with
+    k^2 the continuum eigenvalue. Mesh-independent apart from dt, so a
+    graded-minus-uniform difference at unequal dt carries the CONTROL's
+    e_t; the spatial part is err - e_t (reviewer finding, second pass)."""
+    k2 = (np.pi / row["a_m"]) ** 2 + (np.pi / row["b_m"]) ** 2
+    if row.get("graded") is not None:            # A3 rows (p = 1 along z)
+        k2 += (np.pi / row["d_m"]) ** 2
+    f = row["f_analytic"]
+    return float((leap(k2, row["dt"]) - f) / f)
+
+
 def _judge_inplane(units, caps, steps, err_max, diff_max, inv_max, keyfn) -> dict:
     out = {"err_max": err_max, "diff_max": diff_max, "inv_max": inv_max, "arms": {}}
     real = {k: r for k, r in units.items() if not r.get("smoke")}
@@ -911,6 +1040,20 @@ def _judge_inplane(units, caps, steps, err_max, diff_max, inv_max, keyfn) -> dic
                  "err_uniform": (u["err"] if u else None),
                  "diff_pt": ((g["err"] - u["err"]) if (u and np.isfinite(g["err"]) and np.isfinite(u["err"])) else None)}
             e["f2_pass"] = (None if e["diff_pt"] is None else bool(abs(e["diff_pt"]) <= diff_max))
+            # reported (second pass): split the difference into its leapfrog and spatial parts
+            e["e_t"] = leapfrog_term(g)
+            e["spatial_err"] = (g["err"] - e["e_t"]) if np.isfinite(g["err"]) else None
+            e["model_spatial_err"] = g["model_err"] - e["e_t"]
+            e["t_total_s"], e["dt"] = g["t_total_s"], g["dt"]
+            if u is not None:
+                e["e_t_uniform"] = leapfrog_term(u)
+                e["spatial_err_uniform"] = (u["err"] - e["e_t_uniform"]) if np.isfinite(u["err"]) else None
+                e["model_spatial_err_uniform"] = u["model_err"] - e["e_t_uniform"]
+                e["spatial_diff_pt"] = ((e["spatial_err"] - e["spatial_err_uniform"])
+                                        if (e["spatial_err"] is not None and e["spatial_err_uniform"] is not None) else None)
+                e["model_spatial_diff_pt"] = e["model_spatial_err"] - e["model_spatial_err_uniform"]
+                e["model_diff_pt"] = g["model_err"] - u["model_err"]
+                e["t_total_s_uniform"], e["dt_uniform"] = u["t_total_s"], u["dt"]
             out["arms"][keyfn(cap, n)] = e
         g8, g12 = real.get(keyfn(cap, steps[0])), real.get(keyfn(cap, steps[1]))
         if g8 and g12 and np.isfinite(g8["f_sim"]) and np.isfinite(g12["f_sim"]):
@@ -985,6 +1128,12 @@ def judge_a3(units: dict) -> dict:
                           lambda g, n: a3_key(g == "graded", n))
 
 
+def judge_a3_ext(units: dict) -> dict:
+    """Second pass: the frozen A3 windows at A3_N_STEPS_EXT."""
+    return _judge_inplane(units, ("graded",), A3_N_STEPS_EXT, A3_ERR_MAX, A3_DIFF_MAX, A3_INV_MAX,
+                          lambda g, n: a3_key(g == "graded", n))
+
+
 # ---------------------------------------------------------------------------
 # AD arms
 # ---------------------------------------------------------------------------
@@ -1037,8 +1186,10 @@ def ad_compare_profile(loss, d0: np.ndarray, label: str, tol: float,
     fd_minus = np.full(n, np.nan)
     for k in cells:
         h = FD_REL_H * d0[k]
-        dp = d0.copy(); dp[k] += h
-        dm = d0.copy(); dm[k] -= h
+        dp = d0.copy()
+        dp[k] += h
+        dm = d0.copy()
+        dm[k] -= h
         lp = float(loss_j(jnp.asarray(dp)))
         lm = float(loss_j(jnp.asarray(dm)))
         g_fd[k] = (lp - lm) / (2 * h)
@@ -1187,10 +1338,14 @@ def measure_ad3(smoke: bool = False) -> dict:
             fdm = np.full(n, np.nan)
             for k in cells:
                 h = FD_REL_H * d0[k]
-                dp = list(base); dm = list(base)
-                vp = d0.copy(); vp[k] += h
-                vm = d0.copy(); vm[k] -= h
-                dp[ai] = vp; dm[ai] = vm
+                vp = d0.copy()
+                vp[k] += h
+                vm = d0.copy()
+                vm[k] -= h
+                dp = list(base)
+                dm = list(base)
+                dp[ai] = vp
+                dm[ai] = vm
                 lp = float(loss_j(tuple(jnp.asarray(v, jnp.float32) for v in dp)))
                 lm = float(loss_j(tuple(jnp.asarray(v, jnp.float32) for v in dm)))
                 g_fd[k] = (lp - lm) / (2 * h)
@@ -1220,6 +1375,161 @@ def measure_ad3(smoke: bool = False) -> dict:
                               for k in np.nonzero(tied)[0]],
             }
         fired = [out["axes"][ax]["fired"] for ax in "xyz"]
+        out["fired"] = (None if all(f is None for f in fired) else bool(any(f is True for f in fired)))
+    except Exception as exc:  # noqa: BLE001
+        out.update({"error": repr(exc), "fired": True})
+    out["wallclock_s"] = time.time() - t_unit
+    out.update(provenance())
+    return out
+
+
+def _ad3_loss(px, py, pz, n_steps: int):
+    a, b = float(px.sum()), float(py.sum())
+
+    def loss(profiles):
+        dx_p, dy_p, dz_p = profiles
+        grid = make_nonuniform_grid(domain_xy=(a, b), dz_profile=dz_p, dx=BOUNDARY_CELL,
+                                    dx_profile=dx_p, dy_profile=dy_p, cpml_layers=0)
+        wf = _ad_waveform(n_steps, grid.dt)
+        out = run_nonuniform(grid, _vacuum(grid.shape), n_steps,
+                             sources=[(*AD3_SRC, "ez", wf)], probes=[(*AD3_PRB, "ez")])
+        return jnp.sum(out["time_series"] ** 2)
+    return loss
+
+
+AD3B_REASON = (
+    "Second attempt of AD3 (instrument defect in the FD reference, not a tolerance edit). "
+    "Attempt 1 (key 'ad3', kept, FIRED on y and z) compared jax.grad against a central FD with "
+    "h = 1e-3 d_k on an f32 loss (loss0 = 0.1306, ulp 1.49e-8): the FD reference cannot resolve a slope "
+    "finer than ulp/(2h) and the non-tied dominant cells of y and z carried only 3-17 such quanta. "
+    "This attempt keeps the loss, fixture, dominance rule (5 % of the largest non-tied |g_fd|), "
+    "tolerance (0.15) and sign rule, records FD at h in AD3B_FD_REL_HS, gates at h = 1e-2 (quantum 10x "
+    "smaller), and declares a reference-resolution floor: a dominant cell whose |g_fd| is below "
+    "AD_REF_FLOOR_QUANTA quanta is reported as unresolved by the reference (with its AD, FD and "
+    "forward-mode jvp values) and does not enter the gate; an axis with fewer resolved than unresolved "
+    "dominant cells is INCONCLUSIVE (reference-limited), not HELD. Forward-mode jvp per cell is "
+    "recorded as a second, FD-free reference (reported)."
+)
+
+
+def measure_ad3_second(smoke: bool = False) -> dict:
+    """AD3 second attempt (see AD3B_REASON): same loss as measure_ad3;
+    reverse grad, forward jvp per cell, central FD at every h of
+    AD3B_FD_REL_HS, gate at AD3B_FD_REL_H_GATE on reference-resolved
+    dominant cells."""
+    t_unit = time.time()
+    px, py, pz = a3_profiles()
+    n_steps = 12 if smoke else AD_N_STEPS
+    hs = (1e-3, 1e-2) if smoke else AD3B_FD_REL_HS
+    loss = _ad3_loss(px, py, pz, n_steps)
+    out = {"attempt": 2, "first_attempt_key": "ad3", "reason": AD3B_REASON,
+           "n_steps": n_steps, "smoke": bool(smoke), "src": list(AD3_SRC), "prb": list(AD3_PRB),
+           "dx_m": px.tolist(), "dy_m": py.tolist(), "dz_m": pz.tolist(),
+           "fd_rel_hs": list(hs), "fd_rel_h_gate": AD3B_FD_REL_H_GATE, "ref_floor_quanta": AD_REF_FLOOR_QUANTA,
+           "dominant_frac": DOMINANT_FRAC, "tol": AD3_TOL, "axes": {}}
+    try:
+        loss_j = jax.jit(loss)
+        grad_j = jax.jit(jax.grad(loss))
+        jvp_j = jax.jit(lambda x, t: jax.jvp(loss, (x,), (t,))[1])
+        base = [np.asarray(px), np.asarray(py), np.asarray(pz)]
+        x0 = tuple(jnp.asarray(v, jnp.float32) for v in base)
+        g_ad = [np.asarray(g, np.float64) for g in grad_j(x0)]
+        loss0 = float(loss_j(x0))
+        ulp = float(np.spacing(np.float32(loss0)))
+        out.update({"loss0": loss0, "loss_ulp": ulp,
+                    "dt": float(make_nonuniform_grid((float(px.sum()), float(py.sum())), pz, BOUNDARY_CELL,
+                                                     dx_profile=px, dy_profile=py, cpml_layers=0).dt)})
+        for ai, ax in enumerate("xyz"):
+            d0 = base[ai]
+            n = len(d0)
+            d32 = f32_values(d0)
+            tied = np.isclose(d32, d32.min(), rtol=AD5_TIE_REL, atol=0.0)
+            cells = ([0, n // 2, n - 1] if smoke else list(range(n)))
+            g_jvp = np.full(n, np.nan)
+            for k in cells:
+                t = [jnp.zeros_like(v) for v in x0]
+                t[ai] = t[ai].at[k].set(1.0)
+                g_jvp[k] = float(jvp_j(x0, tuple(t)))
+            have_j = np.isfinite(g_jvp)
+            rel_fr = np.abs(g_ad[ai] - g_jvp) / np.maximum(np.abs(g_jvp), 1e-300)
+            axrow = {
+                "n_cells": n, "all_finite": bool(np.all(np.isfinite(g_ad[ai]))),
+                "n_tied_min": int(tied.sum()), "tied_cells": np.nonzero(tied)[0].tolist(),
+                "g_ad": g_ad[ai].tolist(), "g_jvp": g_jvp.tolist(),
+                "rev_vs_fwd_worst_rel_all": (float(rel_fr[have_j].max()) if have_j.any() else None),
+                "rev_vs_fwd_worst_rel_nontied": (float(rel_fr[have_j & ~tied].max()) if (have_j & ~tied).any() else None),
+                "gmax_all_jvp": (float(np.abs(g_jvp[have_j]).max()) if have_j.any() else None),
+                "gmax_nontied_jvp": (float(np.abs(g_jvp[have_j & ~tied]).max()) if (have_j & ~tied).any() else None),
+                "per_h": {},
+            }
+            for h_rel in hs:
+                g_fd = np.full(n, np.nan)
+                fdp = np.full(n, np.nan)
+                fdm = np.full(n, np.nan)
+                for k in cells:
+                    h = h_rel * d0[k]
+                    vp = d0.copy()
+                    vp[k] += h
+                    vm = d0.copy()
+                    vm[k] -= h
+                    dp = list(base)
+                    dm = list(base)
+                    dp[ai] = vp
+                    dm[ai] = vm
+                    lp = float(loss_j(tuple(jnp.asarray(v, jnp.float32) for v in dp)))
+                    lm = float(loss_j(tuple(jnp.asarray(v, jnp.float32) for v in dm)))
+                    g_fd[k] = (lp - lm) / (2 * h)
+                    fdp[k] = (lp - loss0) / h
+                    fdm[k] = (loss0 - lm) / h
+                quanta = np.abs(g_fd) * 2 * h_rel * d0 / ulp
+                free = np.isfinite(g_fd) & ~tied
+                if free.any():
+                    gmax = np.abs(g_fd[free]).max()
+                    dominant = free & (np.abs(g_fd) > DOMINANT_FRAC * gmax)
+                else:
+                    dominant = np.zeros(n, bool)
+                resolved = dominant & (quanta >= AD_REF_FLOOR_QUANTA)
+                unresolved = dominant & ~resolved
+                rel = np.abs(g_ad[ai] - g_fd) / np.maximum(np.abs(g_fd), 1e-300)
+                worst_all = float(rel[dominant].max()) if dominant.any() else float("nan")
+                signs_all = (bool(np.all(np.sign(g_ad[ai][dominant]) == np.sign(g_fd[dominant])))
+                             if dominant.any() else None)
+                worst_res = float(rel[resolved].max()) if resolved.any() else float("nan")
+                signs_res = (bool(np.all(np.sign(g_ad[ai][resolved]) == np.sign(g_fd[resolved])))
+                             if resolved.any() else None)
+                inconclusive = bool(dominant.any() and resolved.sum() <= unresolved.sum())
+                axrow["per_h"][f"{h_rel:g}"] = {
+                    "fd_rel_h": h_rel, "g_fd": g_fd.tolist(), "fd_plus": fdp.tolist(), "fd_minus": fdm.tolist(),
+                    "quanta": quanta.tolist(),
+                    "n_dominant": int(dominant.sum()), "dominant_cells": np.nonzero(dominant)[0].tolist(),
+                    "worst_dominant_rel_err_attempt1_rule": worst_all, "sign_agreement_attempt1_rule": signs_all,
+                    "fired_attempt1_rule": (None if not dominant.any() else bool(worst_all > AD3_TOL or not signs_all)),
+                    "n_resolved": int(resolved.sum()), "resolved_cells": np.nonzero(resolved)[0].tolist(),
+                    "n_unresolved": int(unresolved.sum()),
+                    "worst_resolved_rel_err": worst_res, "sign_agreement_resolved": signs_res,
+                    "median_resolved_rel_err": (float(np.median(rel[resolved])) if resolved.any() else float("nan")),
+                    "unresolved_dominant": [{"k": int(k), "d_m": float(d0[k]), "g_ad": float(g_ad[ai][k]),
+                                             "g_fd": float(g_fd[k]), "g_jvp": float(g_jvp[k]),
+                                             "quanta": float(quanta[k]), "rel_fd": float(rel[k]),
+                                             "rel_jvp": float(rel_fr[k])}
+                                            for k in np.nonzero(unresolved)[0]],
+                    "inconclusive": inconclusive,
+                    "fired": (None if (not resolved.any() or inconclusive)
+                              else bool(worst_res > AD3_TOL or not signs_res)),
+                    "tie_table": [{"k": int(k), "d_m": float(d0[k]), "g_ad": float(g_ad[ai][k]),
+                                   "g_jvp": float(g_jvp[k]), "fd_plus": float(fdp[k]), "fd_minus": float(fdm[k]),
+                                   "split_model": float(fdp[k] + (fdm[k] - fdp[k]) / max(int(tied.sum()), 1))}
+                                  for k in np.nonzero(tied)[0]],
+                }
+            gate = axrow["per_h"][f"{AD3B_FD_REL_H_GATE:g}"]
+            axrow.update({"gate_h": AD3B_FD_REL_H_GATE, "n_dominant": gate["n_dominant"],
+                          "dominant_cells": gate["dominant_cells"], "n_resolved": gate["n_resolved"],
+                          "n_unresolved": gate["n_unresolved"], "worst_resolved_rel_err": gate["worst_resolved_rel_err"],
+                          "sign_agreement": gate["sign_agreement_resolved"], "inconclusive": gate["inconclusive"],
+                          "fired": gate["fired"], "tol": AD3_TOL})
+            out["axes"][ax] = axrow
+        fired = [out["axes"][ax]["fired"] for ax in "xyz"]
+        out["inconclusive_axes"] = [ax for ax in "xyz" if out["axes"][ax]["inconclusive"]]
         out["fired"] = (None if all(f is None for f in fired) else bool(any(f is True for f in fired)))
     except Exception as exc:  # noqa: BLE001
         out.update({"error": repr(exc), "fired": True})
@@ -1310,6 +1620,29 @@ def _rel(x, y):
     return abs(x - y) / max(abs(y), 1e-300)
 
 
+def _ad1_loss_dtype_probe(eps_col) -> dict:
+    dz0 = a1_mb(2.0)
+    loss = ad1_loss_factory(eps_col, AD_N_STEPS)
+
+    def probe():
+        x = jnp.asarray(dz0)
+        L = jax.eval_shape(loss, x)
+        G = jax.eval_shape(jax.grad(loss), x)
+        dt = jax.eval_shape(lambda d: make_nonuniform_grid(AD1_DOMAIN_XY, d, AD1_DX, cpml_layers=0).dt, x)
+        return {"input": str(x.dtype), "loss": str(L.dtype), "grad": str(G.dtype), "dt": str(dt.dtype)}
+    out = {"default": probe()}
+    try:
+        from tests._x64_compat import enable_x64
+        with enable_x64():
+            jax.clear_caches()
+            out["x64_context"] = probe()
+        jax.clear_caches()
+    except Exception as exc:  # noqa: BLE001
+        out["x64_context"] = {"error": repr(exc)}
+    out["x64_context_raises_solver_precision"] = bool(out["x64_context"].get("loss") == "float64")
+    return out
+
+
 def selfcheck(verbose: bool = True) -> dict:
     t0 = time.time()
     sc = {"oracle": oracle_selfcheck(), "checks": {}}
@@ -1317,6 +1650,7 @@ def selfcheck(verbose: bool = True) -> dict:
     f_true = sc["oracle"]["f_true_hz"]
     ch["oracle_i"] = sc["oracle"]["i_pass"]
     ch["oracle_ip"] = sc["oracle"]["ip_pass"]
+    ch["oracle_ipp_lsm"] = sc["oracle"]["ipp_pass"]
     ch["f_true_declared"] = sc["oracle"]["f_true_matches_declared"]
     ch["mode_p"] = sc["oracle"]["p_matches_declared"]
     ch["neighbours"] = sc["oracle"]["neighbours_match_declared"]
@@ -1466,6 +1800,11 @@ def selfcheck(verbose: bool = True) -> dict:
                         "layers": [s["n_layers"] for s in fam]}
     col = np.asarray(sc["a1"]["units"]["mb|2"]["production_column"])
     ch["ad1_eps_pattern"] = bool(len(col) == 33 and np.max(np.abs(f32_values(AD1_EPS_PATTERN) - col)) == 0.0)
+    # second pass, reported: the dtype the AD1 loss is computed in, with and
+    # without the x64 context (jax.eval_shape, no FDTD). rfx.nonuniform pins
+    # every profile and field to float32, so the "x64 context" arm of AD1 is
+    # the same float32 solve — recorded so the note cannot claim otherwise.
+    sc["ad1_loss_dtype"] = _ad1_loss_dtype_probe(col)
     sc["all_pass"] = bool(all(ch.values()))
     sc["failed"] = [k for k, v in ch.items() if not v]
     sc["wallclock_s"] = time.time() - t0
@@ -1505,7 +1844,8 @@ def _print_a1(r: dict) -> None:
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arms", default="", help="comma list from a1,a2,a3,ad1,ad2,ad3,ad4")
+    ap.add_argument("--arms", default="",
+                    help="comma list from a1,a2,a3,ad1,ad2,ad3,ad4 (second pass: a2ext,a3ext,ad3b)")
     ap.add_argument("--scales", default="2,1,0.5", help="A1 scales")
     ap.add_argument("--rules", default="dual,production", help="A1 eps rules")
     ap.add_argument("--a1-arms", default="uc,mb,az", help="A1 profiles")
@@ -1593,14 +1933,51 @@ def main(argv=None):
                 data["a3"]["judge"] = judge_a3({k: v for k, v in units.items() if not v.get("smoke")})
                 _save(args.out, data)
         print("A3 judge:", data["a3"]["judge"]["verdict"], flush=True)
+    if "a2ext" in arms:
+        units = data.setdefault("a2", {}).setdefault("units", {})
+        for cap in (*A2_CAPS, None):
+            for n in A2_N_STEPS_EXT:
+                key = a2_key(cap, n) + ("|smoke" if args.smoke else "")
+                if not _supersede(units, key):
+                    continue
+                row = measure_a2(cap, n, smoke=args.smoke)
+                row["second_pass_extension"] = True
+                units[key] = row
+                print(f"A2ext {key}: f={row['f_sim']/1e9:.6f} GHz err={row['err']*100:+.5f} % "
+                      f"model={row['model_err']*100:+.5f} % resid={row['model_residual']:+.2e} "
+                      f"T={row['t_total_s']*1e9:.1f} ns sep={row['separation_pass']} "
+                      f"wall={row['wallclock_run_s']:.0f}s", flush=True)
+                data["a2"]["judge_ext"] = judge_a2_ext({k: v for k, v in units.items() if not v.get("smoke")})
+                data["a2"]["judge"] = judge_a2({k: v for k, v in units.items() if not v.get("smoke")})
+                _save(args.out, data)
+        print("A2 ext judge:", data["a2"]["judge_ext"]["verdict"], flush=True)
+    if "a3ext" in arms:
+        units = data.setdefault("a3", {}).setdefault("units", {})
+        for graded in (True, False):
+            for n in A3_N_STEPS_EXT:
+                key = a3_key(graded, n) + ("|smoke" if args.smoke else "")
+                if not _supersede(units, key):
+                    continue
+                row = measure_a3(graded, n, smoke=args.smoke)
+                row["second_pass_extension"] = True
+                units[key] = row
+                print(f"A3ext {key}: f={row['f_sim']/1e9:.6f} GHz err={row['err']*100:+.5f} % "
+                      f"model={row['model_err']*100:+.5f} % resid={row['model_residual']:+.2e} "
+                      f"T={row['t_total_s']*1e9:.1f} ns sep={row['separation_pass']} "
+                      f"wall={row['wallclock_run_s']:.0f}s", flush=True)
+                data["a3"]["judge_ext"] = judge_a3_ext({k: v for k, v in units.items() if not v.get("smoke")})
+                data["a3"]["judge"] = judge_a3({k: v for k, v in units.items() if not v.get("smoke")})
+                _save(args.out, data)
+        print("A3 ext judge:", data["a3"]["judge_ext"]["verdict"], flush=True)
     eps_col = np.asarray(sc["a1"]["units"]["mb|2"]["production_column"], np.float64)
     for name, fn in (("ad1", lambda: measure_ad1(args.smoke, eps_col)),
                      ("ad2", lambda: measure_ad2(args.smoke, eps_col)),
                      ("ad3", lambda: measure_ad3(args.smoke)),
+                     ("ad3b", lambda: measure_ad3_second(args.smoke)),
                      ("ad4", lambda: measure_ad4(args.smoke))):
         if name not in arms:
             continue
-        key = name + ("_smoke" if args.smoke else "")
+        key = ("ad3_second_attempt" if name == "ad3b" else name) + ("_smoke" if args.smoke else "")
         if not _supersede(data, key):
             continue
         row = fn()
@@ -1617,6 +1994,17 @@ def main(argv=None):
         elif name == "ad3":
             print("AD3:", {ax: (v["worst_dominant_rel_err"], v["n_dominant"], v["n_tied_min"], v["fired"])
                            for ax, v in row.get("axes", {}).items()}, "fired=", row.get("fired"),
+                  "error=", row.get("error"), flush=True)
+        elif name == "ad3b":
+            for ax, v in row.get("axes", {}).items():
+                print(f"AD3 second attempt {ax}: gate h={v['gate_h']:g} dominant={v['n_dominant']} "
+                      f"resolved={v['n_resolved']} unresolved={v['n_unresolved']} "
+                      f"worst resolved rel={v['worst_resolved_rel_err']:.4g} signs={v['sign_agreement']} "
+                      f"rev-vs-jvp all={v['rev_vs_fwd_worst_rel_all']:.3g} inconclusive={v['inconclusive']} "
+                      f"fired={v['fired']}; per h attempt-1 rule: "
+                      + ", ".join(f"{h}:{p['worst_dominant_rel_err_attempt1_rule']:.3g}" for h, p in v["per_h"].items()),
+                      flush=True)
+            print("AD3 second attempt fired=", row.get("fired"), "inconclusive=", row.get("inconclusive_axes"),
                   "error=", row.get("error"), flush=True)
         else:
             print(f"AD4: {row['n_stacks']} stacks, failed={row['n_failed']} fired={row['fired']}", flush=True)

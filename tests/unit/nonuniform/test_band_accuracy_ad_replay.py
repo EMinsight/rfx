@@ -110,6 +110,14 @@ def test_oracle_self_checks_i_and_ip():
     sc = w7.oracle_selfcheck()
     assert sc["i_pass"] and sc["i_worst_rel"] <= w7.ORACLE_REL, sc["i_worst_rel"]
     assert sc["ip_pass"] and sc["ip_worst_rel"] <= w7.ORACLE_REL, sc["ip_worst_rel"]
+    # second pass: the Hy / LSM determinant reproduces the closed form too, and
+    # the non-excited families are tabulated (the isolation of note 2.1 is
+    # conditional on source symmetry and polarisation — reviewer finding)
+    assert sc["ipp_pass"] and sc["ipp_worst_rel"] <= w7.ORACLE_REL, sc["ipp_worst_rel"]
+    of = sc["other_families"]
+    assert of["nearest_any_family"] is not None
+    assert abs(of["nearest_any_family"]["rel_to_f_true"]) < 0.01           # an unexcited mode within 1 %
+    assert of["max_source_pair_amplitude_suppressed"] <= 1e-12             # sin(m pi/3) + sin(2m pi/3) = 0
     assert sc["i_roots_by_case"]["a=60mm,m=5"] >= 1      # m = 5 is exercised, not vacuous
     assert sc["f_true_matches_declared"], sc["f_true_hz"]
     assert sc["p_matches_declared"] and sc["neighbours_match_declared"]
@@ -153,8 +161,10 @@ def test_live_ad1_fast_profile_gradient():
     order = [k for k in np.argsort(-np.abs(g_ad)) if not tied[k]][:2]
     for k in order:
         h = w7.FD_REL_H * dz0[k]
-        dp = dz0.copy(); dp[k] += h
-        dm = dz0.copy(); dm[k] -= h
+        dp = dz0.copy()
+        dp[k] += h
+        dm = dz0.copy()
+        dm[k] -= h
         g_fd = (float(loss(jnp.asarray(dp))) - float(loss(jnp.asarray(dm)))) / (2 * h)
         assert np.sign(g_fd) == np.sign(g_ad[k]), (k, g_ad[k], g_fd)
         rel = abs(g_ad[k] - g_fd) / abs(g_fd)
@@ -355,3 +365,111 @@ def test_replay_ad4(w7_json):
         assert st["pass"], st
         assert st["dt"] > 0 and st["trace_finite"] and st["grad_finite"]
     assert row["n_failed"] == 0 and row["fired"] is False
+
+
+# =============================================================================
+# Second pass (review of the first Results): run-length extension of A2 / A3
+# and the AD3 second attempt. Same frozen windows; skipped while absent.
+# =============================================================================
+
+SECOND_PASS_FROZEN = {
+    "A2_N_STEPS_EXT": (24000, 48000), "A3_N_STEPS_EXT": (24000, 48000),
+    "AD3B_FD_REL_HS": (1e-3, 3e-3, 1e-2, 3e-2), "AD3B_FD_REL_H_GATE": 1e-2, "AD_REF_FLOOR_QUANTA": 50.0,
+}
+
+
+def test_second_pass_constants_pinned_verbatim():
+    for name, value in SECOND_PASS_FROZEN.items():
+        got = getattr(w7, name)
+        assert (tuple(got) if isinstance(value, tuple) else got) == value, (name, got, value)
+
+
+def _replay_extension(w7_json, arm, judge_ext, err_max, diff_max, inv_max):
+    units = _real(w7_json[arm]["units"])
+    ext = {k: r for k, r in units.items() if r.get("second_pass_extension")}
+    if not ext:
+        pytest.skip(f"{arm} run-length extension not run yet")
+    fresh = judge_ext(units)
+    assert fresh["verdict"] == w7_json[arm]["judge_ext"]["verdict"]
+    for key, r in ext.items():
+        assert r["separation_pass"] and r["anti_vacuity_pass"], key
+        assert r["git_dirty"] is False, (key, r["git_modified_tracked"])       # measured from a committed tree
+        assert all(p.startswith(w7.RESULTS_DIR) for p in r["git_modified_tracked"]), key
+    for key, e in fresh["arms"].items():
+        if key.endswith("|invariance"):
+            assert e["pass"], f"{arm} {key}: run-length scatter {e['inv']*100:.4f} % > {inv_max*100:.3f} %"
+            continue
+        assert e["f1_pass"], f"{arm} {key}: |err| {abs(e['err'])*100:.4f} % > {err_max*100:.2f} %"
+        if e["diff_pt"] is not None:
+            assert e["f2_pass"], f"{arm} {key}: graded-uniform {e['diff_pt']*100:+.4f} pt > {diff_max*100:.2f} pt"
+        # the reported spatial split is arithmetic on the row (reviewer finding: F2 carries the control's e_t)
+        assert abs(e["spatial_err"] - (e["err"] - e["e_t"])) <= 1e-15
+        if "spatial_diff_pt" in e and e["spatial_diff_pt"] is not None:
+            assert abs(e["spatial_diff_pt"] - (e["spatial_err"] - e["spatial_err_uniform"])) <= 1e-15
+    return ext
+
+
+def test_replay_a2_extension(w7_json):
+    ext = _replay_extension(w7_json, "a2", w7.judge_a2_ext, w7.A2_ERR_MAX, w7.A2_DIFF_MAX, w7.A2_INV_MAX)
+    for key, r in ext.items():
+        px = np.asarray(r["profile_x"]["cells_m"])
+        py = np.asarray(r["profile_y"]["cells_m"])
+        assert abs(w7.a2_model_err(px, py, r["dt"], r["f_analytic"]) - r["model_err"]) <= MODEL_REL, key
+
+
+def test_replay_a3_extension(w7_json):
+    ext = _replay_extension(w7_json, "a3", w7.judge_a3_ext, w7.A3_ERR_MAX, w7.A3_DIFF_MAX, w7.A3_INV_MAX)
+    for key, r in ext.items():
+        px, py, pz = (np.asarray(r[f"profile_{ax}"]["cells_m"]) for ax in "xyz")
+        m = w7.a3_model(px, py, pz, r["dt"], r["f_analytic"])
+        assert abs(m["model_err"] - r["model_err"]) <= MODEL_REL, key
+        assert abs(w7.leapfrog_term(r) - r["e_t"]) <= 1e-12, key            # the judge's e_t is the row's e_t
+
+
+def test_replay_ad3_second_attempt(w7_json):
+    """Second attempt of AD3 (reference-resolution fix, note second-pass
+    section): the first attempt stays under 'ad3' (its replay test stays red
+    by design); here the gate is re-evaluated from the stored arrays on the
+    reference-resolved dominant cells at the gated FD step."""
+    if "ad3_second_attempt" not in w7_json:
+        pytest.skip("AD3 second attempt not run yet")
+    row = w7_json["ad3_second_attempt"]
+    assert "ad3" in w7_json and w7_json["ad3"]["fired"] is True            # attempt 1 kept, unchanged
+    assert "error" not in row, row.get("error")
+    assert row["fd_rel_h_gate"] == w7.AD3B_FD_REL_H_GATE and row["ref_floor_quanta"] == w7.AD_REF_FLOOR_QUANTA
+    assert row["tol"] == w7.AD3_TOL and row["dominant_frac"] == w7.DOMINANT_FRAC and row["n_steps"] == w7.AD_N_STEPS
+    assert row["git_dirty"] is False, row["git_modified_tracked"]
+    ulp = float(np.spacing(np.float32(row["loss0"])))
+    assert ulp == row["loss_ulp"]
+    for ax in "xyz":
+        a = row["axes"][ax]
+        d0 = np.asarray(row[f"d{ax}_m"])
+        g_ad = np.asarray(a["g_ad"])
+        assert np.all(np.isfinite(g_ad)) and a["all_finite"]
+        tied = np.zeros(len(g_ad), bool)
+        tied[a["tied_cells"]] = True
+        gate_key = f"{w7.AD3B_FD_REL_H_GATE:g}"
+        p = a["per_h"][gate_key]
+        g_fd = np.asarray(p["g_fd"])
+        quanta = np.abs(g_fd) * 2 * w7.AD3B_FD_REL_H_GATE * d0 / ulp
+        assert np.allclose(quanta, np.asarray(p["quanta"]), rtol=1e-9, atol=0)
+        free = np.isfinite(g_fd) & ~tied
+        dominant = free & (np.abs(g_fd) > w7.DOMINANT_FRAC * np.abs(g_fd[free]).max())
+        assert sorted(np.nonzero(dominant)[0].tolist()) == sorted(p["dominant_cells"]), ax
+        resolved = dominant & (quanta >= w7.AD_REF_FLOOR_QUANTA)
+        assert sorted(np.nonzero(resolved)[0].tolist()) == sorted(p["resolved_cells"]), ax
+        rel = np.abs(g_ad - g_fd) / np.maximum(np.abs(g_fd), 1e-300)
+        worst = float(rel[resolved].max())
+        assert _rel_close(worst, a["worst_resolved_rel_err"], JUDGE_REL), ax
+        assert not a["inconclusive"], f"{ax}: reference-limited (resolved {a['n_resolved']} <= unresolved {a['n_unresolved']})"
+        assert np.all(np.sign(g_ad[resolved]) == np.sign(g_fd[resolved])), f"{ax}: sign disagreement"
+        assert worst <= w7.AD3_TOL, f"{ax}: worst resolved AD-vs-FD {worst:.3e} > {w7.AD3_TOL}"
+        assert a["fired"] is False, ax
+        # the h = 1e-3 row of this attempt reproduces attempt 1 (same computation, deterministic)
+        p1 = a["per_h"]["0.001"]
+        assert _rel_close(p1["worst_dominant_rel_err_attempt1_rule"],
+                          w7_json["ad3"]["axes"][ax]["worst_dominant_rel_err"], 1e-6), ax
+        # every tied cell carries the split model alongside FD+ / FD- (AD5, knowledge output)
+        assert len(p["tie_table"]) == int(tied.sum()) and all("split_model" in tt for tt in p["tie_table"])
+        assert np.all(np.isfinite(np.asarray(a["g_jvp"])))                 # forward-mode reference recorded
+    assert row["fired"] is False
