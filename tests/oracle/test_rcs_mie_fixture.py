@@ -23,7 +23,12 @@ threshold that separates the two models is
 equated is pinned in
 ``tests/contracts/test_lattice_ownership_contract.py::test_a_sigma_fill_conductor_is_not_a_pec_body``
 (same sphere, 910 sigma cells vs 912 PEC volume cells, and no realized PEC
-edge on the sigma path). Nothing in this module was re-measured for #931.
+edge on the sigma path). Nothing in this module was re-measured for #931,
+and design note §5 says the same for cv16 — with the price of the other
+choice measured: at ka = 0.5 the node-sampled sigma fill occupies 1082
+cells against 1123 for a declared PEC volume of the same sphere, so
+bringing the RCS family under the contract moves a_eff by ~1.2 % and
+needs the fixture and both gate constants regenerated.
 
 Runtime: one 58^3 x 700-step CPU run, ~7 s.
 """
