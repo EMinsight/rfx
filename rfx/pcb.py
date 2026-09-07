@@ -182,12 +182,20 @@ class Stackup:
         thinner than any cell a board simulation uses, and a PEC Box with
         ``0 < extent < one local cell`` is refused by the rasterizer — it
         is a volume declaration the lattice cannot honour.  So a conductor
-        layer is emitted as a ZERO-THICKNESS Box on the foil's MID-plane
-        (``z_lo + thickness/2``), which is the canonical sheet
-        declaration: it realizes as one node plane, the nearest to that
-        mid-plane.  Dielectric layers keep their finite extent, so the
-        stack-up's z arithmetic (``get_layer_z``, ``total_thickness``) is
-        unchanged.
+        layer is emitted as a ZERO-THICKNESS Box, the canonical sheet
+        declaration.
+
+        The plane is the foil's DIELECTRIC INTERFACE, not its mid-plane
+        (§4 rule 2): the face it shares with the neighbouring dielectric
+        layer — ``z_hi`` when the dielectric is above, ``z_lo`` when it is
+        below (``z_lo`` when both, and the mid-plane only when neither
+        neighbour is a dielectric).  On the mid-plane the sheet sits half
+        a foil thickness OFF the laminate, and a mesh that puts a line at
+        both the interface and the sheet gets a 17.5 µm vacuum cell in
+        series with the board — the #702 slot geometry, and a ~23x dt
+        collapse on a standard 2-layer stack-up.  Dielectric layers keep
+        their finite extent, so the stack-up's z arithmetic
+        (``get_layer_z``, ``total_thickness``) is unchanged.
         """
         cx, cy = center_xy
         sx, sy = size_xy
@@ -199,15 +207,26 @@ class Stackup:
         shapes: list[tuple[Box, str]] = []
         z = -self.total_thickness / 2.0
 
-        for layer in self.layers:
+        mats = [resolve_pcb_material(la.material) for la in self.layers]
+        is_cond = [_is_conductor_layer(m) for m in mats]
+
+        for idx, layer in enumerate(self.layers):
             z_lo = z
             z_hi = z + layer.thickness
-            mat = resolve_pcb_material(layer.material)
-            if _is_conductor_layer(mat):
-                z_mid = z_lo + 0.5 * layer.thickness
+            mat = mats[idx]
+            if is_cond[idx]:
+                below_is_dielectric = idx > 0 and not is_cond[idx - 1]
+                above_is_dielectric = (idx + 1 < len(self.layers)
+                                       and not is_cond[idx + 1])
+                if below_is_dielectric:
+                    z_sheet = z_lo
+                elif above_is_dielectric:
+                    z_sheet = z_hi
+                else:
+                    z_sheet = z_lo + 0.5 * layer.thickness
                 box = Box(
-                    corner_lo=(x_lo, y_lo, z_mid),
-                    corner_hi=(x_hi, y_hi, z_mid),
+                    corner_lo=(x_lo, y_lo, z_sheet),
+                    corner_hi=(x_hi, y_hi, z_sheet),
                 )
             else:
                 box = Box(

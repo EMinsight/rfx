@@ -87,32 +87,84 @@ class TestStackup:
 
     # -- z positions -------------------------------------------------------
 
+    def _layer_z_bounds(self, stack):
+        z = -stack.total_thickness / 2.0
+        out = []
+        for layer in stack.layers:
+            out.append((z, z + layer.thickness))
+            z = z + layer.thickness
+        return out
+
     def test_stackup_z_positions(self, simple_stackup):
         """Dielectric layers tile z-space; conductor layers are SHEETS.
 
         #931 §1.5: a 35 um copper foil is thinner than any cell a board
         simulation uses, and a PEC Box with 0 < extent < one local cell is
         refused. ``to_shapes`` therefore emits each conductor layer as a
-        ZERO-THICKNESS Box on the foil's mid-plane. The stack's own z
-        arithmetic (``total_thickness``, ``get_layer_z``) is unchanged, so
+        ZERO-THICKNESS Box.  §4 rule 2 says WHERE: on the dielectric
+        INTERFACE the foil bounds, not on its mid-plane.  On the mid-plane
+        the sheet sits half a foil thickness off the laminate, and the mesh
+        that puts a line at both the interface and the sheet opens a
+        17.5 um vacuum cell in series with the board (the #702 slot, and a
+        ~23x dt collapse on a standard 2-layer stack-up).  The stack's own
+        z arithmetic (``total_thickness``, ``get_layer_z``) is unchanged, so
         the dielectric boxes still tile the interior continuously.
         """
         stack = simple_stackup
         shapes = stack.to_shapes()
         total = stack.total_thickness
+        bounds = self._layer_z_bounds(stack)
+        is_cond = [la.material == "copper" for la in stack.layers]
 
         z = -total / 2.0
-        for layer, (box, _mat) in zip(stack.layers, shapes):
+        for idx, (layer, (box, _mat)) in enumerate(zip(stack.layers, shapes)):
             z_lo, z_hi = z, z + layer.thickness
-            if layer.material == "copper":
-                z_mid = 0.5 * (z_lo + z_hi)
-                assert math.isclose(box.corner_lo[2], z_mid, rel_tol=1e-12)
-                assert math.isclose(box.corner_hi[2], z_mid, rel_tol=1e-12)
+            assert (z_lo, z_hi) == bounds[idx]
+            if is_cond[idx]:
+                if idx > 0 and not is_cond[idx - 1]:
+                    z_sheet = z_lo
+                elif idx + 1 < len(stack.layers) and not is_cond[idx + 1]:
+                    z_sheet = z_hi
+                else:
+                    z_sheet = 0.5 * (z_lo + z_hi)
+                assert math.isclose(box.corner_lo[2], z_sheet, rel_tol=1e-12)
+                assert math.isclose(box.corner_hi[2], z_sheet, rel_tol=1e-12)
             else:
                 assert math.isclose(box.corner_lo[2], z_lo, rel_tol=1e-12)
                 assert math.isclose(box.corner_hi[2], z_hi, rel_tol=1e-12)
             z = z_hi
         assert math.isclose(z, total / 2.0, abs_tol=1e-15)
+
+    def test_foil_sheets_land_on_the_dielectric_faces(self, simple_stackup):
+        """No foil sits in vacuum beside its laminate (#702 slot class).
+
+        Every conductor sheet plane must coincide with a face of an
+        adjacent dielectric box, so a mesh line at the interface IS the
+        sheet's line and no sliver cell is created between the two.
+        """
+        shapes = simple_stackup.to_shapes()
+        faces = set()
+        for layer, (box, _mat) in zip(simple_stackup.layers, shapes):
+            if layer.material != "copper":
+                faces.add(round(box.corner_lo[2], 15))
+                faces.add(round(box.corner_hi[2], 15))
+        for layer, (box, _mat) in zip(simple_stackup.layers, shapes):
+            if layer.material == "copper":
+                assert round(box.corner_lo[2], 15) in faces, (
+                    f"foil {layer.name} at z={box.corner_lo[2]} is not on a "
+                    f"dielectric face {sorted(faces)}")
+
+    def test_four_layer_foils_land_on_the_dielectric_faces(
+            self, four_layer_stackup):
+        shapes = four_layer_stackup.to_shapes()
+        faces = set()
+        for layer, (box, _mat) in zip(four_layer_stackup.layers, shapes):
+            if layer.material != "copper":
+                faces.add(round(box.corner_lo[2], 15))
+                faces.add(round(box.corner_hi[2], 15))
+        for layer, (box, _mat) in zip(four_layer_stackup.layers, shapes):
+            if layer.material == "copper":
+                assert round(box.corner_lo[2], 15) in faces
 
     def test_conductor_layers_are_sheet_declarations(self, simple_stackup):
         """Every copper layer is a zero-thickness Box (a sheet, #931)."""

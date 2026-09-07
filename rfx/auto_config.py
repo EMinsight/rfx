@@ -648,6 +648,11 @@ def auto_configure(
     )
 
 
+# A cut this close to an existing mesh line is that line (#931): splitting
+# there would make a sliver cell whose only effect is to collapse dt.
+_CUT_MERGE_FRACTION = 0.25
+
+
 def _uniform_run(length: float, dx: float, cuts=()) -> list[float]:
     """Fill ``length`` with near-``dx`` cells, putting an EDGE at each cut.
 
@@ -655,13 +660,26 @@ def _uniform_run(length: float, dx: float, cuts=()) -> list[float]:
     strictly inside it splits the run, so a declared plane (a PEC sheet,
     #931 §1.9) lands on a mesh line instead of being snapped to whichever
     node the uniform division happens to leave nearby.
+
+    A cut within ``dx/4`` of an edge the run already has — its own two
+    ends, or a cut already taken — is MERGED into that edge rather than
+    creating a cell.  A 35 µm foil declared half its thickness off a
+    laminate face used to open a 17.5 µm cell in series with the board:
+    one sliver cell, dt down by ~23x, and the #702 vacuum slot realized
+    with no warning.  Merging snaps the plane to the interface, which is
+    where the declaration meant it.
     """
     if length <= 0:
         return []
+    tol = _CUT_MERGE_FRACTION * dx
     edges = [0.0]
     for c in sorted(cuts):
-        if dx * 1e-6 < c < length - dx * 1e-6 and c > edges[-1] + dx * 1e-6:
-            edges.append(float(c))
+        c = float(c)
+        if c <= tol or c >= length - tol:
+            continue                      # merges into a run end
+        if c - edges[-1] <= tol:
+            continue                      # merges into the cut before it
+        edges.append(c)
     edges.append(float(length))
     cells: list[float] = []
     for a, b in zip(edges[:-1], edges[1:]):
