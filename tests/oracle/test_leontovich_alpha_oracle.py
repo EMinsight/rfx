@@ -251,7 +251,23 @@ N_STEPS = 4000
 
 # ---- measured envelope (see module docstring: #677 RE-MEASURE) ----
 MEASURED_ALPHA = 0.69823           # Np/m at f0, node-thin operator (#677)
-MEASURED_ALPHA_TWO_PLANE = 0.72494  # two-plane-ratio comparator, same run
+MEASURED_ALPHA_TWO_PLANE = 0.87333  # two-plane-ratio comparator, same run
+#   Re-pinned 2026-09-07 for #931 (VESSL 369367259243) from 0.72494. The
+#   plates are drawn across the FULL cross-section and the contract samples a
+#   sheet footprint CLOSED, so they realize their last node row in x and in y;
+#   drawn == realized, and the fixture's mode structure is not bit-identical
+#   to the half-open one. What moved, from that run's profile dump:
+#     alpha_fit (span average over 100 mm)   0.69823 -> 0.71565   (+2.5 %)
+#     alpha_two_plane (endpoint ratio)       0.72494 -> 0.87333   (+20.5 %)
+#     ln-RMS fit residual                    0.00245 -> 0.00866
+#   The 8x difference in sensitivity is the extractor, not the field. Total
+#   decay across the fit window is 0.0874 in ln; the two-mode beat ripples the
+#   profile by about +-0.02 in ln, a quarter of that. The endpoint ratio reads
+#   TWO samples of that rippling profile, so a small change in the beat moves
+#   it several times more than it moves the span average. A +-5 % pin on this
+#   number is therefore roughly a +-1 % statement about the field — which is
+#   why it is the instrument that noticed, and why the span-average pin above
+#   is the one to read for the physics.
 MEASURED_ENVELOPE = 0.33806        # |alpha_fit/alpha_analytic - 1| — the
 #   closed-form pairing's envelope, kept as the documented LIMIT-ANCHOR
 #   record (#700): the fixture's alpha_fit is 34% below Rs/(eta0*b)
@@ -556,16 +572,12 @@ def test_alpha_envelope_regression_lock():
         f"measured alpha moved: {alpha:.5f} vs recorded {MEASURED_ALPHA}")
     # Two-plane comparator pin (same run, independent extractor shape).
     #
-    # RED under #931 and NOT re-pinned: measured 0.87333 against the recorded
-    # 0.72494 (+20.5 %), while the span-average fit above moved less than 5 %.
-    # The plates are drawn across the FULL cross-section, and the contract
-    # samples a sheet footprint CLOSED, so they now realize their last node row
-    # in x and in y — rows that sit ON the domain boundary planes the y-PMC and
-    # hi-x PEC own. That is drawn == realized and it is intended, but it means
-    # the fixture's mode structure is not bit-identical, and this pin is the
-    # instrument that says so. Re-centring it on 0.87333 would discard the one
-    # measurement that noticed. The profile dump above is what a re-pin has to
-    # be argued from.
+    # Re-pinned for #931 from the profile dump above (see the constant's own
+    # comment): 0.72494 -> 0.87333, tolerance unchanged at 5 %. The dump is
+    # what makes that a measurement rather than a re-centring — it shows the
+    # window's total decay (0.0874 in ln) against the beat ripple (~+-0.02),
+    # so a two-sample extractor moving 20 % while the span-average fit moves
+    # 2.5 % is the extractor's sensitivity, not a second physical effect.
     assert abs(a2 / MEASURED_ALPHA_TWO_PLANE - 1.0) <= 0.05, a2
     # forward-wave-purity witness (re-measure run: 0.00245 ln-RMS)
     assert out["resid"][_F0_IDX] < 0.02, out["resid"][_F0_IDX]
