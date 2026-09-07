@@ -26,6 +26,7 @@ from __future__ import annotations
 import itertools
 import re
 import subprocess
+import warnings
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -799,3 +800,162 @@ def test_stackup_foils_sit_on_the_dielectric_faces():
     for (box, mat) in shapes:
         if box.corner_lo[2] == box.corner_hi[2]:
             assert round(box.corner_lo[2], 15) in faces
+
+
+# ---------------------------------------------------------------------------
+# the two spellings of a sheet, the domain-BC fence, and the report
+# ---------------------------------------------------------------------------
+
+def test_add_thin_conductor_takes_both_sheet_spellings_and_lands_on_one_plane():
+    """§1.3: a zero-extent Box and a ONE-CELL Box declare the same sheet.
+
+    Three oracle fixtures spell the same operator two ways —
+    ``tests/oracle/test_sheet_film_rta_analytic.py`` hands
+    ``add_thin_conductor`` a Box one cell thick, while
+    ``test_sheet_perturbation_q.py`` and ``test_leontovich_alpha_oracle.py``
+    hand it a zero-extent Box — and nothing said which was normative, so
+    "what does a one-cell Box mean to ``add_thin_conductor``" was an open
+    question with two live answers.
+
+    The contract settles it without a new rule: the sheet's plane is the
+    node plane NEAREST the shape's mid-plane, tie to the LOWER plane. A
+    Box from node ``k`` to node ``k+1`` has its mid-plane exactly half a
+    cell above node ``k``, which is the tie — so it lands on ``k``, the
+    same plane the zero-extent Box at ``k`` lands on. One cell is the
+    ceiling: ``refuse_thick`` rejects anything above it ("not a sheet;
+    use add() for a volume").
+    """
+    from rfx.geometry.csg import Box
+    from rfx.geometry.rasterize_grid import (
+        cell_sizes_from_uniform_grid, coords_from_uniform_grid,
+        sheet_spec_from_shape,
+    )
+    from rfx.grid import Grid
+
+    g = Grid(freq_max=10e9, domain=(0.02, 0.02, 0.02), dx=1e-3)
+    coords = coords_from_uniform_grid(g)
+    sizes = cell_sizes_from_uniform_grid(g)
+    z_k = float(np.asarray(coords.z)[6])
+    d = 1e-3
+
+    zero = sheet_spec_from_shape(
+        Box(corner_lo=(2e-3, 2e-3, z_k), corner_hi=(8e-3, 8e-3, z_k)),
+        coords, sizes, normal_axis=2, name="zero", refuse_thick=True)
+    one_cell = sheet_spec_from_shape(
+        Box(corner_lo=(2e-3, 2e-3, z_k), corner_hi=(8e-3, 8e-3, z_k + d)),
+        coords, sizes, normal_axis=2, name="one_cell", refuse_thick=True)
+
+    assert zero.plane == 6, zero.plane
+    assert one_cell.plane == zero.plane, (
+        "a one-cell-thick Box handed to add_thin_conductor must land on the "
+        "same node plane as the zero-extent Box at its lo face (half-cell "
+        f"tie -> lower plane): got {one_cell.plane} vs {zero.plane}")
+    np.testing.assert_array_equal(np.asarray(one_cell.footprint),
+                                  np.asarray(zero.footprint))
+
+    with pytest.raises(ValueError, match="not a sheet"):
+        sheet_spec_from_shape(
+            Box(corner_lo=(2e-3, 2e-3, z_k), corner_hi=(8e-3, 8e-3, z_k + 2 * d)),
+            coords, sizes, normal_axis=2, name="two_cell", refuse_thick=True)
+
+
+def test_domain_boundary_pec_is_not_a_conductor_body():
+    """§1.8 scope fence, in code rather than prose.
+
+    ``BoundarySpec`` faces / ``apply_pec`` / ``apply_pec_faces`` zero the
+    tangential E on the face plane and are NOT bodies: they own no cell,
+    no sheet and no wire, and ``realized_pec_edge_masks`` never produces
+    them. cv09, cv10, cv14, cv24, ``adi_solver_demo``, ``hello_world`` and
+    ``resonance_harminv`` are the controls that must not move, and
+    fourteen files in the oracle/lock group rest on the domain rule, so a
+    well-meaning unification of the two would move every one of them
+    silently. This is the tripwire.
+    """
+    from rfx.boundaries.pec import apply_pec_faces, realized_pec_edge_masks
+
+    shape = (6, 6, 6)
+    empty = np.zeros(shape, dtype=bool)
+    with pytest.raises(ValueError, match="no cell mask, sheets or wires"):
+        realized_pec_edge_masks(None)
+    masks = realized_pec_edge_masks(jnp.asarray(empty))
+    for c in range(3):
+        assert not np.asarray(masks[c]).any(), (
+            "a domain PEC face must not appear in the realized conductor "
+            "edge set — it is a boundary condition, not a body")
+
+    st = init_state(shape)
+    st = st._replace(ex=jnp.ones(shape), ey=jnp.ones(shape), ez=jnp.ones(shape))
+    out = apply_pec_faces(st, {"z_lo"})
+    assert float(np.asarray(out.ex)[3, 3, 0]) == 0.0
+    assert float(np.asarray(out.ey)[3, 3, 0]) == 0.0
+    assert float(np.asarray(out.ez)[3, 3, 0]) == 1.0   # normal at the face
+    assert float(np.asarray(out.ex)[3, 3, 1]) == 1.0   # one plane only
+
+
+def test_fidelity_report_realized_extent_comes_from_the_wall_planes():
+    """§3: the drawn-vs-realized table is read off the realized edges.
+
+    Before #931 ``fidelity_report`` derived its realization string from the
+    CELL census, which is why the committed example snapshot carries
+    realization strings phrased in the old rule and ``sheet-own-cell-live``
+    findings whose remedy was ``two_plane=True``. A 1-cell PEC Box must now
+    report as a volume with walls on BOTH bounding planes, and a declared
+    sheet must report ONE plane and no cells.
+    """
+    from rfx import Box, Simulation
+    from rfx.fidelity import fidelity_report
+
+    dx = 1e-3
+    sim = Simulation(freq_max=15e9, domain=(20e-3, 20e-3, 20e-3), dx=dx,
+                     boundary="pec")
+    sim.add(Box((4e-3, 4e-3, 10e-3), (16e-3, 16e-3, 11e-3)), material="pec")
+    sim.add_thin_conductor(Box((4e-3, 4e-3, 5e-3), (16e-3, 16e-3, 5e-3)),
+                           sigma_bulk=5.8e7, thickness=1e-6)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = fidelity_report(sim, print_report=False)
+    plate = next(it for it in rep if it["entity"].startswith("geometry["))
+    foil = next(it for it in rep if it["entity"].startswith("thin_conductor["))
+
+    assert "one-cell PEC volume" in plate["realization"], plate["realization"]
+    planes = plate["realized_wall_planes"]["z"]["planes"]
+    assert planes == [10, 11], planes
+    z_um = plate["realized_wall_planes"]["z"]["planes_um"]
+    assert abs((z_um[-1] - z_um[0]) - 1e3) < 1e-6, z_um
+
+    assert foil["realization"].startswith("PEC sheet on node plane z"), \
+        foil["realization"]
+    assert foil["realized_plane"]["index"] == 5, foil["realized_plane"]
+    assert "realized_wall_planes" not in foil, (
+        "a sheet owns no cell, so it has no volume wall-plane row")
+
+
+def test_degenerate_sheet_and_wire_declarations_are_refused():
+    """The sheet/wire analogue of the empty-PolylineWire refusal.
+
+    ``tests/studio/test_interop_value_validation.py`` already refuses an
+    empty point list because a schema-valid document in which the conductor
+    is simply not there is the worst possible outcome. The same failure is
+    available one layer down: a footprint that rasterizes to zero nodes, and
+    a path with fewer than two nodes.
+    """
+    from rfx.boundaries.pec import wire_path_edge_masks
+    from rfx.geometry.csg import Box
+    from rfx.geometry.rasterize_grid import (
+        cell_sizes_from_uniform_grid, coords_from_uniform_grid,
+        sheet_spec_from_shape,
+    )
+    from rfx.grid import Grid
+
+    g = Grid(freq_max=10e9, domain=(0.02, 0.02, 0.02), dx=1e-3)
+    coords = coords_from_uniform_grid(g)
+    sizes = cell_sizes_from_uniform_grid(g)
+    z_k = float(np.asarray(coords.z)[6])
+    # a footprint entirely between two node lines on both in-plane axes
+    with pytest.raises(ValueError, match="ZERO nodes"):
+        sheet_spec_from_shape(
+            Box(corner_lo=(2.2e-3, 2.2e-3, z_k), corner_hi=(2.8e-3, 2.8e-3, z_k)),
+            coords, sizes, normal_axis=2, name="vanished")
+
+    with pytest.raises(ValueError, match="at least two nodes"):
+        wire_path_edge_masks([(1, 1, 1)], (6, 6, 6))
