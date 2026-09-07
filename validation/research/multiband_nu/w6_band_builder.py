@@ -65,8 +65,10 @@ def _old_make_dz_profile():
     from ``git show`` into a throwaway module (provenance, not a retype)."""
     src = subprocess.check_output(
         ["git", "show", f"{OLD_COMMIT}:rfx/auto_config.py"], text=True)
-    mod = types.ModuleType("_old_auto_config")
+    mod = types.ModuleType("_old_auto_config_d990e18c")
     mod.__file__ = f"git:{OLD_COMMIT}:rfx/auto_config.py"
+    # the old module's @dataclass looks itself up in sys.modules
+    sys.modules[mod.__name__] = mod
     exec(compile(src, mod.__file__, "exec"), mod.__dict__)
     return mod._make_dz_profile
 
