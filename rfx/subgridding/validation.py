@@ -806,6 +806,10 @@ def validate_subgrid_setup(
                         )
                     )
 
+        # #931: a CELL mask is the right reading here — this lane
+        # realizes volumes only (run() refuses sheets and wires on it),
+        # and the question below is which CELLS at the coarse/fine
+        # interface carry metal, not which E edges are shorted.
         if pec_mask is not None:
             pec = pec_mask.astype(jnp.bool_)
             pec_interface_guarded_allowed = (

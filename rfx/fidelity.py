@@ -13,6 +13,7 @@ uses, without time stepping.
 """
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
 
 __all__ = ["fidelity_report"]
@@ -192,6 +193,33 @@ def _contract_refusals(sim, grid, nonuniform):
     return out
 
 
+def _wall_plane_rows(mask, nodes, periodic):
+    """Per-axis realized wall planes of ONE conductor entity (#931 §1.9).
+
+    The planes come from the contract's own realization
+    (:func:`rfx.boundaries.pec.realized_pec_edge_masks` +
+    :func:`~rfx.boundaries.pec.realized_wall_planes`) applied to this
+    entity's cells alone, so the report cannot drift from the solve by
+    re-deriving the rule. Returns ``{axis_name: {"planes": [...],
+    "planes_um": [...]}}``.
+
+    A conductor drawn ``z_a -> z_b`` on node planes realizes walls at BOTH,
+    which is the fact the drawn-vs-realized table exists to show: under the
+    pre-#931 sheet rule the ``hi`` face was never a wall at any thickness.
+    """
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    edges = realized_pec_edge_masks(jnp.asarray(np.asarray(mask, dtype=bool)),
+                                    periodic=periodic)
+    out = {}
+    for a in range(3):
+        planes = realized_wall_planes(edges, a)
+        out[_axis_names()[a]] = dict(
+            planes=planes,
+            planes_um=[float(nodes[a][k]) * 1e6 for k in planes
+                       if k < len(nodes[a])])
+    return out
+
+
 def _max_run_length(mask, axis):
     """Longest contiguous run of True along `axis` over occupied lines.
 
@@ -260,6 +288,10 @@ def fidelity_report(sim, print_report: bool = True):
     pec_mask = (np.asarray(pec_mask, dtype=bool)
                 if pec_mask is not None else np.zeros(eps.shape, bool))
     sizes, nodes = _node_arrays(sim, grid, nonuniform)
+    # The realized edge set depends on the run's #689 flags, so the report
+    # reads the same ones the solve will.
+    from rfx.geometry.rasterize_grid import periodic_flags_from_axes
+    periodic = periodic_flags_from_axes(getattr(sim, "_periodic_axes", ""))
     domain = tuple(float(v) for v in getattr(sim, "_domain", (0.0, 0.0, 0.0)))
     # Mask/material arrays live on the PADDED grid (CPML pad cells on every
     # side); declared coordinates are DOMAIN coordinates. The producers
@@ -475,11 +507,21 @@ def fidelity_report(sim, print_report: bool = True):
         boxlike = type(entry.shape).__name__ == "Box"
         mask = _entity_mask(entry, sim, grid, nonuniform)
         pec_assembled = kind_src == "geometry" and _assembled_as_pec(sim, entry)
+        # #931 §1.3: a SHEET owns no cell, so its realized geometry is its
+        # footprint on ONE node plane — not the cells the (node-sampled)
+        # entity mask happens to touch. Resolved before the per-axis rows so
+        # they report the plane, not a spurious one-cell z extent.
+        sheet_spec = _pec_sheet_spec(sim, entry, kind_src, grid, nonuniform)
+        sheet_fp = (np.asarray(sheet_spec.footprint, dtype=bool)
+                    if sheet_spec is not None else None)
         item = dict(entity=name, material=_declared_material(sim, mat_name),
                     declared_lo=tuple(float(v) for v in lo),
                     declared_hi=tuple(float(v) for v in hi),
                     n_cells=int(mask.sum()), findings=[])
-        if item["n_cells"] == 0:
+        if sheet_fp is not None:
+            item["n_cells"] = 0
+            item["n_sheet_nodes"] = int(sheet_fp.sum())
+        if item["n_cells"] == 0 and sheet_fp is None:
             item["findings"].append(dict(
                 kind="absent",
                 detail="rasterizes to ZERO cells — this entity does not exist "
@@ -558,7 +600,9 @@ def fidelity_report(sim, print_report: bool = True):
                             "that conductor is still possible"),
                     remedy="fix that conductor's shape so it rasterizes, "
                            "then re-run fidelity_report"))
-        if pec_assembled:
+        # A SHEET owns no cell (#931 §1.3), so it claims none: a dielectric
+        # drawn after it is not overwritten by it.
+        if pec_assembled and sheet_fp is None:
             pec_before |= mask
             pec_cells_by_entity[i] = np.flatnonzero(mask)
         # Absorber overlap: cells outside [0, domain) live in the CPML pad.
@@ -577,12 +621,18 @@ def fidelity_report(sim, print_report: bool = True):
                 remedy="keep the body inside the domain, or enlarge the "
                        "domain so the absorber stays empty"))
 
-        occ = np.where(mask)
+        occ = np.where(sheet_fp if sheet_fp is not None else mask)
         axes = []
         clipped_axes = []
         for a in range(3):
             i0, i1 = int(occ[a].min()), int(occ[a].max())
-            r_lo, r_hi = float(nodes[a][i0]), float(nodes[a][i1 + 1])
+            if sheet_fp is not None:
+                # NODE bounds, closed: a sheet's footprint is a set of
+                # nodes, and on its normal axis i0 == i1 == the plane, so
+                # the row reads "declared plane -> realized plane".
+                r_lo, r_hi = float(nodes[a][i0]), float(nodes[a][i1])
+            else:
+                r_lo, r_hi = float(nodes[a][i0]), float(nodes[a][i1 + 1])
             d_lo, d_hi = float(lo[a]), float(hi[a])
             # A body drawn past the domain is CLIPPED by construction (a
             # common deliberate idiom: draw big, let the rasterizer cut).
@@ -699,7 +749,6 @@ def fidelity_report(sim, print_report: bool = True):
                 remedy="declare a sheet (a zero-thickness Box, or "
                        "add_thin_conductor), a PolylineWire for a filament, "
                        "or resolve the thickness with the mesh"))
-        sheet_spec = _pec_sheet_spec(sim, entry, kind_src, grid, nonuniform)
         if sheet_spec is not None:
             # #931 §1.3: a sheet owns no cell and is not in pec_mask; it is
             # realized on ONE node plane with a closed footprint.
@@ -741,6 +790,8 @@ def fidelity_report(sim, print_report: bool = True):
             # (The drawn-vs-realized wall-plane table per axis is the
             # follow-up of this report; a zero-thickness Box is a SHEET and
             # is not in pec_mask, so it does not reach this branch.)
+            item["realized_wall_planes"] = _wall_plane_rows(
+                mask, nodes, periodic)
             runs = [_max_run_length(mask, a) for a in range(3)]
             thin_axes = [a for a, r in enumerate(runs) if r == 1]
             if not thin_axes:
@@ -836,7 +887,9 @@ def _print(report):
         if "realization" in it:
             head += f" — {it['realization']}"
         print(f"  {head}")
-        if "n_cells" in it:
+        if "n_sheet_nodes" in it:
+            print(f"    sheet nodes: {it['n_sheet_nodes']} (owns no cell)")
+        elif "n_cells" in it:
             print(f"    cells: {it['n_cells']}")
         for ax in it.get("axes", []):
             print(f"    {ax['axis']}: declared "
@@ -853,6 +906,13 @@ def _print(report):
             # explanation next to it — a silent all-clear (#303 class).
             if ax.get("note"):
                 print(f"       note: {ax['note']}")
+            walls = it.get("realized_wall_planes", {}).get(ax["axis"])
+            if walls and walls["planes"]:
+                vals = walls["planes_um"]
+                um = (", ".join(f"{v:.1f}" for v in vals) if len(vals) <= 4
+                      else f"{vals[0]:.1f} .. {vals[-1]:.1f}"
+                           f" ({len(vals)} planes)")
+                print(f"       realized {ax['axis']} walls at [{um}] um")
         for f in it.get("findings", []):
             ax = f" {f['axis']}:" if f.get("axis") else ""
             print(f"    ! [{f['kind']}]{ax} {f['detail']}")

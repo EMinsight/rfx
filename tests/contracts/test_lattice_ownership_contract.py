@@ -520,6 +520,81 @@ def test_g4_pec_sheet_and_f0_sheet_share_footprint_and_edge_set():
         np.testing.assert_array_equal(np.asarray(got), np.asarray(exp))
 
 
+def test_zero_thickness_pec_box_via_add_is_a_sheet_declaration():
+    """§1.5 (amended): a PEC Box with EXACTLY ONE zero-extent axis passed to
+    ``sim.add`` is a SHEET — zero thickness is a statement of intent, not an
+    inference — and realizes exactly what ``add_thin_conductor`` realizes for
+    the same Box. This is what keeps the documented five-line patch workflow
+    and ``first-patch.mdx`` valid."""
+    from rfx import Box, Simulation
+    from rfx.boundaries.pec import realized_pec_edge_masks
+
+    def _sim(via_add):
+        sim = Simulation(freq_max=10e9, domain=(0.010, 0.010, 0.006),
+                         boundary="pec", dx=1e-3)
+        box = Box((0.002, 0.003, 0.003), (0.006, 0.007, 0.003))
+        if via_add:
+            sim.add(box, material="pec")
+        else:
+            sim.add_thin_conductor(box)
+        return sim
+
+    out = []
+    for via_add in (True, False):
+        sim = _sim(via_add)
+        sheets: list = []
+        pec_mask = sim._assemble_materials(sim._build_grid(),
+                                           pec_sheets=sheets)[3]
+        assert pec_mask is None or not bool(jnp.any(pec_mask)), via_add
+        assert len(sheets) == 1, via_add
+        out.append((sheets[0].normal_axis, sheets[0].plane,
+                    realized_pec_edge_masks(None, sheets=sheets)))
+    assert out[0][0] == out[1][0] and out[0][1] == out[1][1]
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(out[0][2][c]),
+                                      np.asarray(out[1][2][c]))
+
+
+@pytest.mark.parametrize("hi", [(0.006, 0.003, 0.003), (0.002, 0.003, 0.003)])
+def test_pec_box_with_two_or_three_zero_axes_is_refused(hi):
+    """§1.5: a line or a point is not a conductor; the message names
+    ``PolylineWire``."""
+    from rfx import Box, Simulation
+    sim = Simulation(freq_max=10e9, domain=(0.010, 0.010, 0.006),
+                     boundary="pec", dx=1e-3)
+    sim.add(Box((0.002, 0.003, 0.003), hi), material="pec")
+    with pytest.raises(ValueError, match="PolylineWire"):
+        sim._assemble_materials(sim._build_grid())
+
+
+def test_sub_cell_non_box_sheet_is_realized_from_its_mid_plane_cross_section():
+    """§1.3: a non-Box shape declared through ``add_thin_conductor`` — a
+    Cylinder pad one cell tall — is a sheet whose footprint is its
+    cross-section at its OWN mid-plane, placed on the nearest node plane.
+    How many node planes its thickness straddles never enters."""
+    from rfx import Cylinder, Simulation
+    sim = Simulation(freq_max=10e9, domain=(0.010, 0.010, 0.006),
+                     boundary="pec", dx=1e-3)
+    sim.add_thin_conductor(
+        Cylinder(center=(0.005, 0.005, 0.0035), radius=0.002, height=1e-3,
+                 axis="z"))
+    grid = sim._build_grid()
+    sheets: list = []
+    pec_mask = sim._assemble_materials(grid, pec_sheets=sheets)[3]
+    assert pec_mask is None or not bool(jnp.any(pec_mask))
+    assert len(sheets) == 1
+    spec = sheets[0]
+    assert spec.normal_axis == 2
+    # mid-plane 3.5 mm, an exact half-cell tie -> the LOWER node plane
+    assert spec.plane == grid.position_to_index((0.005, 0.005, 0.003))[2]
+    fp = np.asarray(spec.footprint)
+    # the disc's own cross-section, on ONE layer
+    assert fp.sum() == fp[:, :, spec.plane].sum() > 0
+    ci, cj = grid.position_to_index((0.005, 0.005, 0.003))[:2]
+    assert fp[ci, cj, spec.plane]
+    assert not fp[ci + 3, cj, spec.plane]      # 3 mm out, radius is 2 mm
+
+
 def test_sub_cell_pec_box_via_add_is_refused():
     from rfx import Box, Simulation
     sim = Simulation(freq_max=10e9, domain=(0.010, 0.010, 0.006),

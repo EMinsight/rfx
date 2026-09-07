@@ -40,6 +40,34 @@ source as of 88c49bdc, ``test_rule_i_fires_on_the_shorted_junction_copy``
 and ``test_rule_ii_fires_on_the_shorted_junction_copy`` FAIL (no such
 kind / no such code); the negative tests pass trivially there, so their
 value is only in combination with the positive ones.
+
+STATE UNDER #931 (lattice ownership contract) — READ BEFORE EDITING.
+Five tests in this file are RED and the cause is the FIXTURE, not the two
+rules. ``_half_cell(n, n)`` puts the Box faces on cell MIDPOINTS to select
+node ``n`` under the pre-#931 NODE sampler. PEC volumes are now sampled at
+cell CENTRES (design note §1.1), and a Box drawn ``(n-0.5)dx -> (n+0.5)dx``
+occupies cell ``n-1`` (the lo face sits exactly on that cell's centre and
+the tie is inclusive), so the ground foil this fixture means at node 25 is
+realized on cell 24, with walls on planes 24 AND 25. Measured:
+``pec_mask[:, :, 25] & annulus`` = 2 of 36, was 36 of 36.
+
+Two things have to happen before these go green, and neither is this
+file's own subject:
+
+  1. the fixture is redrawn ON-LATTICE — the foils (ground boxes at
+     ``N_GND``, trace at ``N_TRACE``) become SHEET declarations
+     (zero-thickness Boxes at ``N_GND * DX`` / ``N_TRACE * DX``, the plane
+     they already mean), and the pin/clearance counts are re-measured under
+     centre sampling. It is a copy of the attempt-2 coax-MSL fixture, so it
+     is migrated with that family, not separately;
+  2. rule (ii) itself reads ``self._port_pec_mask`` in
+     ``rfx/api/_preflight.py::_check_coaxial_port_junction_aperture``. A
+     sheet owns no cell, so once the ground is declared as one that check
+     sees nothing; it has to read the REALIZED footprint (sheet footprints
+     union volume cells) instead. That file is the preflight owner's.
+
+Rule (i) — the ordered ``dielectric-after-conductor-no-op`` finding — is
+unchanged by the contract and its two tests still pass.
 """
 from __future__ import annotations
 
