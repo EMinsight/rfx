@@ -204,6 +204,14 @@ is, so the branch must be committed before submitting.
   settled would pin numbers taken with a port that is one edge too long. Order:
   settle `_wire_port_cells`' endpoint rule -> re-measure -> re-record the
   measured provenance in the module docstring.
+* **CLOSED 2026-09-07 with NO re-measure needed.** The endpoint rule is
+  settled: `_wire_port_cells` (and the non-uniform runner's own copy) make the
+  extent HALF-OPEN in edges, so 1.0 mm of extent on a 0.5 mm mesh is TWO Ez
+  edges and neither of them sits above the trace. Measured on this fixture,
+  build only: `cells = [(24, 28, 0), (24, 28, 1)]`, both live, `n_live = 2` —
+  the same normalization `Z0/2` the gates were measured at. The gates are not
+  crossing a convention change after all; they were only ever going to move
+  because the port was one edge too long.
 
 ## R9 — the openEMS referee's copy of the fixture's realized board
 

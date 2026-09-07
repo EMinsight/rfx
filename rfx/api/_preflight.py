@@ -8324,10 +8324,11 @@ class _PreflightMixin:
         Two families share the context. The #931 realization findings
         (design note §3: ``pec_box_subcell`` / ``pec_zero_cells`` /
         ``pec_realization_refused`` errors, ``pec_box_one_cell`` warning,
-        ``sheet_plane_realized`` notice, ``sheet_slot_vacuum`` warning) say
-        per declaration what the lattice realized; the issue-#703 campaign
-        checks (congruent-conductor realization parity, sheet-cavity
-        electrical thickness, off-lattice design-edge census) say what that
+        ``sheet_plane_realized`` notice, ``sheet_slot_vacuum`` and
+        ``pec_face_short_of_domain_wall`` warnings) say per declaration
+        what the lattice realized; the issue-#703 campaign checks
+        (congruent-conductor realization parity, sheet-cavity electrical
+        thickness, off-lattice design-edge census) say what that
         realization does to the design's symmetries and stack-ups.
 
         Skips silently when the model has no conductor at all, and on a
@@ -8365,6 +8366,7 @@ class _PreflightMixin:
         self._validate_cfg_pec_realization(_w, ctx)
         self._validate_cfg_congruent_rasterization_parity(_w, ctx)
         self._validate_cfg_off_lattice_design_edges(_w, ctx)
+        self._validate_cfg_pec_face_short_of_domain_wall(_w, ctx)
         realized = ctx.realized()
         if realized is None:
             if any(e.kind == "refused" for e in ctx.entry_realizations()):
@@ -8651,6 +8653,96 @@ class _PreflightMixin:
             "eps_r at the named plane is not 1.0 on the assembled arrays.",
             code="sheet_slot_vacuum", severity="warning",
             source="_validate_cfg_sheet_slot_vacuum",
+        ))
+
+    def _validate_cfg_pec_face_short_of_domain_wall(self, _w, ctx) -> None:
+        """Design note §6 (cv11): a PEC face one cell shy of a domain wall.
+
+        ``Grid`` realizes a declared extent by ``ceil(extent / dx)`` cells,
+        so a 22.86 x 10.16 mm WR-90 declared on a 1 mm mesh is a
+        23 x 11 mm guide and the domain-face PEC (§1.8, BC-owned) stands
+        on the last INTERIOR node. A conductor meant to reach that wall —
+        a shorting plug, a full-width iris — must be drawn to THAT plane,
+        because a volume's face rounds to the NEAREST node (§1.1): drawn
+        to the declared 10.16 mm the plug's top realizes at 10.000 mm
+        under a wall at 11.000 mm, and the one-cell gap between them is a
+        parallel-plate line along the broad wall, open at both ends.
+
+        Measured on cv11 2026-09-07 (``scripts/diagnostics/
+        pec_short_lane_ab.py``): that slot passed |S21| 0.22-0.33 through
+        a "short" and took the pec-short |S11| deficit from 0.0146 to
+        0.0560. Pre-#931 the node-half-open sampler included the top node
+        by accident, so nothing in the repo had ever had to say this.
+
+        Fires per volume entry, per axis, per side: the entry's own
+        realized wall plane (``realized_wall_planes`` on its own edges —
+        not a bounding box, not a cell mask) sits exactly one node inside
+        a NON-absorbing domain face. Absorbing faces are excluded: there
+        is no wall there to short to, and a body grazing an absorber is
+        ``geometry_in_absorber``'s finding, not this one.
+        """
+        interior = getattr(ctx.grid, "interior", None)
+        if interior is None:
+            return          # non-uniform lane: no interior slices
+        from rfx.boundaries.pec import realized_wall_planes
+
+        face_layers = self._preflight_face_layers()
+        shape = tuple(ctx.grid.shape)
+        rows = []
+        for e in ctx.pec_entries():
+            if e.kind != "volume":
+                continue    # a sheet has no face to draw to a wall
+            edges = e.edges(ctx.periodic, shape)
+            for a in range(3):
+                if ctx.periodic[a] or shape[a] < 3:
+                    continue
+                planes = realized_wall_planes(edges, a)
+                if not planes:
+                    continue
+                sl = interior[a]
+                for side, face, wall in (
+                        ("lo", min(planes), int(sl.start)),
+                        ("hi", max(planes), int(sl.stop) - 1)):
+                    step = 1 if side == "lo" else -1
+                    if face - wall != step:
+                        continue
+                    if face_layers.get(f"{'xyz'[a]}_{side}", 0):
+                        continue    # absorbing face: no wall
+                    rows.append((e, a, side, face, wall))
+        if not rows:
+            return
+        desc = "; ".join(
+            f"{e.label} '{e.name}' {'xyz'[a]}_{side} face realized at node "
+            f"{face} ({'xyz'[a]} = {_fmt_len(float(ctx.nodes[a][face]))}) "
+            f"against the domain wall at node {wall} "
+            f"({_fmt_len(float(ctx.nodes[a][wall]))}) — a ONE-CELL gap of "
+            f"{_fmt_len(float(ctx.spacings[a][min(face, wall)]))}"
+            for e, a, side, face, wall in rows[:_CAMPAIGN_MAX_OFFENDERS])
+        _w.warn(PreflightWarning(
+            f"{len(rows)} PEC volume face(s) stop ONE cell short of a "
+            f"domain wall instead of reaching it: {desc}. WHY: Grid "
+            "realizes a declared domain by ceil(extent/dx) cells, so the "
+            "wall stands where the mesh puts it, not at the declared "
+            "number; a volume's face rounds to the NEAREST node (lattice "
+            "ownership contract #931 §1.1), so a body drawn to the "
+            "DECLARED cross-section realizes short of the realized wall. "
+            "The vacuum cell left between them is a parallel-plate line "
+            "along that wall, open at both ends (measured on cv11 "
+            "2026-09-07: |S21| 0.22-0.33 past a PEC short, and the "
+            "pec-short |S11| deficit 0.0146 -> 0.0560). REMEDY: draw the "
+            "face to the REALIZED wall plane quoted above, not to the "
+            "declared dimension (tests/_realized_geometry."
+            "domain_wall_positions reads it off the grid the run builds). "
+            "If the gap is intended, it is a slot and this says where it "
+            f"is. COVERAGE: examined the realized wall planes of "
+            f"{len([e for e in ctx.pec_entries() if e.kind == 'volume'])} "
+            f"PEC volume(s) on the {ctx.lane} lane, on non-periodic axes "
+            "with a non-absorbing face; sheets and wires are not examined "
+            "(they have no face to draw to a wall). STALE IF: "
+            "realized_wall_planes on the named entity does not reproduce "
+            "the printed node.",
+            code="pec_face_short_of_domain_wall", severity="warning",
+            source="_validate_cfg_pec_face_short_of_domain_wall",
         ))
 
     # ------------------------------------------------------------------

@@ -343,8 +343,18 @@ def _run_subgridded_once(
 
         lo = min(idx_start[axis], idx_end[axis])
         hi = max(idx_start[axis], idx_end[axis])
+        # HALF-OPEN in edges, the same rule as the uniform lane
+        # (rfx.sources.sources.wire_port_edge_span) and the non-uniform
+        # runner: the driven edges are the ones whose own location lies
+        # inside the declared extent, so n cells of extent drive n edges.
+        # This lane carried its own endpoint-INCLUSIVE copy; once the
+        # other two were corrected it was the only place where the same
+        # declaration drove one more edge. The shared helper is not called
+        # here because its sub-cell branch needs a node line and these are
+        # FINE-grid indices; an extent that snaps to a single fine node
+        # keeps its one edge, as before.
         cells = []
-        for a in range(lo, hi + 1):
+        for a in range(lo, max(hi, lo + 1)):
             cell = list(idx_start)
             cell[axis] = a
             cells.append(tuple(cell))

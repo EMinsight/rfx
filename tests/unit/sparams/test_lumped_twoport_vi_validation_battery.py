@@ -178,7 +178,8 @@ Box PEC rasterization is lower-inclusive/upper-EXCLUSIVE, so the trace
 box must overhang BOTH port columns by >= 1 cell — a box ending exactly
 at the port-2 x coordinate leaves that column with no PEC overhead and
 produces a silently dead thru. Also: wire extent=1.0 mm at dx=0.5 mm
-rasterizes to n_cells=3 (endpoint-inclusive), which enters the
+rasterizes to n_cells=2 (the extent is half-open in EDGES; it was
+endpoint-inclusive and gave 3 until #931 R8), which enters the
 Z0_cell = Z0/n_cells off-diagonal normalization.
 
 No network, no external solver; deterministic (fixed geometry, fixed step
@@ -520,26 +521,34 @@ def test_thru_trace_is_one_realized_sheet_plane():
     Ez through the trace plane      shorted       live
     primal cells owned              340           0
     realized footprint (x by y)     17.0 x 5.0    17.0 x 5.0 mm
-    wire-port live extent cells     2 of 3        3 of 3
+    wire-port live extent cells     2 of 3 *      2 of 2
     ==============================  ============  ============
+
+    (*) measured under the endpoint-INCLUSIVE extent rule this branch also
+    corrected; the Box column is the historical reading, not what that
+    declaration would rasterize to today.
 
     The footprint is the drawn one under both declarations, and it is also
     what the PRE-#931 rule realized here (checked against the old
     node-half-open sampling plus the #677 neighbour rule), so this fixture
     is not a case where the in-plane rule moved.
 
-    The one thing that does move is ``n_live``.  The port declares
-    ``extent = _THRU_H_M`` — exactly the 1.0 mm ground-to-trace gap — and
-    ``_wire_port_cells`` rasterizes it endpoint-inclusive to THREE Ez
-    edges, the third of which spans 1.0 -> 1.5 mm, i.e. ABOVE the trace.
-    The one-cell Box shorted that surplus edge and the port counted 2 live
-    cells; the correct count, but reached by an accident of the metal being
-    drawn a cell thick.  A foil does not short the edge above it, so under
-    the contract the surplus edge is live and ``Z0_cell = Z0 / n_live``
-    goes from Z0/2 to Z0/3.  That is a defect in the port's
-    endpoint-inclusive extent rasterization, which the volume trace was
-    hiding; it belongs to the wire-port lane, not to this fixture, and it
-    is why the slow_physics gates below need a re-measure (RECOMPUTE R8).
+    ``n_live`` is 2 under both declarations, and it now gets there for a
+    reason instead of by luck.  The port declares ``extent = _THRU_H_M`` —
+    exactly the 1.0 mm ground-to-trace gap — and ``_wire_port_cells`` used
+    to rasterize that endpoint-INCLUSIVE into THREE Ez edges, the third
+    spanning 1.0 -> 1.5 mm, i.e. ABOVE the trace.  While the trace was a
+    one-cell PEC Box that surplus edge was shorted and the port counted 2
+    live cells: the right number, reached by an accident of the metal
+    being drawn a cell thick.  A foil does not short the edge above it, so
+    on the contract's realization the surplus edge went live and
+    ``Z0_cell = Z0 / n_live`` moved to Z0/3.  That was a defect in the
+    port's extent rasterization, made visible (not caused) by the sheet
+    declaration; it is fixed in the wire-port lane — the extent is now
+    half-open in edges, so 1.0 mm of extent on a 0.5 mm mesh is TWO Ez
+    edges and neither of them is above the trace.  The slow_physics gates
+    below therefore stay on Z0/2, which is what they were measured at
+    (RECOMPUTE R8 closed here).
     """
     import numpy as _np
     from rfx.sources.sources import WirePort, _wire_port_live_cells
@@ -571,9 +580,14 @@ def test_thru_trace_is_one_realized_sheet_plane():
                   end=(_THRU_X1_M, _THRU_Y_MID_M, _THRU_H_M),
                   component="ez", impedance=50.0)
     cells, live, n_live = _wire_port_live_cells(rz.grid, wp, rz.edge_masks)
-    assert len(cells) == 3 and n_live == 3, (
-        f"the port's three endpoint-inclusive Ez edges {cells} are all live "
-        f"above a foil; got live={live}")
+    assert len(cells) == 2 and n_live == 2, (
+        f"1.0 mm of extent on a 0.5 mm mesh is TWO Ez edges, both live "
+        f"below the foil (half-open in edges, #931 R8); got {cells}, "
+        f"live={live}")
+    k_trace = int(round(_THRU_H_M / _THRU_DX_M))
+    assert max(c[2] for c in cells) == k_trace - 1, (
+        f"no driven edge may sit above the trace plane k={k_trace}; "
+        f"got {cells}")
 
 
 @pytest.mark.xfail(

@@ -265,10 +265,6 @@ def build_wire_refplane_specs(
     third_index = cells[0][third_axis]
     comp_ids = sorted(c[comp_axis] for c in cells)
     e_lo, e_hi = comp_ids[0], comp_ids[-1] + 1
-    # The extent END cell (top of the wire — sits in/at the trace) seeds
-    # the trace connected component.  _wire_port_cells spans ascending
-    # component-axis indices from the base; the end is the last cell.
-    end_cell = max(cells, key=lambda c: c[comp_axis])
 
     # (a, u, v) right-handed cyclic axes for the Ampere loop.
     u_axis = (line_axis + 1) % 3
@@ -278,6 +274,20 @@ def build_wire_refplane_specs(
 
     pec3d = np.asarray(pec_mask, dtype=bool)
     shape = pec3d.shape
+
+    # The extent's END NODE — the node the port's last driven edge reaches
+    # — seeds the trace connected component, because that is where the
+    # trace sits. ``_wire_port_cells`` is half-open in EDGES (#931 R8), so
+    # the last DRIVEN EDGE is indexed one below that node; while the
+    # extent was endpoint-inclusive the two coincided and this read
+    # ``max(cells)`` directly. Seeding one cell low is not a loud failure:
+    # ``_trace_bbox_at_plane`` falls back to the NEAREST conductor cell,
+    # and on a microstrip cross-section the ground plane below is exactly
+    # as near as the trace above — a tie that would silently measure the
+    # ground.
+    _end = list(max(cells, key=lambda c: c[comp_axis]))
+    _end[comp_axis] = min(e_hi, shape[comp_axis] - 1)
+    end_cell = tuple(_end)
 
     specs = []
     bboxes = []

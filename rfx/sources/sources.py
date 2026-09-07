@@ -401,7 +401,31 @@ class WirePort:
 
 
 def _wire_port_cells(grid, port):
-    """Return list of (i, j, k) cell indices along the wire."""
+    """The E edges the wire port drives — the extent, HALF-OPEN in edges.
+
+    The port's declared extent is the node interval ``[start, end)`` along
+    its axis, and the edges it drives are the ones whose OWN location lies
+    inside that interval. The port's component is staggered half a cell
+    along the axis, so edge ``a`` sits between node ``a`` and node
+    ``a + 1``: it lies inside ``[start, end)`` exactly for
+    ``lo <= a <= hi - 1``, where ``lo``/``hi`` are the endpoints' node
+    indices. An extent of n cells therefore drives n edges.
+
+    This used to be endpoint-INCLUSIVE (``range(lo, hi + 1)``), which
+    drove n + 1 edges — the last one spanning one cell ABOVE the declared
+    end. On the issue-#313 THRU that surplus Ez edge sits above the
+    microstrip trace: while the trace was drawn as a one-cell PEC Box the
+    edge was shorted and ``_wire_port_live_cells`` reported the right
+    ``n_live`` by accident, so the off-by-one was invisible. Under the
+    lattice ownership contract the trace is a sheet, which does not short
+    the edge above it, and the port drove one cell too many
+    (``n_live`` 2 -> 3, i.e. ``Z0_cell = Z0 / n_live`` off by 3/2).
+
+    An extent shorter than the cell it lands in snaps to a single node
+    (``lo == hi``) and would give NO edge. That port still drives exactly
+    one edge — the one its extent lies in — chosen on the side of the node
+    the extent occupies; it is a sub-cell declaration, not an empty one.
+    """
     import numpy as np
     s = np.array(port.start)
     e = np.array(port.end)
@@ -416,13 +440,59 @@ def _wire_port_cells(grid, port):
 
     lo = min(idx_s[axis], idx_e[axis])
     hi = max(idx_s[axis], idx_e[axis])
+    first, last = wire_port_edge_span(
+        grid, axis, lo, hi, float(s[axis]), float(e[axis]))
 
     cells = []
-    for a in range(lo, hi + 1):
+    for a in range(first, last + 1):
         cell = list(idx_s)
         cell[axis] = a
         cells.append(tuple(cell))
     return cells
+
+
+def wire_port_edge_span(grid, axis: int, lo: int, hi: int,
+                        start_pos: float, end_pos: float) -> tuple[int, int]:
+    """``(first, last)`` E-edge index of a wire port extent — ONE spelling.
+
+    ``lo``/``hi`` are the extent endpoints' node indices (ordered). The
+    span is HALF-OPEN in edges: ``lo .. hi - 1``. Both the uniform lane
+    (:func:`_wire_port_cells`) and the non-uniform runner call this, so
+    the same declaration cannot rasterize to a different number of driven
+    edges on the two lanes.
+
+    ``start_pos``/``end_pos`` are the declared endpoint coordinates on
+    ``axis`` and are used only for the sub-cell case below.
+    """
+    if hi > lo:
+        return lo, hi - 1
+    # Sub-cell extent: both ends snapped to node ``lo``, so the half-open
+    # span is empty. The port still drives exactly one edge — the one its
+    # extent lies in — chosen on the side of the node the extent occupies.
+    # A tie (an extent centred on the node) takes the upper edge, which is
+    # what the half-open rule would give for a one-cell extent.
+    mid = 0.5 * (float(start_pos) + float(end_pos))
+    node_pos = _axis_node_position(grid, axis, lo)
+    k = lo if mid >= node_pos else max(lo - 1, 0)
+    return k, k
+
+
+def _axis_node_position(grid, axis: int, index: int) -> float:
+    """Physical position of node ``index`` on ``axis``, in DOMAIN metres.
+
+    Read from the library's own node-line producers so this does not
+    become a second spelling of where a node is (the #562 class).
+    """
+    from rfx.geometry.rasterize_grid import (
+        coords_from_nonuniform_grid, coords_from_uniform_grid)
+    from rfx.nonuniform import NonUniformGrid
+    import numpy as np
+
+    coords = (coords_from_nonuniform_grid(grid)
+              if isinstance(grid, NonUniformGrid)
+              else coords_from_uniform_grid(grid))
+    line = np.asarray((coords.x, coords.y, coords.z)[axis], dtype=np.float64)
+    return float(line[int(np.clip(index, 0, line.size - 1))])
 
 
 def _wire_port_live_cells(grid, port, pec_edge_masks=None):
