@@ -250,9 +250,9 @@ def test_results_rows_replay_verdicts(sweep_json, key):
 
 def test_results_law_i_replays(sweep_json):
     cells = sweep_json["cells"]
-    recs = w6.e1_scaling_checks(cells, sweep_json["ratios"], sweep_json["n_lambdas"])
+    recs = w6.e1_scaling_checks(cells, sweep_json["ratios_all"], sweep_json["n_lambdas_all"])
     committed = sweep_json["law_i"]
-    assert len(recs) == len(committed)
+    assert len(recs) == len(committed) == 6      # 3 ratios x {15, 60} vs 30
     for rec, com in zip(recs, committed):
         assert (rec["ratio"], rec["n_lambda"]) == (com["ratio"], com["n_lambda"])
         assert _rel_close(rec["model_ratio"], com["model_ratio"])

@@ -711,11 +711,15 @@ def run_e1(n_lambdas: list[int], ratios: list[float], widths: list[int],
                 print(f"E1 {key}: already in {out_path}, skipped (resume)", flush=True)
                 continue
             results["cells"][key] = run_e1_cell(e1_setting(n_lambda, ratio), widths, model_only)
-            results["law_i"] = e1_scaling_checks(results["cells"], ratios, n_lambdas)
             results["wallclock_s"] = time.time() - t0
             with open(out_path, "w") as fh:
                 json.dump(results, fh, indent=1)
-    results["law_i"] = e1_scaling_checks(results["cells"], ratios, n_lambdas)
+    # law (i) aggregates over EVERY cell in the JSON, not this call's lists
+    # (a --resume call per resolution would otherwise drop the earlier pairs)
+    results["n_lambdas_all"] = sorted({c["setting"]["n_lambda"] for c in results["cells"].values()})
+    results["ratios_all"] = sorted({c["setting"]["ratio"] for c in results["cells"].values()})
+    results["law_i"] = e1_scaling_checks(results["cells"], results["ratios_all"],
+                                         results["n_lambdas_all"])
     for rec in results["law_i"]:
         print(f"law (i) r={rec['ratio']} N={rec['n_lambda']}/30: model_ratio={rec['model_ratio']:.4f} "
               f"(exponent {rec['model_exponent']:.3f}) "
