@@ -15,11 +15,19 @@ absolute `-f` path — the yamls were copied to `/tmp/t6vessl/` and submitted fr
 there. Source of truth for the yamls is `_vessl931/` in this worktree.
 
 All runs: cluster `remilab-c0`, preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`,
-image `ghcr.io/bk-squared/rfx-openems:5b423bdfe0c8`, staged copy of this
-worktree at commit `b884b83f`, artifacts under
+image `ghcr.io/bk-squared/rfx-openems:5b423bdfe0c8`, artifacts under
 `/root/workspace/claude-workspace/rfx/runs/issue931-post-<case>-<ts>/`
 (`pytest.log`, `junit.xml`, `commit.txt`; the latest path is echoed to
 `issue931-post-<case>.latest`).
+
+Each job copies the LIVE worktree at the moment it starts and writes the commit
+it saw into `commit.txt` — read that, not this file, for the provenance of a
+given run. The batch was submitted at `b884b83f`; the branch has since merged
+`feat/931-lattice-ownership` (core fixes to `rasterize_grid`'s zero-cell refusal
+and to `tests/_realized_geometry`'s lane picker) and added two prose commits, so
+a job that started after the merge staged the merged tree. None of those changes
+touch a declaration, so no row's pre-declaration moves; if a `commit.txt` shows
+a commit you do not recognise, `git log` it before reading the numbers.
 
 ## Submitted
 
