@@ -46,6 +46,56 @@ geometry regression fails in seconds rather than in hours.
 Fixtures are NOT committed from this phase (the ingest phase does that). The
 artifact is written to the run directory only.
 
+## Result of run 369367259196 (finished 2026-09-07 11:54 UTC)
+
+Output: `/root/workspace/claude-workspace/rfx/runs/issue931-post-chain-battery-20260907T105351Z/`
+(all four stage `.rc` files 0; `fixture.json` 507 kB; 184 verdicts, 6 fail).
+The fixture is NOT committed here — the ingest phase decides that. Compare
+against `tests/fixtures/waveguide_chain_battery/fixture_guide_cell_aperture.json`,
+which is the run-2 config this builder ships (`SHIFT_PAIR_NAME =
+sign_discriminating_pair`); `fixture.json` is run 1 and differs for reasons
+that have nothing to do with #931.
+
+### Measured against the pre-declaration, item by item
+
+| pre-declared | measured | verdict |
+|---|---|---|
+| `thru` and `slab` legs unchanged | every S entry of all 12 thru/slab cells agrees to ≤ 1.1e-5 (float32 noise); no verdict moved | **held** |
+| `referee_pec_short` inside [0.99, 1.03), mean within 0.02 | coarse\|false min/max/mean |S11| 0.99702 / 1.00235 / 0.99965 (was 0.99702 / 1.00236 / 0.99965) | **held** |
+| `|S11|` unchanged — the reflecting NEAR face does not move | max |ΔS11| over the six pec_short cells ≤ 6.8e-6; the implied reference-plane move is 0.00000 mm on every bin | **held** |
+| the far face gains a wall | `S22` moves by a phase equal to **exactly one cell**: −2.5263 mm at dx = 2.54, −1.2646 at dx = 1.27, −0.6323 at dx = 0.635 (per-bin spread ≤ 0.07 mm, the Yee β dispersion) | **held, and it is the §5 one-cell witness on a third case** |
+| the `("pec_short", "sigma")` AD leg MOVES and is report-only | it did not move: g_AD −6.4283 vs −6.4214, rel(AD, FD) 4.9e-4 against a 0.05 gate, verdict pass. Re-stamping is gone and the gradient is the same quantity to four digits | **prediction wrong, stated as measured** |
+| — (not predicted) | the nine `forward_identity|*|flux|*` failures the run-2 fixture carries are all **gone**: the override no longer has to re-carry a sigma fold, so the traced and untraced forwards are the same solve | improvement |
+| — (not predicted) | six `ad_vs_fd|pec_short|*|eps|*` legs FAIL with `g_fd = nan` | new red, cause below |
+
+### The six NaN legs: traced, and not the realization change
+
+`f_minus` is NaN; `f_plus`, the AD gradient and the primal are all finite. The
+minus arm evaluates the pec_short θ window (vacuum) at `eps_r = 0.95`, and dt
+is picked at 0.99 of the `eps_r = 1` Courant limit: `0.99 / sqrt(0.95) =
+1.0157`. The FD reference has always been 1.6 % outside the stability limit,
+at every rung — `tests/_waveguide_chain_battery_fixture.py::
+eps_fd_step_courant_ratio` now reports that number without solving anything
+(1.015719 for pec_short, 0.498123 for slab, every rung).
+
+Two arms, measured locally (coarse and mid rungs, x64, θ = −0.05):
+
+| rung | pec_short | thru (NO conductor anywhere) |
+|---|---|---|
+| coarse, 713 → 8545 steps | bounded, max|S| = 1.00254 | bounded, max|S| = 1.00196 |
+| mid, 1425 steps | NaN | **NaN** |
+
+A guide with no conductor in it blows up the same way, so `eps_r < 1` is
+sufficient and the ownership contract is not the cause. What the contract
+removed is what used to hide it on THIS DUT: the lane no longer folds the
+short into a `sigma = 1e10` volume, and that lossy block sat one cell from the
+window and damped the growing mode.
+
+Section T did not change `THETA0_EPS` or `FD_STEP_EPS` to make the leg pass.
+That is a re-declaration of a measurement the battery's predeclaration fixes
+(a central difference AT the shipped fixture), so it is the PI's call; the
+options are in `docs/design_notes/931_migration/T-tests-crossval.md` §3.
+
 ## Not submitted by section T — owned elsewhere, named so nothing is lost
 
 | case | owner | what section T is waiting for |

@@ -624,3 +624,105 @@ def assert_design_override_keeps_the_short(sim: Simulation, dut: str) -> None:
                 f"{name} PEC edges. The AD lane and the forward lane would "
                 "then be solving different geometries — the silent divergence "
                 "the |S11| 0.076 measurement recorded.")
+
+
+# --- FD probe admissibility (no solve) --------------------------------------
+# Measured 2026-09-07 on VESSL run 369367259196 (the post-#931 re-measure):
+# all six ``ad_vs_fd|pec_short|*|eps|*`` legs came back FAIL with
+# ``g_fd = nan``. The minus arm of the central difference, not the gradient,
+# is what produced the NaN, and the cause is in THIS file rather than in the
+# realization change: the pec_short θ window is vacuum, so θ0 − h = −0.05
+# evaluates the guide at eps_r = 0.95, and dt is picked at 0.99 of the
+# eps_r = 1 Courant limit. 0.99 / sqrt(0.95) = 1.0157 — the FD minus step has
+# always been 1.6 % OUTSIDE the stability limit, on every rung.
+#
+# Why it only surfaces now, measured rather than inferred (coarse rung, x64,
+# θ = −0.05): the coarse rung stays bounded to 8545 steps (max|S| = 1.00254
+# for pec_short, 1.00196 for thru), the mid rung returns NaN for pec_short AND
+# for thru — a DUT with no conductor anywhere. So eps_r < 1 alone is
+# sufficient; the ownership contract did not cause it. What the contract
+# removed is the thing that used to hide it on this DUT: the lane no longer
+# folds the short into a sigma = 1e10 volume, and that lossy block sat one
+# cell from the window and damped the growing mode.
+#
+# Nothing here changes θ0 or h to make the leg pass. That is a re-declaration
+# of a measurement covered by the battery's predeclaration (a central
+# difference at the shipped fixture), so it is the PI's to make; the options
+# are written up in docs/design_notes/931_migration/T-tests-crossval.md §3.
+# What this file owes the next reader is the number, checkable without a solve.
+
+def guide_interior_cells(sim: Simulation) -> tuple[int, int]:
+    """Cell counts across the guide interior on (y, z) — ``A_M/dx`` and
+    ``B_M/dx``, both integral at every ladder rung by the assertions at the
+    top of this module. The material arrays carry one row beyond each on the
+    PEC-walled axes; fields there sit outside the guide."""
+    grid = sim._build_grid()
+    dx = float(grid.dx)
+    return int(round(A_M / dx)), int(round(B_M / dx))
+
+
+def eps_fd_step_courant_ratio(sim: Simulation, dut: str, *,
+                              theta0: float | None = None,
+                              h: float | None = None,
+                              interior_only: bool = True) -> float:
+    """``dt`` divided by the Courant limit at the FD MINUS step's ``eps_r``.
+
+    ``> 1`` means the finite-difference reference solve is unconditionally
+    unstable — what it produces is not a worse gradient, it is not a
+    gradient. Build-time: reads ``grid.dt`` and the assembled material array,
+    runs nothing.
+
+    ``interior_only`` (default) takes the minimum over the guide INTERIOR of
+    the θ window. The window is a full-cross-section x-slab, so it also
+    covers the row of cells beyond each PEC wall, which carry eps_r = 1 for
+    every DUT and no field worth the name; counting them would report the
+    vacuum ratio for the eps_r = 4 slab as well, and the run says otherwise —
+    the slab's FD legs came back finite and the pec_short legs did not.
+    """
+    theta0 = THETA0_EPS if theta0 is None else float(theta0)
+    h = FD_STEP_EPS if h is None else float(h)
+    grid = sim._build_grid()
+    i_lo, i_hi = design_region_index_range(sim, dut)
+    eps = np.asarray(sim._assemble_materials(grid)[0].eps_r)
+    window = eps[i_lo:i_hi, :, :]
+    if interior_only:
+        ny, nz = guide_interior_cells(sim)
+        window = window[:, :ny, :nz]
+    eps_minus = float(np.min(window)) + (theta0 - h)
+    if eps_minus <= 0.0:
+        return float("inf")
+    dx = float(grid.dx)
+    limit = math.sqrt(eps_minus) * dx / (C0 * math.sqrt(3.0))
+    return float(grid.dt) / limit
+
+
+def eps_fd_step_min_eps(sim: Simulation, dut: str, *,
+                        theta0: float | None = None,
+                        h: float | None = None) -> float:
+    """The smallest ``eps_r`` the FD minus step puts inside the guide."""
+    theta0 = THETA0_EPS if theta0 is None else float(theta0)
+    h = FD_STEP_EPS if h is None else float(h)
+    grid = sim._build_grid()
+    i_lo, i_hi = design_region_index_range(sim, dut)
+    ny, nz = guide_interior_cells(sim)
+    eps = np.asarray(sim._assemble_materials(grid)[0].eps_r)
+    return float(np.min(eps[i_lo:i_hi, :ny, :nz])) + (theta0 - h)
+
+
+def assert_eps_fd_step_is_courant_admissible(sim: Simulation, dut: str) -> float:
+    """Refuse to call an unstable solve a finite-difference reference.
+
+    RED TODAY for ``dut='pec_short'`` (ratio 1.0157 at every rung) and green
+    for ``slab`` (0.498), which is the split the run measured. Returns the
+    ratio when it passes.
+    """
+    ratio = eps_fd_step_courant_ratio(sim, dut)
+    if ratio > 1.0:
+        raise AssertionError(
+            f"{dut}: the eps FD minus step (θ0 = {THETA0_EPS}, h = "
+            f"{FD_STEP_EPS}) puts eps_r = "
+            f"{eps_fd_step_min_eps(sim, dut):g} inside the guide, where dt is "
+            f"{ratio:.4f} x the Courant limit. The reference solve is "
+            "unstable: it returned NaN at the mid and fine rungs on VESSL run "
+            "369367259196. Fix the STEP, not the gate.")
+    return ratio

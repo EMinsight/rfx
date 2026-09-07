@@ -178,9 +178,53 @@ One line section T needs present, for the carriers above:
    `_ENVELOPES_REDERIVED_FOR_931` (cv05) are `False` and gate the pins that
    cannot be recomputed without the re-solve. Flip each in the same commit that
    ingests its artifact, and re-pin from the artifact.
-4. **`tests/fixtures/waveguide_chain_battery/` (tests-oracle group).** The
-   battery's `("pec_short", "sigma")` AD leg changes meaning: the S-matrix lane
-   no longer folds `pec_mask` into `sigma = 1e10`, so the override now
-   differentiates through vacuum cells inside an edge-realized short. That leg
-   must be re-measured, not re-pinned. Section T has scheduled the run (see
-   `RECOMPUTE.md`); ingest decides whether to adopt the artifact.
+4. **`tests/fixtures/waveguide_chain_battery/` (tests-oracle group).** The run
+   is DONE — VESSL 369367259196, artifact
+   `/root/workspace/claude-workspace/rfx/runs/issue931-post-chain-battery-20260907T105351Z/fixture.json`,
+   full measured-vs-predeclared table in `_results_T/RECOMPUTE.md`. Three
+   things the ingest owner needs from it:
+
+   * the `("pec_short", "sigma")` AD leg did NOT move (g_AD −6.4283 vs
+     −6.4214, rel 4.9e-4 against a 0.05 gate). The prediction that it would
+     was wrong and is recorded as wrong;
+   * `S22` on the pec_short DUT moves by exactly one cell at all three rungs
+     (−2.5263 / −1.2646 / −0.6323 mm at dx = 2.54 / 1.27 / 0.635 mm) while
+     `S11` does not move at all. That is the far face arriving where it is
+     drawn — the design note §5 one-cell witness, on a case that was not asked
+     to provide one. Adopting the artifact re-pins every `S22`-derived number
+     for that DUT, and only those;
+   * thru and slab are unchanged to 1.1e-5, and the nine
+     `forward_identity|*|flux|*` failures the run-2 fixture carries are gone.
+
+5. **The eps FD leg's step is outside the Courant limit — a PI decision, not a
+   re-pin.** All six `ad_vs_fd|pec_short|*|eps|*` legs come back with
+   `g_fd = nan`. Cause, traced and measured (`RECOMPUTE.md`): the minus arm
+   evaluates the vacuum θ window at `eps_r = 0.95` while dt is picked at 0.99
+   of the `eps_r = 1` limit — `0.99/sqrt(0.95) = 1.0157`, on every rung, since
+   the fixture was written. A thru guide with no conductor anywhere NaNs the
+   same way at the mid rung, so this is not the realization change; the change
+   only removed the lossy `sigma = 1e10` block that used to damp it one cell
+   from the window.
+
+   `tests/_waveguide_chain_battery_fixture.py` now carries
+   `eps_fd_step_courant_ratio` / `assert_eps_fd_step_is_courant_admissible`
+   (build-time, no solve; 1.015719 for pec_short, 0.498123 for slab). Nothing
+   calls the assert yet — the battery's tests live in `tests/oracle/`, which
+   section T does not own, and wiring it in makes a currently-green lane red.
+   Section T did NOT touch `THETA0_EPS` (0.0) or `FD_STEP_EPS` (0.05): moving
+   either re-declares a measurement the battery's predeclaration fixes (a
+   CENTRAL difference AT the shipped fixture). The three ways out, for whoever
+   re-declares:
+
+   a. `θ0 = +h` for the eps leg on pec_short — the minus arm lands on
+      `eps_r = 1.0` exactly. Cheapest; costs the "AD is evaluated at the
+      shipped fixture" property, which is the property the predeclaration
+      names.
+   b. a one-sided (plus-arm) difference for that leg — keeps θ0, drops the
+      estimator from O(h²) to O(h), so the 0.05 relative gate must be
+      re-derived, not reused.
+   c. lower the fixture's Courant factor so `eps_r = 0.95` is admissible —
+      correct and unaffordable: dt changes, and every recorded number in the
+      battery changes with it.
+
+   Section T's reading is (a), stated as a preference and not applied.
