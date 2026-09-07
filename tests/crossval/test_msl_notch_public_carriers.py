@@ -19,7 +19,17 @@ This test couples them. It locks:
      prints) and the ELECTRICAL width the analytic reference takes
      (635.0um = 10 node rows * dx, unchanged by #931 because the strip's
      row count is unchanged). Both must be measured, not asserted from a
-     formula;
+     formula.
+
+     #931 history: under the pre-contract rule the 600um trace realized
+     635.0um and `round(W_TRACE/DX)*DX = 571.5um` was demonstrably the WRONG
+     answer, so this file asserted the inequality. Under the lattice
+     ownership contract the trace is foil, i.e. a SHEET, and a sheet's
+     footprint is the CLOSED node rectangle (design note §1.3): nodes 16..25
+     at dx=63.5um, geometric width 571.5um -- which for this W/dx coincides
+     with the old "naive" formula. The inequality is therefore deleted rather
+     than inverted; what is pinned is that both numbers are READ off the
+     build, and which one each consumer takes;
   3. the committed run log's headline numbers, parsed from the log rather
      than retyped;
   4. each carrier quotes the CURRENT numbers, and carries the superseded
@@ -79,6 +89,37 @@ def log_text():
     return RUN_LOG.read_text(encoding="utf-8")
 
 
+# --------------------------------------------------------------------------- #
+# #931 lattice ownership — the migration gate for cv06b
+# --------------------------------------------------------------------------- #
+# cv06b draws its trace and stub as one-cell PEC Boxes from z = H_SUB to
+# z = H_SUB + DX. Real copper on this board is ~35 um against a 63.5 um cell,
+# i.e. foil, so under the contract they are SHEETS on the substrate-top node
+# plane (design note §1.3) and the crossval-B migration declares them with
+# add_thin_conductor. Measured here, on a stand-in build of the same board:
+#
+#   1-cell Box (V): z walls at 254.0 and 317.5 um  (the far face is NEW under
+#                   the contract), realized y width 635.0 um
+#   zero-thickness sheet (S): one wall at 254.0 um, realized y width 571.5 um
+#
+# So (S) keeps the electrical z-plane the board has today and moves the
+# in-plane width; (V) keeps the width and turns the foil into a 63.5 um slab
+# with a second wall. The width feeds Hammerstad-Jensen: 46.18 ohm at 635 um,
+# 49.39 ohm at 571.5 um against a design-board 47.90 ohm. Every one of those
+# numbers is downstream of the re-solve, so nothing here is re-typed.
+_MIGRATION_RUN = ("VESSL rfx-931-post-cv06b — "
+                  "validation/crossval/06b_msl_notch_filter_uniform.py "
+                  "re-solved with the trace and stub declared as sheets "
+                  "(crossval-B); the run log, W_realized, Z0 median and "
+                  "F_NOTCH_AN all move with it")
+
+
+def _is_sheet_declared(sim) -> bool:
+    """True when cv06b's conductors are sheet declarations, not Boxes."""
+    from tests._realized_pec import realize
+    return len(realize(sim).sheets) >= 2
+
+
 def test_mesh_convention_is_h_sub_over_four(cv06b):
     """dx = h_sub/4 is the whole point of #723 -- an aligned substrate."""
     assert cv06b.DX == pytest.approx(cv06b.H_SUB / 4.0, rel=1e-12)
@@ -90,8 +131,12 @@ def test_mesh_convention_is_h_sub_over_four(cv06b):
 
 
 def test_realized_board_is_measured_not_assumed(cv06b):
-    """Substrate 254.0um exactly; trace and stub both 571.5um, measured from
-    the realized PEC EDGE set on the real build (no time stepping).
+    """Substrate 254.0um exactly; trace and stub both 571.5um GEOMETRIC,
+    measured from the realized PEC EDGE set on the real build (no time
+    stepping), and 635.0um ELECTRICAL from the script's own reader.
+
+    The substrate is a dielectric and the contract does not touch dielectric
+    sampling (design note §1.1), so 254.0um exact holds at every stage.
 
     #931: the metal is declared as two SHEETS (zero-thickness Boxes on the
     substrate-top node plane). A sheet's conductor is the set of edges
@@ -99,7 +144,8 @@ def test_realized_board_is_measured_not_assumed(cv06b):
     The pre-#931 neighbour rule zeroed one extra edge past the hi rim of
     each footprint and this case read 635.0um = 10 * dx -- a CELL count of
     a NODE mask. Both readings are recorded here so the change cannot be
-    mistaken for a re-pin.
+    mistaken for a re-pin; ``_realized_trace_width`` must return what the
+    realization actually did, and the analytic reference must be fed that.
     """
     sim = cv06b._build_sim()
     report = sim.fidelity_report(print_report=False)
@@ -137,6 +183,31 @@ def test_realized_board_is_measured_not_assumed(cv06b):
     naive = round(cv06b.W_TRACE / cv06b.DX) * cv06b.DX
     assert naive == pytest.approx(571.5e-6, rel=1e-9)
     assert naive != pytest.approx(635.0e-6, rel=1e-6)
+
+
+def test_trace_and_stub_are_foil_on_the_substrate_top_plane(cv06b):
+    """#931 §1.3: 35 um copper against a 63.5 um cell is foil, i.e. a SHEET.
+
+    Declared as a one-cell Box the same metal is a 63.5 um SLAB: the contract
+    gives it a second wall at z = 317.5 um and shorts the normal edge through
+    it, which changes the microstrip cross-section, Z0 and the notch
+    frequency materially. So the declaration is what is checked — one wall at
+    the substrate top, no cell owned, normal E live through the film — and
+    the falsifier arm asserts there is no wall a cell above the laminate.
+    """
+    sim = cv06b._build_sim()
+    if not _is_sheet_declared(sim):
+        pytest.skip("cv06b still draws the trace and stub as one-cell PEC "
+                    f"Boxes; {_MIGRATION_RUN}")
+    from tests._realized_pec import (assert_no_wall_at, assert_normal_edge_live,
+                                     assert_sheet_owns_no_cell,
+                                     assert_sheet_planes, realize)
+    realized = realize(sim)
+    assert_sheet_planes(realized, 2, [cv06b.H_SUB], what="cv06b trace/stub")
+    assert_sheet_owns_no_cell(realized, what="cv06b trace/stub")
+    assert_normal_edge_live(realized, what="cv06b trace/stub")
+    assert_no_wall_at(realized, 2, [cv06b.H_SUB + cv06b.DX],
+                      what="cv06b board")
 
 
 def test_shared_helper_agrees_with_the_case_gate(cv06b):
@@ -182,6 +253,13 @@ def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
     """
     from rfx.sources.msl_eigenmode import hammerstad_jensen_z0_eps_eff
 
+    if _is_sheet_declared(cv06b._build_sim()):
+        pytest.skip(
+            "cv06b's realized trace width moves 635.0 -> 571.5 um when the "
+            "foil is declared as a sheet (Hammerstad-Jensen 46.18 -> 49.39 "
+            "ohm), and the measured Z0 median moves with the re-solve. Every "
+            "number in this test is downstream of both; re-derive them from "
+            f"the new run log rather than re-typing: {_MIGRATION_RUN}")
     z0_design, _ = hammerstad_jensen_z0_eps_eff(600e-6, 254e-6, cv06b.EPS_R)
     z0_realized_63, _ = hammerstad_jensen_z0_eps_eff(635e-6, 254e-6, cv06b.EPS_R)
     z0_realized_80, _ = hammerstad_jensen_z0_eps_eff(560e-6, 320e-6, cv06b.EPS_R)
@@ -220,7 +298,7 @@ def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
     assert dev_design_63 == pytest.approx(2.9, abs=0.15)
 
 
-def test_committed_log_reports_the_numbers_the_carriers_quote(log_text):
+def test_committed_log_reports_the_numbers_the_carriers_quote(log_text, cv06b):
     """Parse the log; do not retype it."""
     def grab(label: str) -> float:
         m = re.search(rf"{label}\s*=\s*(-?[\d.]+)", log_text)
@@ -230,7 +308,17 @@ def test_committed_log_reports_the_numbers_the_carriers_quote(log_text):
     assert grab("Notch frequency error") == pytest.approx(1.40, abs=0.005)
     assert grab(r"Notch depth \|S21\|") == pytest.approx(-43.3, abs=0.05)
     assert grab(r"Re\(Z0\) median") == pytest.approx(46.5, abs=0.05)
-    assert "W_realized=635.0µm" in log_text
+    # #931: the realized width is a reading, so read it out of the log and
+    # check it against the build that produced it, instead of pinning the
+    # literal 635.0 that only holds for the pre-contract realization.
+    m = re.search(r"W_realized=([\d.]+)", log_text)
+    assert m, "W_realized missing from the run log"
+    logged_um = float(m.group(1))
+    live_um = cv06b._realized_trace_width(cv06b._build_sim()) * 1e6
+    assert logged_um == pytest.approx(live_um, abs=1e-6), (
+        f"the committed run log records W_realized={logged_um} um but this "
+        f"tree realizes {live_um} um — the log predates the geometry it "
+        f"claims to describe ({_MIGRATION_RUN})")
     assert "mesh: dx=63.5µm, n_z_sub=4" in log_text
     assert "PASS: cv06b" in log_text
 

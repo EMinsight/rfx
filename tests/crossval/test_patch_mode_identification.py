@@ -249,6 +249,55 @@ def _fixture(name):
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
+# --------------------------------------------------------------------------- #
+# #931: the two cv15 ring-down legs are HISTORY, not two live options
+# --------------------------------------------------------------------------- #
+# ``cv15_ringdown_spectra.json`` carries two reproductions of the same board:
+# ``two_plane_ground`` (walls at both faces of the one-cell ground) and
+# ``one_plane_ground_740_defect`` (one wall, a full cell below the substrate
+# floor -- the #693 vacuum ground cell). They were produced by
+# ``build_rfx_sim(two_plane=True/False)``, and the whole #740 argument was that
+# the flag chose between them.
+#
+# The lattice ownership contract removes the choice. A conductor is declared a
+# volume or a sheet; a volume realizes BOTH faces at every thickness and a
+# sheet realizes exactly one declared plane, so neither leg is reachable from a
+# flag any more and "two_plane_ground" is not the name of a correct build. What
+# the pair still is, and what these tests still use it for, is a frozen
+# MEASUREMENT of two realizations of one board: the dilation between them
+# (x1.068 common-mode) and the mode-pair ratio band derived from it are
+# statements about geometry sensitivity that stand on their own.
+#
+# So the legs are read by role, not by mechanism, and the names are resolved
+# rather than typed. If the crossval-C regeneration renames them (it should:
+# the mechanism they name is deleted), this keeps working, and the assertions
+# below stop describing a flag as the correct answer.
+_LEG_ALIASES = {
+    # role -> the fixture keys that have ever carried it, newest first
+    "two_wall": ("two_wall_ground", "volume_ground", "two_plane_ground"),
+    "one_wall": ("one_wall_ground_740_defect", "one_plane_ground_740_defect"),
+}
+
+
+def _leg(fx, role):
+    """The ring-down leg for ``role``, whatever the fixture calls it."""
+    for key in _LEG_ALIASES[role]:
+        if key in fx:
+            return fx[key]
+    raise KeyError(
+        f"no leg for role {role!r} in the committed spectra; tried "
+        f"{_LEG_ALIASES[role]}. The #740 realization pair is frozen HISTORICAL "
+        "evidence under #931 — if it was regenerated, add the new key here "
+        "rather than renaming the role.")
+
+
+def _leg_key(fx, role):
+    for key in _LEG_ALIASES[role]:
+        if key in fx:
+            return key
+    raise KeyError(role)
+
+
 def test_cv05_correct_build_passes_with_margin():
     """(A) cv05's committed configuration, run through its own script: the
     design member TM100 is FOUND, its residual is more than 3x inside the
@@ -309,22 +358,26 @@ def test_cv05_mis_realized_resonant_length_fails_for_the_stated_reason(run, f_gh
     assert all(o != (1, 0) for _f, o, _r in ident.assignments)
 
 
-def test_cv15_correct_build_would_pass_with_margin():
+def test_cv15_two_wall_realization_would_pass_with_margin():
     """(A) for cv15, recorded even though cv15 ships no spectral gate: the
-    correct (two_plane) build's ring-down identifies every in-band declared
-    member with margin against the derived tolerance.
+    two-wall realization's ring-down identifies every in-band declared member
+    with margin against the derived tolerance.
 
-    Source: ``cv15_ringdown_spectra.json::two_plane_ground.modes`` -- a live
-    reproduction recorded 2026-09-01 at repo commit 5b6db32 through what was
-    then cv15's production builder, ``build_rfx_sim(two_plane=True)``. That
-    spelling no longer exists (#931 deletes the flag and declares both
-    conductors as sheets); the fixture is frozen historical evidence and is
-    deliberately not regenerated. (A) alone is cosmetic; (B) is what cv15
-    could not meet."""
+    Source: ``cv15_ringdown_spectra.json::two_plane_ground.modes``, read here
+    through the ``two_wall`` leg alias -- a live reproduction recorded
+    2026-09-01 at repo commit 5b6db32 through what was then cv15's production
+    builder, ``build_rfx_sim(two_plane=True)``: the board with a wall at each
+    face of the one-cell ground. #931 note: that leg used to be called "the
+    correct build" because a flag chose it. Under the ownership contract it is
+    what a VOLUME declaration realizes, and cv15's foil is declared a SHEET
+    instead (the flag spelling no longer exists), so the leg is frozen
+    historical evidence about geometry sensitivity rather than a live option,
+    and the fixture is deliberately not regenerated. (A) alone is cosmetic;
+    (B) is what cv15 could not meet."""
     fx = _fixture("cv15_ringdown_spectra.json")
     members = _members(CV15)
     ident = identify_patch_modes(
-        [m["freq_hz"] for m in fx["two_plane_ground"]["modes"]], members)
+        [m["freq_hz"] for m in _leg(fx, "two_wall")["modes"]], members)
     assert ident.ok, ident.reasons
     worst = max(abs(r) for _f, o, r in ident.assignments if o is not None)
     assert worst < 0.5 * ident.tol        # margin, not a squeaker
@@ -347,7 +400,7 @@ def test_cv15_reproduction_ringdown_matches_the_leg_it_was_recorded_from():
     fixture rests on, permanently.
 
     The leg carries no mode list; f0 is the field the two share."""
-    fx = _fixture("cv15_ringdown_spectra.json")["two_plane_ground"]
+    fx = _leg(_fixture("cv15_ringdown_spectra.json"), "two_wall")
     leg = json.loads(
         (REPO_ROOT / "validation/crossval/_15_patch_results"
          / "rfx_pre931_two_plane_ground_1f005d0d.json").read_text(encoding="utf-8"))
@@ -392,8 +445,8 @@ def test_cv15_740_defect_is_a_common_mode_dilation():
     fx = _fixture("cv15_ringdown_spectra.json")
     members = _members(CV15)
 
-    good = [m["freq_hz"] for m in fx["two_plane_ground"]["modes"]]
-    bad = [m["freq_hz"] for m in fx["one_plane_ground_740_defect"]["modes"]]
+    good = [m["freq_hz"] for m in _leg(fx, "two_wall")["modes"]]
+    bad = [m["freq_hz"] for m in _leg(fx, "one_wall")["modes"]]
     assert identify_patch_modes(good, members).ok
     ident_bad = identify_patch_modes(bad, members)
     assert ident_bad.ok, "the spectral gate is blind to #740 -- by construction"
@@ -416,17 +469,17 @@ def test_cv15_740_defect_is_a_common_mode_dilation():
     assert dil["half_spread"] < 0.5 * ident_bad.tol
 
     # the instrument that DOES see it, quoted from the same reproduction
-    assert fx["one_plane_ground_740_defect"]["assert_realized_stack"].startswith(
+    assert _leg(fx, "one_wall")["assert_realized_stack"].startswith(
         "RuntimeError: assert_realized_stack:")
     assert "no electric wall at z_sub_lo" in \
-        fx["one_plane_ground_740_defect"]["assert_realized_stack"]
+        _leg(fx, "one_wall")["assert_realized_stack"]
 
 
 def test_cv15_one_plane_reproduction_matches_the_committed_prefix_leg():
     """The live one-plane reproduction and the committed pre-fix leg
     (`rfx_one_plane_ground_b29f9de7.json`) are the same defect: their ring-down
     f0 agree to 6e-9 relative."""
-    fx = _fixture("cv15_ringdown_spectra.json")["one_plane_ground_740_defect"]
+    fx = _leg(_fixture("cv15_ringdown_spectra.json"), "one_wall")
     committed = json.loads(
         (REPO_ROOT / "validation/crossval/_15_patch_results"
          / "rfx_one_plane_ground_b29f9de7.json").read_text(encoding="utf-8"))
@@ -472,9 +525,9 @@ def test_mode_pair_ratio_band_census_reproduces_from_the_committed_spectra():
         identification_tolerance(members), rel=1e-12)
 
     widths = {}
-    for key, leg in (("correct_build", "two_plane_ground"),
-                     ("defect_740", "one_plane_ground_740_defect")):
-        fs = sorted(m["freq_hz"] for m in fx[leg]["modes"])
+    for key, role in (("correct_build", "two_wall"),
+                      ("defect_740", "one_wall")):
+        fs = sorted(m["freq_hz"] for m in _leg(fx, role)["modes"])
         r = fs[1] / fs[0]
         assert band["measured"][key]["pair_ratio"] == pytest.approx(r, rel=1e-12)
         assert band["measured"][key]["residual_vs_declared"] == pytest.approx(
@@ -511,12 +564,12 @@ def test_a_band_from_the_census_interval_does_separate_the_two_realizations():
     hi = band["declared_anchored_band"]["max_half_width_still_rejecting_740"]
     w = math.sqrt(lo * hi)          # geometric midpoint of the interval
 
-    def fires(leg):
-        fs = sorted(m["freq_hz"] for m in fx[leg]["modes"])
+    def fires(role):
+        fs = sorted(m["freq_hz"] for m in _leg(fx, role)["modes"])
         return abs(fs[1] / fs[0] / r_decl - 1.0) > w
 
-    assert not fires("two_plane_ground")            # correct build admitted
-    assert fires("one_plane_ground_740_defect")     # #740 rejected
+    assert not fires("two_wall")     # the two-wall realization admitted
+    assert fires("one_wall")         # the #740 one-wall realization rejected
 
 
 def test_the_census_interval_is_far_tighter_than_anything_derivable():

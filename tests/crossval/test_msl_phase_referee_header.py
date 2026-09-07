@@ -205,6 +205,20 @@ def test_f_notch_an_matches_cv06b_closed_form():
     own oracle, and a cross-check that this script did not silently
     diverge from the repo's existing validated formula.
 
+    #931 (2026-09-07): cv06b's realized trace width moves again when its
+    foil is declared a SHEET — 635.0um -> 571.5um on that board, so its
+    runtime ``F_NOTCH_AN`` moves a second time. This test is unaffected for
+    the same reason it was unaffected in #723: it never imports cv06b and
+    compares only against Stage A's own explicitly-meshed 600/254um board.
+    Stage A's substrate is a dielectric and dielectric sampling is untouched
+    by the contract (§1.1), so ``n_z_sub_realized`` — the quantity
+    ``_build_stage_b`` pins its mesh against — does not move either. What DOES
+    move on the referee side is ``w_trace_realized_m``: the openEMS Stage-B
+    board is meshed from rfx's realized trace, so it must be re-meshed and
+    re-run with cv06b/cv20 (crossval-B/E), and the declared-vs-realized
+    distinguishability argument (5 vs 6 substrate cells) has to be re-checked
+    rather than assumed to survive.
+
     issue #723 (2026-08-27) CORRECTION: this is the SAME formula, but NOT
     the same board as cv06b's own runtime output any more. ``module.
     F_NOTCH_AN_HZ`` here is Stage A's value (A_MSL_WIDTH_UM=600,
