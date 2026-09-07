@@ -649,3 +649,217 @@ recorded and neither changed here:**
 - Tied-minimum cells are excluded from the AD1/AD3 dominant-cell
   comparison and reported one-sided (no jitter: the vector under test is
   the builder's).
+
+## Results
+
+Measured 2026-09-07 06:42-06:53 UTC on the shared machine (load ~10, a
+test battery running in another worktree). Instrument commit `5fdfced9`
+(A1), `4c5f6476` (A2/A3), `15a59c33` (AD1-4); `rfx.__file__ =
+/Users/byungkwankim/Documents/rfx-nu-accuracy/rfx/__init__.py` printed by
+every call; no `rfx/` source touched. The `git_dirty = true` on the A1
+rows is the results JSON itself being written into the tree between
+commits; nothing else was modified. One attempt per unit, no unit
+re-run, no `--force` used, no window edited. Everything below is read
+from `validation/research/multiband_nu/results/w7_accuracy_ad.json`.
+
+Selfcheck (auto-run before every arm): oracle (i) worst 1.81e-16, (i')
+1.88e-16 relative; every model row of this note reproduced; all_pass.
+
+### A1 — z-stratified cavity, 15 ns harminv, both eps rules
+
+Per unit: measured error `f_meas - f_true`, the exact discrete model,
+their residual (gate G3, window 0.15 MHz), run-length invariance
+`|f(15 ns) - f(10 ns)|` (window 0.1 MHz), z-fraction. All in MHz.
+
+| unit | f_meas GHz | err | model | resid | inv | z-frac | nz | cells | steps | wall s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| uc 2 dual | 10.497397 | -64.322 | -64.303 | -0.019 | 0.036 | 0.964 | 44 | 19215 | 13627 | 0.9 |
+| uc 2 prod | 10.532255 | -29.465 | -29.461 | -0.004 | 0.001 | 0.928 | 44 | 19215 | 13627 | 0.8 |
+| uc 1 dual | 10.545680 | -16.040 | -16.006 | -0.035 | 0.066 | 0.964 | 88 | 139997 | 27254 | 6.7 |
+| uc 1 prod | 10.562090 | +0.370 | +0.341 | +0.029 | 0.059 | 0.257 | 88 | 139997 | 27254 | 6.0 |
+| uc 0.5 dual | 10.557741 | -3.979 | -3.997 | +0.018 | 0.035 | 0.964 | 176 | 1066425 | 54508 | 87.8 |
+| uc 0.5 prod | 10.565731 | +4.011 | +3.991 | +0.020 | 0.057 | 0.961 | 176 | 1066425 | 54508 | 88.1 |
+| mb 2 dual | 10.440043 | -121.677 | -121.618 | -0.059 | 0.009 | 0.980 | 32 | 14091 | 13627 | 0.6 |
+| mb 2 prod | 10.345074 | -216.646 | -216.635 | -0.011 | 0.059 | 0.989 | 32 | 14091 | 13627 | 0.6 |
+| mb 1 dual | 10.531626 | -30.093 | -30.098 | +0.004 | 0.023 | 0.980 | 64 | 102245 | 27254 | 4.6 |
+| mb 1 prod | 10.483764 | -77.956 | -77.932 | -0.024 | 0.014 | 0.992 | 64 | 102245 | 27254 | 4.6 |
+| mb 0.5 dual | 10.554219 | -7.501 | -7.505 | +0.005 | 0.005 | 0.980 | 128 | 777225 | 54508 | 58.4 |
+| mb 0.5 prod | 10.543340 | -18.380 | -18.351 | -0.029 | 0.058 | 0.992 | 128 | 777225 | 54508 | 56.4 |
+| az 2 dual | 10.537389 | -24.331 | -24.306 | -0.025 | 0.061 | 0.976 | 67 | 29036 | 30130 | 2.2 |
+| az 2 prod | 10.545163 | -16.556 | -16.525 | -0.031 | 0.075 | 0.965 | 67 | 29036 | 30130 | 1.9 |
+| az 1 dual | 10.538970 | -22.749 | -22.753 | +0.004 | 0.039 | 0.985 | 75 | 119548 | 37457 | 7.2 |
+| az 1 prod | 10.546804 | -14.915 | -14.924 | +0.008 | 0.023 | 0.978 | 75 | 119548 | 37457 | 6.5 |
+| az 0.5 dual | 10.554337 | -7.383 | -7.385 | +0.002 | 0.037 | 0.986 | 133 | 807350 | 65667 | 72.8 |
+| az 0.5 prod | 10.549165 | -12.554 | -12.555 | +0.001 | 0.004 | 0.991 | 133 | 807350 | 65667 | 75.6 |
+
+Gates and falsifiers (measured vs window):
+
+- **A1-O (i)/(i') HELD**: 1.81e-16 / 1.88e-16 <= 1e-12.
+- **G3 HELD** on all 18 units: worst residual 0.059 MHz (mb 2 dual) on the
+  dual rule, 0.031 MHz (az 2 prod) on production; window 0.15 MHz.
+- **Run-length invariance HELD** on all 18: worst 0.075 MHz (az 2 prod);
+  window 0.1 MHz. Every unit `valid` at 15 ns and at 10 ns.
+- **G1 HELD**: min z-fraction over UC/MB dual 0.964 (>= 0.80; model 0.964).
+  The 0.257 on `uc 1 prod` is the production arm where the first-order
+  sampling term nearly cancels the grading error (+0.37 MHz total); it is
+  a reported arm and not in the G1 set.
+- **G2 HELD**: min grading share 0.467 (>= 0.20; model 0.467-0.471).
+- **A1-O (ii) HELD**: dual UC fitted order **p_uc = 2.007**, window
+  [1.8, 2.2] (model 2.004); 3 points, all above the 0.3 MHz floor
+  (smallest 3.98 MHz).
+- **A1-F1 HELD**: dual MB fitted order **p_mb = 2.010** >= 1.8 (model
+  2.009); no anomaly (< 2.4).
+- **A1-F2 HELD**: **rho = 1.884** at h = df(s = 1) <= 2.0 (exact model
+  1.883); per-scale MB/UC ratios 1.885 / 1.876 / 1.892 at s = 0.5 / 1 / 2
+  (model 1.878 / 1.881 / 1.891).
+- **A1-R (reported)**: measured `e_samp = f(prod) - f(dual)` in MHz vs the
+  section 1b table: UC +7.990 / +16.410 / +34.857 (model +7.988 / +16.347
+  / +34.842) at s = 0.5 / 1 / 2; MB -10.879 / -47.862 / -94.969 (model
+  -10.845 / -47.834 / -95.017); AZ -5.171 / +7.834 / +7.774 (model -5.170
+  / +7.829 / +7.780). Production ladder fitted orders 1.438 UC and 1.780
+  MB (expected 1.44 / 1.78; not orders of anything, recorded as such).
+  The interface-assignment tables re-recorded by the instrument matched
+  section 1a on all nine meshes. AZ: dz_min 0.167 / 0.167 / 0.111 mm at
+  s = 2 / 1 / 0.5 (nz 67 / 75 / 133), error -24.3 / -22.7 / -7.4 MHz
+  dual — the thin-layer cell does not scale with s, so the AZ error
+  does not follow the s^2 law; residual vs model <= 0.031 MHz. Cost MB
+  vs UC at matched s: cells 0.73x (14091 / 19215, 102245 / 139997,
+  777225 / 1066425), steps identical (same dt, dz_min = df on both),
+  wallclock 0.67-0.69x.
+
+Reading: on every mesh the solver did what its own operators say to
+<= 0.06 MHz (6e-6 relative); the grading error of the cap-1.4 four-cell
+dielectric band is second order with the same order as the uniform mesh,
+and its amplitude at matched finest cell is 1.88x the uniform one, which
+is the Yee `sum(k_z^4 d^2)` bound with r^2 = 1.96 minus the shared terms
+— the law of section 3.2, measured. The first-order production-sampling
+term (section 1) is confirmed at all three scales to <= 0.06 MHz against
+its exact model; #931 stands.
+
+### A2 — in-plane two-band TM110, 5.786173 GHz
+
+| arm | steps | f GHz | err % | model % | err_uniform % | diff pt |
+|---|---|---|---|---|---|---|
+| cap 1.3 | 8000 | 5.785435 | -0.01276 | -0.02146 | -0.01083 | -0.0019 |
+| cap 1.3 | 12000 | 5.785167 | -0.01738 | -0.02146 | -0.01100 | -0.0064 |
+| cap 1.4 | 8000 | 5.785077 | -0.01893 | -0.02766 | -0.01083 | -0.0081 |
+| cap 1.4 | 12000 | 5.784807 | -0.02360 | -0.02766 | -0.01100 | -0.0126 |
+| uniform | 8000 | 5.785546 | -0.01083 | -0.01142 | | |
+| uniform | 12000 | 5.785537 | -0.01100 | -0.01142 | | |
+
+- **A2-F1 HELD** at both caps and both step counts: worst |err| 0.0236 %
+  (cap 1.4, 12000) <= 0.10 %.
+- **A2-F2 HELD**: worst |diff| 0.0126 pt (cap 1.4, 12000) <= 0.05 pt.
+- **A2-V HELD**: invariance 0.0046 % (cap 1.3) and 0.0047 % (cap 1.4)
+  <= 0.017 %; separation and anti-vacuity pass on every unit. Snapped
+  source (13, 11, 5) and probe (27, 23, 5) as declared. Wallclock 0.8-1.9
+  s per unit. The cap-1.4 in-plane advisory fired on the 1.4 arm as the
+  preflight says it will (max ratio 1.318 x / 1.309 y > 1.3); recorded,
+  accepted, this note is the report it asks for.
+- Model residual (reported, no gate): +0.0087 / +0.0041 pt at cap 1.3,
+  +0.0087 / +0.0041 pt at cap 1.4, +0.0006 / +0.0004 pt uniform — the
+  Simulation path sits 0.004-0.009 pt above the bare-operator model at
+  8000 / 12000 steps; the step-count dependence (0.0046 %) is of the same
+  size as the committed single-band scatter (0.0071 pt).
+
+### A3 — TM111, all three axes multi-band, 7.051389 GHz
+
+| arm | steps | f GHz | err % | model % | diff pt |
+|---|---|---|---|---|---|
+| graded | 8000 | 7.048539 | -0.04042 | -0.03488 | -0.0393 |
+| graded | 12000 | 7.048516 | -0.04074 | -0.03488 | -0.0390 |
+| uniform | 8000 | 7.051311 | -0.00111 | -0.00098 | |
+| uniform | 12000 | 7.051266 | -0.00175 | -0.00098 | |
+
+- **A3-F1 HELD**: |err| 0.0407 % <= 0.20 % (model 0.0349 %).
+- **A3-F2 HELD**: |diff| 0.0393 pt <= 0.10 pt (model 0.0339 pt).
+- **A3-V HELD**: invariance 0.0003 % <= 0.033 %; separation and
+  anti-vacuity (max/min = 4 on every axis) pass. Model residual -0.0055 /
+  -0.0059 pt graded. Wallclock 1.1-2.3 s per unit.
+
+### AD1-AD5 — autodiff on the builder's meshes
+
+- **AD1 HELD** (f32, 120 steps, 32-cell A1 MB s = 2 vector, production
+  eps by index, pattern verified): 6 dominant non-tied cells (8, 9, 12,
+  13, 14, 15; |g_fd| 16-270), worst rel err **1.31e-3**, median 8.5e-5,
+  signs agree; window 0.15. x64 context (reported): worst 1.06e-3, same
+  dominant set. AD5 tie table for the two 1.0 mm cells: k = 10 g_ad
+  +120.0 between FD+ +144.3 and FD- +95.4; k = 11 g_ad +26.3 between
+  FD+ +49.3 and FD- +2.65 — the JAX tied-min convention lands between
+  the two one-sided slopes on both cells. Wallclock 2.0 s.
+- **AD2 HELD**: g_ad 0.012451 vs g_fd 0.012499, rel err **3.8e-3** <= 0.05,
+  signs agree; h = 0.015 on eps_thin = 3.0. Wallclock 1.2 s.
+- **AD3 FIRED** (f32, 120 steps, A3 vectors, 142 cells, 284 forward runs,
+  wallclock 7.0 s). Per axis, dominant non-tied cells / tied cells /
+  worst rel err / sign agreement: x 3 / 8 / **0.0043** / yes (HELD);
+  y 18 / 8 / **0.522** / yes (FIRED); z 12 / 8 / **0.992** / yes (FIRED).
+  All 142 AD values finite; every sign agrees. The arm is STOPPED as
+  declared; not re-run, not re-tuned, no x64 arm was declared for AD3
+  and none was run.
+
+  What the recorded data say about the fired rows (arithmetic on the
+  JSON, no new FDTD): `loss0 = 0.13063` and one f32 ulp of it is
+  1.49e-8, so a central FD with `h = 1e-3 d_k` cannot resolve a slope
+  finer than `ulp / (2h)` = 7.45e-3 on a 0.994 mm cell (3.0e-2 on a
+  0.25 mm cell). The non-tied `g_fd` values on the coarse cells are in
+  fact exact multiples of that quantum (7.49e-3, 1.4986e-2,
+  2.2479e-2, ...; the recorded values on the far coarse cells are 0 or
+  +-1 quantum, against AD values of 1e-28..1e-3). On the A3 fixture the
+  gradient is carried almost entirely by the 8 tied fine cells per axis
+  (|g| up to 992 x / 585 y / 946 z, where AD and central FD agree to
+  0.1-0.3 % and AD sits between FD+ and FD- on every tied cell), so the
+  non-tied maxima are only 10.0 (x), 0.82 (y) and 0.36 (z), and the
+  5 % dominance threshold admits cells whose FD reference is 3-50
+  quanta. Every one of the 12 fired cells has |g_fd| <= 17 quanta
+  (y: k = 10, 15, 30, 35 at 6-7 quanta; z: k = 12, 15, 16, 17, 27,
+  29, 32, 35 at 3-17 quanta); every dominant cell with >= 50 quanta
+  (x: 29, 30; y: 16, 29) agrees to <= 1.6 %. AD1 did not meet this
+  floor because its dominant cells carry |g_fd| 16-270 (2000-36000
+  quanta on 1.4 mm cells). So the fired measurement is consistent with
+  a correct joint gradient read against a reference at the f32
+  round-off floor of the declared FD, and it is also consistent with a
+  joint-gradient error of up to 1.0x on cells that contribute < 1 % of
+  the gradient norm — the declared instrument cannot tell these apart,
+  and this note does not choose. The joint dx/dy/dz gradient claim is
+  therefore NOT supported by this lane; it is not refuted either. A PI
+  decision is needed on whether an x64-loss AD3 (the AD1 x64 context,
+  which was declared there but not here) is a new declared arm.
+
+- **AD4 HELD**: 20 stacks (nz 6-580, dz_min 1.847 um, dt 6.1e-15 to
+  4.5e-13 s, all > 0), forward trace finite and gradient finite on all
+  20, zero non-finite values; max |g| per stack from 1.1e-3 (stack 9) to
+  7.8e+3 (stack 17), none zero. Wallclock 31.9 s.
+- **AD5** (knowledge output): tie tables recorded for AD1 (2 cells) and
+  AD3 (8 cells per axis). On every tied cell the AD value lies between
+  FD+ and FD- except z k = 20 and k = 26 in AD3 (AD +0.34 / +0.44 vs FD+
+  +0.60 / +1.01 and FD- -2.92 / -2.80: inside the interval as well, the
+  sign of the central average being the artefact). The realized
+  convention is the equal split of the tied `min` cotangent.
+
+Scope statement, recorded as declared: the builder is host-side numpy,
+gradients w.r.t. layer EDGES are not available and not claimed; every
+AD arm differentiates w.r.t. the realized cell vector (or eps by index).
+
+### Replay test
+
+`tests/unit/nonuniform/test_band_accuracy_ad_replay.py` against the
+results JSON: **14 passed, 1 failed** — `test_replay_ad3` red at
+`worst dominant AD-vs-FD 5.224e-01 > 0.15`, by design. It stays red; the
+answer is a PI decision, not a tolerance edit.
+
+### Validity domain (what this lane measured, and where)
+
+| claim | inside (measured) | outside / not measured |
+|---|---|---|
+| Stratified-dielectric cavity on a builder MB mesh converges at order 2 with amplitude <= 1.9x uniform (Fabry-Perot / Yee sum k_z^4 d^2 law) | eps 4.3 / 3.0 / 4.3 / 1 (contrast 4.3), 4-cell thin band at cap 1.4, fine 30 and coarse 21 cells per dielectric wavelength (s = 1), s = 0.5-2, LSE/Ey m = 1 p = 5 at 10.56 GHz, PEC, dual-cell-average eps on node-aligned interfaces | production interface sampling (first-order, #931, reported not gated); Ez/Hz families; contrast > 4.3; bands thinner than 4 cells; lossy or dispersive media; PML-terminated boxes |
+| Absolute accuracy on the same mesh | \|err\| 0.071 % (mb 0.5 dual) to 1.15 % (mb 2 dual) over s; production 0.17-2.05 % | — |
+| Auto-z (`_make_dz_profile`) on the same fixture | err 0.070-0.23 % over s, model residual <= 0.031 MHz; no order claimed (thin cell pinned by min_cells_per_feature) | any order statement |
+| In-plane two-band grading, TM110 | caps 1.3 and 1.4, 4:1 fine/coarse, 8000 and 12000 steps, 5.79 GHz: \|err\| <= 0.024 %, excess over uniform <= 0.013 pt | caps > 1.4; more than two bands per axis; cavities with dielectric loading in-plane |
+| Three axes graded at once, TM111 | cap ~1.3 all axes, 4:1, 7.05 GHz: err -0.041 %, excess -0.039 pt | — |
+| Profile gradient (dz), material gradient (eps by index) on a dielectric MB mesh | AD1 1.3e-3, AD2 3.8e-3 at f32, 120 steps, dominant cells with FD reference >= 2000 f32 quanta | cells whose FD reference is < 50 quanta (unresolved by the declared FD) |
+| Joint (dx, dy, dz) gradient on a three-axis MB mesh | x axis 4.3e-3 (dominant cells at 49-443 quanta); tied fine cells agree to 0.1-0.3 % on all axes (reported, excluded by AD5) | **y and z dominant coarse/ramp cells: FIRED at 0.52 / 0.99; unresolved — not supported, not refuted** |
+| Tracer path of `make_nonuniform_grid` with `cpml_layers = 0` on the builder's output family | 20 stacks, nz 6-580, dz_min 1.85 um: finite, dt > 0 | more than 6 layers; dz below 1.85 um |
+
+Wallclock: A1 482 s of FDTD (18 units; the s = 0.5 units 56-88 s each),
+A2 7.8 s, A3 6.6 s, AD1-4 42 s; the whole lane under 12 minutes of
+solver time plus 9 s of selfcheck per call.
