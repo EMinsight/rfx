@@ -409,6 +409,34 @@ fixture change seen through a two-sample extractor.
 * **chain battery**: unchanged by this round — `T6-waveguide-chain-battery.md`
   still owns the fourth pre-declared measurement run.
 
+### Test-lane state at the end of phase 2b, and what could not be measured
+
+Per module, at HEAD, on this pod:
+
+```
+tests/locks/test_refplane_port_waves.py            27 passed, 6 deselected
+tests/locks/test_patch_edgefed_s11_passivity.py     2 passed, 1 deselected
+  + test_patch_edgefed_resonance_harminv.py         6 passed, 5 deselected
+tests/contracts/test_lattice_ownership_contract.py 114 passed (with the
+  + test_two_plane_gone_from_docs_and_scripts.py     two_plane grep gate)
+tests/oracle/test_waveguide_port_validation_battery.py  9 passed (VESSL 369367259278)
+tests/oracle/test_leontovich_alpha_oracle.py       11 passed, 2 failed,
+                                                    1 xfailed (VESSL 369367259292)
+```
+
+**The whole-directory lane could not be measured here.** `pytest -n 4
+tests/locks tests/oracle` and the `-m "not slow_physics"` subset each hit the
+1200 s cap at 82-90 % on a pod carrying four other agents' suites; a
+`tests/locks`-only fast lane reached 55 % in the same 20 minutes. The
+unfiltered runs showed ZERO failures in everything they reached. The
+marker-filtered subset showed **3 failures in `tests/oracle`** that the
+unfiltered run did not reach or did not have — most likely fast tests whose
+module-level cache is built by a `slow_physics` sibling that the filter
+deselects, but that is a guess and it is written here as one. **Not
+investigated further, and not claimed green.** The merge agent's VESSL fast
+lane is the authority; if those three appear there, they are real and this
+paragraph is where the trail starts.
+
 ## Fast-lane state of the four T6 directories at the end of this pass
 
 ```
