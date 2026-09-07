@@ -17,15 +17,22 @@ the end of this file so the ingest phase can recreate them.
 |---|---|---|---|
 | 369367259135 | the group's three directories at the pre-migration commit 299b0f9f (the failure list this migration worked from) | `vessl run create -f scripts/vessl_931_t1_unit_tests.yaml` | 164 s wall, 12 workers |
 | 369367259162 | same lane at 250399d8 (post-migration) | same | ~3 min |
-| 369367259163 | per-bin \|S11\| of the cv11-style PEC short, binary and conformal lanes, num_periods 40 and 80 | `vessl run create -f scripts/vessl_931_t1_pec_short_s11.yaml` | ~20 min (4 waveguide S-matrix solves) |
+| 369367259185 | same lane at 9ed75fbb, after merging the core's outer-jit fix and the shared `tests/_realized_geometry.py` | same | 195 s |
+| 369367259163 | per-bin \|S11\| of the cv11-style PEC short — FAILED to start | — | — |
+| 369367259190 | the same probe, re-submitted | `vessl run create -f scripts/vessl_931_t1_pec_short_s11.yaml` | ~20 min (4 waveguide S-matrix solves) |
 
 Outputs land in
 `/root/workspace/claude-workspace/rfx/runs/issue931-post-t1-*` and
 `.../issue931-post-t1-pecshort-*`, with a `.latest` pointer beside them.
-`vessl run create` must be issued from a directory that is NOT a git worktree
+Two operational notes, both cost a re-submit. `vessl run create` must be
+issued from a directory that is NOT a git worktree
 — the CLI reads `.git/HEAD` as a directory and a linked worktree has a `.git`
 FILE, which raises `NotADirectoryError`. Run it from `/tmp` with an absolute
-path to the yaml.
+path to the yaml. And a `run:` block that contains a heredoc is rewritten by
+VESSL's own wrapper into something the shell cannot parse (run 369367259163
+died at `syntax error: unexpected end of file (expecting ")")` in
+`/opt/vessl/scripts/*.sh`, though `sh -n` on the block passes locally); ship
+an inline script as `echo <base64> | base64 -d > file` instead.
 
 ## Fixtures NOT regenerated, and why
 
@@ -41,18 +48,39 @@ path to the yaml.
 
 ## Left for the ingest phase
 
-1. `tests/unit/autodiff/test_forward_outer_jit_traceable.py::
-   test_real_interior_pec_under_outer_jit_matches_eager` is RED and must stay
-   red until `rfx/geometry/rasterize_grid.py` is patched — see
-   `T1-rasterize_grid-outer-jit-tracer-regression.md`. Not T1's file.
+1. CLOSED. `test_real_interior_pec_under_outer_jit_matches_eager` was red on
+   this branch until the core landed 49fdf579 ("the zero-cell refusal decides
+   emptiness on the host, never through a jnp mask"), merged in here. The
+   write-up that reported it,
+   `T1-rasterize_grid-outer-jit-tracer-regression.md`, is kept as the record
+   of the defect and its reproduction.
 2. The five `test_fidelity_topology_findings` reds — three owners, listed in
    that file's module docstring and in `T1-fidelity-sheet-overlap.md` /
    `T1-preflight-junction-plane.md`.
-3. `tests/unit/geometry/test_subpixel_pec.py::
-   test_pec_short_s11_baseline_unchanged_with_binary_path` — min \|S11\|
-   0.9892 against the 0.99 gate. Run 369367259163 is the second witness; read
-   its `pec_short_s11.json` before deciding anything. The gate is NOT touched
-   here.
+3. CLOSED, measured. `test_pec_short_s11_baseline_unchanged_with_binary_path`
+   read min \|S11\| 0.9892 against a 0.99 gate. Run **369367259190**
+   (`pec_short_s11.json`) settles it: the realized walls are on the drawn
+   faces (planes 28 and 29, 0.084 and 0.087 m), and
+
+   | lane | num_periods | \|S11\| min | \|S11\| max |
+   |---|---|---|---|
+   | binary | 40 | 0.9892 | 1.0057 |
+   | binary | 80 | 0.9974 | 1.0024 |
+   | conformal | 40 | 0.9942 | 1.0278 |
+   | conformal | 80 | 0.5701 | 2.7691 |
+
+   Three bins above 1 for a passive reflector at 40 periods: the record's
+   own noise is +-0.6% there, and the short moved one cell toward the left
+   port when it stopped being a zero-thickness wall, so the 40-period window
+   no longer contains the settled round trip. The binary test now runs at 80
+   periods with the 0.99 gate UNCHANGED, plus a new upper assertion
+   (max \|S11\| <= 1.01) so a contaminated record cannot be read as physics
+   again.
+
+   OBSERVATION, not fixed and not caused by #931 as far as this run can say:
+   the CONFORMAL face-PEC lane diverges at 80 periods on the same geometry
+   (\|S11\| from 0.57 to 2.77). Its own test is left at 40 periods, where it
+   passes. That lane is §1.8-fenced; someone should look at it.
 
 ## Run yamls (gitignored; reproduce from here)
 
