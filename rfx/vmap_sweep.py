@@ -265,9 +265,10 @@ def _apply_batched_thin_conductors(
             # ctx now, and sims carrying one never reach the fast path
             # (has_f0_sheets ineligibility in _build_full_scan_fn).
             # #931: a PEC thin conductor is a SheetSpec, a no-op on the
-            # material arrays; the batched lane's PEC realization (edge
-            # masks incl. sheets) is wired in the runner (stage C), so the
-            # collector here is deliberately discarded.
+            # material arrays. The batched lane realizes it in
+            # ``_build_vmap_scan_fn`` from the sheets the CALLER collected
+            # off the full assembly, so the collector here is deliberately
+            # discarded (it would be a per-batch-element duplicate).
             mats, _ = apply_thin_conductor(grid, tc, mats, pec_mask=None,
                                            sheets=[])
         return mats.eps_r, mats.sigma, mats.mu_r
@@ -467,6 +468,8 @@ def _build_vmap_scan_fn(
     cpml_axes: str = "xyz",
     pec_axes: str = "xyz",
     pec_mask=None,
+    pec_sheets=(),
+    pec_wires=(),
     dft_probes: list[DFTPlaneProbe] | None = None,
 ):
     """Build a pure function ``f(materials) -> (time_series, dft_accs)``
@@ -510,7 +513,17 @@ def _build_vmap_scan_fn(
     probes = probes or []
     dft_probes = dft_probes or []
 
-    use_pec_mask = pec_mask is not None
+    # #931 §1.7: realize (Mx, My, Mz) ONCE here, at build time, under the
+    # flags this scan body will use.  Sheets and wires own no cell, so
+    # this is the only place the batched lane can see them.
+    pec_sheets = tuple(pec_sheets or ())
+    pec_wires = tuple(pec_wires or ())
+    pec_edge_masks = None
+    if pec_mask is not None or pec_sheets or pec_wires:
+        from rfx.boundaries.pec import realized_pec_edge_masks
+        pec_edge_masks = realized_pec_edge_masks(
+            pec_mask, sheets=pec_sheets, wires=pec_wires, periodic=periodic)
+    use_pec_edges = pec_edge_masks is not None
     use_dft = len(dft_probes) > 0
     dft_meta = tuple(
         (p.component, p.axis, p.index, p.freqs) for p in dft_probes
@@ -604,10 +617,9 @@ def _build_vmap_scan_fn(
             if pec_axes:
                 st = apply_pec(st, axes=pec_axes)
 
-            if use_pec_mask:
-                from rfx.boundaries.pec import apply_pec_mask
-                # #689: pass the run's periodic flags (see pec.py).
-                st = apply_pec_mask(st, pec_mask, periodic)
+            if use_pec_edges:
+                from rfx.boundaries.pec import apply_pec_edges
+                st = apply_pec_edges(st, pec_edge_masks)
 
             # Non-J soft sources (raw field add, no Cb dependence)
             for idx_s, (si, sj, sk, sc) in enumerate(src_meta):
@@ -676,6 +688,8 @@ def _build_full_scan_fn(
     debye_spec=None,
     lorentz_spec=None,
     pec_mask=None,
+    pec_sheets=(),
+    pec_wires=(),
 ):
     """Build ``(f, dft_names)`` where ``f(materials) -> (time_series,
     dft_accs)`` uses the full simulation runner (including CPML,
@@ -864,6 +878,8 @@ def _build_full_scan_fn(
                 cpml_axes=cpml_axes,
                 pec_axes=pec_axes,
                 pec_mask=pec_mask,
+                pec_sheets=pec_sheets,
+                pec_wires=pec_wires,
                 dft_probes=dft_probes,
             )
         else:
@@ -880,6 +896,8 @@ def _build_full_scan_fn(
                 periodic=periodic,
                 pec_axes=pec_axes,
                 pec_mask=pec_mask,
+                pec_sheets=pec_sheets,
+                pec_wires=pec_wires,
                 dft_probes=dft_probes,
             )
         return run_one_fn, dft_names
@@ -1012,7 +1030,10 @@ def vmap_material_sweep(
 
     # Build grid and base materials once
     grid = sim._build_grid()
-    base_materials, debye_spec, lorentz_spec, pec_mask, *_ = sim._assemble_materials(grid)
+    _sweep_pec_sheets: list = []
+    _sweep_pec_wires: list = []
+    base_materials, debye_spec, lorentz_spec, pec_mask, *_ = sim._assemble_materials(
+        grid, pec_sheets=_sweep_pec_sheets, pec_wires=_sweep_pec_wires)
 
     if n_steps is None:
         n_steps = grid.num_timesteps(num_periods=num_periods)
@@ -1023,6 +1044,8 @@ def vmap_material_sweep(
         debye_spec=debye_spec,
         lorentz_spec=lorentz_spec,
         pec_mask=pec_mask,
+        pec_sheets=tuple(_sweep_pec_sheets),
+        pec_wires=tuple(_sweep_pec_wires),
     )
 
     jax_param_values = jnp.asarray(param_values)
