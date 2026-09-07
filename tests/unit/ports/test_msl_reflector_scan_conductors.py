@@ -160,6 +160,13 @@ class _NoBBox:
     def mask(self, grid):                     # pragma: no cover - unused
         raise NotImplementedError
 
+    # #931: the ownership classifier reaches a non-Box shape through
+    # ``mask_on_coords`` (rasterize_grid.pec_volume_cell_mask), so the double
+    # has to refuse there too — refusing only ``mask`` let the classifier
+    # raise AttributeError instead of the refusal this fixture is about.
+    def mask_on_coords(self, x, y, z):        # pragma: no cover - unused
+        raise NotImplementedError
+
 
 class _RaisingBBox(_NoBBox):
     def bounding_box(self):

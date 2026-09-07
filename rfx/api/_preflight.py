@@ -766,10 +766,19 @@ class _CampaignStaticsContext:
                 cells, sheet, wire = classify_pec_entry(
                     entry.shape, self.coords, self.centres, self.cell_sizes,
                     name=entry.material_name)
-            except ValueError as exc:
+            except self._NARROW_EXCS as exc:
+                # A shape that cannot be rasterized is a FINDING, not a
+                # crash: preflight's job is to report. One unplaceable
+                # conductor used to kill the whole per-entry loop, so every
+                # other entry lost its realization too (measured on the
+                # #685 `_NoBBox` fixture: NotImplementedError out of
+                # classify_pec_entry, no advisory at all).
                 out.append(_EntryRealization(
                     label=label, name=entry.material_name, shape=entry.shape,
-                    kind="refused", error=str(exc), lo=lo, hi=hi))
+                    kind="refused",
+                    error=(str(exc) if isinstance(exc, ValueError)
+                           else f"{type(exc).__name__}: {exc}"),
+                    lo=lo, hi=hi))
                 continue
             if cells is not None:
                 out.append(_EntryRealization(

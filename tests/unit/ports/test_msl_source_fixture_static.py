@@ -25,6 +25,8 @@ import warnings
 import jax
 import jax.numpy as jnp
 import numpy as np
+from rfx.sources.msl_port import (
+    msl_cell, msl_cross_section_span, msl_port_from_entry)
 import pytest
 
 from rfx import Box, Simulation
@@ -133,7 +135,22 @@ def test_explicit_and_auto_eps_build_the_same_fixture():
     a = np.asarray(ra.time_series)
     b = np.asarray(rb.time_series)
     assert a.shape == b.shape
-    assert np.array_equal(a, b), (
+    # The claim is that the auto branch READS THE REGISTERED MATERIAL, so
+    # assert that directly: the value it samples is the float32 the assembly
+    # stores, which is not bit-equal to the float64 literal the explicit arm
+    # passes (float32(3.66) = 3.6600000858306885). Bit-equality of the two
+    # time series pinned that float64->float32 path, not the sampling, and
+    # 8.9e-08 on a 0.134 peak (6.7e-07 relative) is that path, measured.
+    _mp = msl_port_from_entry(sim_a._msl_ports[0])
+    _span = msl_cross_section_span(sim_a._build_grid(), _mp)
+    _cell = msl_cell(sim_a._msl_ports[0].direction, _span["i_feed"],
+                     _span["w_centre"], (_span["n_lo"] + _span["n_hi"]) // 2)
+    _mats = sim_a._assemble_materials(sim_a._build_grid(), pec_sheets=[],
+                                      pec_wires=[])[0]
+    assert float(np.asarray(_mats.eps_r)[_cell]) == float(np.float32(_EPS_R)), (
+        "the auto branch did not sample the registered substrate material at "
+        f"the trace-centre cell {_cell}")
+    assert np.allclose(a, b, rtol=0.0, atol=1e-6 * float(np.abs(a).max())), (
         "auto-resolved eps_r_sub built a different launch fixture than the "
         "explicit value — the auto branch is not sampling the registered "
         "materials (issue #483)"
