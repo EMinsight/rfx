@@ -122,3 +122,110 @@ vessl run create -f scripts/vessl_931_xb/post-cv11.yaml        # from a non-git 
    magnitude gates after #729 settles, on a re-measured envelope" is the
    script's own rule, and #729's port-aperture default is exactly what just
    moved.
+
+## SUPERSEDED — run 369367259194 must not be ingested
+
+Everything under "Pre-declared, before the run" above, including the
+**MEASURED — (1) IS FALSIFIED** table and the **ATTRIBUTED** paragraph
+that filed +0.057 against the #931 core, was measured on run
+**369367259194**, whose PEC plug was still drawn to the DECLARED
+22.86 x 10.16 mm cross-section. The grid realizes the guide by ceil as
+23 x 11 mm and a volume's face rounds to the nearest node, so that plug's
+top landed at z = 10.000 mm under a wall at 11.000 mm: a
+1 x 22.86 x 2 mm vacuum slot along the top broad wall, a parallel-plate
+line for Ez carrying |S21| 0.22-0.33 past the "short". Adjudicated in
+`a8d59e86` / merged `1b0866db`; the per-arm evidence is
+`scripts/diagnostics/pec_short_lane_ab.py` and its JSON under
+`scripts/diagnostics/_artifacts/pec_short_lane_ab/`.
+
+The attribution to the core lane's stage-C sigma fold was therefore
+**wrong, and is withdrawn**. It was not a lane defect and no change was
+made in `rfx/`. The pre-declaration (1) is not "falsified" after all: the
+envelope does tighten once the plug closes the guide.
+
+## MEASURED — run 369367259277, post-fix, three legs in one container
+
+`vessl run create -f scripts/vessl_931_xb/post-cv11-v2.yaml` (from a
+non-git cwd). Outputs under
+`/root/workspace/claude-workspace/rfx/runs/issue931-post-cv11v2-20260907T191351Z/`.
+Three legs back to back in ONE container so no environment term separates
+the columns:
+
+1. `main_baseline` — the campaign baseline worktree
+   `rfx-baseline-d990e18c` (origin/main d990e18c). Reproduces campaign
+   baseline run **369367259004** on every gate line, so the baseline is
+   itself reproducible.
+2. `fresh` — this branch, `NUM_PERIODS_LONG = 200`.
+3. `witness_np400` — the same at 400 (the grep is the fixture's first
+   line). All 27 gate lines reproduce leg 2 to the last printed digit
+   except `[pec-short S11 vs conj(MEEP)] |S| max_diff` 0.1992 vs 0.1991.
+
+Each leg's stdout is committed as
+`tests/fixtures/waveguide_broad_e5/cv11_wr90_{main_baseline,fresh,witness_np400}_stdout.txt`
+with a provenance header; the full before/after table is now the case
+docstring's RUN RESULT section.
+
+| leg | main d990e18c | this branch | gate |
+|---|---|---|---|
+| pec-short \|S11\| max_diff | 0.0146 | **0.0020** | 0.050 |
+| pec-short per-bin envelope | [0.9854, 0.9938] | **[0.9980, 1.0019]** | band [0.93, 1.07] |
+| pec-short round-trip phase | 9.99° / 6.16° | **3.26° / 1.45°** | 15° |
+| pec-short vs conj(MEEP) ∠S | 27.12° / 22.26° | **21.68° / 17.55°** | 10° (both fail) |
+| slab S11 ∠S | 13.60° / 11.71° | **8.79° / 6.08°** | 60° |
+| slab S11 vs conj(MEEP) ∠S | 25.37° / 21.67° | **18.58° / 16.03°** | 10° (both fail) |
+| slab S11 \|S\| max_diff | 0.1468 | 0.1487 | 0.100 (**both fail** — see below) |
+| slab S21, empty | — | identical | — |
+
+Pre-declaration (1) HOLDS on the fixed drawing: the envelope tightens to
+[0.9980, 1.0019] and max_diff falls 0.0146 → 0.0020. (2) holds: the
+round-trip phase leg is 3.26° / 1.45°. (3) holds for the slab phase legs,
+which improve; the slab MAGNITUDE leg is a separate matter, below. (4)
+holds — no gate is tightened on the new envelope.
+
+## THE ONE THING THIS RUN FOUND THAT IS NOT #931's — for the core owners
+
+`[slab S11] |S| max_diff` is **0.1468 on origin/main d990e18c** and 0.1487
+on this branch, against a 0.100 gate. **Both fail.** The 2026-08-28
+revision of the case docstring measured the same line at 0.0186 on main
+(cdc38bc8) and 0.0141 on its branch. So the leg degraded ~8x **on main**
+between cdc38bc8 and d990e18c; #931 adds +0.0019, a last-digit move.
+
+Confirmed independently through the external referee — same builder, same
+`--reference-column Palace_r_h2`, three inputs, no FDTD:
+
+| input | slab S11 max_mag_abs_diff | status |
+|---|---|---|
+| committed 2026-08-28 branch stdout | 0.0194 | passed |
+| 2026-09-07 origin/main d990e18c | **0.1482** | **FAILED** |
+| 2026-09-07 this branch | **0.1500** | **FAILED** |
+
+`slab S21` moves with it (0.0045 → 0.0343 on main) and the empty guide
+does not move at all, so it is a dielectric-slab-lane term, not a port or
+normalization term. Not diagnosed here: cv11 is a reporter, the
+regression predates this branch, and a ten-day bisect of main is not a
+guess to make inside an ingest.
+
+## THE BROAD-E4 REFRESH IS BLOCKED, DELIBERATELY
+
+`tests/fixtures/waveguide_broad_e5/wr90_rectangular_broad_e4_comparison.json`
+is **not** refreshed in this pass and its numbers are untouched. Rebuilding
+it from the new stdout would set slab S11 `max_mag_abs_diff` 0.0707 →
+0.1500, past its own `max_mag_abs_tol = 0.1`, and flip `status` to
+`failed`. That would publish a failing external claim and date-stamp a
+main-line regression as a #931 result. The file's own `provenance` rule —
+a refresh must EXPLAIN its delta, never re-pin it — cannot be satisfied
+while one of the deltas is unattributed. Widening the tolerance to make it
+pass is not on the table.
+
+Three deltas now separate the committed 0.0707 from a rebuild, and a
+refresh must account for all three:
+
+1. **2026-06-16 → 2026-08-28** (the delta the provenance block already
+   names): 0.0707 → 0.0186–0.0194, ~3.7x BETTER. Candidate causes listed
+   there, never attributed per commit.
+2. **2026-08-28 → 2026-09-07 on main**: 0.0194 → 0.1482, ~7.6x WORSE.
+   New, unattributed, and the blocking one.
+3. **origin/main → #931**: 0.1482 → 0.1500, +1.2%. Measured here.
+
+Refresh it when (2) is attributed, in the same pass that fixes or accepts
+it, and write all three deltas into the `provenance` block.

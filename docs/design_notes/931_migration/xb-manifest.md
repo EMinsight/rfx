@@ -140,3 +140,102 @@ Optional, and the reason the controls are worth naming: add
 `tests/crossval/test_cv09_cv10_body_contract_controls.py` to both cases'
 `gate_paths`, so "these two must not move" is machine-checkable rather than
 a claim in prose.
+
+---
+
+# PASS 2 (2026-09-07 ingest) — CORRECTIONS TO WHAT WAS ALREADY APPLIED
+
+The pass-1 text above was written before the three post-change runs were
+read. `5ce20cd7` applied it to `manifest.json`. Three things in the applied
+text are now wrong or stale and must be replaced. **`manifest.json` is still
+not edited by this branch** — apply these, in this order, in the pass that
+owns it.
+
+## 1. `cases[11_waveguide_port_wr90]` — a WITHDRAWN attribution is live in a claim field
+
+The applied `claim_scope` ends with:
+
+> "Measured on that run and NOT absorbed: the pec-short |S11| max_diff moved
+> 0.0146 → 0.0560 (past its 0.050 gate) and the round-trip phase 9.99° →
+> 17.20° while every other phase leg improved; the trim A/B (369367259198:
+> trim 0.0711, no_trim 0.0560) attributes the magnitude degradation to the
+> waveguide S-matrix lane's stage-C change (realized PEC edges in place of
+> the sigma=1e10 fill), i.e. to the core, not to this script. The magnitude
+> gates are not tightened on the new envelope."
+
+**That attribution is withdrawn.** Run 369367259194's PEC plug was drawn to
+the DECLARED 22.86 × 10.16 mm cross-section while the grid realizes the
+guide by ceil as 23 × 11 mm, leaving a 1 × 22.86 × 2 mm vacuum slot along
+the top broad wall. It was the drawing, not the lane; `a8d59e86` adjudicated
+it, `1b0866db` merged it, and nothing changed in `rfx/`. Replace that
+sentence with:
+
+> "Re-solved post-fix as VESSL run **369367259277** (three legs in one
+> container: origin/main d990e18c, this branch at 200 periods, and the same
+> at 400). Run 369367259194 is SUPERSEDED and its attribution of a
+> +0.057 pec-short degradation to the #931 core is WITHDRAWN — that run's
+> plug was drawn to the declared 22.86 × 10.16 mm cross-section against a
+> ceil-realized 23 × 11 mm guide, leaving a 1 × 22.86 × 2 mm vacuum slot
+> along the top broad wall (adjudicated `a8d59e86`, merged `1b0866db`; no
+> change in `rfx/`). Measured post-fix, main d990e18c → this branch:
+> pec-short |S11| max_diff 0.0146 → **0.0020** (gate 0.050), per-bin
+> envelope [0.9854, 0.9938] → **[0.9980, 1.0019]**, round-trip phase
+> 9.99°/6.16° → **3.26°/1.45°** (gate 15°), slab S11 phase 13.60° →
+> **8.79°**; slab S21 and the empty guide identical. No gate is moved.
+> SEPARATELY, AND NOT THIS CASE'S: `[slab S11] |S| max_diff` reads 0.1468 on
+> origin/main d990e18c and 0.1487 here against a 0.100 gate — both fail —
+> where the 2026-08-28 measurement of the same line was 0.0186 on main. The
+> leg degraded ~8× ON MAIN between cdc38bc8 and d990e18c; #931 adds +0.0019.
+> The external referee reproduces the split (same builder, same Palace_r_h2
+> column: 2026-08-28 stdout 0.0194 passed, today's main 0.1482 FAILED, this
+> branch 0.1500 FAILED). Unattributed; a core item, not a cv11 one. The
+> broad-E4 artifact refresh is therefore BLOCKED and untouched: a rebuild
+> would flip `status` to `failed` and date-stamp a main-line regression as a
+> #931 result. Three deltas must be explained together when it is refreshed
+> — 2026-06→2026-08 (0.0707 → 0.0194, better), 2026-08→2026-09 on main
+> (0.0194 → 0.1482, worse, blocking), and main→#931 (0.1482 → 0.1500)."
+
+Also stale in the same field, from the 2026-08-31 block: "The three cv11
+stdouts committed in that directory today are 2026-08-28". They are now
+2026-09-07, from run 369367259277. And "Run 369367259194 forces the pending
+refresh decision" → run 369367259277, and the decision was taken: blocked.
+
+## 2. `cases[06b_msl_notch_filter_uniform]` — the width falsifier fired against BOTH readings
+
+Whatever the applied text says about the width convention being settled by
+the re-solve, it is not. Append:
+
+> "Re-solved as VESSL run **369367259191**. The pre-declared falsifier was
+> G4's Z0 median: ~46.5 Ω would say the electrical width of an n-row strip
+> is n·dx = 635.0 µm, ~49.4 Ω would say it is the geometric node span
+> (n−1)·dx = 571.5 µm. Measured **48.192 Ω** — between them, 4.35 % above
+> HJ(635.0) = 46.18 and 2.43 % below HJ(571.5) = 49.39. BOTH readings are
+> rejected and the convention is NOT settled. Three more pre-declarations
+> were falsified with it: the notch rose +3.67 % (3.7586 GHz) where one stub
+> cell predicted +0.51 %, `err_pct` rose 1.4530 → **2.1649 %** where ≈0.95 %
+> was predicted, and the half-grid witness and notch depth moved (0.3175 →
+> 0.4469 bin, −43.3 → −39.44 dB) where neither was predicted to. All four
+> gates still PASS on their own unchanged windows (G1 2.16 % < 4.0 %, G2
+> 0.9991, G3 0.4469 bin, G4 48.2 Ω) and NOTHING is re-derived from the
+> measurement: one board at one dx cannot settle an effective-width
+> convention. The case still ships n·dx and both named quantities stay
+> named. Criterion B now closes — the one-cell stub arm went
+> `visible: false → true` and `verdict.all_ok false → true`. Headline for
+> this mesh is now 2.16 % / −39.4 dB / 48.2 Ω, superseding 1.40 / 43.3 /
+> 46.5."
+
+## 3. `cases[07_sheen_lpf]` — the passivity footprint got worse and must be quoted
+
+Append:
+
+> "Re-solved as VESSL run **369367259192**; every COMMITTED rfx entry is
+> re-pinned from its produced `rfx.json` with no gate window moved (argmin
+> null 7.8739 → 8.2017 GHz, doublet (6.943990, 7.925928) → (7.233338,
+> 8.244069), corner 5.5036 → 5.7071, passband mean 0.9378 → 0.9471). The
+> Palace referee fixture was re-derived by its own producer; `sides_with`
+> stays 'openems' and rfx's structure distance goes 1.52 % → 2.87 %.
+> QUOTABILITY, WORSE AND NOT ABSORBED: bins carrying a raw passivity
+> correction > 0.05 went 0 → **3** and the worst went 0.0145 @ 17.378 GHz →
+> **0.6572 @ 17.870 GHz**. All three sit above 17 GHz and none inside the
+> 5–15 GHz null band, so gate D5 and the in-band footprint are unchanged; no
+> magnitude claim above 15 GHz is made or permitted."
