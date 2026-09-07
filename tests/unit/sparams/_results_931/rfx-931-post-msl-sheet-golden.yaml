@@ -37,7 +37,7 @@ run: |-
   cat "$OUT/commit.txt"
   touch "$OUT/.tstamp"
   "$PY" -m pip uninstall -y -q jax-cuda12-plugin jax-cuda12-pjrt 2>/dev/null || true
-  "$PY" -m pip install -q "jax[cpu]==0.6.2" "numpy<2" "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7"
+  "$PY" -m pip install -q "jax[cpu]==0.6.2" "numpy<2" "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7" "pytest>=7.4"
   export RFX_REPO_ROOT="$WORK"
   export PYTHONPATH="$WORK"
   export MPLBACKEND=Agg

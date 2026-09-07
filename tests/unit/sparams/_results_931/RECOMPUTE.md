@@ -53,8 +53,15 @@ is, so the branch must be committed before submitting.
   27 baseline yamls in `scratchpad/vessl_baseline/` uses a heredoc — VESSL's
   own run wrapper rewrites the block and the terminator stops terminating.
   Do not put a heredoc in a VESSL `run:` block; put the program in a file.
-* **VESSL run id: 369367259224** (resubmitted 2026-09-07 14:24 UTC,
-  https://app.vessl.ai/remilab/runs/byungkwan/369367259224).
+* **VESSL run 369367259224 FAILED** (14:24 UTC, rc=1 in 16 s). The shell was
+  fine this time — the job ran, staged the checkout and reached the capture —
+  and the capture died on `ModuleNotFoundError: No module named 'pytest'`:
+  `test_msl_sheet_threading.py` imports pytest at module scope and the
+  `rfx-openems` image does not carry it. The heredoc version would have hit the
+  same wall had it started. Fixed by adding `pytest>=7.4` to the job's pip line;
+  any future job that imports a test module needs the same.
+* **VESSL run id: 369367259285** (resubmitted 2026-09-07 14:41 UTC,
+  https://app.vessl.ai/remilab/runs/byungkwan/369367259285).
   Command: `vessl run create -f rfx-931-post-msl-sheet-golden.yaml` (the yaml
   sits beside this file; submit it from a non-git directory — the CLI cannot
   read a worktree's `.git` file). Run name `rfx-931-post-msl-sheet-golden`,
