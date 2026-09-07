@@ -12,12 +12,22 @@ This test couples them. It locks:
 
   1. the script's own mesh convention (`DX == H_SUB / 4`) -- if the mesh
      moves again, this reds first;
-  2. the realized board that convention buys, measured live from
-     `sim.fidelity_report()` (no time stepping): substrate exactly 254.0um,
-     main trace and stub both 635.0um. The 635.0 figure is what the analytic
-     reference and every carrier quote, so it must be measured, not asserted
-     from a formula -- `round(W_TRACE/DX)*DX` gives 571.5um here and is
-     wrong (half-open [lo, hi) node rasterization);
+  2. the realized board that convention buys, measured live (no time
+     stepping): substrate exactly 254.0um, and the trace/stub width READ BACK
+     off the build rather than computed from a formula. That reading is the
+     one the analytic reference and every carrier quote, so it has to come
+     from the realization, whatever the realization is.
+
+     #931 moves it. Under the pre-contract rule the 600um trace realized
+     635.0um and `round(W_TRACE/DX)*DX = 571.5um` was demonstrably the WRONG
+     answer, so this file asserted the inequality. Under the lattice
+     ownership contract the trace is foil, i.e. a SHEET, and a sheet's
+     footprint is the CLOSED node rectangle (design note §1.3): measured on
+     this board, nodes 16..25 at dx=63.5um, so the realized width is 571.5um
+     -- which for this particular W/dx coincides with the old "naive"
+     formula. The inequality is therefore deleted rather than inverted: it
+     was never the property worth pinning. The property is that the number is
+     READ, and that is what is pinned now;
   3. the committed run log's headline numbers, parsed from the log rather
      than retyped;
   4. each carrier quotes the CURRENT numbers, and carries the superseded
@@ -77,6 +87,37 @@ def log_text():
     return RUN_LOG.read_text(encoding="utf-8")
 
 
+# --------------------------------------------------------------------------- #
+# #931 lattice ownership — the migration gate for cv06b
+# --------------------------------------------------------------------------- #
+# cv06b draws its trace and stub as one-cell PEC Boxes from z = H_SUB to
+# z = H_SUB + DX. Real copper on this board is ~35 um against a 63.5 um cell,
+# i.e. foil, so under the contract they are SHEETS on the substrate-top node
+# plane (design note §1.3) and the crossval-B migration declares them with
+# add_thin_conductor. Measured here, on a stand-in build of the same board:
+#
+#   1-cell Box (V): z walls at 254.0 and 317.5 um  (the far face is NEW under
+#                   the contract), realized y width 635.0 um
+#   zero-thickness sheet (S): one wall at 254.0 um, realized y width 571.5 um
+#
+# So (S) keeps the electrical z-plane the board has today and moves the
+# in-plane width; (V) keeps the width and turns the foil into a 63.5 um slab
+# with a second wall. The width feeds Hammerstad-Jensen: 46.18 ohm at 635 um,
+# 49.39 ohm at 571.5 um against a design-board 47.90 ohm. Every one of those
+# numbers is downstream of the re-solve, so nothing here is re-typed.
+_MIGRATION_RUN = ("VESSL rfx-931-post-cv06b — "
+                  "validation/crossval/06b_msl_notch_filter_uniform.py "
+                  "re-solved with the trace and stub declared as sheets "
+                  "(crossval-B); the run log, W_realized, Z0 median and "
+                  "F_NOTCH_AN all move with it")
+
+
+def _is_sheet_declared(sim) -> bool:
+    """True when cv06b's conductors are sheet declarations, not Boxes."""
+    from tests._realized_pec import realize
+    return len(realize(sim).sheets) >= 2
+
+
 def test_mesh_convention_is_h_sub_over_four(cv06b):
     """dx = h_sub/4 is the whole point of #723 -- an aligned substrate."""
     assert cv06b.DX == pytest.approx(cv06b.H_SUB / 4.0, rel=1e-12)
@@ -88,9 +129,15 @@ def test_mesh_convention_is_h_sub_over_four(cv06b):
 
 
 def test_realized_board_is_measured_not_assumed(cv06b):
-    """Substrate 254.0um exactly, trace and stub both 635.0um -- read from
-    fidelity_report on the real build, which is where the analytic reference
-    gets its width at runtime."""
+    """Substrate 254.0um exactly, and the trace/stub width READ off the build.
+
+    The substrate is a dielectric and the contract does not touch dielectric
+    sampling (design note §1.1), so 254.0 um exact holds at every stage. The
+    conductor width is the number that moves, so it is measured rather than
+    named: whatever the realization is, ``_realized_trace_width`` must return
+    what the realization actually did, and the analytic reference must be fed
+    that.
+    """
     sim = cv06b._build_sim()
     report = sim.fidelity_report(print_report=False)
     axes = {item["entity"]: {a["axis"]: a for a in item["axes"]}
@@ -102,17 +149,39 @@ def test_realized_board_is_measured_not_assumed(cv06b):
 
     trace_y = axes["geometry[1] 'pec'"]["y"]
     stub_x = axes["geometry[2] 'pec'"]["x"]
-    assert trace_y["realized_extent_um"] == pytest.approx(635.0, abs=1e-6)
-    assert stub_x["realized_extent_um"] == pytest.approx(635.0, abs=1e-6)
+    expected_um = 571.5 if _is_sheet_declared(sim) else 635.0
+    assert trace_y["realized_extent_um"] == pytest.approx(expected_um, abs=1e-6)
+    assert stub_x["realized_extent_um"] == pytest.approx(expected_um, abs=1e-6)
 
-    # The live reader must agree with the report it reads.
-    assert cv06b._realized_trace_width(sim) == pytest.approx(635.0e-6, rel=1e-12)
+    # The live reader must agree with the report it reads — that, not any
+    # particular number, is the invariant this test exists for.
+    assert cv06b._realized_trace_width(sim) == pytest.approx(
+        expected_um * 1e-6, rel=1e-12)
 
-    # And it must NOT be reproducible by the round() formula -- if a future
-    # edit "simplifies" _realized_trace_width into arithmetic, this reds.
-    naive = round(cv06b.W_TRACE / cv06b.DX) * cv06b.DX
-    assert naive == pytest.approx(571.5e-6, rel=1e-9)
-    assert naive != pytest.approx(635.0e-6, rel=1e-6)
+
+def test_trace_and_stub_are_foil_on_the_substrate_top_plane(cv06b):
+    """#931 §1.3: 35 um copper against a 63.5 um cell is foil, i.e. a SHEET.
+
+    Declared as a one-cell Box the same metal is a 63.5 um SLAB: the contract
+    gives it a second wall at z = 317.5 um and shorts the normal edge through
+    it, which changes the microstrip cross-section, Z0 and the notch
+    frequency materially. So the declaration is what is checked — one wall at
+    the substrate top, no cell owned, normal E live through the film — and
+    the falsifier arm asserts there is no wall a cell above the laminate.
+    """
+    sim = cv06b._build_sim()
+    if not _is_sheet_declared(sim):
+        pytest.skip("cv06b still draws the trace and stub as one-cell PEC "
+                    f"Boxes; {_MIGRATION_RUN}")
+    from tests._realized_pec import (assert_no_wall_at, assert_normal_edge_live,
+                                     assert_sheet_owns_no_cell,
+                                     assert_sheet_planes, realize)
+    realized = realize(sim)
+    assert_sheet_planes(realized, 2, [cv06b.H_SUB], what="cv06b trace/stub")
+    assert_sheet_owns_no_cell(realized, what="cv06b trace/stub")
+    assert_normal_edge_live(realized, what="cv06b trace/stub")
+    assert_no_wall_at(realized, 2, [cv06b.H_SUB + cv06b.DX],
+                      what="cv06b board")
 
 
 def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
@@ -125,6 +194,13 @@ def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
     """
     from rfx.sources.msl_eigenmode import hammerstad_jensen_z0_eps_eff
 
+    if _is_sheet_declared(cv06b._build_sim()):
+        pytest.skip(
+            "cv06b's realized trace width moves 635.0 -> 571.5 um when the "
+            "foil is declared as a sheet (Hammerstad-Jensen 46.18 -> 49.39 "
+            "ohm), and the measured Z0 median moves with the re-solve. Every "
+            "number in this test is downstream of both; re-derive them from "
+            f"the new run log rather than re-typing: {_MIGRATION_RUN}")
     z0_design, _ = hammerstad_jensen_z0_eps_eff(600e-6, 254e-6, cv06b.EPS_R)
     z0_realized_63, _ = hammerstad_jensen_z0_eps_eff(635e-6, 254e-6, cv06b.EPS_R)
     z0_realized_80, _ = hammerstad_jensen_z0_eps_eff(560e-6, 320e-6, cv06b.EPS_R)
@@ -153,7 +229,7 @@ def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
     assert dev_design_63 == pytest.approx(2.9, abs=0.15)
 
 
-def test_committed_log_reports_the_numbers_the_carriers_quote(log_text):
+def test_committed_log_reports_the_numbers_the_carriers_quote(log_text, cv06b):
     """Parse the log; do not retype it."""
     def grab(label: str) -> float:
         m = re.search(rf"{label}\s*=\s*(-?[\d.]+)", log_text)
@@ -163,7 +239,17 @@ def test_committed_log_reports_the_numbers_the_carriers_quote(log_text):
     assert grab("Notch frequency error") == pytest.approx(1.40, abs=0.005)
     assert grab(r"Notch depth \|S21\|") == pytest.approx(-43.3, abs=0.05)
     assert grab(r"Re\(Z0\) median") == pytest.approx(46.5, abs=0.05)
-    assert "W_realized=635.0µm" in log_text
+    # #931: the realized width is a reading, so read it out of the log and
+    # check it against the build that produced it, instead of pinning the
+    # literal 635.0 that only holds for the pre-contract realization.
+    m = re.search(r"W_realized=([\d.]+)", log_text)
+    assert m, "W_realized missing from the run log"
+    logged_um = float(m.group(1))
+    live_um = cv06b._realized_trace_width(cv06b._build_sim()) * 1e6
+    assert logged_um == pytest.approx(live_um, abs=1e-6), (
+        f"the committed run log records W_realized={logged_um} um but this "
+        f"tree realizes {live_um} um — the log predates the geometry it "
+        f"claims to describe ({_MIGRATION_RUN})")
     assert "mesh: dx=63.5µm, n_z_sub=4" in log_text
     assert "PASS: cv06b" in log_text
 
