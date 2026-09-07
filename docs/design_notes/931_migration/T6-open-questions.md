@@ -153,7 +153,27 @@ modes rose (30.2153 GHz against a length-scaled 26.85; 25.3992 against 23.63),
 and the A/B module reproduces its number at HEAD on this pod, so it is not
 staleness.
 
-**Chosen: add the instrument, leave the pin red.** The modules reported two
+**RESOLVED 2026-09-07 by the census run (VESSL 369367259230).** The peaks the
+old pin named are still there; the SELECTION moved. `base` takes the two
+loudest, and the census shows the old second pin (28.1318) sitting at 27.9141
+GHz — within one `df` of where it was — at 0.117 of the loudest, while a
+0.418-amplitude line at 30.2153 took its place in the top two. So neither
+"the modes moved by the length ratio" nor "nothing changed" is right: the
+footprint really did grow to the drawn 5.500 mm, the lines moved by much less
+than the length ratio, and the ranking changed which two the pin reads. Both
+modules are re-pinned from their own runs (the A/B pair to (25.1741, 30.2153)
+GHz, the perturbation-Q sibling's mode-tracking pin to 25.399 GHz), widths and
+thresholds untouched, and the census stays printed so the next reader sees the
+ranking rather than inferring it.
+
+What is NOT fixed, and is now visible rather than hidden: amplitude rank is not
+a mode label. This module has no parity check like the harminv board's ("MODE
+IDENTITY — PARITY, NEVER AMPLITUDE RANK"), so a rank swap and a moved mode look
+identical to it. That is the follow-up. It does not block the gate, which
+compares f0 against PEC at the same frequencies in every arm and so does not
+care which two peaks are chosen, only that the choice is common.
+
+**Chosen at the time: add the instrument, leave the pin red.** The modules reported two
 headline frequencies with no trace, so a real move and a two-loudest PEAK PICKER
 swapping peaks between arms look identical from the outside — an R5 gap. The
 census (every peak, every arm, with amplitudes) is committed and the re-run is

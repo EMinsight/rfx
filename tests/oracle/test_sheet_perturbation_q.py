@@ -179,11 +179,25 @@ def _measured():
 @pytest.mark.slow_physics
 def test_g2_loss_is_real():
     out = _measured()
+    # R5: the whole measurement before any assertion reads one number of it.
+    # Without this the two pins below reported a bare frequency, and a mode
+    # that MOVED could not be told from an extractor that picked a different
+    # peak (the sibling A/B module was in exactly that position under #931).
+    print("[G2/LOSS-IS-REAL] " + "  ".join(
+        f"{k}={v:.6g}" for k, v in sorted(out.items())))
     # measured 2026-08-19: fw_f0/fw_pec = 6.98; the f0 FWHM must stay far
     # above the identically processed PEC (window-limited) width
     assert out["fw_f0"] / out["fw_pec"] > 2.0, out
-    # regression pins on the measured envelope (loose: mode tracking)
-    assert abs(out["f_mode"] - 24.753e9) < 0.3e9, out["f_mode"]
+    # Regression pins on the measured envelope (loose: mode tracking).
+    #
+    # Re-pinned 2026-09-07 for #931 (VESSL 369367259231, reproducing
+    # 369367259167 to 4 significant figures): 24.753 -> 25.399 GHz. The patch
+    # is declared as a zero-thickness sheet whose in-plane faces sit ON node
+    # lines, and the contract samples a sheet footprint CLOSED, so the patch
+    # realizes the length it draws instead of one cell less. The mode tracks
+    # the fixture; the WIDTH of this pin (+-0.3 GHz) and the FWHM and Q
+    # assertions around it are unchanged.
+    assert abs(out["f_mode"] - 25.399e9) < 0.3e9, out["f_mode"]
     assert abs(out["q_f0"] / 26.5 - 1.0) < 0.25, out["q_f0"]
 
 

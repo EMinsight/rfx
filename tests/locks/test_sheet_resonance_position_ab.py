@@ -91,9 +91,40 @@ N_STEPS = 30000
 X0 = (12e-3 - L_PATCH) / 2
 Y0 = (12e-3 - W_PATCH) / 2
 
-# measured provenance (2026-08-19); the regression assertions below allow
-# small float drift around these, the GATE is computed live per contract
-MEASURED_PEC_MODES = (24.5646e9, 28.1318e9)
+# Measured provenance; the regression assertions below allow small float drift
+# around these (2*df), and the GATE itself is computed live per contract.
+#
+# Re-pinned 2026-09-07 for #931 from VESSL 369367259230, whose census this
+# module now prints in full. Old pair (24.5646, 28.1318) GHz, measured
+# 2026-08-19; new pair (25.1741, 30.2153) GHz. What the census shows, and the
+# reason this is a re-pin and not a moved mode:
+#
+#   PEC arm peaks (GHz, amplitude relative to the loudest)
+#     25.1741  1.000     <- pinned, was 24.5646
+#     27.9141  0.117     <- the OLD second pin, 28.1318, still here and
+#                           within one df (0.3265 GHz) of where it was
+#     30.2153  0.418     <- pinned now, because `base` is the two LOUDEST
+#     31.3377  0.165
+#     35.3099  0.019
+#
+# So the old modes did not vanish or move by the patch-length ratio: the
+# selection changed. `base` takes the two loudest peaks, and the 30.2153 line
+# grew past the 27.9141 one. The patch's footprint DID change — the contract
+# samples a sheet footprint closed, so it realizes the drawn 5.500 mm instead
+# of the 5.250 mm the old half-open node sampling gave it (build-time
+# measurement: Ex rows 13..34 on both patch planes) — but that change moved
+# these lines by well under the naive length ratio, and the pin's job is to
+# follow the fixture, not to predict it.
+#
+# WHAT THIS PIN DOES NOT DO, now visible in the census: it does not identify a
+# MODE. Amplitude rank is not a mode label, and this module has no parity
+# check like the one the harminv board uses ("MODE IDENTITY — PARITY, NEVER
+# AMPLITUDE RANK"). A rank swap and a moved mode look the same to it. The
+# census above is the interim instrument; a parity or field-profile label is
+# the fix, and it is not attempted here because the gate below — f0 versus PEC
+# residuals at the SAME frequencies, in the same arms — does not depend on
+# which two peaks are chosen, only that the choice is the same in every arm.
+MEASURED_PEC_MODES = (25.1741e9, 30.2153e9)
 
 
 def _build(mode):
