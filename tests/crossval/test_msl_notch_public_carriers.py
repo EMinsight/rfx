@@ -49,8 +49,13 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CV06B = REPO_ROOT / "validation/crossval/06b_msl_notch_filter_uniform.py"
+# The CURRENT committed run: the post-#931 re-solve (VESSL 369367259191,
+# 2026-09-07), with the trace and stub declared as sheets. The 2026-08-27
+# log stays committed as the pre-2.0 record and is read by nothing here.
 RUN_LOG = (REPO_ROOT / "validation/crossval/_06b_notch_uniform_logs"
-           / "20260827T131217Z_run.log")
+           / "20260907T124851Z_run.log")
+RUN_LOG_PRE931 = (REPO_ROOT / "validation/crossval/_06b_notch_uniform_logs"
+                  / "20260827T131217Z_run.log")
 RUN_LOG_DX80 = (REPO_ROOT / "validation/crossval/_06b_notch_uniform_logs"
                 / "20260828T054132Z_dx80_origin_main_cdc38bc8_run.log")
 README = REPO_ROOT / "validation/README.md"
@@ -307,9 +312,9 @@ def test_committed_log_reports_the_numbers_the_carriers_quote(log_text, cv06b):
         assert m, f"{label!r} missing from {RUN_LOG.name}"
         return float(m.group(1))
 
-    assert grab("Notch frequency error") == pytest.approx(1.40, abs=0.005)
-    assert grab(r"Notch depth \|S21\|") == pytest.approx(-43.3, abs=0.05)
-    assert grab(r"Re\(Z0\) median") == pytest.approx(46.5, abs=0.05)
+    assert grab("Notch frequency error") == pytest.approx(2.16, abs=0.005)
+    assert grab(r"Notch depth \|S21\|") == pytest.approx(-39.4, abs=0.05)
+    assert grab(r"Re\(Z0\) median") == pytest.approx(48.2, abs=0.05)
     # #931: the realized width is a reading, so read it out of the log and
     # check it against the build that produced it, instead of pinning the
     # literal 635.0 that only holds for the pre-contract realization.
@@ -328,11 +333,11 @@ def test_committed_log_reports_the_numbers_the_carriers_quote(log_text, cv06b):
 def test_committed_log_carries_the_warnings_the_contract_quotes(log_text):
     """R5: the headline is read inside a flagged band and after a passivity
     projection. Both must stay quotable from the same log."""
-    assert "standing-wave null at the port plane: 9 bins in [3.6273, 7.0000] GHz" in log_text
+    assert "standing-wave null at the port plane: 9 bins in [3.7545, 7.0000] GHz" in log_text
     assert "63 of 100 frequency bins were non-passive as extracted" in log_text
     assert "worst sigma_max = 1.006" in log_text
-    assert "'msl_0' = 61.02 ohm" in log_text
-    assert "'msl_1' = 39.90 ohm" in log_text
+    assert "'msl_0' = 33.02 ohm" in log_text
+    assert "'msl_1' = 59.23 ohm" in log_text
 
 
 @pytest.mark.parametrize(
@@ -346,8 +351,12 @@ def test_carrier_quotes_the_current_mesh(carrier):
 
 @pytest.mark.parametrize("carrier", [MATRIX_MD, MATRIX_JSON, PORT_SELECTION])
 def test_carrier_quotes_the_current_headline(carrier):
+    """#931: the current headline is the post-contract re-solve's, and the
+    pre-2.0 one may only appear framed as the realization 2.0 does not
+    produce (checked by ``test_carrier_marks_the_pre931_headline_as_history``
+    below)."""
     text = carrier.read_text(encoding="utf-8")
-    for number in ("1.40", "43.3", "46.5"):
+    for number in ("2.16", "39.4", "48.2"):
         assert number in text, (
             f"{carrier.relative_to(REPO_ROOT)} is missing the current cv06b "
             f"figure {number}")
@@ -367,6 +376,24 @@ def test_carrier_does_not_present_the_dx80_numbers_as_current(carrier):
             assert any(k in window for k in history_markers), (
                 f"{carrier.relative_to(REPO_ROOT)} quotes the superseded "
                 f"dx=80um figure {number} without marking it as history")
+
+
+@pytest.mark.parametrize("carrier", [MATRIX_MD, MATRIX_JSON, PORT_SELECTION])
+def test_carrier_marks_the_pre931_headline_as_history(carrier):
+    """1.40 / -43.3 / 46.5 are the ONE-CELL-BOX realization's numbers. 2.0
+    cannot produce them, so a carrier may keep them only inside a sentence
+    that says so -- the same rule this file already applies to the dx=80um
+    figures, one realization later."""
+    text = carrier.read_text(encoding="utf-8")
+    markers = ("pre-2.0", "PRE-2.0", "history", "historical", "one-cell PEC "
+               "Box", "one-cell Box")
+    for number in ("1.40", "43.3", "46.5"):
+        for m in re.finditer(re.escape(number), text):
+            window = text[max(0, m.start() - 700):m.end() + 700]
+            assert any(k in window for k in markers), (
+                f"{carrier.relative_to(REPO_ROOT)} quotes the pre-#931 cv06b "
+                f"figure {number} without marking it as the superseded "
+                "realization")
 
 
 def test_e4_board_mismatch_is_disclosed_where_the_comparison_is_cited():

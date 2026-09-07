@@ -143,37 +143,63 @@ Relevant checks include `validation/crossval/05_patch_antenna.py`,
   2026-08, where the declared `254 um` substrate rasterized to `320 um` and
   the `600 um` trace to `560 um`, so the analytic references were computed on
   a board that mesh did not solve; that run is history, not current evidence.
-  The committed 2026-08-27 GPU run log
-  (`validation/crossval/_06b_notch_uniform_logs/20260827T131217Z_run.log`)
-  reports `1.40%` frequency error against the analytic notch evaluated on the
-  realized `635.0 um` trace width (a **pre-2.0** realized width: under the
-  lattice ownership contract the trace's footprint is sampled closed on the
-  in-plane axes, so this number is re-read from the recomputed run's own
-  `fidelity_report()`), `-43.3 dB` notch depth, and median
-  `Re(Z0)=46.5 ohm` (port 0, median over the 100 bins); it passes the gates
-  IN FORCE WHEN IT RAN -- frequency error `<15%`, notch depth `<-10 dB`, and
-  median `Re(Z0)` in `(40, 65) ohm`. **Those are not the case's current
-  gates.** The #812 P3 re-gate (2026-09-01,
-  `docs/design_notes/estimator_resolution_regate.md`) replaced the
-  bin-quantised `argmin` with a sub-bin log-parabolic vertex, TIGHTENED the
-  frequency window to `<4.0%`, added a `-10 dB` stopband-WIDTH gate against
-  the ideal shunt-open-stub closed form `(4/pi)atan(r/6) = 0.210274` at
-  `r = 1` (window `+-20%`), added an in-run half-grid resolution witness
-  (`< 1.000` full-grid bin), and demoted the `<-10 dB` depth gate to a witness
-  because on this `63.6364 MHz` grid an ideal `r = 1` stub's WORST sampled
-  minimum is `-31.23 dB`, `21.2 dB` inside it. The 2026-08-27 log PREDATES
-  those gates and therefore carries no measurement of the two new quantities:
-  re-running the case on GPU
-  (`scripts/vessl_cv06b_estimator_falsifiers.yaml`) is what will judge them.
-  That `Re(Z0)` sits `-2.9%` from
-  Hammerstad-Jensen on the DESIGN board (`600/254 um`, `47.90 ohm`) and
-  reproduces the independent `msl_z0_bias_floor_sweep` "aligned h_sub/4"
-  point (`46.098 ohm`) to `0.87%`. Read it with that run's own warnings, not
-  without them: a standing-wave null flags 9 bins in `[3.6273, 7.0000] GHz`
-  as unreliable for the wave split -- which starts at the reported notch --
-  `63 of 100` bins were non-passive as extracted (worst `sigma_max = 1.006`),
-  and the per-port argmax `Z0` deviations against Hammerstad-Jensen are
-  `61.02 ohm` (`msl_0`) and `39.90 ohm` (`msl_1`).
+  The current evidence is the post-#931 re-solve, **VESSL 369367259191**
+  (2026-09-07), whose log is committed at
+  `validation/crossval/_06b_notch_uniform_logs/20260907T124851Z_run.log`. On
+  that board the trace and the stub are declared as SHEETS (design note
+  section 1.3): each realizes ONE node plane at `z = 254 um`, and its
+  footprint is the closed node rectangle, so the GEOMETRIC width is
+  `571.5 um` while the ELECTRICAL width the analytic reference takes is
+  `n_rows*dx = 635.0 um`. The run reports `2.16%` frequency error (sub-bin
+  refined vertex `3.7586 GHz` against the analytic `3.679 GHz`), `-39.4 dB`
+  notch depth and median `Re(Z0) = 48.2 ohm` (port 0, median over the 100
+  bins), and it passes the case's CURRENT gates: frequency error `<4.0%`;
+  `-10 dB` stopband fractional width `0.21009`, ratio `0.9991` to the ideal
+  `r = 1` closed form, inside `(0.80, 1.20)`; half-grid resolution witness
+  `0.4469` bin (`< 1.000`); median `Re(Z0)` in `(40, 65) ohm`.
+  **The width convention is measured, not settled.** crossval-B pre-declared
+  the Z0 median as its falsifier -- `46.48 +- 1.0 ohm` says the electrical
+  `635.0 um` is the formula's input (Hammerstad-Jensen `46.18 ohm`), about
+  `49.4 ohm` says the geometric `571.5 um` is (`49.39 ohm`) -- and the
+  re-solve landed at `48.2 ohm`, outside that window and between the two
+  predictions. In the same run the frequency error ROSE (`1.453%` to
+  `2.16%`) where the migration predicted a fall to about `0.95%`, so cv06b's
+  own pre-declaration is not discharged. Both readings belong to crossval-B;
+  nothing here was re-tuned and no gate was moved for them.
+  Read the run with its own warnings, not without them: a standing-wave null
+  flags 9 bins in `[3.7545, 7.0000] GHz` as unreliable for the wave split --
+  which starts at the reported notch -- `63 of 100` bins were non-passive as
+  extracted (worst `sigma_max = 1.006`), and the per-port argmax `Z0`
+  deviations against Hammerstad-Jensen are `33.02 ohm` (`msl_0`) and
+  `59.23 ohm` (`msl_1`). That median sits `+0.6%` from Hammerstad-Jensen on
+  the DESIGN board (`600/254 um`, `47.90 ohm`; `48.2/47.90`) and `+4.5%` from
+  the independent `msl_z0_bias_floor_sweep` "aligned h_sub/4" point
+  (`46.098 ohm`; `48.2/46.098`).
+  The **pre-2.0** committed log
+  (`validation/crossval/_06b_notch_uniform_logs/20260827T131217Z_run.log`,
+  2026-08-27) reported `1.40%` frequency error, `-43.3 dB` notch depth and
+  median `Re(Z0)=46.5 ohm` for the same drawing realized as one-cell PEC
+  Boxes, passing the gates IN FORCE WHEN IT RAN -- frequency error `<15%`,
+  notch depth `<-10 dB`, median `Re(Z0)` in `(40, 65) ohm`. Those figures are
+  history: 2.0 does not produce that realization, and that log predates the
+  current gates as well. Its own qualifying numbers, kept with it: that median
+  sat `-2.9%` from Hammerstad-Jensen on the DESIGN board and reproduced
+  the independent `msl_z0_bias_floor_sweep` "aligned h_sub/4" point
+  (`46.098 ohm`) to `0.87%`, and the run's own warnings were a
+  standing-wave null over 9 bins in `[3.6273, 7.0000] GHz`, `63 of 100`
+  bins non-passive as extracted (worst `sigma_max = 1.006`) and per-port
+  argmax `Z0` deviations `61.02 ohm` (`msl_0`) and `39.90 ohm` (`msl_1`). The #812 P3 re-gate (2026-09-01,
+  `docs/design_notes/estimator_resolution_regate.md`) is what set the gates
+  quoted above: it replaced the bin-quantised `argmin` with a sub-bin
+  log-parabolic vertex, TIGHTENED the frequency window to `<4.0%`, added the
+  `-10 dB` stopband-WIDTH gate against the ideal shunt-open-stub closed form
+  `(4/pi)atan(r/6) = 0.210274` at `r = 1` (window `+-20%`), added the in-run
+  half-grid resolution witness (`< 1.000` full-grid bin), and demoted the
+  `<-10 dB` depth gate to a witness because an ideal `r = 1` stub's WORST
+  sampled minimum on this grid is about `-31 dB` (`-31.23 dB` on the
+  committed estimator fixture's `63.6364 MHz` grid, `-31.51 dB` in the
+  re-solve's own `63.6367 MHz` sweep), i.e. more than `21 dB` inside the
+  gate, so it cannot fail while a notch exists.
 - The `dx = 50 um` OpenEMS notch comparison below is NOT the same board:
   its rfx leg (`scripts/diagnostics/build_msl_notch_rfx_dx50.py`) still
   realizes `h_sub = 300 um` at its own `dx = 50 um` and is deferred, not
@@ -356,6 +382,8 @@ A `True` entry is not an accuracy guarantee.
   witness probes are excluded from preflight advisories (#470).
 
 **cv06b re-gate, judged on its own board (2026-09-02, VESSL 369367257702, issue #812 P3 round 2 — PRE-2.0 realization; recomputed under #931).** Every gate passed on the shipped dx = 63.5 µm mesh: notch error `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.err_pct = 1.453` % (window 4.0 %), −10 dB width ratio `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.bw_ratio = 0.9684` (window 0.80–1.20). The build-level narrow-stub falsifier fires the width gate while the retained depth witness stays blind. One pre-declared falsifier FIRED and is recorded, not softened: a one-cell stub-length error (analytic shift 0.532 %, `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.true_shift_pct = 0.532`) moved the refined notch estimate by `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.refined_delta_pct = 0.145` % — non-zero, but below the declared half-of-predicted visibility criterion — so sub-bin resolution of the notch frequency on this board is not demonstrated; cause not attributed (design note section 7.6 names the two candidates and the finer-DFT experiment that separates them).
+
+**cv06b under #931, VESSL 369367259191 (2026-09-07).** The re-solve with the trace and stub declared as sheets passes the same four gates on the same mesh — notch error 2.16 %, width ratio 0.9991, half-grid witness 0.4469 bin, median Re(Z0) 48.2 Ω — and its build falsifiers were re-run in the same job: the one-cell stub error now moves the refined estimate 0.823 % against a predicted 0.532 %, i.e. the falsifier that FIRED above no longer fires, and the narrow-stub arm still trips the width gate (ratio 0.655) while the depth witness stays blind. Those numbers are read from the run's own artifacts under `/root/workspace/claude-workspace/rfx/runs/issue931-post-cv06b-20260907T124851Z/` (`cv06b_run.log`, committed as the 2026-09-07 entry in `validation/crossval/_06b_notch_uniform_logs/`, and `cv06b_build_falsifiers_summary.json`); the regenerated falsifier summary and estimator fixture are NOT committed yet, so the citations in the paragraph above still resolve against the pre-2.0 files and are labelled as such. Committing them is crossval-B's — the new summary flips the pinned inequality in `tests/crossval/test_cv06b_build_falsifier_plumbing.py`, which is an adjudication, not a docs edit.
 
 ## Rectangular-waveguide port
 
