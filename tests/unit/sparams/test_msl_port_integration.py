@@ -50,13 +50,26 @@ Gate calibration (dx=80 µm, laplace mode, measured 2026-05-04)
 57.58 Ω refresh below) are pre-contract: they were taken on the
 bisecting mesh, where the strip sat at 320 µm over a 254 µm dielectric
 plus a 66 µm air gap. The fixture is now on the lattice with the trace
-declared as a sheet, so it simulates the intended board and the numbers
-are RE-MEASURED, not translated (VESSL run recorded in
-``tests/unit/sparams/_results_931/RECOMPUTE.md``). The three BOUNDS are
-untouched — the aligned-mesh sibling this file already documents read
-44.11 Ω, inside (40, 65), which is why the windows are expected to hold
-without being moved. If a bound turns out not to hold, that is a result
-to report, not a bound to widen.
+declared as a sheet, so it simulates the intended board.
+
+RE-MEASURED on the contract board (VESSL run 369367259284, 2026-09-07,
+preset gpu-rtx4090, JAX_PLATFORMS=cpu, ``-m slow``, rc=0, 6 min). The
+three BOUNDS are UNTOUCHED and all three hold with more margin than
+before:
+
+  quantity        pre-#931 (dx = 80 µm)   post-#931 (dx = h_sub/3)   gate
+  mean |S11|      0.1160                  0.0203                     < 0.15
+  mean |S21|      0.9930                  0.9997                     (0.90, 1.05)
+  mean Re(Z0)     57.58 Ω                 46.16 Ω                    (40, 65) Ω
+
+That is the direction the geometry implies and the size this file's own
+text predicted: it already recorded the aligned dx = 84.67 µm sibling at
+44.11 Ω against the bisecting mesh's 57.58 Ω, and named 57.58 Ω "the
+faithful extraction of THAT geometry, not extractor error". The board is
+now the intended one, so Re(Z0) sits 3.6 % below the declared board's
+Hammerstad–Jensen anchor of 47.89 Ω instead of 20 % above it, and the
+reflection the port sees against its own 50 Ω reference falls 5.7×.
+Nothing was widened; nothing was translated.
 """
 
 from __future__ import annotations
@@ -143,13 +156,14 @@ def test_msl_thru_line_passive_gate():
     See ``docs/agent-memory/port_sparam_review_2026-05-19.md``.
 
     CALIBRATION REFRESHED 2026-07-30 (issues #511/#507 + PR #516 review
-    finding F2). Bounds untouched — never weakened or moved; only the
-    recorded measured values:
+    finding F2) and again 2026-09-07 (#931 R6 — the on-lattice sheet
+    board). Bounds untouched throughout — never weakened or moved; only
+    the recorded measured values:
 
-        quantity        pre-#511    final (trace-anchored V, PR #516)
-        mean|S11|       0.118       0.1160
-        mean|S21|       0.972       0.9930
-        mean Re(Z0)     ~57 Ω       57.58 Ω
+        quantity        pre-#511    PR #516     #931 (VESSL 369367259284)
+        mean|S11|       0.118       0.1160      0.0203
+        mean|S21|       0.972       0.9930      0.9997
+        mean Re(Z0)     ~57 Ω       57.58 Ω     46.16 Ω
 
     (An intermediate PR #516 state read 0.0746 / 42.41 Ω here; that was the
     review's finding F2 — a V span anchored on ``round(h_sub/dx)``, one
@@ -264,7 +278,8 @@ def test_msl_thru_line_passive_gate():
     nz_sub = int(round(H_SUB / DX))
     print(f"[MSL thru] dx = {DX*1e6:.0f} µm, nz_sub ≈ {nz_sub}")
 
-    # --- reflection gate (laplace mode, dx=80µm: measured ~0.118) ---
+    # --- reflection gate (laplace mode; measured 0.0203 on the #931
+    #     on-lattice sheet board, 0.1160 on the pre-#931 bisecting mesh) ---
     assert mean_s11 < 0.15, (
         f"|S11| = {mean_s11:.4f} ≥ 0.15 — excessive reflection at source plane"
     )
@@ -277,7 +292,8 @@ def test_msl_thru_line_passive_gate():
         f"|S21| = {mean_s21:.4f} ≥ 1.05 — passivity violated"
     )
 
-    # --- Z0 gate (dx=80µm corrected window; measured ~54 Ω) ---
+    # --- Z0 gate (window unchanged since the dx=80µm correction; measured
+    #     46.16 Ω on the #931 board, 57.58 Ω on the pre-#931 one) ---
     assert 40.0 < mean_z0 < 65.0, (
         f"Re(Z0) = {mean_z0:.2f} Ω outside (40, 65) Ω"
     )
@@ -457,6 +473,17 @@ def test_msl_thru_line_z0_length_invariance_and_positive_sign():
     Enforced bound = gate_from_envelope(0.004607, quantum=1000) = 0.007 —
     the shared measured-envelope policy (``tests/_gate_policy.py``:
     ENVELOPE_GATE_MULTIPLIER then ceil-quantize to 1/1000), a 1.52x margin.
+
+    #931, RE-MEASURED on the on-lattice sheet board (VESSL run
+    369367259284): mean|Z0| per length {8, 10, 12} mm = 46.21 / 46.16 /
+    46.13 Ω, spread 0.16% against the SAME 0.7% bound; per-leg mean|S11|
+    0.0126 / 0.0203 / 0.0264 against the same < 0.15 envelope. The bound is
+    NOT re-derived from this run. gate_from_envelope(0.0016, quantum=1000)
+    would tighten it to 0.003, and doing that on one solve on one platform
+    would throw away the cross-platform envelope work below (issue #610):
+    a gate re-derived from the single measurement it bounds cannot fail by
+    construction. The envelope moved and is recorded; the gate stays where
+    the two-platform evidence put it.
 
     The L = 6 mm leg was REMOVED, not re-bounded (no-silent-loosening: the
     bound TIGHTENED 5% → 0.7%). Issue #518 attributes its ~+2.9 Ω offset to

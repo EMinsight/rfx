@@ -111,8 +111,30 @@ is, so the branch must be committed before submitting.
 * Command: `JAX_PLATFORMS=cpu python -m pytest
   tests/unit/sparams/test_msl_port_integration.py -m slow -q -s`
 * Cost: cpu-hour class (three thru solves plus the length-invariance ladder).
-* Not yet submitted — submit after the branch is merged with the preflight
-  group's work, so the run measures one geometry and one advisory set.
+* **DONE — VESSL run 369367259284** (2026-09-07, preset gpu-rtx4090,
+  JAX_PLATFORMS=cpu, rc=0, 6 min; 2 passed, 1 xfailed, 1 deselected).
+  Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-msl-port-integration-20260907T194139Z/pytest.log`.
+  Submitted after the preflight merge, so it measured one geometry and one
+  advisory set. **All three BOUNDS untouched and all three hold, with more
+  margin than before:**
+
+  | quantity | pre-#931 (dx = 80 µm) | post-#931 (dx = h_sub/3) | gate |
+  |---|---|---|---|
+  | mean \|S11\| | 0.1160 | **0.0203** | < 0.15 |
+  | mean \|S21\| | 0.9930 | **0.9997** | (0.90, 1.05) |
+  | mean Re(Z0) | 57.58 Ω | **46.16 Ω** | (40, 65) Ω |
+
+  Length invariance: mean\|Z0\| per length {8, 10, 12} mm = 46.21 / 46.16 /
+  46.13 Ω, spread **0.16 %** against the same 0.7 % bound (was 0.4607 %);
+  per-leg mean\|S11\| 0.0126 / 0.0203 / 0.0264 against the same < 0.15
+  envelope. The 0.7 % bound is NOT re-derived from this run:
+  `gate_from_envelope(0.0016, quantum=1000)` would tighten it to 0.003, and
+  re-deriving a gate from the single measurement it bounds — on one platform —
+  would discard the two-platform envelope work of issue #610.
+  The measurement matches what the file's own text predicted: it already
+  recorded the aligned dx = 84.67 µm sibling at 44.11 Ω against the bisecting
+  mesh's 57.58 Ω. Re(Z0) now sits 3.6 % below the declared board's
+  Hammerstad–Jensen anchor (47.89 Ω) instead of 20 % above it.
 
 ## R3 — `tests/unit/ports/test_msl_source_fixture_static.py` highmem referee
 
