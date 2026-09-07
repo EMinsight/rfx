@@ -46,6 +46,16 @@ schema, not just with this test's own reading.
 Both layers REPLAY frozen numbers; they are not a live-physics anchor. The
 gitignored-``.omx`` loss of the June-2026 numbers (the reason committing the raw
 arrays here matters) is exactly what committing the raw arrays here prevents.
+
+
+#931 SCOPE, traced to the producer: the T-junction's walls are NOT conductor
+bodies under the ownership contract. ``build_waveguide_tjunction_broad_e5_envelope.py``
+stamps them with ``sigma = 1e10`` directly onto the material array
+(``jnp.where(box.mask(grid), 1e10, materials.sigma)``), which design note §1.8
+fences out of the contract as a lossy-volume model — the same fence as cv16 and
+the RCS lane. The per-port straight-guide references are built the same way. So
+every committed S matrix here, the mesh-convergence envelope and the Meep
+cross-FDTD distance are unchanged and no re-run is scheduled.
 """
 from __future__ import annotations
 
