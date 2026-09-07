@@ -863,16 +863,21 @@ def test_wire_port_dead_cell_advisory_matches_ground_truth_on_488_fixture():
     (PR #543 measured Z_in = Z0/4 = 12.5 ohm flat, matching n_live = 4 to
     5.8e-4).
 
-    #931: the count is still 4/4, but for a stated reason instead of an
-    accident. The board is ON-LATTICE now (h_sub/dx 3.175 -> 3) and the
-    foil is a SHEET on node 3, so the feed's four rasterized cells run
-    0..3 and every one of them is live — normal E through a sheet stays
-    live by contract (§1.3), and the last cell sits above the sheet
-    plane. Before the contract the same 4/4 came from ``apply_pec_mask``
+    #931: the count is 3/3. The board is ON-LATTICE now (h_sub/dx
+    3.175 -> 3) and the foil is a SHEET on node 3; the feed's extent
+    ``h_sub`` = 3 dx is HALF-OPEN in edges (R8, 6d66ac65), so it drives
+    exactly the three Ez edges between the ground and the foil, cells
+    0..2, and every one of them is live — normal E through a sheet stays
+    live by contract (§1.3). The 4/4 this test pinned before R8 counted a
+    fourth edge ABOVE the foil (cell 3, spanning 3 dx .. 4 dx): the
+    endpoint-inclusive rasterizer drove one edge past the declared end,
+    and before the contract the same 4/4 came from ``apply_pec_mask``
     happening to preserve normal E inside a one-cell PEC body. The
     property under test is unchanged: no cell is dead, so the advisory
     stays silent, and the ground truth reads the realized edge set — the
-    same primitive the assembler applies.
+    same primitive the assembler applies. Measured build-only 2026-09-07:
+    extent 2 dx / 3 dx / 4 dx -> 2/2, 3/3, 4/4 (the 4 dx row is the old
+    geometry, declared honestly).
     """
     sim, y_c = _base_sim()
     _add_feed(sim, y_c, x=2e-3)
@@ -880,7 +885,7 @@ def test_wire_port_dead_cell_advisory_matches_ground_truth_on_488_fixture():
 
     n_live_truth, n = _ground_truth_wire_port_n_live(
         sim, position=(2e-3, y_c, 0.0), component="ez", extent=_H_SUB)
-    assert (n_live_truth, n) == (4, 4), (
+    assert (n_live_truth, n) == (3, 3), (
         f"ground truth changed ({n_live_truth}/{n}) -- re-derive the "
         "expected preflight behaviour before trusting the rest of this "
         "test"
@@ -889,11 +894,11 @@ def test_wire_port_dead_cell_advisory_matches_ground_truth_on_488_fixture():
     issues = sim.preflight()
     codes = [getattr(s, "code", None) for s in issues]
     assert "wire_port_dead_extent_cells" not in codes, (
-        "corrected advisory must be silent: ground truth is n_live/n=4/4 "
+        "corrected advisory must be silent: ground truth is n_live/n=3/3 "
         "(issue #544): " + "\n".join(str(s) for s in issues)
     )
     assert "wire_port_midpoint_in_pec" not in codes, (
-        "midpoint cell (index 2, z=200um) is live -- #314 must stay "
+        "midpoint cell (index 1, z=85um) is live -- #314 must stay "
         "silent too: " + "\n".join(str(s) for s in issues)
     )
     assert "wire_port_dead_cell_classification_unavailable" not in codes, (
@@ -907,9 +912,14 @@ def test_wire_port_dead_cell_advisory_matches_ground_truth_on_488_fixture():
 def test_wire_port_dead_cell_advisory_stays_correct_on_an_already_agreeing_case():
     """No false-positive introduction: a case where the pre-#544 advisory
     and the assembler ALREADY agreed must still report the same n_live/n
-    after the fix. dx=0.5mm, trace z in [0.9,1.4]mm (1 cell thick -> the
-    thin-sheet branch), port extent=1.0mm -> 3 cells (centers
-    0.25/0.75/1.25mm). The thin-sheet midpoint is 1.15mm, UNAMBIGUOUSLY
+    after the fix. dx=0.5mm, trace z in [0.9,1.4]mm (one cell thick: a
+    VOLUME on cell 2 under #931 §1.1, its centre 1.25mm inside
+    [0.9,1.4)mm), port extent=1.5mm -> 3 cells (centers 0.25/0.75/1.25mm;
+    the extent is HALF-OPEN in edges, #931 R8 / 6d66ac65, so three edges
+    on a 0.5mm mesh are 1.5mm of extent -- this fixture declared 1.0mm
+    while the rasterizer drove one edge past the declared end, and 1.0mm
+    now reads 2/2 with no dead cell, measured 2026-09-07). The thin-sheet
+    midpoint is 1.15mm, UNAMBIGUOUSLY
     closer to node z=1.0mm (0.15mm away) than to node z=1.5mm (0.35mm
     away) -- not a tie, so the ground-truth node is deterministic
     regardless of platform/dtype rounding (issue #544 review item 5: an
@@ -927,12 +937,12 @@ def test_wire_port_dead_cell_advisory_stays_correct_on_an_already_agreeing_case(
     sim.add(Box((0.004, 0.003, 0.9e-3), (0.012, 0.007, 1.4e-3)),
             material="pec")
     sim.add_port(position=(0.008, 0.005, 0.0), component="ez",
-                 impedance=50.0, extent=1.0e-3)
+                 impedance=50.0, extent=1.5e-3)
 
     n_live_truth, n = _ground_truth_wire_port_n_live(
-        sim, position=(0.008, 0.005, 0.0), component="ez", extent=1.0e-3)
+        sim, position=(0.008, 0.005, 0.0), component="ez", extent=1.5e-3)
     n_live_old, n_old = _old_buggy_dead_cell_classification(
-        sim, position=(0.008, 0.005, 0.0), component="ez", extent=1.0e-3)
+        sim, position=(0.008, 0.005, 0.0), component="ez", extent=1.5e-3)
     assert (n_live_truth, n) == (n_live_old, n_old) == (2, 3), (
         f"expected this fixture to be an ALREADY-AGREEING case (2/3 "
         f"either way); got ground_truth={n_live_truth}/{n} "
@@ -978,7 +988,7 @@ def test_a_cell_occupancy_classifier_cannot_see_a_sheet_at_all():
         sim, position=(2e-3, y_c, 0.0), component="ez", extent=_H_SUB)
     n_live_old, n_old = _old_buggy_dead_cell_classification(
         sim, position=(2e-3, y_c, 0.0), component="ez", extent=_H_SUB)
-    assert (n_live_truth, n) == (n_live_old, n_old) == (4, 4)
+    assert (n_live_truth, n) == (n_live_old, n_old) == (3, 3)
 
     # A port lying IN the sheet: every cell dead under the contract, so
     # the shared primitive refuses the port outright (#318).
@@ -1183,22 +1193,27 @@ def _d5_gap_ground_truth(sim, position, component, extent, impedance=50.0):
 
 
 @pytest.mark.xfail(
-    reason="the #556 end-gap advisory still finds metal by scanning "
-           "pec_mask cells, and a foil sheet owns no cell, so it cannot "
-           "fire on this fixture at all (#931 design note §6, 'not yet "
-           "implemented'; owned by the preflight migration). The "
-           "ground-truth premise this file owns is asserted first and "
-           "passes; the marker is the pre-declared falsifier for the "
-           "advisory's move onto realized wall planes.",
+    reason="the #556 end-gap advisory reads realized wall planes now and "
+           "FIRES on this fixture (measured 2026-09-07: one warning on the "
+           "+z side), but its message spells the gap as 'gap = 8.46667e-05 "
+           "m' and the remedy as 'e.g. dx = h/N', where this test looks "
+           "for 'gap = 1 cell' and 'refine dx'. The wording is the "
+           "preflight owner's (#931 design note §6); the ground-truth "
+           "premise this file owns is asserted first and passes. Strict, "
+           "so the wording change un-xfails this loudly.",
     strict=True,
 )
 def test_wire_port_end_gap_advisory_fires_on_a_declared_one_cell_gap():
     """POSITIVE (issue #556), re-declared on the lattice (#931).
 
     The board is three cells thick, the foil sheet sits on node 3, and
-    the feed is drawn ONE cell short of it (extent = dx puts the port's
-    cells at 0..1 and its top node at 2, so exactly one live Ez edge —
-    cell 2 — separates the feed from the conductor). Every port cell is live, so the
+    the feed is drawn ONE cell short of it (extent = 2*dx puts the port's
+    cells at 0..1 and its top node at 2 — the extent is HALF-OPEN in
+    edges, #931 R8 / 6d66ac65; it was declared ``dx`` while the
+    rasterizer drove one edge past the declared end — so exactly one
+    live Ez edge, cell 2, separates the feed from the conductor;
+    measured 2026-09-07: (end_live, wall_one_cell_on) = (True, True) at
+    2 dx, (True, False) at dx). Every port cell is live, so the
     #314/#319 dead-cell advisories are correctly silent -- and before
     #556 NOTHING warned, while the measured physics was capacitive-only
     coupling (|S21| rising with f, falsifier-ledger D5). The advisory
@@ -1211,19 +1226,18 @@ def test_wire_port_end_gap_advisory_fires_on_a_declared_one_cell_gap():
     defect it stands for is unchanged; only the way the fixture reaches it
     is honest about being deliberate.
 
-    NOTE (cross-branch): the preflight assertions below need the #556
-    advisory to read realized wall planes rather than ``pec_mask`` cells
-    (design note §6, "not yet implemented"; owned by the preflight
-    stage). A foil sheet is invisible to a cell scan, so until that lands
-    the advisory cannot fire here at all. The ground-truth premise above
-    it is the part this file owns, and it passes today.
+    NOTE (cross-branch): the advisory reads realized wall planes and
+    fires here (see the xfail reason); what still reds this test is its
+    message wording ("gap = 1 cell", "refine dx"), which the preflight
+    owner spells differently. The ground-truth premise above it is the
+    part this file owns, and it passes today.
     """
     sim, y_c = _base_sim()
-    _add_feed(sim, y_c, x=2e-3, extent=_DX)
+    _add_feed(sim, y_c, x=2e-3, extent=2 * _DX)
     _add_msl(sim, y_c, x=5.5e-3, n_probe_offset=10, n_probe_spacing=4)
 
     end_live, wall_one_cell_on = _d5_gap_ground_truth(
-        sim, position=(2e-3, y_c, 0.0), component="ez", extent=_DX)
+        sim, position=(2e-3, y_c, 0.0), component="ez", extent=2 * _DX)
     assert (end_live, wall_one_cell_on) == (True, True), (
         f"ground-truth premise changed (end_live={end_live}, "
         f"wall_one_cell_on={wall_one_cell_on}) -- the one-cell-gap "
@@ -1261,10 +1275,16 @@ def test_wire_port_end_gap_advisory_fires_on_a_declared_one_cell_gap():
 def test_wire_port_end_gap_advisory_silent_when_extent_reaches_conductor():
     """SILENT CONTROL 1 (issue #556): the feed drawn to the foil.
 
-    ``extent = 2*dx`` puts the port's top NODE on the foil's realized
-    wall plane -- galvanic contact, D5's own remedy. (The fixture's
-    default ``extent = h_sub`` = 3*dx reaches one edge FURTHER, past the
-    sheet; both are contact, and this control takes the exact one.) The #556 gap
+    ``extent = h_sub`` = 3*dx puts the port's top NODE on the foil's
+    realized wall plane (node 3) -- galvanic contact, D5's own remedy.
+    The extent is HALF-OPEN in edges (#931 R8, 6d66ac65): 3 dx drives
+    cells 0..2 and ends on node 3, exactly the gap between ground and
+    foil. This control used to declare ``2*dx`` and reached node 3 only
+    because the rasterizer drove one edge past the declared end; under
+    the corrected rule 2*dx ends on node 2, one cell SHORT of the foil,
+    and is the positive case (measured 2026-09-07: extent 2 dx -> the
+    #556 advisory fires once on the +z side; 3 dx -> silent, ground
+    truth (end_live, wall_one_cell_on) = (True, False)). The #556 gap
     advisory must not fire.
 
     #931 changed the partition this control used to assert. Contact used
@@ -1277,11 +1297,11 @@ def test_wire_port_end_gap_advisory_silent_when_extent_reaches_conductor():
     galvanic feed off the ground was the defect, not the finding.
     """
     sim, y_c = _base_sim()
-    _add_feed(sim, y_c, x=2e-3, extent=2 * _DX)
+    _add_feed(sim, y_c, x=2e-3, extent=_H_SUB)
     _add_msl(sim, y_c, x=5.5e-3, n_probe_offset=10, n_probe_spacing=4)
 
     end_live, wall_one_cell_on = _d5_gap_ground_truth(
-        sim, position=(2e-3, y_c, 0.0), component="ez", extent=2 * _DX)
+        sim, position=(2e-3, y_c, 0.0), component="ez", extent=_H_SUB)
     assert (end_live, wall_one_cell_on) == (True, False), (
         "ground-truth premise changed: a feed drawn to the foil ends ON "
         "its wall plane, so its last cell is live (Ez is normal to a "
