@@ -365,12 +365,45 @@ def _rel(x, y):
 
 
 def map_checks(hs=SELFCHECK_H) -> dict:
+    """E4-M. The map is exact linear arithmetic; its 1e-9 m windows are
+    float64-class statements (0.27 f32 ulp of the 44 mm column), so the
+    gated rows are evaluated under the scoped x64 context (bring-up fix,
+    see Results) and the default-dtype (float32, the solver's view) rows
+    are recorded alongside as ``rows_f32``."""
+    from tests._x64_compat import enable_x64
+    rows_f32 = _map_rows(hs)
+    with enable_x64():
+        jax.clear_caches()
+        ch = _map_checks_gated(hs)
+    jax.clear_caches()
+    ch["rows_f32"] = rows_f32
+    ch["f32_length_err_max_m"] = float(max(r["length_err_m"] for r in rows_f32))
+    ch["f32_iface_err_max_m"] = float(max(r["iface_err_m"] for r in rows_f32))
+    ch["f32_ulp_of_column_m"] = float(np.spacing(np.float32(L_Z)))
+    return ch
+
+
+def _map_checks_gated(hs) -> dict:
     ch = {}
     jac = np.asarray(jax.jacfwd(lambda p: stackup(p)[0])(jnp.asarray(PARAMS0))[:, 0], np.float64)
     jd = declared_jacobian_h()
     ch["jacobian_h_worst_rel"] = float(max(_rel(a, b) if b != 0 else abs(a) for a, b in zip(jac, jd)))
     ch["jacobian_h_pass"] = ch["jacobian_h_worst_rel"] <= MAP_JAC_REL
     ch["jacobian_h_sum"] = float(jac.sum())
+    rows = _map_rows(hs)
+    ch["rows"] = rows
+    ch["length_pass"] = all(r["length_err_m"] <= MAP_LEN_TOL for r in rows)
+    ch["thin_equal_pass"] = all(r["thin_cells_bitwise_equal"] for r in rows)
+    ch["iface_pass"] = all(r["iface_err_m"] <= MAP_LEN_TOL for r in rows)
+    ch["eps_pass"] = all(r["eps_iface_err"] <= MAP_EPS_TOL for r in rows)
+    ch["topology_pass"] = all(r["n_cells"] == N_CELLS and r["n_nodes"] == N_CELLS + 1 for r in rows)
+    ch["all_pass"] = all(ch[k] for k in ("jacobian_h_pass", "length_pass", "thin_equal_pass",
+                                          "iface_pass", "eps_pass", "topology_pass"))
+    ch["dtype"] = str(jnp.asarray(PARAMS0).dtype)
+    return ch
+
+
+def _map_rows(hs) -> list[dict]:
     rows = []
     for h in hs:
         p = (h, PARAMS0[1], PARAMS0[2])
@@ -389,22 +422,18 @@ def map_checks(hs=SELFCHECK_H) -> dict:
                      "iface_err_m": float(max(abs(zn[k] - w) for k, w in zip(K_IFACE, want))),
                      "eps_iface": {str(k): float(eps[k]) for k in K_IFACE},
                      "eps_iface_err": float(max(abs(eps[k] - e_hand[k]) for k in K_IFACE)),
-                     "dz_min_is_thin": bool(np.isclose(dz.min(), thin[0]) and np.sum(dz == dz.min()) == N_THIN)})
-    ch["rows"] = rows
-    ch["length_pass"] = all(r["length_err_m"] <= MAP_LEN_TOL for r in rows)
-    ch["thin_equal_pass"] = all(r["thin_cells_bitwise_equal"] for r in rows)
-    ch["iface_pass"] = all(r["iface_err_m"] <= MAP_LEN_TOL for r in rows)
-    ch["eps_pass"] = all(r["eps_iface_err"] <= MAP_EPS_TOL for r in rows)
-    ch["topology_pass"] = all(r["n_cells"] == N_CELLS and r["n_nodes"] == N_CELLS + 1 for r in rows)
-    ch["all_pass"] = all(ch[k] for k in ("jacobian_h_pass", "length_pass", "thin_equal_pass",
-                                          "iface_pass", "eps_pass", "topology_pass"))
-    return ch
+                     "dz_min_is_thin": bool(np.isclose(dz.min(), thin[0]) and np.sum(dz == dz.min()) == N_THIN),
+                     "dtype": str(np.asarray(stackup(jnp.asarray(p))[0]).dtype)})
+    return rows
 
 
 def selfcheck(verbose: bool = True) -> dict:
     t0 = time.time()
     sc = {"map": map_checks()}
     sc["oracle_w7"] = w7.oracle_selfcheck()
+    sc["oracle_w7"]["all_pass"] = bool(sc["oracle_w7"]["i_pass"] and sc["oracle_w7"]["ip_pass"]
+                                        and sc["oracle_w7"]["ipp_pass"]
+                                        and sc["oracle_w7"]["f_true_matches_declared"])
     f0 = f_res(PARAMS0)
     sc["f_res_hz"] = f0
     sc["f_res_rel_to_w7_f_true"] = _rel(f0, w7.F_TRUE_DECLARED)

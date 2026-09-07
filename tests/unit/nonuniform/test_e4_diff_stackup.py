@@ -31,6 +31,17 @@ FD_REL = {"h_thin": 1e-3, "eps_thin": 1e-2, "eps_core": 1e-2}
 
 
 def test_map_invariants():
+    """E4-M under the scoped x64 context: the 1e-9 m windows are float64-class
+    statements (0.27 f32 ulp of the 44 mm column) — bring-up fix, see the
+    note's Results. The map itself is dtype-generic."""
+    from tests._x64_compat import enable_x64
+    with enable_x64():
+        jax.clear_caches()
+        _map_invariants()
+    jax.clear_caches()
+
+
+def _map_invariants():
     jac = np.asarray(jax.jacfwd(lambda p: e4.stackup(p)[0])(jnp.asarray(e4.PARAMS0))[:, 0], np.float64)
     want = e4.declared_jacobian_h()
     assert np.allclose(jac, want, rtol=1e-6, atol=1e-9), "Jacobian of dz w.r.t. h_thin is not the declared one"
