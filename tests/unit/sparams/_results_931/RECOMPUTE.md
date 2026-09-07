@@ -221,16 +221,23 @@ is, so the branch must be committed before submitting.
   when the rungs land, not on a claimed exact quartering (the replacement doc
   said "exactly"; it is corrected there).
 * **VESSL runs 369367259285 (dx/1), 369367259286 (dx/2), 369367259287 (dx/4)
-  — attempt 1, DEAD AT THE LANE ASSERTION.** Forty minutes after each job
-  created its artifact directory it still held only `.tstamp` and
-  `commit.txt` — no `rung.log`, which the shell redirect creates the instant
-  the rung script starts — so all three stopped at the backend check. That is
-  the assertion working: the rungs' own record (369367257803) is a GPU-lane
-  measurement and a silent CPU fall back would have produced an
-  unreadable rung after hours of compute at dx/4. Named defect: the IMAGE.
-  Those jobs ran on `ghcr.io/bk-squared/rfx-openems`, whose CUDA jax gives no
-  gpu backend on this preset — the working recipe for that image here (run
-  369367259234) uninstalls `jax-cuda12-plugin`/`pjrt` and installs `jax[cpu]`.
+  — attempt 1, NO PROGRESS.** What was OBSERVED, and nothing more: forty
+  minutes after each job created its artifact directory it still held only
+  `.tstamp` and `commit.txt`. `rung.log` is created by the shell redirect the
+  instant the rung script starts, so the rung script had not started in any of
+  the three. Two readings fit and this session could not separate them,
+  because the job wrote nothing else to the artifact directory and
+  `vessl run list` is off-limits here:
+  (a) the jobs stopped at the backend assertion — the assertion doing its job,
+  since the rungs' own record (369367257803) is a GPU-lane measurement and a
+  silent CPU fall back would produce an unreadable rung after hours of compute
+  at dx/4; or (b) they were still pulling the image / installing.
+  The suspicion behind (a) is concrete: those jobs ran on
+  `ghcr.io/bk-squared/rfx-openems`, and the only recipe for that image
+  verified on this cluster (run 369367259234) uninstalls
+  `jax-cuda12-plugin`/`pjrt` and installs `jax[cpu]` — i.e. its CUDA jax is
+  not the one used here. **Attempt 2 settles it either way**, because its
+  probe writes to the artifact directory before asserting.
 * **VESSL runs 369367259304 (dx/1), 369367259305 (dx/2), 369367259306 (dx/4)
   — attempt 2**, submitted 2026-09-07 20:07 UTC on
   `nvcr.io/nvidia/jax:24.10-py3`, the image run 369367257803 itself used, with
