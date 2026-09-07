@@ -27,7 +27,7 @@ is not evidence that the property holds.
 
 | field | value |
 |---|---|
-| VESSL run id | see `REPORT` below / the run table in this file's commit |
+| VESSL run id | `369367259156` (submitted 2026-09-07 10:08 UTC, remilab/byungkwan) |
 | yaml | `scripts/vessl_931_post_cv15.yaml` (`vessl run create -f`) |
 | preset | `gpu-rtx4090`, cluster `remilab-c0`, `JAX_PLATFORMS=cpu` |
 | command 1 | `python -u validation/crossval/15_patch_antenna_rt5880.py rfx --num-periods 45.0 --gain` |

@@ -15,6 +15,7 @@ interface averaging).
 
 | field | value |
 |---|---|
+| VESSL run id | `369367259154` (submitted 2026-09-07, remilab/byungkwan) |
 | yaml | `scripts/vessl_931_post_cv17.yaml` (`vessl run create -f`) |
 | preset | `gpu-rtx4090`, cluster `remilab-c0`, `JAX_PLATFORMS=cpu` |
 | command | `python -u validation/crossval/17_dielectric_sphere_mie.py` |

@@ -13,10 +13,16 @@ One VESSL run per case, preset `gpu-rtx4090`, cluster `remilab-c0`,
 
 | case | run id | yaml | command | expected runtime | verdict wanted |
 |---|---|---|---|---|---|
-| cv14 | `RUNID_CV14` | `scripts/vessl_931_post_cv14.yaml` | `python -u validation/crossval/14_rect_cavity_pozar.py` | seconds | CONTROL — all four gates reproduce, and the new `[WALL REGISTRATION]` line reports realized planes `x=[0,50] y=[0,30] z=[0,40]` |
-| cv15 | `RUNID_CV15` | `scripts/vessl_931_post_cv15.yaml` | `… 15_patch_antenna_rt5880.py rfx --num-periods 45.0 --gain`, then `… compare` | 5-8 min | MIGRATION — the leg is regenerated; gates must pass and the stack check must report `sheet / sheet` |
-| cv16 | `RUNID_CV16` | `scripts/vessl_931_post_cv16.yaml` | `python -u validation/crossval/16_pec_sphere_mie_ka_sweep.py` | 5-10 min | CONTROL — fenced sigma fill, every gated `delta_db` / `a_eff_over_a` reproduces. **No** `--write-fixture` |
-| cv17 | `RUNID_CV17` | `scripts/vessl_931_post_cv17.yaml` | `python -u validation/crossval/17_dielectric_sphere_mie.py` | 5-10 min | CONTROL — dielectric-only, bit-identical. **No** `--write-fixture` |
+| cv14 | `369367259152` | `scripts/vessl_931_post_cv14.yaml` | `python -u validation/crossval/14_rect_cavity_pozar.py` | seconds | CONTROL — all four gates reproduce, and the new `[WALL REGISTRATION]` line reports realized planes `x=[0,50] y=[0,30] z=[0,40]` |
+| cv15 | `369367259156` | `scripts/vessl_931_post_cv15.yaml` | `… 15_patch_antenna_rt5880.py rfx --num-periods 45.0 --gain`, then `… compare` | 5-8 min | MIGRATION — the leg is regenerated; gates must pass and the stack check must report `sheet / sheet` |
+| cv16 | `369367259153` | `scripts/vessl_931_post_cv16.yaml` | `python -u validation/crossval/16_pec_sphere_mie_ka_sweep.py` | 5-10 min | CONTROL — fenced sigma fill, every gated `delta_db` / `a_eff_over_a` reproduces. **No** `--write-fixture` |
+| cv17 | `369367259154` | `scripts/vessl_931_post_cv17.yaml` | `python -u validation/crossval/17_dielectric_sphere_mie.py` | 5-10 min | CONTROL — dielectric-only, bit-identical. **No** `--write-fixture` |
+
+Submitted 2026-09-07 10:07-10:09 UTC, organization `remilab`, project
+`byungkwan`; run pages at `https://app.vessl.ai/remilab/runs/byungkwan/<run id>`.
+Submitted from a non-worktree directory: the `vessl` CLI walks the cwd's `.git`
+as a directory and a git worktree's `.git` is a file, so `vessl run create`
+raises `NotADirectoryError` if run from inside one.
 
 Outputs: `/root/workspace/claude-workspace/rfx/runs/issue931-post-<case>-<UTC>/`,
 with a `…-<case>.latest` pointer beside it. Each job harvests every file newer

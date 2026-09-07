@@ -23,6 +23,7 @@ Two reasons the fixture must not be regenerated even opportunistically:
 
 | field | value |
 |---|---|
+| VESSL run id | `369367259153` (submitted 2026-09-07, remilab/byungkwan) |
 | yaml | `scripts/vessl_931_post_cv16.yaml` (`vessl run create -f`) |
 | preset | `gpu-rtx4090`, cluster `remilab-c0`, `JAX_PLATFORMS=cpu` |
 | command | `python -u validation/crossval/16_pec_sphere_mie_ka_sweep.py` |
