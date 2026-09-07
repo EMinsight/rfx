@@ -482,6 +482,15 @@ CLASSIFICATION: dict[str, Entry] = {
         "W6 narrow-band witness (2026-09-07 lane): make_band_profile "
         "profiles driven through harness.build_pec_fixture + run_nonuniform, "
         "the W2 two-run method -- no Simulation"),
+    "validation/research/multiband_nu/w7_accuracy_ad.py": Entry(
+        "builder_fused_with_solve",
+        "W7 accuracy + autodiff witness (2026-09-07 lane): the A1 ladder and "
+        "the AD arms drive the functional grid/kernel path, but the A2/A3 "
+        "arms reuse the committed cavity oracles' recipe -- "
+        "`_run_cavity_sim()` builds a PEC-cavity Simulation on the NU path "
+        "and calls .run(...) in the same function (and "
+        "`a1_production_column()` builds one only to read its rasterized "
+        "eps column) -- no separable build-only path"),
 
     # ---- module_level_solve (6): solves at import time, no main guard ----
     "validation/crossval/01_waveguide_bend.py": Entry(
