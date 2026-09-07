@@ -76,6 +76,18 @@ CHANGELOG entries are left as dated history.
   one-cell sheet realizes on one and the same plane in both lanes. (At 2.0 the
   node/half-open statement describes dielectric sampling only; PEC volumes are
   centre-sampled. The one-node tie rule became the sheet plane-selection rule.)
+- New preflight warning `pec_face_short_of_domain_wall`. A domain is realized
+  by `ceil(extent / dx)` cells while a PEC volume's face rounds to the nearest
+  node, so a conductor drawn to a declared dimension can land one cell short of
+  the wall it was meant to reach — and that cell is a parallel-plate line along
+  the wall, open at both ends, not a short. The check reads the entry's own
+  realized wall planes against the grid's interior, on non-absorbing faces only.
+  Draw a conductor meant to reach a wall to the grid's REALIZED wall plane.
+- Fixed: on the distributed non-uniform lane, a conductor cell sitting on a rank
+  boundary reached its neighbour un-zeroed. The E ghost rows were exchanged
+  before the PEC stages, which act on a rank's own cells only, so the neighbour
+  read a stale copy of the conductor's plane; the exchange now runs last in the
+  E half-step. Single-device results are unaffected.
 - A `dz_profile`-only simulation now dispatches to the non-uniform waveguide
   S-matrix lane instead of silently solving on the uniform grid built from
   the scalar `dx`. The unsupported default `normalize=False` fails loudly
