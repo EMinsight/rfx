@@ -569,6 +569,20 @@ def test_pec_short_s11_magnitude():
     # front wall that is not the whole cross-section, which is what would
     # have caught this at build time.
     #
+    # MEASURED after that redraw (VESSL 369367259278, this module run whole,
+    # 9 passed): |S11| range [0.99822, 1.02670], mean 1.00376 — the gate is
+    # green at its untouched 0.99 and the pre-#931 baseline is back. The
+    # pre-declared thickness separation ran in the same job
+    # (`_vessl931/pec_short_thickness_sweep.py`, SHORT_CELLS = 1, 2, 4) and
+    # is now FLAT to five decimals: min|S11| 0.99822 at every thickness,
+    # spread 0.00000, the six per-bin values identical arm to arm. That is
+    # the physics the sweep was written to test — everything past a total
+    # reflector's leading face is dark, so |S11| cannot depend on how many
+    # cells sit behind it — and it only became true once the leak along the
+    # top broad wall was closed. Before the fix the same sweep read 0.95721
+    # / 0.96705 / 0.97607 (369367259233): the thicker the plug, the longer
+    # the slot, the less it leaked.
+    #
     # Build-time realization check (#931), no solve: it fails before the
     # 40-period run if the geometry ever drifts off the node line again.
     #

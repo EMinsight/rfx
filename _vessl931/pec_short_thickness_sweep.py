@@ -58,6 +58,21 @@ def main() -> int:
           + ", ".join(f"{r[0]}->{r[3].min():.5f}" for r in rows))
     print(f"[pec-short-sweep] spread across thickness = {spread:.5f}")
     if spread <= 0.005:
+        # BLIND SPOT of the original pre-declaration, added 2026-09-07 after
+        # the post-fix run: both of its branches assumed a deficit EXISTS and
+        # only asked who owns it. A flat sweep AT unity owns nothing — it is
+        # the physics the sweep was written to test, and it says the thing
+        # that used to move with thickness has been removed. Which is what
+        # happened: the plug is drawn to the realized guide walls now
+        # (a8d59e86), and the leak along the top broad wall is gone.
+        if mins.min() >= 0.99:
+            print("[pec-short-sweep] VERDICT: NOTHING TO ATTRIBUTE — |S11| is "
+                  f"flat in thickness (spread {spread:.5f}) AND at unity "
+                  f"(min {mins.min():.5f} >= 0.99). A total reflector "
+                  "reflects everything and does not care how thick it is. "
+                  "No re-pin: the module's own gate is green at its "
+                  "untouched threshold.")
+            return 0
         print("[pec-short-sweep] VERDICT: OPERATOR — |S11| is flat in "
               "thickness, so the deficit is not the redraw; it belongs with "
               "the chain-battery re-measure.")
