@@ -314,9 +314,13 @@ def test_cv15_correct_build_would_pass_with_margin():
     correct (two_plane) build's ring-down identifies every in-band declared
     member with margin against the derived tolerance.
 
-    Source: ``cv15_ringdown_spectra.json::two_plane_ground.modes`` -- the live
-    reproduction through cv15's production ``build_rfx_sim(two_plane=True)``.
-    (A) alone is cosmetic; (B) is what cv15 could not meet."""
+    Source: ``cv15_ringdown_spectra.json::two_plane_ground.modes`` -- a live
+    reproduction recorded 2026-09-01 at repo commit 5b6db32 through what was
+    then cv15's production builder, ``build_rfx_sim(two_plane=True)``. That
+    spelling no longer exists (#931 deletes the flag and declares both
+    conductors as sheets); the fixture is frozen historical evidence and is
+    deliberately not regenerated. (A) alone is cosmetic; (B) is what cv15
+    could not meet."""
     fx = _fixture("cv15_ringdown_spectra.json")
     members = _members(CV15)
     ident = identify_patch_modes(
