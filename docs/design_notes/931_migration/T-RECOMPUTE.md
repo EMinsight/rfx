@@ -53,3 +53,12 @@ unless the PI extends the contract to sigma fills.
   failures before the run hit its 1700 s wall-clock cap (machine load average
   was 90-150 from the other #931 agents); the files T touched in that set are
   all covered green by the runs above. Nothing failed in any of the five runs.
+
+## Final state
+
+After merging `feat/931-lattice-ownership` (which landed
+`tests/_realized_geometry.py`, the shared build-time realization check that
+every group-T assertion now goes through):
+
+    tests/unit/{materials,api,misc,sources,farfield}
+    561 passed, 15 skipped, 0 failed (991 s, -n 4, JAX_PLATFORMS=cpu)
