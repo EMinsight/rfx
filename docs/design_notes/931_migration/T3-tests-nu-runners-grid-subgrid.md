@@ -156,6 +156,23 @@ reason. `strict` is the point: when the lane is fixed the marker turns red
 and has to be deleted, and nobody can quietly restore the three-cell
 padding instead.
 
+**CLOSED 2026-09-07 (ingest).** The lane was fixed on
+`feat/931-core-distributed-seam` and merged into the base at `b096d464`
+(fix `ac782d4f`). Root cause: the scan body exchanged the E ghost rows
+BEFORE the PEC stages, and those stages act on real cells only, so a body
+whose cell is rank 1's FIRST real cell had its seam-plane Ey/Ez zeroed only
+in rank 1's copy — rank 0's ghost copy was taken before that, and rank 0's
+next H update at its last real cell read the stale plane. The exchange is
+now the last stage of the E half-step, matching the placement the H half
+already gives the PMC face. That is why the three-cell fixture never saw
+it: with body cells on both sides of the seam the stale read sits inside
+the body and feeds only PEC edges.
+
+The strict markers did what they were for — they went red on the fix and
+were deleted in the same commit that made them pass. The one-cell fixtures
+stay one cell; `strict` is what stopped the padding from coming back
+instead.
+
 ### 2. `test_runner_import_binding.py::test_coax_then_refplane_order_does_not_leak_fake_run`
 
 Red in the slow lane only (`-m ""`), not caused by #931, not fixed here.
