@@ -54,10 +54,12 @@ Error budget at this deliberately coarse resolution (dx = 2 mm):
   with a vacuum ground cell, which no longer exists; the lock SKIPS its gated
   legs until crossval-A re-derives the envelope from the cv05 re-solve.  Do
   not read +3.5 % as passing a live gate — it is a measurement waiting for
-  one.  It did move the way #740's two_plane arm predicted (that arm measured
-  -4.7 % at dx = 2), but only part of the way: -7.8 points, landing at +3.5 %
-  rather than the predicted -4.7 %.  The direction is confirmed, the size is
-  not, and the 8.2-point remainder is unattributed here.
+  one.  It did move the way issue #740's A/B predicted: that study's arm with
+  a wall on BOTH faces of the ground's cell — the closest thing then available
+  to a cavity with no vacuum in it — measured -4.7 % at dx = 2.  The board
+  moved -7.8 points and landed at +3.5 %, not -4.7 %.  The direction is
+  confirmed, the size is not, and the 8.2-point remainder is unattributed
+  here.
 - The sign is not a settled coarse-grid bias that finer cells remove.  Two
   discretization errors push opposite ways: the substrate under-resolved in z
   reads high, the staircased PEC patch edge reads low, and they are not
