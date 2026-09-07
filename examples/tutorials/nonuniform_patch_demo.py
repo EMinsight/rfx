@@ -39,10 +39,13 @@ air.  This tutorial shows the practical recipe AND the trap that comes with it:
      see ``examples/tutorials/patch_antenna_demo.py`` for that workflow.
      This script prints the full mode list and gates on no single frequency.
 
-Runtime: measured 2026-09-05, 64-core CPU, run alone: 1169 s (19 min), of
-which the num_periods=120 FDTD run is 1160 s.  Settling at 120 periods:
--53.8 dB (the witness in part [5] prints it every run).  Parts [1]-[3], the
-mesh lesson itself, are grid-only arithmetic and cost nothing to run.
+Runtime: the pre-#931 board measured 1169 s (19 min) at num_periods=120 on a
+64-core CPU run alone, settling -53.8 dB.  Under the ownership contract the
+foils are sheets and the cavity lost its two vacuum cells, which raised the
+modal Q: the same 120 periods measured -30.9 dB, under-settled by the
+witness in part [5].  The run length is 200 periods for that reason (see the
+comment at the call).  Parts [1]-[3], the mesh lesson itself, are grid-only
+arithmetic and cost nothing to run.
 
 Run:
   python examples/tutorials/nonuniform_patch_demo.py
@@ -300,7 +303,14 @@ assert abs(float(_z_nodes[k_patch] - _z_nodes[k_gnd]) - h_sub) < 1e-9, \
 print("\n[4] Preflight (advisories below are part of the result):")
 sim.preflight(strict=False)
 
-n_periods = 120   # the witness in [5] measured -53.8 dB here (2026-09-05)
+# 120 periods settled the PRE-#931 board (-53.8 dB, 2026-09-05). It no longer
+# settles this one: with the vacuum cells gone from the cavity the modes are
+# higher-Q, and the #931 re-solve (VESSL 369367259177) measured -30.9 dB at
+# 120 — UNDER-SETTLED by the script's own witness. The binding mode is TM01
+# (1.9052 GHz, Q = 100.8): its free decay is -25.8 dB by 120 periods, so the
+# -40 dB bar needs ~186. 200 is that with margin. Raising the run length is
+# the response to an unsettled run; lowering the bar would not be.
+n_periods = 200   # witness measured below; see the docstring runtime note
 print(f"\nRunning NU simulation (num_periods={n_periods})...")
 t0 = time.time()
 result = sim.run(num_periods=n_periods)
