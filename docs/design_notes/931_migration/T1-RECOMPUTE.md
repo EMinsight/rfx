@@ -19,7 +19,8 @@ the end of this file so the ingest phase can recreate them.
 | 369367259162 | same lane at 250399d8 (post-migration) | same | ~3 min |
 | 369367259185 | same lane at 9ed75fbb, after merging the core's outer-jit fix and the shared `tests/_realized_geometry.py` | same | 195 s |
 | 369367259163 | per-bin \|S11\| of the cv11-style PEC short — FAILED to start | — | — |
-| 369367259190 | the same probe, re-submitted | `vessl run create -f scripts/vessl_931_t1_pec_short_s11.yaml` | ~20 min (4 waveguide S-matrix solves) |
+| 369367259190 | the same probe, re-submitted | `vessl run create -f scripts/vessl_931_t1_pec_short_s11.yaml` | 10 min (4 waveguide S-matrix solves) |
+| 369367259195 | FINAL lane at 496b5bd1 | `vessl run create -f scripts/vessl_931_t1_unit_tests.yaml` | 191 s — **5 failed, 784 passed, 9 skipped**; all 5 are the junction fixture below |
 
 Outputs land in
 `/root/workspace/claude-workspace/rfx/runs/issue931-post-t1-*` and
