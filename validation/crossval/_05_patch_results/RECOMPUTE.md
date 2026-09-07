@@ -330,7 +330,7 @@ pre-declaration holds end-to-end as well as at build time.
 | run | yaml | what it decides |
 |---|---|---|
 | **369367259288** | `scripts/vessl_931/cv05_fixture_check.yaml` | **RETURNED rc 0: "OK: committed cv05_ringdown_spectra.json reproduces".** See below. |
-| **369367259302** | `scripts/vessl_931/cv05_farfield_envelope.yaml` | Re-derives `D_ABS_TOL_DB`, `F_RES_REL_LO`/`HI` and the mode-pair band for `tests/crossval/test_patch_canonical_farfield_e4.py` by calling that file's own `rfx_run` fixture function on the sheet-declared canonical patch, and writes the arithmetic beside the measurement. Until it returns, `_ENVELOPES_REDERIVED_FOR_931` stays `False` and the three slow gates stay skipped. ~15 min. Replaces run **369367259289**, which died in 40 s on `No module named pytest`: its refusal gate shelled out to pytest and the solver image does not carry it, so the job refused on a missing test runner rather than on the board. The four fast gates now run as plain function calls inside the measuring script and pytest is in the pip line because the gate file imports it at module scope. |
+| **369367259302** | `scripts/vessl_931/cv05_farfield_envelope.yaml` | **RETURNED rc 0 — see the section below.** Re-derives `D_ABS_TOL_DB`, `F_RES_REL_LO`/`HI` and the mode-pair band for `tests/crossval/test_patch_canonical_farfield_e4.py` by calling that file's own `rfx_run` fixture function on the sheet-declared canonical patch, and writes the arithmetic beside the measurement. Until it returns, `_ENVELOPES_REDERIVED_FOR_931` stays `False` and the three slow gates stay skipped. ~15 min. Replaces run **369367259289**, which died in 40 s on `No module named pytest`: its refusal gate shelled out to pytest and the solver image does not carry it, so the job refused on a missing test runner rather than on the board. The four fast gates now run as plain function calls inside the measuring script and pytest is in the pip line because the gate file imports it at module scope. |
 
 Nothing in those three is a re-solve of a question already answered: the first
 is a reproducibility check on a file just committed, the second is the first
@@ -359,3 +359,86 @@ deterministic across runs on this image, which is worth knowing separately —
 the round-1 macOS build differed from the cluster build by up to 1.3e-3
 relative at 22.0 mm, and that scatter is what made the 38.0 mm falsifier
 build-dependent in the first place.
+## The canonical-patch envelope, re-derived — run 369367259302, rc 0
+
+`measure_patch_canonical_farfield_e4.py` called
+`tests/crossval/test_patch_canonical_farfield_e4.py`'s own `rfx_run` fixture
+function on the merged tree at `09aab9d9`, clean worktree. All four of that
+file's fast gates passed before the solve, then one FDTD run of the lean frame
+(dx = 2 mm, `num_periods` = 110).
+
+**Settling first, because nothing else is quotable without it: −42.9 dB against
+a −40 dB bar.** The measurement is admissible; a run under the bar would not
+have been, and the producer records the flag rather than leaving it to be
+noticed.
+
+| | pre-#931 one-cell ground | #931 sheet board |
+|---|---|---|
+| broadside D at the radiating bin | 7.39 dBi, \|Δ\| **0.60 dB** | 6.7241 dBi, \|Δ\| **0.0659 dB** |
+| design-mode f_res vs openEMS 2.4221 GHz | 2.6954 GHz, **+11.3 %** | 2.5070 GHz, **+3.51 %** |
+| mode-pair ratio (TL model 1.232) | 2.6954/2.2147 = 1.217 | 2.5070/2.0346 = **1.2322** |
+| settling | — | −42.9 dB |
+
+The #693 mechanism is measurable in the difference. The one-cell PEC ground had
+its own cell inside the modelled cavity as vacuum; that diluted eps_eff and was
+worth about +15 percentage points of the +11.3 %. A sheet owns no cell, the two
+reserved fine cells are out of the mesh, and the offset drops to +3.51 %. The
+directivity agreement improves by a factor of nine and the mode-pair ratio lands
+on the transmission-line model's 1.232 to four digits.
+
+### The prediction, and what it got right
+
+The #740 `two_plane` arm measured −4.7 % at dx = 2 and was written into the gate
+file as "a PREDICTION to check against — not a number to type in here". It gave
+the direction (down from +11.3 %) and not the crossing: measured +3.51 %, still
+high. Recorded, not repaired. `two_plane` put a second wall a cell away from the
+laminate face; a sheet puts one wall on it, so the two are not the same board and
+the prediction was never going to be more than directional.
+
+### What moved, with the arithmetic
+
+| constant | old | new | rule |
+|---|---|---|---|
+| `_ENVELOPES_REDERIVED_FOR_931` | `False` | `True` | — |
+| `D_ABS_TOL_DB` | 1.0 | **1.0 (HELD)** | round-UP(0.0659 × 1.5, .1) = 0.1; `max(0.1, 1.0) = 1.0` — a rerun may not narrow a gate |
+| `F_RES_REL_LO` | +0.06 | **−0.02** | `floor(+3.51 − 5) = −2 %` |
+| `F_RES_REL_HI` | +0.16 | **+0.09** | `ceil(+3.51 + 5) = +9 %` |
+| mode-pair band | [1.15, 1.30] | **unchanged** | 1.2322 sits inside with margin; the producer's rule would have moved it ±0.01 in both directions, widening the high side of a gate for no measured reason |
+
+### The change of kind, said rather than absorbed
+
+`[+6%, +16%]` excluded zero, so passing it also asserted "rfx reads HIGH here" —
+the deleted mechanism is what put the whole band on one side. `[-2%, +9%]`
+contains zero, so **the sign is no longer part of the lock**. What survives is
+the magnitude envelope and its asymmetry: the high side is nine times the low,
+so a drift back toward +11.3 % still fails and so does a 2 % swing low.
+`XA-manifest.json.md` §5 pre-declared that this outcome would have to be stated
+instead of re-tuned into looking like the old band, and the gate's own docstring
+now states it.
+
+### Verification without a second solve
+
+The five gates the flag was holding are functions of the values in the committed
+record, so they were checked against it directly rather than by re-solving on
+the shared pod:
+
+    PASS settling_witness                          -42.90 < -40.0
+    PASS radiating_mode_is_broadside               peak 4.0, E -1.0, H -4.0 <= 15.0
+    PASS directivity_within_committed_envelope     0.0659 <= 1.0
+    PASS mode_pair_present_with_aspect_ratio       ratio 1.2322 in [1.15, 1.30]
+    PASS f_res_inside_documented_coarse_dx_envelope +3.51% in [-2%, +9%]
+
+The file's four fast gates run green in the ordinary lane. The slow lane's own
+`pytest -m slow` re-solve is a duplicate of run 369367259302 and was not
+submitted; if it is ever wanted, it is `pytest -q -m slow
+tests/crossval/test_patch_canonical_farfield_e4.py` on a machine that can spend
+~12 min of CPU.
+
+### Pointers that moved with the edit
+
+The constant block grew, so `D_ABS_TOL_DB` / `F_RES_REL_LO` / `F_RES_REL_HI` are
+now at lines **157 / 163 / 164**, not 134 / 140 / 141.
+`validation/README.md`'s pointer is refreshed here;
+`validation/crossval/manifest.json` carries the same pointer twice and is the
+merge agent's file — the replacement is in
+`docs/design_notes/931_migration/XA-manifest-2b.md` §E.

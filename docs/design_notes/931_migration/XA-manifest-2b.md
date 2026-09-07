@@ -121,6 +121,21 @@ accuracy evidence and the case gates none of them.
 
 ## E. Still open after this note
 
+* **Two manifest pointers moved.** `validation/crossval/manifest.json`'s cv05
+  `claim_scope` cites
+  `tests/crossval/test_patch_canonical_farfield_e4.py:134,140,141` in two
+  places. The envelope re-derivation rewrote that file's constant block, so
+  both must become **`:157,163,164`** — same three constants
+  (`D_ABS_TOL_DB`, `F_RES_REL_LO`, `F_RES_REL_HI`), same order.
+  `tests/contracts/test_evidence_citation_pointers.py` gates them and
+  `validation/README.md`'s copy is already refreshed on this branch. The
+  manifest's `#931` sentence in the same paragraph — "the [+6%, +16%] band's
+  stated mechanism is the one-plane sheet's own-cell vacuum term the contract
+  deletes, so it is re-measured on the migrated canonical build by the
+  tests-crossval group or the lock is retired" — should become: re-measured
+  2026-09-07 by X-A (VESSL 369367259302), band now [-2%, +9%] and no longer
+  sign-locked; the manifest still carries no band inline.
+
 * `_ENVELOPES_REDERIVED_FOR_931` in
   `tests/crossval/test_patch_canonical_farfield_e4.py` and the three constants it
   holds. That file builds its own canonical thirds-rule patch, not cv05's board,
@@ -131,6 +146,16 @@ accuracy evidence and the case gates none of them.
   §1's rule stands and needs no change either way: the manifest cites
   `D_ABS_TOL_DB`, `F_RES_REL_LO` and `F_RES_REL_HI` by NAME with no band inline,
   so whatever that run measures flows through without a second hand-edit here.
+
+  **RETURNED, rc 0, and applied on this branch.** Run **369367259302**,
+  record committed as
+  `tests/fixtures/patch_canonical_farfield_e4/canonical_farfield_e4_measured_369367259302.json`:
+  settling -42.9 dB (clears the -40 dB bar, so the run is quotable),
+  |D| 0.0659 dB (rfx 6.7241 vs openEMS 6.7900), f_res +3.51 % (2.5070 vs
+  2.4221 GHz), mode pair 2.0346 / 2.5070 GHz, ratio 1.2322. `D_ABS_TOL_DB`
+  held at 1.0, `F_RES_REL_LO/HI` +0.06/+0.16 -> -0.02/+0.09, mode-pair band
+  left at [1.15, 1.30]. The steps below are kept as the recipe for the next
+  time this constant family is re-derived.
 
   ### What to do with that run's result
 
