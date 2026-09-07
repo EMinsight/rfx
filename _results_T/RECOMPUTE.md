@@ -125,3 +125,21 @@ and NU-E4 `pec_short` legs. The short is drawn two cells thick at `x = 145 mm`
 on a 1 mm mesh, so both faces are on node planes; the contract adds a wall at
 the FAR face only, behind a total reflector, and the reflecting near face is
 where it has always been.
+
+## Verification of section T's own files (2026-09-07, this pod)
+
+`JAX_PLATFORMS=cpu pytest -n 4`, the default fast lane (`not gpu and not slow
+and not slow_physics`), the 25 changed files run in four batches because the
+whole `tests/crossval` directory needs longer than the 20-minute cap this pod
+allows:
+
+| batch | result |
+|---|---|
+| 13 files (coax/pmc/cv09/cv14/cv15/cv06b/cv23/witness/meep/msl x3/cv05) | 230 passed, 10 skipped, 126 s |
+| 9 files (patch mode id, five RCS lanes, sheen, NU-E4, T-junction) | 116 passed, 5 s |
+| `test_wr90_iris_filter_gates.py` + `test_wr90_iris_modematch_gates.py` | 59 passed, 6 skipped, 651 s |
+| `test_waveguide_broad_e5.py` | 36 passed, 20 s |
+| the three unchanged crossval files that import section T's helpers (cv22, cv24, NU-E5) | 77 passed, 4 s |
+
+441 passed, 16 skipped, 0 failed. Every skip names the VESSL run that will
+un-skip it (`rfx-931-post-cv05/06b/15/18/19`).
