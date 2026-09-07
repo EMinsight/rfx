@@ -399,6 +399,35 @@ def pec_volume_cell_mask(shape, centres: GridCoords):
     return jnp.asarray(shape.mask_on_coords(centres.x, centres.y, centres.z))
 
 
+def _volume_is_empty(shape, centres: GridCoords, mask) -> bool | None:
+    """Zero-cell test that never converts a jnp mask to bool (§1.5 refusal).
+
+    Inside an outer ``jax.jit`` the grid coordinates are still concrete host
+    arrays, but every jnp array built from them is a tracer, so a Python
+    bool of ``jnp.any(mask)`` raises ``TracerBoolConversionError`` — the
+    #642-class defect ``rfx/api/_compile.py`` documents and the first cut
+    of this refusal re-introduced one frame down (found by the #931 phase-2
+    T1 test ``test_real_interior_pec_under_outer_jit_matches_eager``).
+
+    Decision order: a Box is decided on the HOST from its corners and the
+    centre lines (exact, cheap); any other shape is decided from its mask
+    only when that mask is concrete; a traced mask is undecidable here and
+    returns ``None`` (the eager path already refused it, if it is empty).
+    """
+    lo = getattr(shape, "corner_lo", None)
+    hi = getattr(shape, "corner_hi", None)
+    axes = (centres.x, centres.y, centres.z)
+    if lo is not None and hi is not None and not any(is_tracer(c) for c in axes):
+        for i in range(3):
+            c = np.asarray(axes[i], dtype=np.float64)
+            if not np.any((c >= float(lo[i])) & (c < float(hi[i]))):
+                return True
+        return False
+    if is_tracer(mask):
+        return None
+    return not bool(np.any(np.asarray(mask, dtype=bool)))
+
+
 def _refuse_zero_cells(shape, name, what: str):
     raise ValueError(
         f"{what} {name!r} ({type(shape).__name__}) rasterizes to ZERO cells "
@@ -599,7 +628,7 @@ def classify_pec_entry(shape, coords: GridCoords, centres: GridCoords,
             if subcell:
                 _refuse_subcell(subcell, shape, name)
         mask = pec_volume_cell_mask(shape, centres)
-        if not traced and not bool(jnp.any(mask)):
+        if not traced and _volume_is_empty(shape, centres, mask):
             _refuse_zero_cells(shape, name, "PEC volume")
         return mask, None, None
     pts = getattr(shape, "points", None)
@@ -638,7 +667,7 @@ def classify_pec_entry(shape, coords: GridCoords, centres: GridCoords,
             if subcell:
                 _refuse_subcell(subcell, shape, name)
     mask = pec_volume_cell_mask(shape, centres)
-    if not traced and not bool(jnp.any(mask)):
+    if not traced and _volume_is_empty(shape, centres, mask):
         _refuse_zero_cells(shape, name, "PEC volume")
     return mask, None, None
 
