@@ -12,12 +12,14 @@ This test couples them. It locks:
 
   1. the script's own mesh convention (`DX == H_SUB / 4`) -- if the mesh
      moves again, this reds first;
-  2. the realized board that convention buys, measured live from
-     `sim.fidelity_report()` (no time stepping): substrate exactly 254.0um,
-     main trace and stub both 635.0um. The 635.0 figure is what the analytic
-     reference and every carrier quote, so it must be measured, not asserted
-     from a formula -- `round(W_TRACE/DX)*DX` gives 571.5um here and is
-     wrong (half-open [lo, hi) node rasterization);
+  2. the realized board that convention buys, measured live on the real
+     build (no time stepping): substrate exactly 254.0um, and the two
+     numbers #931 separated -- the GEOMETRIC realized width of each sheet
+     (571.5um, the node span the contract owns and `fidelity_report`
+     prints) and the ELECTRICAL width the analytic reference takes
+     (635.0um = 10 node rows * dx, unchanged by #931 because the strip's
+     row count is unchanged). Both must be measured, not asserted from a
+     formula;
   3. the committed run log's headline numbers, parsed from the log rather
      than retyped;
   4. each carrier quotes the CURRENT numbers, and carries the superseded
@@ -88,31 +90,86 @@ def test_mesh_convention_is_h_sub_over_four(cv06b):
 
 
 def test_realized_board_is_measured_not_assumed(cv06b):
-    """Substrate 254.0um exactly, trace and stub both 635.0um -- read from
-    fidelity_report on the real build, which is where the analytic reference
-    gets its width at runtime."""
+    """Substrate 254.0um exactly; trace and stub both 571.5um, measured from
+    the realized PEC EDGE set on the real build (no time stepping).
+
+    #931: the metal is declared as two SHEETS (zero-thickness Boxes on the
+    substrate-top node plane). A sheet's conductor is the set of edges
+    BETWEEN its footprint nodes, so 10 node rows carry 9 edges = 571.5um.
+    The pre-#931 neighbour rule zeroed one extra edge past the hi rim of
+    each footprint and this case read 635.0um = 10 * dx -- a CELL count of
+    a NODE mask. Both readings are recorded here so the change cannot be
+    mistaken for a re-pin.
+    """
     sim = cv06b._build_sim()
     report = sim.fidelity_report(print_report=False)
     axes = {item["entity"]: {a["axis"]: a for a in item["axes"]}
             for item in report if "axes" in item}
 
+    # Dielectric sampling is untouched by #931 (design note §1.8), so the
+    # substrate row must be bit-identical to the pre-#931 one.
     sub_z = axes["geometry[0] 'ro4350b'"]["z"]
     assert sub_z["realized_extent_um"] == pytest.approx(254.0, abs=1e-6)
     assert max(sub_z["face_residual_um"]) == pytest.approx(0.0, abs=1e-9)
 
+    # The metal rows are SHEET rows now: node bounds on the in-plane axes,
+    # and a single plane on the normal axis.
     trace_y = axes["geometry[1] 'pec'"]["y"]
     stub_x = axes["geometry[2] 'pec'"]["x"]
-    assert trace_y["realized_extent_um"] == pytest.approx(635.0, abs=1e-6)
-    assert stub_x["realized_extent_um"] == pytest.approx(635.0, abs=1e-6)
+    assert trace_y["realized_extent_um"] == pytest.approx(571.5, abs=1e-6)
+    assert stub_x["realized_extent_um"] == pytest.approx(571.5, abs=1e-6)
+    for entity in ("geometry[1] 'pec'", "geometry[2] 'pec'"):
+        item = next(it for it in report if it["entity"] == entity)
+        assert item["realized_plane"]["axis"] == "z"
+        assert item["realized_plane"]["coordinate"] == pytest.approx(
+            cv06b.H_SUB, rel=1e-12)
 
-    # The live reader must agree with the report it reads.
+    # The ELECTRICAL width the analytic reference takes is n_rows * dx, a
+    # different quantity from the geometric extent above and one cell
+    # bigger. It is unchanged by #931 because the strip's row count is
+    # unchanged; ``_realized_trace_width``'s docstring carries the measured
+    # evidence (Re(Z0) 46.48 ohm vs HJ(635) 46.18 / HJ(571.5) 49.39).
     assert cv06b._realized_trace_width(sim) == pytest.approx(635.0e-6, rel=1e-12)
 
-    # And it must NOT be reproducible by the round() formula -- if a future
-    # edit "simplifies" _realized_trace_width into arithmetic, this reds.
+    # PRE-#931 this asserted the round() formula gives the WRONG answer for
+    # the realized width. It gives the GEOMETRIC one, which the contract now
+    # reports; it still does not give the electrical one.
     naive = round(cv06b.W_TRACE / cv06b.DX) * cv06b.DX
     assert naive == pytest.approx(571.5e-6, rel=1e-9)
     assert naive != pytest.approx(635.0e-6, rel=1e-6)
+
+
+def test_shared_helper_agrees_with_the_case_gate(cv06b):
+    """The case's own gate and the branch-wide helper must say the same
+    thing. `tests/_realized_geometry` is the single shared spelling of the
+    build-time check (#931); this case carries its own `realized_metal`
+    because a crossval script cannot import from `tests/`, so the two are
+    cross-checked here rather than left to drift."""
+    from tests._realized_geometry import assert_sheet_planes, assert_wall_planes
+
+    sim = cv06b._build_sim()
+    # One tangential wall plane, at the substrate top, from the shared owner.
+    assert_wall_planes(sim, 2, [cv06b.H_SUB], what="cv06b metal")
+    # And it is there because two SHEETS were declared, not a volume.
+    assert_sheet_planes(sim, 2, [cv06b.H_SUB, cv06b.H_SUB],
+                        what="cv06b trace + stub")
+
+
+def test_build_time_assertion_accepts_the_shipped_geometry(cv06b):
+    """``assert_realized_metal`` is the #931 build gate: it must pass on the
+    shipped declaration and return the measured sheet."""
+    m = cv06b.assert_realized_metal(cv06b._build_sim())
+    assert m["n_sheets"] == 2
+    assert m["n_volume_cells"] == 0
+    assert m["plane_z"] == pytest.approx(cv06b.H_SUB, rel=1e-12)
+    assert m["trace_w"] == pytest.approx(m["stub_w"], abs=1e-12)
+    assert m["n_rows"] == m["n_cols"] == 10
+    assert m["trace_w"] == pytest.approx(571.5e-6, rel=1e-12)
+    assert m["trace_w_elec"] == pytest.approx(635.0e-6, rel=1e-12)
+    # Edge-to-edge the stub did not move; from the line CENTRE it lost one
+    # cell, which is the quarter-wave length that sets the notch.
+    assert m["stub_len"] == pytest.approx(12.0015e-3, abs=1e-9)
+    assert m["stub_len_centreline"] == pytest.approx(12.28725e-3, abs=1e-9)
 
 
 def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
@@ -132,6 +189,16 @@ def test_z0_anchor_is_the_design_board_not_a_realized_one(cv06b):
     assert z0_design == pytest.approx(47.90, abs=0.02)
     assert z0_realized_63 == pytest.approx(46.18, abs=0.02)
     assert z0_realized_80 == pytest.approx(57.46, abs=0.02)
+
+    # POST-#931 the same mesh realizes a 571.5um line (one edge narrower --
+    # see test_realized_board_is_measured_not_assumed), so its own anchor is
+    # 49.39 ohm, on the OTHER side of the 47.90 ohm design board. Every
+    # measured Z0 below is a PRE-#931 log and is compared only against the
+    # pre-#931 anchors; splicing a post-#931 measurement into this block
+    # would compare two boards.
+    z0_realized_931, _ = hammerstad_jensen_z0_eps_eff(571.5e-6, 254e-6,
+                                                      cv06b.EPS_R)
+    assert z0_realized_931 == pytest.approx(49.39, abs=0.02)
 
     # The measured medians, PARSED from the two committed logs rather than
     # retyped: the post-fix GPU run and the dx=80um re-measurement taken

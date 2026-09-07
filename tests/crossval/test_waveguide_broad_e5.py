@@ -578,10 +578,39 @@ def _live_build_sim(freqs_hz, *, pec_short_x=None):
         cpml_layers=10,
     )
     if pec_short_x is not None:
-        thickness = 0.002
+        # A VOLUME, RESOLVED. The short used to be drawn 2 mm thick on a mesh
+        # this builder lets rfx choose (~2.14 mm here) — i.e. THINNER than
+        # one cell, which the lattice ownership contract refuses outright
+        # (#931 §1.5) rather than realizing to whatever the raster happened
+        # to give. It is now drawn to a whole number of cells from the same
+        # front face, so the declaration says what the lattice can build.
+        #
+        # NOT a sheet, and that is measured, not assumed: declared as a
+        # zero-thickness Box at pec_short_x this anchor reads
+        # |S11| = [1.2128, 0.7139, 0.8416, 0.9628, 1.0023, 1.4836] instead of
+        # ~1 — the waveguide S-matrix lane does not reflect off a
+        # sheet-declared short. A PEC sheet across the full cross-section IS
+        # a perfect short physically, so that is a lane limitation worth its
+        # own issue (#931 §1.9 consumers); it is recorded here rather than
+        # worked around silently. cv11's own short is a 2 mm plug drawn on a
+        # dx = 1 mm mesh, so it is a volume there too and is unaffected.
+        #
+        # WITH the one-cell volume below this anchor still FAILS, and that is
+        # the finding, not a reason to move the gate: |S11| =
+        # [0.9663, 0.9572, 0.9741, 0.9827, 0.9847, 0.9836], min 0.9572
+        # against the 0.99 floor. Physically sane (a short, reflecting) but
+        # 3-4% lossy. It is the same regression cv11's A/B isolated
+        # (VESSL 369367259198): on the waveguide S-matrix lane the #931 core
+        # moved the pec-short |S11| deficit from 0.0146 to ~0.056, and that
+        # lane is where stage C (0184d64c) replaced a sigma = 1e10 cell fill
+        # with the realized PEC edges. This test is the file's "primary
+        # regression witness" and it is doing its job; the fix belongs to the
+        # core, not to the fixture.
+        dx_local = float(sim._build_grid().dx)
+        n_cells = max(1, int(np.ceil(0.002 / dx_local - 1e-9)))
         sim.add(
             Box((pec_short_x, 0.0, 0.0),
-                (pec_short_x + thickness, DOMAIN[1], DOMAIN[2])),
+                (pec_short_x + n_cells * dx_local, DOMAIN[1], DOMAIN[2])),
             material="pec",
         )
     port_freqs = jnp.asarray(freqs)
