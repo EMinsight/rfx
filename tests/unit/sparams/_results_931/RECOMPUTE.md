@@ -425,3 +425,46 @@ falsifiers for work owned by other groups. Re-run on the merged tree:
 | `tests/unit/sparams/test_lumped_twoport_vi_validation_battery.py::test_thru_preflight_code_set_is_the_contract_set` | still XFAIL — preflight's own consumers still measure metal from the primal CELL mask and its `_assemble_materials` call still omits a sheet collector. Blocker unchanged (design note §6, "not yet implemented"). |
 | `tests/unit/sparams/test_mixed_port_sparam.py::test_wire_port_end_gap_advisory_fires_on_a_declared_one_cell_gap` | still XFAIL — the #556 end-gap advisory still finds metal by scanning `pec_mask` cells, so it cannot fire on a sheet at all. Same blocker. |
 | `tests/unit/sparams/test_probe_fed_msl_referee_contract.py::test_referee_record_still_describes_the_fixture_it_names` | still XFAIL — see R9 above: the edit was attempted, measured and backed out; the blocker is now the referee's off-lattice plane list, named in the marker. |
+
+
+---
+
+## Verification on this pod (phase 2b, 2026-09-07)
+
+Shared pod, load average 40-115 throughout; a single sweep of both group
+directories was not achievable (a 20-minute cap was hit with no result, the
+same wall phase 2a reported). Every file this session changed was run
+together instead:
+
+```
+JAX_PLATFORMS=cpu python -m pytest \
+  tests/unit/sparams/test_msl_sheet_threading.py \
+  tests/unit/sparams/test_coax_msl_transition.py \
+  tests/unit/sparams/test_msl_port_integration.py \
+  tests/unit/ports/test_port_aperture_rasterization.py \
+  tests/unit/sparams/test_probe_fed_msl_referee_contract.py \
+  tests/unit/sparams/test_thru_singular_value_dx_ladder_replay.py \
+  tests/unit/sparams/test_lumped_twoport_vi_validation_battery.py \
+  -q -n 4
+```
+
+**133 passed, 7 xfailed, 0 failed** (9 min 07 s). The seven xfails are the
+five R6 blockers plus the two that are still owned by the preflight migration
+(`test_thru_preflight_code_set_is_the_contract_set`) and by the referee's
+Stage-2 mesh (`test_referee_record_still_describes_the_fixture_it_names`).
+`test_coax_msl_transition` alone went from 31 passed / 11 failed to 38 passed
+/ 5 xfailed.
+
+## Runs still in flight when this session ended
+
+| case | run | state at 20:25 UTC |
+|---|---|---|
+| R4 replay recapture | **369367259296** | submitted 19:43, no artifact directory yet — queued |
+| R5 ladder dx/1 | **369367259304** | submitted 20:07, queued |
+| R5 ladder dx/2 | **369367259305** | submitted 20:07, queued |
+| R5 ladder dx/4 | **369367259306** | submitted 20:07, queued |
+
+Poll `/root/workspace/claude-workspace/rfx/runs/issue931-post-<case>-<ts>/`;
+each case's `.latest` file names its newest directory. For the ladder rungs
+read `probe.log` first — it says which backend the job got before it decided
+anything.
