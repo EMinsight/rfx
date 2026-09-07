@@ -107,6 +107,13 @@ CLAIMS_RUNG = "fine"                                     # pre-declaration §2.6
 LEGS_RUNG_DEFAULT = "fine"                               # AD / FD / plane legs
 
 # Distance from each DEFAULT reference plane to the near DUT face (§2.3).
+# #931: the pec_short oracle is anchored to the DECLARED near face, and under
+# the ownership contract that is also the REALIZED near wall — drawn = realized
+# (§1.2), no longer a coincidence of the old rule putting a body's only wall at
+# its lower node plane. This is the one compensation-free oracle in the
+# battery, so it is the reference pattern rather than a special case; what
+# makes it true is checked, not assumed, by
+# :func:`assert_oracle_anchors_are_realized` below.
 D_PLANE_TO_PEC_FACE_M = F.PEC_SHORT_X_M[0] - F.REF_LEFT_DEFAULT_M     # 0.03810
 D_PLANE_TO_SLAB_FACE_M = F.SLAB_X_M[0] - F.REF_LEFT_DEFAULT_M         # 0.03556
 SLAB_THICKNESS_M = F.SLAB_X_M[1] - F.SLAB_X_M[0]                      # 0.01016
@@ -981,3 +988,36 @@ def pin_fixture(fx: dict) -> dict:
                             "lower bounds rounded down by the same multiplier"}
     fx["verdicts"] = recompute_verdicts(fx)
     return fx
+
+
+def assert_oracle_anchors_are_realized(sim, dut: str) -> None:
+    """BUILD-TIME (no solve): the oracles are fed the geometry that is BUILT.
+
+    Two oracles in this module take a distance from a DECLARED face:
+    :func:`pec_short_phase_oracle_deg` uses ``D_PLANE_TO_PEC_FACE_M`` and
+    :func:`airy_reference` uses ``D_PLANE_TO_SLAB_FACE_M`` with
+    ``SLAB_THICKNESS_M``. Feeding an oracle the drawn geometry while the
+    solver realizes a different one is the cv19 defect class verbatim, and it
+    is invisible in the residual — it shows up as a convention, not a bug.
+
+    So: for ``pec_short``, the realized near wall must BE the drawn near face
+    and the realized far wall the drawn far face. For ``slab`` (a dielectric,
+    which the contract does not touch) the check is that it realizes no PEC
+    wall at all, i.e. no conductor appeared where the Airy oracle assumes a
+    plain dielectric interface.
+    """
+    walls = F.assert_dut_realizes_its_faces(sim, dut)
+    if dut != "pec_short":
+        return
+    near, far = float(walls[0]), float(walls[-1])
+    if abs(near - F.PEC_SHORT_X_M[0]) > 1e-12:
+        raise AssertionError(
+            f"pec_short_phase_oracle_deg is anchored {D_PLANE_TO_PEC_FACE_M} m "
+            f"from x = {F.PEC_SHORT_X_M[0]} m, but the realized near wall is "
+            f"at {near} m. The oracle is measuring a plane the solver did not "
+            "build.")
+    if abs(far - F.PEC_SHORT_X_M[1]) > 1e-12:
+        raise AssertionError(
+            f"pec_short realized far wall {far} m != drawn far face "
+            f"{F.PEC_SHORT_X_M[1]} m — realized thickness must equal drawn "
+            "thickness (#931 §1.2).")
