@@ -276,3 +276,39 @@ def test_two_d_sheet_through_the_api_is_one_plane_and_no_cell():
     edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
     np.testing.assert_array_equal(np.asarray(edges[2]),
                                   np.asarray(spec.footprint))
+
+
+# --------------------------------------------------------------------------
+# 3. the declaration survives serialization
+# --------------------------------------------------------------------------
+
+def test_a_sheet_declaration_round_trips_through_the_design_ir():
+    """A serialized design must not silently reinterpret its conductors.
+
+    Under the contract the (V)/(S) declaration IS the drawn geometry — a
+    zero-extent axis on a PEC Box says "sheet" — so the IR needs no ownership
+    field, but it does need the zero-extent corner to survive the round trip
+    exactly. If a codec ever normalises ``corner_hi`` away from ``corner_lo``
+    (a "degenerate box" repair, a tolerance snap), the rebuilt design becomes
+    a one-cell VOLUME with a wall on each face and nothing says so. ``two_plane``
+    is gone from the IR entirely (v2), so the declaration is the only thing
+    left carrying the realization.
+    """
+    from rfx.interop import design_to_dict, simulation_from_design
+
+    sim = _stack(with_sheet=True)
+    doc = design_to_dict(sim)
+    assert "two_plane" not in repr(doc), "two_plane must be gone from the IR"
+    rebuilt = simulation_from_design(doc)
+
+    got = []
+    for s in (sim, rebuilt):
+        grid = s._build_grid()
+        sheets: list = []
+        pec_mask = s._assemble_materials(grid, pec_sheets=sheets)[3]
+        assert pec_mask is None or not bool(jnp.any(pec_mask))
+        assert len(sheets) == 1
+        got.append((sheets[0].normal_axis, sheets[0].plane,
+                    np.asarray(sheets[0].footprint)))
+    assert got[0][:2] == got[1][:2]
+    np.testing.assert_array_equal(got[0][2], got[1][2])
