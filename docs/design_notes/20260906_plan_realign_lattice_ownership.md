@@ -318,3 +318,65 @@ Physics falsifiers, pre-declared before any recompute:
 R3 for every commit on the branch: `R3: memory=rfx-known-issues.md("top face plane is never
 zeroed" 2026-08-28; two_plane A/B verdict) | R2-attempts=0 (redesign, not a repeat) |
 falsifier=<the §5 item exercised>`.
+
+## 6. Amendments from implementation and review (2026-09-07)
+
+Where the branch and this note disagreed, the branch is right and the wording
+below replaces the earlier text. Each item names what actually shipped.
+
+**§1.9 port clearing — one component, not three.** The note said "the three E
+entries at those indices are un-zeroed". Implemented literally, that opens the
+two edges TANGENTIAL to the port at its foot, which wherever the foot stands on
+a conductor's node plane are that conductor's wall: measured, a wire port on a
+PEC block removed 2 of 40 wall edges from the block's top face, and an MSL feed
+released 7/7 Ex and 7/7 Ey along the port width on the ground plane. Corrected
+rule: **a port releases the ONE component it drives, at its own cells.**
+`clear_edges(edge_masks, cells, component=)`. A wire port releases nothing at
+all — a cell is live exactly when the port component's own edge is not PEC, so
+the release is a no-op by construction. An MSL port releases the
+substrate-normal component over its cross-section.
+
+**§1.5 sub-cell refusal is shape-agnostic.** The note's prose said "a PEC Box
+with `0 < extent < one local cell`"; the rule is on the DRAWN bounding box of
+any shape that has one (Cylinder pad, thin Sphere, imported outline).
+PolylineWire is exempt — §1.4 decides filament vs volume on the radius.
+
+**§1.3 sheet plane must be on the node line.** A sheet declared further than
+half a local cell from the nearest node is refused, not clamped onto an end
+plane.
+
+**§1.3 2-D lane.** A sheet whose normal is a length-1 axis is realized by the
+node-footprint rule (identical to the volume rule for a rectangular footprint,
+verified), and no notice is emitted — notices are preflight's surface and
+preflight is a separate stage.
+
+**§3 out-parameters.** `rasterize_geometry` / `_assemble_materials` do not
+return `sheets` in the positional tuple; sheets and wires come back through the
+existing `sheet_specs`-style collector keywords, so the positional tuple
+(pec_mask at index 3) stays unpacked by three validation scripts and many
+tests. A caller that passes no collector does not receive them and gets a
+`UserWarning`; a caller that steps fields must pass collectors or refuse.
+
+**§4 rule 2 for stack-ups.** `Stackup.to_shapes` puts a foil sheet on the
+dielectric INTERFACE it bounds, not on the foil's mid-plane. On the mid-plane
+the sheet sits half a foil thickness off the laminate and `auto_configure`'s
+sheet-plane cut opens a 17.5 µm cell in series with the board — a ~23x dt
+collapse and the #702 slot geometry. `_uniform_run` also merges a cut within
+dx/4 of an existing mesh line rather than splitting there.
+
+**§1.8 conformal.** "Conformal unchanged" is not literally true: the waveguide
+lane's conformal path now applies the realized PEC edges AND Dey–Mittra, where
+before it applied a sigma fold and Dey–Mittra. Not a regression (the sigma fold
+was the thing §1.7 replaces), but no test pins a curved conformal body, so this
+stays an untested edge.
+
+**Not yet implemented — preflight (§3 findings, §1.9 consumers).** Owned by the
+preflight stage that follows this branch: `pec_box_one_cell`,
+`sheet_plane_realized`, `sheet_slot_vacuum`, `pec_zero_cells` as findings; and
+the consumers that still measure metal from the primal CELL mask —
+`_port_transverse_spans` (the #868 "40 mm guide reads 42 mm" case),
+`_check_coaxial_port_junction_aperture` via `_port_pec_mask`,
+`_msl_realized_substrate`, the wire-port advisory, and
+`_validate_cfg_sheet_live_edge_materials`. Until those switch, a sheet-declared
+conductor is invisible to preflight and preflight's own
+`_assemble_materials(grid)` calls take the sheets-dropped warning above.

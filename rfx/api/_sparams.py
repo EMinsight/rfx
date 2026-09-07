@@ -2996,7 +2996,8 @@ class _SparamMixin:
         _wg_pec_edge_masks = None
         if pec_mask_wg is not None or _wg_pec_sheets or _wg_pec_wires:
             _wg_pec_edge_masks = _rpem(
-                pec_mask_wg, sheets=_wg_pec_sheets, wires=_wg_pec_wires)
+                pec_mask_wg, sheets=_wg_pec_sheets, wires=_wg_pec_wires,
+                periodic=self._periodic_flags())
         # #677: node-thin sheet ctx for the DEVICE runs of this lane; the
         # edge exclusion uses the same realized edges so sheet and PEC
         # never contend for one edge.  The vacuum REFERENCE runs never

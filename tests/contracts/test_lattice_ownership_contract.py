@@ -673,3 +673,129 @@ def test_two_plane_is_gone_from_the_package():
             if knob.search(line):
                 bad.append(f"{p}:{n}: {line.strip()}")
     assert bad == [], "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------
+# review fixes (2026-09-07) — design note §6
+# ---------------------------------------------------------------------------
+
+def test_clear_edges_releases_only_the_named_component():
+    """§1.9 corrected: a port releases the ONE edge it drives.
+
+    The three-component form releases the two edges TANGENTIAL to the port
+    at its foot, which wherever the foot stands on a conductor's node plane
+    ARE that conductor's wall. A ground plane under an MSL feed, the top
+    face of a body under a probe feed: both lost wall edges to it.
+    """
+    from rfx.boundaries.pec import clear_edges, edge_is_pec, realized_pec_edge_masks
+    masks = realized_pec_edge_masks(jnp.asarray(_box_cells(SHAPE, LO, HI)))
+    cleared = clear_edges(masks, [(3, 3, 3)], component="ez")
+    assert not edge_is_pec(cleared, "ez", 3, 3, 3)
+    assert edge_is_pec(cleared, "ex", 3, 3, 3)
+    assert edge_is_pec(cleared, "ey", 3, 3, 3)
+    as_mask = np.zeros(SHAPE, dtype=bool)
+    as_mask[3, 3, 3] = True
+    cleared_m = clear_edges(masks, jnp.asarray(as_mask), component=2)
+    for c in range(3):
+        np.testing.assert_array_equal(np.asarray(cleared[c]),
+                                      np.asarray(cleared_m[c]))
+
+
+def test_edges_are_pec_matches_edge_is_pec():
+    from rfx.boundaries.pec import edge_is_pec, edges_are_pec, realized_pec_edge_masks
+    masks = realized_pec_edge_masks(jnp.asarray(_box_cells(SHAPE, LO, HI)))
+    cells = [(3, 3, 3), (5, 2, 2), (0, 0, 0), (2, 2, 2)]
+    assert (edges_are_pec(masks, "ex", cells)
+            == [edge_is_pec(masks, "ex", *c) for c in cells])
+
+
+def test_realized_wall_planes_column_follows_the_periodic_wrap():
+    """§1.7 / #689: node 0's backward incident edge is stored at n-1."""
+    from rfx.boundaries.pec import (
+        SheetSpec, realized_pec_edge_masks, realized_wall_planes,
+    )
+    fp = np.zeros(SHAPE, dtype=bool)
+    fp[SHAPE[0] - 1, 3, 3] = True
+    fp[0, 3, 3] = True
+    sheet = SheetSpec(normal_axis=2, plane=3, footprint=jnp.asarray(fp))
+    periodic = (True, False, False)
+    masks = realized_pec_edge_masks(None, sheets=[sheet], periodic=periodic)
+    # the seam edge Ex[n-1, 3, 3] joins node n-1 to node 0 and IS realized
+    assert bool(np.asarray(masks[0])[SHAPE[0] - 1, 3, 3])
+    assert realized_wall_planes(masks, 2, ij=(SHAPE[0] - 1, 3)) == [3]
+    assert realized_wall_planes(masks, 2, ij=(0, 3)) == []
+    assert realized_wall_planes(masks, 2, ij=(0, 3), periodic=periodic) == [3]
+
+
+def test_wire_path_has_no_periodic_argument():
+    """A path is a list of edges the caller named, not a neighbour rule."""
+    import inspect
+
+    from rfx.boundaries.pec import wire_path_edge_masks
+    assert "periodic" not in inspect.signature(wire_path_edge_masks).parameters
+
+
+def test_subcell_refusal_covers_non_box_shapes():
+    """§1.5 is on the DRAWN extent of any shape, not just a Box.
+
+    A 0.3-cell Cylinder pad used to realize as a ONE-CELL slab with two
+    faces at one z and raise "ZERO cells" at another 0.3 cell away —
+    raster-dependent thickness, which §1.5 exists to forbid.
+    """
+    from rfx.geometry import Cylinder
+    from rfx.geometry.rasterize_grid import (
+        cell_sizes_from_uniform_grid, centres_from_uniform_grid,
+        classify_pec_entry, coords_from_uniform_grid,
+    )
+    from rfx.grid import Grid
+
+    g = Grid(freq_max=10e9, domain=(0.02, 0.02, 0.02), dx=1e-3)
+    coords = coords_from_uniform_grid(g)
+    centres = centres_from_uniform_grid(g)
+    sizes = cell_sizes_from_uniform_grid(g)
+    for z_c in (8.5e-3, 8.2e-3):
+        pad = Cylinder(center=(0.0, 0.0, z_c), radius=3e-3,
+                       height=0.3e-3, axis="z")
+        with pytest.raises(ValueError, match="thinner than one cell"):
+            classify_pec_entry(pad, coords, centres, sizes, name="pad")
+
+
+def test_sheet_plane_outside_the_node_line_is_refused():
+    """§1.3: "nearest" means within half a cell, not "clamp onto the end"."""
+    from rfx.geometry.csg import Box
+    from rfx.geometry.rasterize_grid import (
+        cell_sizes_from_uniform_grid, coords_from_uniform_grid,
+        sheet_spec_from_shape,
+    )
+    from rfx.grid import Grid
+
+    g = Grid(freq_max=10e9, domain=(0.02, 0.02, 0.02), dx=1e-3)
+    coords = coords_from_uniform_grid(g)
+    sizes = cell_sizes_from_uniform_grid(g)
+    z_out = float(np.asarray(coords.z)[-1]) + 4e-3
+    box = Box(corner_lo=(-5e-3, -5e-3, z_out), corner_hi=(5e-3, 5e-3, z_out))
+    with pytest.raises(ValueError, match="nearest node line"):
+        sheet_spec_from_shape(box, coords, sizes, normal_axis=2, name="foil")
+
+
+def test_cell_centres_use_the_actual_node_line():
+    """A caller-supplied axis with a fractional origin gets node + d/2."""
+    from rfx.geometry.rasterize_grid import GridCoords, cell_centres_from_nodes
+    nodes = 0.25 + np.arange(10.0)
+    c = GridCoords(x=nodes, y=nodes, z=nodes, shape=(10, 10, 10))
+    got = cell_centres_from_nodes(c)
+    np.testing.assert_allclose(np.asarray(got.x) - nodes, 0.5)
+
+
+def test_stackup_foils_sit_on_the_dielectric_faces():
+    """§4 rule 2: a foil sheet is ON its laminate face, not half a foil off."""
+    from rfx.pcb import Stackup
+    shapes = Stackup.standard_2layer().to_shapes()
+    faces = set()
+    for (box, mat) in shapes:
+        if box.corner_lo[2] != box.corner_hi[2]:
+            faces.add(round(box.corner_lo[2], 15))
+            faces.add(round(box.corner_hi[2], 15))
+    for (box, mat) in shapes:
+        if box.corner_lo[2] == box.corner_hi[2]:
+            assert round(box.corner_lo[2], 15) in faces

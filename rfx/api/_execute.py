@@ -1422,12 +1422,7 @@ class _ExecuteMixin:
         # the port setup below reads those masks, so the flag resolution
         # moves ahead of it.  The Floquet SOURCE injection stays where it
         # was, so the source list order is unchanged.
-        periodic = None
-        if self._periodic_axes:
-            periodic = tuple(axis in self._periodic_axes for axis in "xyz")
-        if self._floquet_ports and periodic is None:
-            periodic = (True, True, False)  # default x-y periodic for Floquet
-        periodic_bool = periodic if periodic is not None else (False, False, False)
+        periodic_bool = self._periodic_flags()
 
         # Forward cpml_axes from the grid — when waveguide ports are
         # present the grid restricts CPML to the non-propagation axes.
@@ -3358,7 +3353,8 @@ class _ExecuteMixin:
             pec_edge_masks=(
                 None if (pec_mask is None and not _fwd_pec_sheets)
                 else _rpem(pec_mask, sheets=tuple(_fwd_pec_sheets),
-                           wires=tuple(_fwd_pec_wires))))
+                           wires=tuple(_fwd_pec_wires),
+                           periodic=self._periodic_flags())))
         # #679: the same UPML refusal run_uniform carries. forward() reaches
         # the solver by its own route (it never enters run_uniform), so
         # WITHOUT this the eps_override / forward() channel silently ran the

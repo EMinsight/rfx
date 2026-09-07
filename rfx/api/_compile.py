@@ -11,6 +11,7 @@ LEAF mixin module — it must NEVER do ``from rfx.api import ...`` or
 from __future__ import annotations
 
 import math  # noqa: F401  (used by moved method bodies)
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -59,6 +60,21 @@ class _CompileMixin:
     Mixed into ``Simulation``; all methods stay bound methods on a
     ``Simulation`` instance (resolved via MRO).
     """
+
+    def _periodic_flags(self) -> tuple[bool, bool, bool]:
+        """THE run's per-axis periodic flags (#689) — one spelling.
+
+        `realized_pec_edge_masks` is only correct under the flags the step
+        function will use, so every site that realizes PEC edges outside a
+        runner reads them from here instead of taking the non-periodic
+        default and hoping. A TFSF lane that forces its own transverse
+        wrap overrides the result at its own site; nothing else does.
+        """
+        if self._periodic_axes:
+            return tuple(axis in self._periodic_axes for axis in "xyz")
+        if getattr(self, "_floquet_ports", None):
+            return (True, True, False)   # default x-y periodic for Floquet
+        return (False, False, False)
 
     def _waveguide_cpml_axes(self, extra_axes: str = "") -> str:
         axes_in_use = {
@@ -153,9 +169,14 @@ class _CompileMixin:
         ----------
         pec_sheets, pec_wires : list or None
             Out-parameters (same pattern as ``sheet_specs``) so the
-            positional return tuple stays unchanged.  Sheets/wires are
-            always classified; passing no collector only means the caller
-            does not receive them.
+            positional return tuple stays unchanged.  Sheets and wires are
+            always classified, but they own no cell, so a caller that
+            passes no collector gets a ``pec_mask`` with the sheet MISSING
+            — not a mask that contains it.  A caller that STEPS fields must
+            therefore pass collectors (and either realize them or refuse);
+            a caller that only reads cells may omit them, and gets a
+            ``UserWarning`` naming what it did not receive so the omission
+            is visible rather than silent.
         include_thin_conductors : bool, default True
             When False, stop one step short of the finished arrays and
             return the state as it is *before* the ``_thin_conductors``
@@ -430,6 +451,9 @@ class _CompileMixin:
             warn_sheet_planes_inside_dielectric,
         )
         warn_sheet_planes_inside_dielectric(_pec_sheets, materials.eps_r)
+        _warn_uncollected_pec(_pec_sheets if pec_sheets is None else (),
+                              _pec_wires if pec_wires is None else (),
+                              lane="uniform")
         return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, boundary_pec_shapes, kerr_chi3
 
     @staticmethod
@@ -719,3 +743,25 @@ class _CompileMixin:
         """Convert physical (x, y, z) to non-uniform grid indices."""
         from rfx.runners.nonuniform import pos_to_nu_index
         return pos_to_nu_index(grid, pos)
+
+
+def _warn_uncollected_pec(sheets, wires, *, lane: str) -> None:
+    """Say out loud that a classified sheet / wire is not in the return.
+
+    A sheet owns no cell (#931 §1.3), so it cannot ride out in
+    ``pec_mask``.  Callers that only read cells (preflight's port masks,
+    the sub-grid validator, ``optimize``'s bookkeeping assembly) legitimately
+    pass no collector; this makes what they did not receive visible instead
+    of leaving the model looking conductor-free.  The message is constant so
+    Python's default "once per location" filter collapses it.
+    """
+    if not sheets and not wires:
+        return
+    warnings.warn(
+        f"_assemble_materials ({lane} lane): PEC sheets/wires were "
+        "classified but the caller passed no pec_sheets/pec_wires "
+        "collector, so they are absent from the returned pec_mask (a "
+        "sheet owns no cell, #931 §1.3). A caller that steps fields must "
+        "pass collectors and realize them with "
+        "rfx.boundaries.pec.realized_pec_edge_masks.",
+        UserWarning, stacklevel=3)

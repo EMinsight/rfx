@@ -1354,9 +1354,20 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
     # introduce this and does not fix it; threading sheets in would only
     # make the drop harder to see. Tracked separately.
     grid = sim._build_grid()
+    _d_pec_sheets: list = []
+    _d_pec_wires: list = []
     base_materials, debye_spec, lorentz_spec, pec_mask, pec_shapes, *_ = (
-        sim._assemble_materials(grid)
+        sim._assemble_materials(grid, pec_sheets=_d_pec_sheets,
+                                pec_wires=_d_pec_wires)
     )
+    if _d_pec_sheets or _d_pec_wires:
+        raise NotImplementedError(
+            "run_distributed() does not realize PEC sheets or sub-cell "
+            "wires (#931): a sheet owns no cell, this lane carries geometry "
+            "PEC only as a cell mask, and its step body applies domain-face "
+            "PEC alone — so a declared sheet would be absent from every "
+            "rank with no sign of it. Draw the conductor as a volume (a Box "
+            "at least one cell thick) or run the single-device lane.")
     materials = base_materials
 
     nx, ny, nz = grid.shape

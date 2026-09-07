@@ -103,13 +103,15 @@ def compute_lumped_wire_s_matrix_via_scan(
     _pec_sheets = tuple(_pec_sheets)
     _pec_wires = tuple(_pec_wires)
     # #931 §1.7: the realized PEC edges of this model — volumes, sheets and
-    # wires — read once here.  #689: default (non-periodic) flags, because
-    # preflight refuses lumped/wire S-params under periodic axes (#206).
+    # wires — read once here, under the RUN's #689 flags (preflight refuses
+    # lumped/wire S-params under periodic axes (#206), so this is normally
+    # the non-periodic convention — but the flags are read, not assumed).
     from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
     _pec_edge_masks = None
     if pec_mask is not None or _pec_sheets or _pec_wires:
         _pec_edge_masks = _rpem(pec_mask, sheets=_pec_sheets,
-                                wires=_pec_wires)
+                                wires=_pec_wires,
+                                periodic=sim._periodic_flags())
     # #677: node-thin sheet ctx, applied by every per-drive forward run.
     from rfx.materials.thin_conductor import build_sheet_impedance_ctx
     _sheet_ctx = build_sheet_impedance_ctx(
