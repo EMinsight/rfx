@@ -21,15 +21,13 @@
 # the 1 mm substrate is only ~2 cells thick. Refine `dx` for a quantitative
 # run.
 #
-# Preflight advisories to expect from `rfx run` on this file: two copies of
-# "PEC sheets/wires were classified but the caller passed no pec_sheets ...
-# collector". That one is rfx's, not this model's — preflight still assembles
-# without a sheet collector, so a sheet-declared conductor is invisible to it
-# (#931 §6, owned by the preflight stage that follows the contract branch).
-# The "Gap between PEC structures ... coupling may be under-resolved" advisory
-# this file used to draw goes silent for the same reason. The condition it
-# named still holds — 1 mm of FR4 is two cells — so do not read its absence as
-# a better mesh.
+# Preflight advisories to expect from `rfx run` on this file: a line naming the
+# realized PEC sheets and whether each landed on the plane it declared
+# (#931 §1.3), and the "Gap between PEC structures ... coupling may be
+# under-resolved" advisory — 1 mm of FR4 is two cells at this dx. An earlier
+# revision of this comment said preflight could not see a sheet and that the
+# gap advisory went silent; that was true only of the branch state before the
+# sheet collectors were threaded through every assembler caller.
 #
 #   rfx run examples/config/microstrip_thru.yaml --output thru.h5
 #   rfx plot thru.h5 --quantity s_params --out thru_s11.png

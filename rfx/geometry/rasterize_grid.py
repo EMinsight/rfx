@@ -519,7 +519,47 @@ def sheet_spec_from_shape(shape, coords: GridCoords, cell_sizes=None, *,
             f"grid{(' (' + lane + ' lane)') if lane else ''} at plane "
             f"{'xyz'[a]}={plane}; it would silently vanish (#369 class). "
             "Widen the footprint to reach a node line or refine the mesh.")
-    return SheetSpec(normal_axis=a, plane=plane, footprint=jnp.asarray(fp), name=name)
+    return SheetSpec(normal_axis=a, plane=plane, footprint=jnp.asarray(fp),
+                     name=name)
+
+
+
+def refuse_vaporized_sheets(sheets, *, lane: str = ""):
+    """Refuse a sheet PLANE that realizes no PEC edge (#931 §1.5, #369 class).
+
+    §1.3 unions every footprint on one ``(normal_axis, plane)`` BEFORE the
+    edge rule, so the unit that must carry current is the plane, not the
+    declaration: a patterned ground drawn as twenty half-cell boxes has
+    single-node rows that realize nothing alone and one connected plane
+    together. What cannot stand is a plane whose whole union realizes ZERO
+    edges — metal that reaches node lines but never two adjacent ones, and
+    so carries no current, the same silent vanishing a sub-cell Box is
+    refused for on the volume side.
+
+    Asked of the single owner (:func:`realized_pec_edge_masks`) rather than
+    re-derived, so it cannot disagree with the solve.
+    """
+    sheets = list(sheets or ())
+    if not sheets:
+        return
+    from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+    by_plane: dict = {}
+    for sp in sheets:
+        by_plane.setdefault((int(sp.normal_axis), int(sp.plane)), []).append(sp)
+    for (axis, plane), group in by_plane.items():
+        if any(is_tracer(sp.footprint) for sp in group):
+            continue
+        if any(bool(np.asarray(m).any()) for m in _rpem(None, sheets=tuple(group))):
+            continue
+        names = ", ".join(repr(getattr(sp, "name", None)) for sp in group)
+        raise ValueError(
+            f"PEC sheet plane {'xyz'[axis]}={plane} realizes ZERO PEC edges on "
+            f"this grid{(' (' + lane + ' lane)') if lane else ''}: its whole "
+            f"footprint ({len(group)} declaration(s): {names}) reaches node "
+            "line(s) but never two ADJACENT ones, so the metal carries no "
+            "current and would silently vanish (#369 class; the volume side "
+            "refuses the same drawing, #931 §1.5). Widen the footprint to span "
+            "at least one cell in an in-plane direction, or refine the mesh.")
 
 
 def sheet_footprint_traced(shape, coords: GridCoords, normal_axis: int):
@@ -810,6 +850,7 @@ def rasterize_geometry(
 
     has_pec = bool(jnp.any(pec_mask))
     kerr_chi3 = chi3_arr if has_kerr else None
+    refuse_vaporized_sheets(sheets, lane="non-uniform")
     return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, kerr_chi3
 
 

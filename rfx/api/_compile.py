@@ -456,6 +456,8 @@ class _CompileMixin:
         _refuse_uncollected_pec(_pec_sheets if pec_sheets is None else (),
                                 _pec_wires if pec_wires is None else (),
                                 lane="uniform")
+        from rfx.geometry.rasterize_grid import refuse_vaporized_sheets as _rvs
+        _rvs(_pec_sheets, lane="uniform")
         return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, boundary_pec_shapes, kerr_chi3
 
     @staticmethod

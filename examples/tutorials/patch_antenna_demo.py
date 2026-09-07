@@ -421,18 +421,18 @@ def main():
     #
     #   * the close bottom NTFF face (see build_simulation) — a condition to
     #     interpret, not to suppress;
-    #   * a "PEC sheets/wires were classified but the caller passed no
-    #     pec_sheets collector" warning.  That one is rfx's, not this model's:
-    #     preflight still assembles without a sheet collector, so a
-    #     sheet-declared conductor is invisible to it (#931 §6, owned by the
-    #     preflight stage that follows the contract branch).  Two checks this
-    #     fixture used to draw go silent for the same reason — the small-ground
-    #     -plane pattern advisory (60 mm = 0.56 lambda at f_max, so edge
-    #     diffraction shapes the pattern; physics shared with the openEMS
-    #     reference, not a solver defect) and the off-lattice conductor-face
-    #     residual on the patch and ground outlines (1 mm on a 2 mm cell).
-    #     Both still hold for this model; preflight simply cannot see a sheet
-    #     yet.  Do not read their absence as an improvement.
+    #   * a line naming the realized PEC sheets and whether each landed on
+    #     the plane it declared (#931 §1.3) — preflight collects sheets, so a
+    #     sheet-declared conductor is visible to it;
+    #   * the small-ground-plane pattern advisory (60 mm = 0.56 lambda at
+    #     f_max, so edge diffraction shapes the pattern) — expected physics,
+    #     shared with the openEMS reference, not a solver defect;
+    #   * the off-lattice conductor-face residual on the patch and ground
+    #     outlines (1 mm on a 2 mm cell).
+    #   Measured 2026-09-07: four advisories, and both of the last two fire.
+    #   An earlier revision of this comment said preflight could not see a
+    #   sheet and that those two went silent; that was true only of the branch
+    #   state before the collectors were threaded.
     #
     # The sub-cell PEC advisories that used to head this list are gone for a
     # real reason: nothing here is a sub-cell conductor any more.  The foils

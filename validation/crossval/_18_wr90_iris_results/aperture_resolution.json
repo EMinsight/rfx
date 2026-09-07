@@ -15,7 +15,7 @@
   "dx_coarse_mm": 0.762,
   "n_freqs": 29,
   "richardson_gate_abs": 0.01,
-  "pooled_fine_gate_abs": 0.04
+  "pooled_fine_gate_abs": 0.02
  },
  "offset_grid_fine_cells": [
   -1.0,

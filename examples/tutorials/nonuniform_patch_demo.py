@@ -253,10 +253,10 @@ print(f"\n[3] Mesh economics: NU {nx}x{ny}x{nz_nu} vs uniform-at-dz_sub "
 # FR4 is modelled lossless (sigma=0) so preflight's infinite-Q advisory will
 # fire: legitimate here — we quote mode FREQUENCIES, not absolute Q (real FR4
 # tan_delta ~0.02 would cap Q near ~50).
-# The second advisory is rfx's own gap, not this model's: preflight still
-# assembles without a sheet collector, so a sheet-declared conductor is
-# invisible to it (#931 §6, owned by the preflight stage that follows the
-# contract branch).  Do not read it as a finding about this geometry.
+# The second line names the realized PEC sheets and whether each landed on the
+# plane it declared (#931 §1.3): preflight collects sheets, so a sheet-declared
+# conductor is visible to it.  It is a statement of where the metal is, not a
+# finding about this geometry.
 # =============================================================================
 src_z   = z_sub_lo + dz_sub * 2.5
 probe_z = src_z

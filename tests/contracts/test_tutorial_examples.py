@@ -71,14 +71,16 @@ def test_ports_and_sparams_101_tutorial_runs():
 
     # Three empty general reports: the two generic-port models and the
     # waveguide.  The microstrip's general report is NOT empty since the
-    # lattice ownership contract (#931) made its ground and trace SHEETS:
-    # preflight assembles without a PEC-sheet collector, so it says the sheets
-    # are absent from the cell mask it reads instead of dropping them quietly
-    # (#931 §6, owned by the preflight stage).  Readiness is report.ok there,
-    # the same rule the waveguide leg already used.
+    # lattice ownership contract (#931) made its ground and trace SHEETS —
+    # preflight now COLLECTS them and says where they landed, which is the
+    # line asserted below.  (Until the collectors were threaded it instead
+    # warned that it had been handed none; that warning no longer exists and
+    # asserting it here pinned a transient state, measured 2026-09-07.)
+    # Readiness is report.ok there, the same rule the waveguide leg used.
     assert output.count("[PREFLIGHT] All checks passed") >= 3
     assert "Microstrip port setup ready: True" in output
-    assert "PEC sheets/wires were classified but the caller passed no" in output
+    assert "2 PEC sheet(s) realized (lattice ownership contract #931" in output
+    assert "0 of them off their decl" in output
     # The declared foils must BE the realized wall planes, and the gap between
     # them the height the MSL ports were told.  build_microstrip_ports() raises
     # if not; this pins the measured line so a silent plane move is visible.
