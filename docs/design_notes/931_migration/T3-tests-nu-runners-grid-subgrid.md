@@ -167,6 +167,71 @@ excite". A summary-line check instead of a whole-stdout substring check
 would fix it. Left alone because the brittleness predates this branch and
 the warning text belongs to another owner.
 
+### 3. The MSL thru fixture does not witness its own trace
+
+Measured on this branch while reading the re-measured `Z0` / `beta` for
+`test_run_progress_reporting.py::_msl_thru`. NOT caused by #931, NOT fixed
+here, and no gate in this group moves — every assertion in that file
+compares two runs of the SAME fixture. It is recorded because the migration
+puts a SHEET where a one-cell PEC Box was, and the obvious question — did
+the trace survive the change — turns out to be unanswerable with this
+fixture.
+
+`compute_msl_s_matrix(freqs = 2-18 GHz, num_periods = 6)`, dx = 0.2 mm,
+eps_r 2.2 substrate 0.8 mm, ports at x = 2 and 10 mm. Logs:
+`/root/workspace/claude-workspace/rfx/runs/issue931-post-t3-msl-witness-20260907T141743Z/`
+(`three_traces.log`, `shorting_wall_control.log`), local CPU runs:
+
+| declared trace | \|S21\| @10.7 GHz | beta[6] | Re Z0[6] |
+|---|---|---|---|
+| 1.2 mm sheet on z = 0.8 mm (the migrated fixture) | 0.999992 | 196.064 | 59.72 |
+| 3.6 mm sheet, same plane | 0.999992 | 196.064 | 97.02 |
+| 1.2 mm one-cell PEC Box (walls at 0.8 and 1.0 mm) | 0.999992 | 196.064 | 53.28 |
+
+`max|dS|` 1.4e-07 between the two sheet widths and 4.2e-07 between the
+sheet and the volume — float32 noise, on a matrix reading `|S11|` exactly
+0.000000. Only `Z0` moves, and it moves with the REALIZED width, so it is
+read off the geometry rather than off the fields.
+
+**The lane is not blind — the control says so.** Pre-declared before the
+run: *if a conductor the fixture cannot ignore also leaves S unmoved, the
+S-matrix path is not reading the realized geometry at all; if it moves S,
+the trace insensitivity is the fixture's, not the lane's.* A PEC Box drawn
+across the whole guide at mid-line takes `|S21|` from 0.999992 to
+**0.000000** (`max|dS| = 1.000`). So the realized edges do reach this
+solve; what this fixture cannot resolve is its own trace, which for a
+matched thru changes neither `|S11| = 0` nor `|S21| = 1`.
+
+Two known mechanisms are enough to explain the saturation and neither is
+new here:
+
+* `compute_msl_s_matrix` projects S onto the passive set by default, and
+  its own docstring warns the projection "is NOT small where the raw
+  extraction is bad" (it names a thru whose raw sigma_max ran 1.19-1.91).
+  Whether `S_raw` separates the three declarations is UNMEASURED — that is
+  the one cheap check left for whoever owns the extractor;
+* `beta/k0` = 0.872 on 8 of the 12 bins (eps_eff 0.76, below vacuum) and
+  does not move with `num_periods` 6 -> 20, while `Re Z0` swings -4533 to
+  98 ohm across the band. This is *consistent with* `rfx-known-issues.md`
+  2026-08-20, "MSL extractor reports non-physical Z0 / eps_eff on a real
+  board — DIAGNOSTIC-ONLY (does NOT reach S11)": same extractor, same model
+  class, same non-physical eps_eff. Not a new defect and not a #931 one.
+
+**One thing this measurement settles positively**, and the critic's
+`critic.json` listed it as blocking ~18 rows in other groups: the MSL trace
+detector no longer refuses a sheet. Removing the trace from the fixture
+raises `compute_msl_s_matrix: no realized PEC trace conductor found above
+the substrate top for MSL port 'p1'` — the message reads *realized*, and a
+sheet-declared trace passes it. The "declare the MSL trace as a sheet"
+migrations elsewhere are unblocked.
+
+**Still open, for the stage that owns the solver lanes**: every one of
+these runs printed `_assemble_materials (uniform lane): PEC sheets/wires
+were classified but the caller passed no pec_sheets/pec_wires collector, so
+they are absent from the returned pec_mask`. That is the design note's own
+§6 out-parameter warning firing on a production path, not a test artifact.
+
+
 ## Recompute
 
 See `RECOMPUTE.md` beside this file.

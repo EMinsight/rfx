@@ -87,7 +87,8 @@ the contract.
 
 Read commit `7b8d9921`, rc 0, four cases in 21 s of solve
 (`.../issue931-post-t3-measure-20260907T123234Z/t3_remeasure.json`). The
-values are folded into the three docstrings in commit `<this one>`; none of
+values are folded into the docstrings in commits `8bcc2303` (iris, wire
+port) and the one this paragraph ships in (MSL thru); none of
 them is an assertion.
 
 | case | measured | pre-#931 prose |
