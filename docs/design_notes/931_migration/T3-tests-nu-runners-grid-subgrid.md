@@ -81,6 +81,22 @@ Two more the design note did not raise:
   realized span; whether preflight scores it from realized walls or from the
   Box mask is owner **P**'s call. The assertion here is qualitative and fires
   either way.
+
+  **Finding for owner P, measured while redrawing it.**
+  `_validate_mesh_quality`'s `_local_cell` resolves a body whose face lands
+  exactly on a band boundary to the FINER neighbouring band. On the fixture's
+  profile (`[12x250um, 8x500um, 8x125um, 12x250um]`, coarse band
+  `[3.0, 7.0) mm`) the same 3-coarse-cell PEC volume scores:
+
+      drawn 3.0 -> 4.5 mm (lo face ON the band's first node): 0 advisories
+      drawn 3.5 -> 5.0 mm (one coarse cell inside):           2 advisories
+
+  Same body, same 3 cells, same realized-vs-drawn span. The 3.0 mm case is
+  scored against the 250 um cell on the fine side of the boundary — the
+  exact "a body in a coarse region judged by a fine cell it never sees"
+  failure the #743 check exists to prevent, reappearing at the band edge.
+  The fixture is drawn one coarse cell inside the band so it keeps testing
+  what it names; the tie itself is NOT worked around and is not fixed here.
 * `validation/crossval/05_patch_antenna.py` and
   `scripts/diagnostics/patch_tutorial_rfx.py` — owner **X-A**.
   `test_patch_uniform_fine_substrate.py::build_uniform_fine_z` is the
