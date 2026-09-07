@@ -91,6 +91,20 @@ def test_realized_patch_is_one_cell_under_declared_on_each_axis(cv07, measured):
     assert measured["patch_prop"] + dx == pytest.approx(2600e-6, rel=1e-12)
 
 
+def test_shared_helper_agrees_with_the_case_gate(cv07):
+    """The case's own gate and the branch-wide helper must say the same
+    thing. `tests/_realized_geometry` is the single shared spelling of the
+    build-time check (#931); this case carries its own `realized_metal`
+    because a crossval script cannot import from `tests/`."""
+    from tests._realized_geometry import assert_sheet_planes, assert_wall_planes
+
+    sim = cv07.build_rfx_sim(DX_COMMITTED)
+    # 800 um = the realized laminate face, one plane, not the two a one-cell
+    # volume trace would stand.
+    assert_wall_planes(sim, 2, [800e-6], what="cv07 metal")
+    assert_sheet_planes(sim, 2, [800e-6] * 3, what="cv07 feeds + patch")
+
+
 def test_port_cross_section_row_mismatch_is_reported_not_hidden(measured):
     """#931 §1.9 / #729, left OPEN by this case: the MSL port rounds each
     face to the nearest node while a sheet footprint is closed [lo, hi], so

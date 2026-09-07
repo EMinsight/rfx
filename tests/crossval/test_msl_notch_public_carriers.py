@@ -139,6 +139,22 @@ def test_realized_board_is_measured_not_assumed(cv06b):
     assert naive != pytest.approx(635.0e-6, rel=1e-6)
 
 
+def test_shared_helper_agrees_with_the_case_gate(cv06b):
+    """The case's own gate and the branch-wide helper must say the same
+    thing. `tests/_realized_geometry` is the single shared spelling of the
+    build-time check (#931); this case carries its own `realized_metal`
+    because a crossval script cannot import from `tests/`, so the two are
+    cross-checked here rather than left to drift."""
+    from tests._realized_geometry import assert_sheet_planes, assert_wall_planes
+
+    sim = cv06b._build_sim()
+    # One tangential wall plane, at the substrate top, from the shared owner.
+    assert_wall_planes(sim, 2, [cv06b.H_SUB], what="cv06b metal")
+    # And it is there because two SHEETS were declared, not a volume.
+    assert_sheet_planes(sim, 2, [cv06b.H_SUB, cv06b.H_SUB],
+                        what="cv06b trace + stub")
+
+
 def test_build_time_assertion_accepts_the_shipped_geometry(cv06b):
     """``assert_realized_metal`` is the #931 build gate: it must pass on the
     shipped declaration and return the measured sheet."""

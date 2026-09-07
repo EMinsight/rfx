@@ -58,6 +58,15 @@ def test_short_realizes_walls_on_both_drawn_faces(cv11):
     assert r["n_sheets"] == 0
 
 
+def test_shared_helper_agrees_with_the_case_gate(cv11):
+    """The case's own `assert_realized_short` and the branch-wide helper
+    must say the same thing (#931 single-owner rule)."""
+    from tests._realized_geometry import assert_wall_planes
+
+    sim = cv11._build_sim(cv11.FREQS_HZ, pec_short_x=cv11.PEC_SHORT_X)
+    assert_wall_planes(sim, 0, [0.145, 0.146, 0.147], what="cv11 PEC short")
+
+
 def test_short_thickness_is_an_absolute_extent(cv11):
     """The `2 * DX_M` cell-relative spelling this script flagged since
     #722/#724 is gone; the constant realizes the identical body at
