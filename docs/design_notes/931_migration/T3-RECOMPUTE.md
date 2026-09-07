@@ -76,9 +76,37 @@ Run 369367259208 read commit 6b8f9fae and returned **865 passed, 4 failed,
   passes; the assertion greps the whole stdout for "failed" and a warning
   says "one drive that failed to excite").
 
-`rfx-931-post-t3-pytest-r2` (369367259214) re-runs the same lane on
-`cffbb997`, which carries both fixes, so its expected verdict is 2 xfailed
-plus that one unrelated red.
+`rfx-931-post-t3-pytest-r2` (369367259214) re-ran the same lane on
+`7b8d9921` and returned **866 passed, 1 failed, 6 xfailed in 32.5 min**
+(`.../issue931-post-t3-pytest-20260907T120828Z/`). The single red is the
+`test_runner_import_binding.py` slow-lane brittleness above, which does not
+touch #931. The predicted verdict held; the four directories are green under
+the contract.
+
+## Results — measure run 369367259209
+
+Read commit `7b8d9921`, rc 0, four cases in 21 s of solve
+(`.../issue931-post-t3-measure-20260907T123234Z/t3_remeasure.json`). The
+values are folded into the three docstrings in commit `<this one>`; none of
+them is an assertion.
+
+| case | measured | pre-#931 prose |
+|---|---|---|
+| WR-90 iris, uniform | `\|S11\|max` 2.170 | ~0.78-2.1 |
+| WR-90 iris, graded-dy | `\|S11\|max` 1.807 | ~1.4-1.6 |
+| wire port, 5 mm gap, vacuum / PEC plates (n_live 6) | -0.7142854 / -0.7142860 (-2.3e-05j) | -0.71429+0.00027j |
+| wire port, 3 mm gap, vacuum / eps_r=10 (n_live 4) | -0.6000000 / -0.6000003 | -0.60000+0.00034j |
+| MSL thru, `\|S21\|` 2-18 GHz | 0.99999 flat | not quoted |
+| MSL thru, `beta/k0` | 0.872 on 8 of 12 points | not quoted |
+
+The wire-port rows are the interesting ones: the real parts sit on the
+module's own closed form `(1-n_live)/(1+n_live)` to seven digits and do not
+move with the load, which is what the module claims, and they do not move
+now that the PEC plates actually short their interior. Only the small
+imaginary part changed.
+
+The MSL row is an OPEN QUESTION, not a result of this migration — see the
+group note, finding 3.
 
 Both read this worktree
 (`/root/workspace/byungkwan-workspace/research/rfx-931-T3-nu-runners-grid-subgrid`)

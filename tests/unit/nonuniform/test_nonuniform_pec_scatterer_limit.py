@@ -32,6 +32,22 @@ walls intact). Documented in ``docs/guides/support_matrix.{json,md}``.
 Both tests are now hard gates: the uniform witness confirms the iris fixture is
 a valid strong reflector, and the NU gate confirms the PEC iris reflects on the
 graded-``dy`` path within the uniform reflector class.
+
+RE-MEASURED under the #931 lattice ownership contract (VESSL run
+369367259209, commit 7b8d9921, ``JAX_PLATFORMS=cpu``; producer
+``docs/design_notes/931_migration/t3_remeasure.py``, output
+``/root/workspace/claude-workspace/rfx/runs/issue931-post-t3-measure-20260907T123234Z/t3_remeasure.json``):
+
+    uniform  |S11|max = 2.170   (was ~0.78-2.1)
+    graded-dy |S11|max = 1.807  (was ~1.4-1.6)
+
+Two things moved at once and neither is separated here, because neither
+gate binds on the value: the fins are now drawn on the node line (so the
+realized block is the drawn one, not a 1.5 mm block between two planes the
+drawing never named), and the waveguide S-matrix lane applies the realized
+PEC edges instead of folding ``pec_mask`` cells into ``sigma = 1e10``. The
+numbers above are the reflector class, quoted so the next reader does not
+carry the pre-#931 figures forward.
 """
 from __future__ import annotations
 
@@ -152,8 +168,9 @@ def test_nonuniform_pec_iris_reflects():
     pec_mask) → device and reference DFTs bit-identical → S11=0 for any
     reflector. Fixed by ``run_nonuniform_path(..., strip_interior_pec=True)`` on
     the reference (drops interior PEC, keeps the boundary guide walls). The
-    iris now recovers to |S11| ~ 1.4-1.6 on the graded-dy path, in the same
-    strong-reflector class as the uniform witness."""
+    iris now recovers on the graded-dy path into the same strong-reflector
+    class as the uniform witness (|S11|max 1.807 vs 2.170 re-measured under
+    #931; ~1.4-1.6 vs ~0.78-2.1 when the fix landed)."""
     s11_nu = _iris_s11_max(nonuniform=True)
     assert s11_nu > 0.2, (
         f"NU PEC iris |S11|max={s11_nu:.3f} <= 0.2 — iris not reflecting; the "

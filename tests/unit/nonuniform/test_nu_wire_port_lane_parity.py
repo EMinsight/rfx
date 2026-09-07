@@ -41,17 +41,34 @@ and an ``eps_r = 10`` slab filling it — all return the SAME
 ``S11(0.2 GHz)`` at ``n_live = 4``. The load does not move the reading at
 all. A convention test is exactly what that supports.
 
-#931 NOTE ON THE THREE-LOAD WITNESS. The numbers quoted throughout this
-module were measured before the lattice ownership contract, when a one-cell
-PEC body realized a single wall plane and left its normal E live — so the
-"PEC plates" arm was two films and could not short anything even in
-principle. Under the contract each plate realizes both of its drawn faces
-and shorts Ez between them. That makes the arm a stronger witness, not a
-weaker one: the plates are now genuinely conducting bodies one cell from
-the port and the reading STILL does not move. The parity and passivity
-gates below are load-independent by construction; the literal S11 values in
-this docstring are pre-#931 and are re-measured with the fixture (see
-docs/design_notes/931_migration/, T3 row for this file).
+#931 NOTE ON THE THREE-LOAD WITNESS. The table above was measured before
+the lattice ownership contract, when a one-cell PEC body realized a single
+wall plane and left its normal E live — so the "PEC plates" arm was two
+films and could not short anything even in principle. Under the contract
+each plate realizes both of its drawn faces and shorts Ez between them, so
+the arm is a stronger witness: genuinely conducting bodies one cell from
+the port.
+
+RE-MEASURED under the contract (VESSL run 369367259209, commit 7b8d9921,
+``JAX_PLATFORMS=cpu``; producer ``docs/design_notes/931_migration/
+t3_remeasure.py``, output ``/root/workspace/claude-workspace/rfx/runs/
+issue931-post-t3-measure-20260907T123234Z/t3_remeasure.json``), S11 at
+0.2 GHz, uniform lane and NU lane agreeing to ~1e-6 on every row:
+
+  gap extent   load          n_live   S11(0.2 GHz)
+  5 mm         vacuum        6        -0.7142854 - 2.316e-05j
+  5 mm         PEC plates    6        -0.7142860 - 2.257e-05j
+  3 mm         vacuum        4        -0.6000000 - 4.406e-05j
+  3 mm         eps_r=10 slab 4        -0.6000003 - 4.449e-04j
+
+The reading is set by ``n_live`` and by nothing else: ``(1-n)/(1+n)`` is
+-5/7 = -0.7142857 at n = 6 and -3/5 = -0.6 at n = 4, and the measurement
+sits on those to seven digits. Shorting the plates' interior did not move
+it, which is the module's whole claim. What DID move against the pre-#931
+table is the small imaginary part (+2.7e-04 -> -2.3e-05 on the PEC-plate
+arm): it is the residual the closed form does not carry, and it is not
+gated anywhere. The dielectric arm's -4.4e-04 is the one load-dependent
+digit in the table, an order of magnitude below the real part.
 
 The step from the raw ratio to ``S11`` additionally runs through the
 extractor's own mixed normalization (V and I are sampled at ONE cell in
