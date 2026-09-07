@@ -40,7 +40,7 @@ explicitly not used as a prediction.
   a STOP that qualifies that guidance. A narrowing VOLUME arm is a caveat on
   drawing foil as a one-cell Box, not on sheets. Frequency shift between arms
   is expected and reported, not gated.
-* **run id**: see `SUBMITTED` below.
+* **run id**: `369367259157` (submitted 2026-09-07 10:15 UTC).
 
 ## Not submitted — listed with the reason and the owner
 
@@ -107,4 +107,18 @@ with that explanation. The committed
 
 ## SUBMITTED
 
-Filled in at submission time.
+| run id | name | yaml | submitted | expected wall |
+|---|---|---|---|---|
+| `369367259157` | `rfx-931-post-docs-ab` | `scripts/vessl_931_docs_sheet_vs_volume_ab.yaml` | 2026-09-07 10:15 UTC | ~1 h (timeouts 2 h + 3 h) |
+
+Submit command (from a directory that is NOT a git worktree — the VESSL CLI
+reads `.git` as a directory and a worktree's `.git` is a file):
+
+    cd /tmp && vessl run create -f \
+      /root/workspace/byungkwan-workspace/research/rfx-931-Docs-docs/scripts/vessl_931_docs_sheet_vs_volume_ab.yaml
+
+Read the result at
+`/root/workspace/claude-workspace/rfx/runs/issue931-post-docs-ab-<ts>/`:
+`gate_realized_planes.log` first (it must show one plane per foil in the sheet
+arm and two in the volume arm), then `sheet_vs_volume_ab.log` and
+`patch_sheet_realization_ladder.log`. Read the settling witness before any Q.
