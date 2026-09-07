@@ -65,14 +65,22 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
+import sys
 
 import numpy as np
 
 from rfx import Box, Simulation
-from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
-from rfx.geometry.rasterize_grid import coords_from_uniform_grid
 from rfx.harminv import harminv
 from rfx.sources import GaussianPulse
+
+# The ONE spelling of the build-time realization check (#931 §1.7). A second
+# hand-rolled scan over an edge mask is the drift the single-owner rule exists
+# to stop, so this diagnostic reads the same helper the migrated fixtures do.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "tests"))
+from _realized_geometry import assert_wall_planes, node_index, realized  # noqa: E402
 
 EPS_R = 3.38
 H_SUB = 0.787e-3
@@ -143,61 +151,60 @@ def build(kind: str) -> Simulation:
     return sim
 
 
-def _realized_edges(sim):
-    """The three E edge masks the SOLVE will zero, plus the grid. No solve."""
-    grid = sim._build_grid()
-    pec_sheets: list = []
-    pec_wires: list = []
-    _, _, _, pec_mask, *_ = sim._assemble_materials(
-        grid, sheet_specs=[], pec_sheets=pec_sheets, pec_wires=pec_wires)
-    edges = realized_pec_edge_masks(pec_mask, sheets=pec_sheets,
-                                    wires=pec_wires,
-                                    periodic=(False, False, False))
-    return grid, edges
-
-
-def _node_index(grid, axis: int, v: float) -> int:
-    nodes = np.asarray(coords_from_uniform_grid(grid)[axis])
-    return int(np.argmin(np.abs(nodes - v)))
-
-
-def _node_position(grid, axis: int, k: int) -> float:
-    return float(np.asarray(coords_from_uniform_grid(grid)[axis])[k])
-
-
 def assert_realized_planes(kind: str, verbose: bool = True) -> dict:
     """Build-time gate (§1.2/§1.3): realized walls == declared planes.
 
-    Arm ``sheet``: each foil realizes ONE z wall plane, at its declared
-    plane, over its own footprint.  Arm ``volume``: each foil realizes TWO,
-    at the declared plane and one cell above it.  Raises otherwise.
+    Three columns, because a column tells you what stands ABOVE it too and
+    the ground's footprint is the whole board:
+
+    * ``ground_only`` — past the patch in x and below it in y, so only the
+      ground is overhead: one plane in arm S, two in arm V;
+    * ``patch`` and ``feed`` — ground plus the upper foil: two planes in
+      arm S, four in arm V.
+
+    That is a stronger statement than "the ground's own plane is right": it
+    also says no foil put a wall anywhere it was not declared. No solve —
+    ``tests/_realized_geometry.realized`` assembles and realizes.
     """
     sim = build(kind)
-    grid, edges = _realized_edges(sim)
+    rz = realized(sim)
+    k_gnd = node_index(rz.grid, 2, Z_GND_PLANE)
+    k_tr = node_index(rz.grid, 2, Z_TRACE_PLANE)
+    if kind == "sheet":
+        want_gnd, want_upper = [k_gnd], [k_gnd, k_tr]
+    else:
+        want_gnd = [k_gnd, k_gnd + 1]
+        want_upper = [k_gnd, k_gnd + 1, k_tr, k_tr + 1]
+    x_p0 = X_PATCH0
+    columns = (
+        ("ground_only", 0.5 * (x_p0 + L + DOM_X), 0.5 * (Y_C - W / 2),
+         want_gnd),
+        ("patch", x_p0 + 0.5 * L, Y_C, want_upper),
+        ("feed", 0.5 * x_p0, Y_C, want_upper),
+    )
     out = {}
-    for name, (x0, y0), (x1, y1), z in _FOILS:
-        k = _node_index(grid, 2, z)
-        # a column strictly inside the footprint, away from every rim
-        i = _node_index(grid, 0, 0.5 * (x0 + x1))
-        j = _node_index(grid, 1, 0.5 * (y0 + y1))
-        planes = realized_wall_planes(edges, 2, ij=(i, j))
-        want = [k] if kind == "sheet" else [k, k + 1]
-        got = [p for p in planes if k - 2 <= p <= k + 3]
-        if got != want:
-            raise RuntimeError(
-                f"assert_realized_planes[{kind}]: foil '{name}' declared at "
-                f"z = {z * 1e3:.4f} mm (node {k}) realizes z wall planes "
-                f"{got} on its own column, wanted {want}. Full column: "
-                f"{planes}")
-        out[name] = dict(declared_plane=k, realized_planes=got,
-                         declared_z_mm=z * 1e3,
-                         realized_z_mm=[_node_position(grid, 2, p) * 1e3
-                                        for p in got])
+    for name, x, y, want in columns:
+        i = node_index(rz.grid, 0, x)
+        j = node_index(rz.grid, 1, y)
+        got = assert_wall_planes(sim, 2, expected_planes=want, ij=(i, j),
+                                 what=f"{kind} column '{name}'")
+        out[name] = dict(realized_planes=got,
+                         realized_z_mm=[_node_position(rz.grid, 2, k) * 1e3
+                                        for k in got])
         if verbose:
-            print(f"  [{kind}] {name:7s} declared z = {z * 1e3:8.4f} mm "
-                  f"(node {k}) -> realized walls "
+            print(f"  [{kind}] {name:12s} at (x={x*1e3:6.2f}, y={y*1e3:6.2f}) mm"
+                  f" -> realized z walls "
                   f"{[f'{v:.4f}' for v in out[name]['realized_z_mm']]} mm")
+    if verbose:
+        print(f"  [{kind}] declared: ground {Z_GND_PLANE*1e3:.4f} mm "
+              f"(node {k_gnd}), feed and patch {Z_TRACE_PLANE*1e3:.4f} mm "
+              f"(node {k_tr})")
     return out
+
+
+def _node_position(grid, axis: int, k: int) -> float:
+    from rfx.geometry.rasterize_grid import coords_from_uniform_grid
+    return float(np.asarray(coords_from_uniform_grid(grid)[axis])[k])
 
 
 def run_arm(tag: str, kind: str):

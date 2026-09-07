@@ -97,13 +97,21 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
+import sys
 
 import numpy as np
 
 from rfx import Box, Simulation
-from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
 from rfx.geometry.rasterize_grid import coords_from_uniform_grid
 from rfx.sources import GaussianPulse
+
+# The ONE spelling of the build-time realization read (#931 §1.7): a second
+# hand-rolled scan over an edge mask is the drift the single-owner rule exists
+# to stop, and this file's whole job is to report where the walls stand.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tests"))
+from _realized_geometry import realized  # noqa: E402
 
 EPS_R = 3.38
 H_SUB = 0.787e-3
@@ -175,14 +183,9 @@ def rasterization(sim, h_sub=H_SUB, dx=DX):
     walls are therefore read from ``realized_pec_edge_masks``, the ONE
     function the solve applies (#931 sec 1.7).
     """
-    grid = sim._build_grid()
-    ps: list = []
-    pw: list = []
-    assembled = sim._assemble_materials(grid, sheet_specs=[],
-                                        pec_sheets=ps, pec_wires=pw)
-    eps = np.asarray(assembled[0].eps_r, dtype=float)
-    edge_masks = realized_pec_edge_masks(assembled[3], sheets=ps, wires=pw,
-                                         periodic=(False, False, False))
+    rz = realized(sim)
+    grid = rz.grid
+    eps = np.asarray(sim._assemble_materials(grid)[0].eps_r, dtype=float)
     c = coords_from_uniform_grid(grid)
     z = np.asarray(c.z, dtype=float)
     xc, yc = np.asarray(c.x, dtype=float), np.asarray(c.y, dtype=float)
@@ -191,8 +194,7 @@ def rasterization(sim, h_sub=H_SUB, dx=DX):
     j = int(np.argmin(np.abs(yc - DOM_Y / 2.0)))
     # a z-normal wall zeroes the in-plane components Ex and Ey; ij= asks the
     # contract's own helper for this column, backward neighbours included
-    walls = np.asarray(realized_wall_planes(edge_masks, 2, ij=(i, j)),
-                       dtype=int)
+    walls = np.asarray(rz.wall_planes(2, ij=(i, j)), dtype=int)
     out = {"walls_k": walls, "walls_um": [float(z[k] * 1e6) for k in walls],
            "physical_cavity_um": float(h_sub * 1e6),
            "physical_sum_d_over_eps_um": float(h_sub / EPS_R * 1e6)}

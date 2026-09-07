@@ -77,37 +77,32 @@ N_PROBES = 5
 
 
 def _assert_realized_stack(sim, x_probe, y_probe):
-    """Build-time gate (#931), no solve: the realized z wall planes are the
-    two declared ones — ground at z = 0 and trace at z = H_SUB — with no
-    third plane anywhere. Under the pre-2.0 rule the ground's wall sat at
-    z = -DX unless the drawing compensated for it, and that is exactly the
-    class this fixture is meant to be free of.
+    """Build-time gate (#931), no solve: on a trace column far from the
+    shorting wall the realized z wall planes are the two declared ones —
+    ground at z = 0 and trace at z = H_SUB — and nothing else.
+
+    Under the pre-2.0 rule the ground's wall sat at z = -DX unless the
+    drawing compensated for it, and that is exactly the class this fixture
+    is meant to be free of. The shorting wall is a VOLUME and stands a wall
+    on every plane it spans, by design, so the column is chosen away from it.
+
+    The check is ``tests/_realized_geometry.assert_wall_planes``, the one
+    spelling on this branch.
     """
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "tests"))
+    from _realized_geometry import assert_wall_planes, node_index, realized
+    rz = realized(sim)
+    i = node_index(rz.grid, 0, x_probe)
+    j = node_index(rz.grid, 1, y_probe)
+    got = assert_wall_planes(sim, 2, expected_m=[0.0, H_SUB], ij=(i, j),
+                             what="shorted-line stack")
     from rfx.geometry.rasterize_grid import coords_from_uniform_grid
-    grid = sim._build_grid()
-    ps: list = []
-    pw: list = []
-    _, _, _, pec_mask, *_ = sim._assemble_materials(
-        grid, sheet_specs=[], pec_sheets=ps, pec_wires=pw)
-    edges = realized_pec_edge_masks(pec_mask, sheets=ps, wires=pw,
-                                   periodic=(False, False, False))
-    coords = coords_from_uniform_grid(grid)
-    nodes = np.asarray(coords.z)
-    # a column on the trace, far from the shorting wall (which is a VOLUME and
-    # stands a wall on every plane it spans, by design)
-    i = int(np.argmin(np.abs(np.asarray(coords.x) - x_probe)))
-    j = int(np.argmin(np.abs(np.asarray(coords.y) - y_probe)))
-    got = sorted(float(nodes[k]) for k in realized_wall_planes(edges, 2, ij=(i, j))
-                 if k < len(nodes))
-    want = [0.0, H_SUB]
-    if len(got) != 2 or any(abs(a - b) > 1e-12 for a, b in zip(got, want)):
-        raise RuntimeError(
-            "assert_realized_stack: declared ground z = 0.0000 mm and trace "
-            f"z = {H_SUB * 1e3:.4f} mm, realized z wall planes "
-            + ", ".join(f"{v * 1e3:.4f}" for v in got) + " mm")
-    print(f"  realized z wall planes: {got[0]*1e3:.4f}, {got[1]*1e3:.4f} mm "
-          "(declared ground 0.0000, trace "
+    z = np.asarray(coords_from_uniform_grid(rz.grid).z)
+    print(f"  realized z wall planes: {z[got[0]]*1e3:.4f}, "
+          f"{z[got[1]]*1e3:.4f} mm (declared ground 0.0000, trace "
           f"{H_SUB*1e3:.4f})  [#931 build-time gate, no solve]")
 
 

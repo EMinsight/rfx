@@ -41,6 +41,15 @@ explicitly not used as a prediction.
   drawing foil as a one-cell Box, not on sheets. Frequency shift between arms
   is expected and reported, not gated.
 * **run id**: `369367259157` (submitted 2026-09-07 10:15 UTC).
+* **note on the version the job reads**: submitted before the four migrated
+  diagnostics were switched onto the shared
+  `tests/_realized_geometry` helper (commit after the merge of
+  `feat/931-lattice-ownership`). The change is to the BUILD-TIME gate only —
+  it got stricter, three columns per arm instead of one — and to nothing the
+  solve touches: geometry, `num_periods`, the settling bar and the pre-declared
+  verdict band are byte-identical between the two versions, so the run's arms
+  are the arms described here. If the job's own `gate_realized_planes.log`
+  shows the one-column form, that is why.
 
 ## Not submitted — listed with the reason and the owner
 

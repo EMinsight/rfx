@@ -22,6 +22,7 @@ radiates dominantly once resonant, so the pattern is patch-dominated, not feed-d
 import json
 import math
 import os
+import sys
 import time
 import numpy as np
 from rfx import Simulation, Box
@@ -30,7 +31,11 @@ from rfx.sources.sources import GaussianPulse
 from rfx.auto_config import smooth_grading
 from rfx.harminv import harminv
 from rfx.farfield import compute_far_field, directivity
-from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+# The ONE spelling of the build-time realization check (#931 §1.7).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tests"))
+from _realized_geometry import (   # noqa: E402
+    assert_wall_planes as _assert_wall_planes, realized as _realized)
 
 C0 = 2.998e8
 EPS0 = 8.8541878e-12
@@ -97,51 +102,34 @@ def hpbw_deg(ang_deg, power_lin):
 
 
 def assert_sheet_planes(sim, want_z, labels=("ground", "patch")):
-    """Build-time gate (#931 sec 1.3): the foils realize exactly their declared
-    node planes and nothing else. No solve — ``_build_grid`` +
-    ``_assemble_materials`` + the contract's own realization function, so it
-    cannot drift from what the solve zeroes.
+    """Build-time gate (#931 sec 1.3), no solve: the foils realize exactly
+    their declared node planes.
 
-    ``want_z`` is the declared z of each sheet, in metres, in ``labels`` order.
-    Both lanes are covered: the cubic build is uniform, the graded build is a
-    NonUniformGrid.
+    The check itself is ``tests/_realized_geometry.assert_wall_planes`` —
+    the ONE spelling on this branch — so this script cannot drift from what
+    the solve zeroes, and it covers both lanes (the cubic build is uniform,
+    the graded build is a NonUniformGrid) because that helper picks the lane
+    the simulation itself would take.
     """
-    from rfx.geometry.rasterize_grid import (coords_from_nonuniform_grid,
-                                             coords_from_uniform_grid)
-    from rfx.nonuniform import NonUniformGrid
-    is_nu = (sim._dx_profile is not None or sim._dy_profile is not None
-             or sim._dz_profile is not None)
-    grid = sim._build_nonuniform_grid() if is_nu else sim._build_grid()
-    pec_sheets: list = []
-    pec_wires: list = []
-    if isinstance(grid, NonUniformGrid):
-        _, _, _, pec_mask = sim._assemble_materials_nu(
-            grid, sheet_specs=[], pec_sheets=pec_sheets, pec_wires=pec_wires)
-        nodes = np.asarray(coords_from_nonuniform_grid(grid).z)
-    else:
-        _, _, _, pec_mask, *_ = sim._assemble_materials(
-            grid, sheet_specs=[], pec_sheets=pec_sheets, pec_wires=pec_wires)
-        nodes = np.asarray(coords_from_uniform_grid(grid).z)
-    edges = realized_pec_edge_masks(pec_mask, sheets=pec_sheets,
-                                    wires=pec_wires,
-                                    periodic=(False, False, False))
-    planes = realized_wall_planes(edges, 2)
-    got_z = sorted(float(nodes[k]) for k in planes if k < len(nodes))
-    want = sorted(float(z) for z in want_z)
-    tol = 1e-12
-    if len(got_z) != len(want) or any(abs(a - b) > tol
-                                      for a, b in zip(got_z, want)):
-        raise RuntimeError(
-            "assert_sheet_planes: declared "
-            + ", ".join(f"{l}={z*1e3:.4f} mm" for l, z in zip(labels, want_z))
-            + " but the realized z wall planes are "
-            + ", ".join(f"{z*1e3:.4f} mm" for z in got_z))
+    got = _assert_wall_planes(sim, 2, expected_m=list(want_z),
+                              what="patch tutorial foils")
+    rz = _realized(sim)
+    got_z = [_node_line_position(rz.grid, 2, k) for k in got]
     print("  realized z wall planes: "
           + ", ".join(f"{z*1e3:.4f} mm" for z in got_z)
           + "  (declared: "
           + ", ".join(f"{l} {z*1e3:.4f}" for l, z in zip(labels, want_z))
           + ")  [#931 build-time gate, no solve]")
     return got_z
+
+
+def _node_line_position(grid, axis, k):
+    from rfx.geometry.rasterize_grid import (coords_from_nonuniform_grid,
+                                             coords_from_uniform_grid)
+    from rfx.nonuniform import NonUniformGrid
+    c = (coords_from_nonuniform_grid(grid) if isinstance(grid, NonUniformGrid)
+         else coords_from_uniform_grid(grid))
+    return float(np.asarray((c.x, c.y, c.z)[axis])[k])
 
 
 def build_cubic():
