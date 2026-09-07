@@ -285,14 +285,20 @@ def cell_centres_from_nodes(coords: GridCoords, cell_sizes=None) -> GridCoords:
             continue
         x = np.asarray(nodes, dtype=np.float64)
         dd = np.asarray(d, dtype=np.float64)
+        closed = None
         if x.size and dd.size and bool(np.all(dd == dd[0])):
-            # uniform-valued axis: nodes are (i - pad) * dx exactly, so
-            # ``pad`` is recoverable from the first node
+            # uniform-valued axis: IF the nodes are (i - pad) * dx exactly
+            # (every in-repo producer goes through ``_uniform_axis_nodes``),
+            # ``pad`` is recoverable from the first node and the closed form
+            # keeps the uniform and non-uniform lanes bit-identical (#807).
+            # A caller-supplied node line with a fractional origin is NOT
+            # that axis, and the closed form would silently move its
+            # centres by the fractional offset — take the exact fallback.
             dx = float(dd[0])
             pad = int(round(-x[0] / dx)) if dx > 0 else 0
-            axes.append(_uniform_axis_centres(x.size, pad, dx))
-        else:
-            axes.append(x + 0.5 * dd)
+            if np.array_equal(x, _uniform_axis_nodes(x.size, pad, dx)):
+                closed = _uniform_axis_centres(x.size, pad, dx)
+        axes.append(closed if closed is not None else x + 0.5 * dd)
     return GridCoords(x=axes[0], y=axes[1], z=axes[2], shape=coords.shape)
 
 
@@ -322,16 +328,30 @@ def _local_cell(nodes, d, pos: float) -> float:
     return float(dd[k])
 
 
-def _nearest_plane(nodes, pos: float, d_local: float) -> int:
+def _nearest_plane(nodes, pos: float, d_local: float, *, what: str = "sheet",
+                   name=None, axis: int = 0) -> int:
     """Node plane nearest ``pos``; an exact half-cell tie resolves LOWER
-    (§1.3, today's ``n_vol == 1`` rule for a face-registered 1-cell Box)."""
+    (§1.3, today's ``n_vol == 1`` rule for a face-registered 1-cell Box).
+
+    "Nearest" means within half a local cell.  A declaration further out
+    than that is not on this node line at all — ``argmin`` would clamp it
+    onto the end plane and the caller would get a conductor it never drew
+    (the #369 silently-relocated-metal class).  That raises.
+    """
     x = np.asarray(nodes, dtype=np.float64)
     dist = np.abs(x - pos)
     k = int(np.argmin(dist))
-    if k + 1 < x.size and abs(dist[k + 1] - dist[k]) <= _REL_TOL * d_local:
-        k = min(k, k + 1)          # argmin is the lower on an exact tie
+    if dist[k] > 0.5 * d_local * (1.0 + _REL_TOL):
+        raise ValueError(
+            f"{what} {name!r}: the declared plane {'xyz'[axis]} = {pos:.6g} m "
+            f"lies {dist[k]:.6g} m from the nearest node line "
+            f"({x[k]:.6g} m), more than half the local cell "
+            f"({d_local:.6g} m) — it is outside this grid's node range "
+            f"[{x[0]:.6g}, {x[-1]:.6g}] m, so it would be silently clamped "
+            "onto an end plane. Move the declaration inside the domain or "
+            "enlarge the domain.")
     if k - 1 >= 0 and abs(dist[k - 1] - dist[k]) <= _REL_TOL * d_local:
-        k = k - 1
+        k = k - 1                  # exact half-cell tie resolves LOWER
     return k
 
 
@@ -440,7 +460,8 @@ def sheet_spec_from_shape(shape, coords: GridCoords, cell_sizes=None, *,
             f"along {'xyz'[a]} against a local cell of {d_local:.6g} m — not a "
             "sheet; use add() for a volume (the lattice ownership contract "
             "realizes a volume with both faces and a shorted interior).")
-    plane = _nearest_plane(node_axes[a], mid, d_local)
+    plane = _nearest_plane(node_axes[a], mid, d_local,
+                           what="sheet", name=name, axis=a)
     shape_3 = tuple(coords.shape)
     is_box = getattr(shape, "corner_lo", None) is not None
     if is_box:
@@ -505,6 +526,41 @@ def _box_zero_axes(lo, hi):
     return [i for i in range(3) if float(hi[i]) - float(lo[i]) == 0.0]
 
 
+def _subcell_axes(lo, hi, node_axes, cell_sizes):
+    """Axes where the drawn extent is ``0 < extent < one local cell`` (§1.5).
+
+    One spelling for every shape: the test is on the DRAWN extent (the
+    shape's axis-aligned bounding box), never on what the raster happened
+    to produce — "nothing is inferred from raster thickness or drawing
+    direction".  A zero extent is not sub-cell: on a Box it is the sheet
+    declaration, and on any other shape it falls through to the zero-cell
+    refusal.
+    """
+    out = []
+    for i in range(3):
+        ext = float(hi[i]) - float(lo[i])
+        if ext <= 0.0:
+            continue
+        mid = 0.5 * (float(lo[i]) + float(hi[i]))
+        d_local = _local_cell(node_axes[i], cell_sizes[i], mid)
+        if ext < d_local * (1.0 - _REL_TOL):
+            out.append((i, ext, d_local))
+    return out
+
+
+def _refuse_subcell(subcell, shape, name):
+    where = "; ".join(
+        f"{'xyz'[i]} ({ext:.6g} m against a local cell of {d:.6g} m)"
+        for i, ext, d in subcell)
+    kind = type(shape).__name__
+    raise ValueError(
+        f"PEC {kind} {name!r} is thinner than one cell along {where}: "
+        f"a {kind} passed to sim.add() is a VOLUME; declare a sheet (a "
+        "zero-thickness Box or add_thin_conductor) or resolve the "
+        "thickness. Nothing is inferred from raster thickness or drawing "
+        "direction (lattice ownership contract §1.5).")
+
+
 def classify_pec_entry(shape, coords: GridCoords, centres: GridCoords,
                        cell_sizes=None, *, name=None):
     """Classify one PEC geometry entry (``sim.add(shape, material=pec)``).
@@ -539,20 +595,9 @@ def classify_pec_entry(shape, coords: GridCoords, centres: GridCoords,
             return None, sheet_spec_from_shape(
                 shape, coords, cell_sizes, normal_axis=zero[0], name=name), None
         if not traced:
-            subcell = []
-            for i in range(3):
-                ext = float(hi[i]) - float(lo[i])
-                mid = 0.5 * (float(lo[i]) + float(hi[i]))
-                d_local = _local_cell(node_axes[i], cell_sizes[i], mid)
-                if 0.0 < ext < d_local * (1.0 - _REL_TOL):
-                    subcell.append(f"{'xyz'[i]} ({ext:.6g} m against a local "
-                                   f"cell of {d_local:.6g} m)")
+            subcell = _subcell_axes(lo, hi, node_axes, cell_sizes)
             if subcell:
-                raise ValueError(
-                    f"PEC Box {name!r} is thinner than one cell along "
-                    f"{'; '.join(subcell)}: a Box is a volume; declare a "
-                    "sheet (a zero-thickness Box or add_thin_conductor) or "
-                    "resolve the thickness.")
+                _refuse_subcell(subcell, shape, name)
         mask = pec_volume_cell_mask(shape, centres)
         if not traced and not bool(jnp.any(mask)):
             _refuse_zero_cells(shape, name, "PEC volume")
@@ -577,6 +622,21 @@ def classify_pec_entry(shape, coords: GridCoords, centres: GridCoords,
         if float(radius) < 0.5 * d_min:
             edges = wire_path_edge_masks(nodes, coords.shape)
             return None, None, WireSpec(edges=edges, name=name)
+    elif not traced:
+        # §1.5 for every OTHER shape with an axis-aligned bounding box —
+        # a Cylinder via pad, a thin Sphere, an imported outline.  The
+        # refusal was Box-only, so a 0.3-cell Cylinder pad was realized as
+        # a one-cell slab with two faces (or refused as zero cells) purely
+        # according to where it fell between two centres: the #369/#702
+        # raster-dependent thickness the contract exists to make an error.
+        # PolylineWire is excluded on purpose: §1.4 gives it its own
+        # filament/volume rule on the radius, decided above.
+        from rfx.materials.thin_conductor import sheet_bounds
+        bb_lo, bb_hi = sheet_bounds(shape)
+        if bb_lo is not None and bb_hi is not None:
+            subcell = _subcell_axes(bb_lo, bb_hi, node_axes, cell_sizes)
+            if subcell:
+                _refuse_subcell(subcell, shape, name)
     mask = pec_volume_cell_mask(shape, centres)
     if not traced and not bool(jnp.any(mask)):
         _refuse_zero_cells(shape, name, "PEC volume")
