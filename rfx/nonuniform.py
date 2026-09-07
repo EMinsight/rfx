@@ -669,6 +669,31 @@ def _band_realize_free(length: float, target: float, cap: float,
         s = sum(_band_ramp(lo, u, cap)) + sum(_band_ramp(hi, u, cap))
         return (length - s) / u
 
+    def _finish(u, n):
+        left = _band_ramp(lo, u, cap)
+        right = _band_ramp(hi, u, cap)
+        cells = left + [u] * n + right[::-1]
+        if not cells:
+            return None
+        # float dust -> the largest cell (ratio change ~1e-16 relative)
+        dust = length - float(np.sum(cells))
+        j = int(np.argmax(cells))
+        cells[j] += dust
+        return [float(c) for c in cells]
+
+    # Exact fit at the target itself (the engineered case: a span that is
+    # an integer number of target cells plus its ramps). Checked on P's
+    # own accounting before any inset evaluation — measured on the F8
+    # fixture (140 x 1.96 mm + 1.4 mm): G(P) = 139.000000000000, and the
+    # inset moved it by n x 1e-10 = 1.4e-8, past the old 1e-8 tolerance.
+    g0 = _G(P)
+    n0 = int(round(g0))
+    has_ramp0 = bool(_band_ramp(lo, P, cap) or _band_ramp(hi, P, cap))
+    if n0 >= (0 if has_ramp0 else 1) and abs(g0 - n0) <= 1e-9:
+        cells = _finish(P, n0)
+        if cells is not None:
+            return cells
+
     th = sorted({t for t in _thresholds(lo) + _thresholds(hi)
                  if u_floor < t < P}, reverse=True)
     bounds = [P] + th + [u_floor]
@@ -687,9 +712,12 @@ def _band_realize_free(length: float, target: float, cap: float,
         g_lo = _G(b_lo_in)
         has_ramp = bool(_band_ramp(lo, b_hi_in, cap)
                         or _band_ramp(hi, b_hi_in, cap))
-        n = int(np.ceil(g_hi - 1e-8))
+        # The inset shifts G by about (G + ramp cells) x inset; the ceil
+        # tolerance scales with it so a long plateau cannot round up.
+        g_tol = (abs(g_hi) + 100.0) * 10.0 * inset
+        n = int(np.ceil(g_hi - g_tol))
         n = max(n, 0 if has_ramp else 1)
-        if n > g_lo + 1e-8:
+        if n > g_lo + g_tol:
             continue                      # no integer reachable on this piece
         a, b = b_lo_in, b_hi_in           # G(a) >= n >= G(b) (up to inset)
         for _ in range(200):
@@ -710,16 +738,10 @@ def _band_realize_free(length: float, target: float, cap: float,
                 break
         if abs(_G(u) - n) > 1e-9:
             continue                      # landed on a jump, not a root
-        left = _band_ramp(lo, u, cap)
-        right = _band_ramp(hi, u, cap)
-        cells = left + [u] * n + right[::-1]
-        if not cells:
+        cells = _finish(u, n)
+        if cells is None:
             continue
-        # float dust -> the largest cell (ratio change ~1e-16 relative)
-        dust = length - float(np.sum(cells))
-        j = int(np.argmax(cells))
-        cells[j] += dust
-        return [float(c) for c in cells]
+        return cells
     raise ValueError(
         f"{what}: span {length*1e3:.6g} mm cannot hold its ramps at ratio "
         f"<= {cap:g} (pinned boundary cell too large for the span, or the "

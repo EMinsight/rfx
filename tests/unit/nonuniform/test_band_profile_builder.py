@@ -389,6 +389,24 @@ def test_exact_multiple_realizes_uniform():
     assert np.array_equal(cells, np.full(3, 1e-3))
 
 
+@pytest.mark.parametrize("n_b", [2, 4, 8, 16])
+def test_f8_narrow_band_fixture_realizes_declared_vector(n_b):
+    """The F8 witness profile A(n_b) — ``[1.96 mm] x 140 | 1.4 | [1.0] x n_b
+    | 1.4 | [1.96] x 150`` — comes out of the builder cell-for-cell
+    (1e-12 m), so the FDTD witness measures the builder's own output.
+    Before the exact-endpoint check, the inset evaluation rounded the
+    139-cell plateau up to 140 (142 cells at 1.946 mm instead of 141)."""
+    dc, dr, df = 1.0e-3 * 1.4 ** 2, 1.0e-3 * 1.4, 1.0e-3
+    z1 = 140 * dc + dr
+    z2 = z1 + n_b * df
+    z3 = z2 + dr + 150 * dc
+    cells = make_band_profile([0.0, z1, z2, z3], [dc, df, dc],
+                              protected=[False, True, False], max_ratio=1.4)
+    expected = np.asarray([dc] * 140 + [dr] + [df] * n_b + [dr] + [dc] * 150)
+    assert len(cells) == len(expected)
+    assert float(np.max(np.abs(cells - expected))) <= 1e-12
+
+
 def test_protected_min_cells_and_ceil_tolerance():
     """R3: a float-dust quotient (8.000000000000002e-4 / 2e-4) realizes
     4 cells, not 5; min_cells lifts a thin block to the floor."""
