@@ -168,14 +168,28 @@ def _build_patch_sim() -> Simulation:
         dx=DX, cpml_layers=8, boundary="cpml",
     )
     sim.add_material("ro4003c", eps_r=EPS_R, sigma=0.0)
-    sim.add(Box((0, 0, 4e-3), (DOM_X, DOM_Y, 4e-3 + DX)), material="pec")
+    # Ground, feed trace and patch are FOILS, declared as sheets (#931
+    # §1.3). As one-cell PEC Boxes the contract reads them as volumes —
+    # a wall on both bounding planes and the interior shorted. The sheet
+    # declaration reproduces the pre-#931 edge set for this board: the
+    # mid-plane of a face-registered one-cell Box is the half-cell tie and
+    # a tie resolves to the LOWER plane, and this board's in-plane faces
+    # are off-lattice (the docstring records the x/y registration), so the
+    # closed footprint and the old half-open one are the same node set.
+    # Verified on the sibling Board H, same stack-up and dx: volume gives
+    # z walls {28,29,33,34} and a patch one cell wider each way, sheets
+    # give {29,34} and exactly the asserted node census minus one edge per
+    # axis. The pinned readings are therefore not re-measured.
+    sim.add_thin_conductor(Box((0, 0, 4e-3), (DOM_X, DOM_Y, 4e-3 + DX)),
+                           sigma_bulk=5.8e7)
     sim.add(Box((0, 0, 4e-3 + DX), (DOM_X, DOM_Y, 4e-3 + DX + H_SUB)),
             material="ro4003c")
-    sim.add(Box((0, Y_C - W_MSL / 2, 4e-3 + DX + H_SUB + DX),
-                (PORT_MARGIN + L_MSL, Y_C + W_MSL / 2,
-                 4e-3 + DX + H_SUB + 2 * DX)),
-            material="pec")
-    sim.add(_patch_box(), material="pec")
+    sim.add_thin_conductor(
+        Box((0, Y_C - W_MSL / 2, 4e-3 + DX + H_SUB + DX),
+            (PORT_MARGIN + L_MSL, Y_C + W_MSL / 2,
+             4e-3 + DX + H_SUB + 2 * DX)),
+        sigma_bulk=5.8e7)
+    sim.add_thin_conductor(_patch_box(), sigma_bulk=5.8e7)
     sim.add_msl_port(
         position=(PORT_MARGIN, Y_C, 4e-3 + DX),
         width=W_MSL, height=H_SUB, direction="+x", impedance=50.0,
@@ -230,6 +244,43 @@ def _gate_readings(fr_ghz, s, z0):
         band_crossings_ghz=[c for c in crossings
                             if RES_BAND_GHZ[0] <= c <= RES_BAND_GHZ[1]],
     )
+
+
+def test_the_board_realizes_three_foils_and_no_conductor_volume():
+    """Build-time (no solve): ground, feed and patch are sheets, not slabs.
+
+    The band below was pinned on a board whose metallization presented ONE
+    electrical wall each. Declared as one-cell PEC Boxes the ownership
+    contract would give each of them two walls and a shorted interior — a
+    different board. This is the assertion that says which one is in the
+    solve, read from the single owner (#931 §1.7).
+
+    The node census the raster test asserts is 44 x 51; the electrical
+    patch is the 43 x 50 edges between those nodes. Both are stated, for
+    the same reason as in the Board H twin.
+    """
+    from tests._realized_geometry import realized
+
+    sim = _build_patch_sim()
+    rz = realized(sim)
+    assert rz.pec_mask is None or not bool(np.asarray(rz.pec_mask).any()), (
+        "a foil owns no cell")
+    assert rz.sheet_planes.keys() == {2}, rz.sheet_planes
+    planes = sorted(set(p for v in rz.sheet_planes.values() for p in v))
+    assert len(planes) == 2, planes            # ground plane, metal plane
+    assert len(rz.sheets) == 3, len(rz.sheets)  # ground, feed trace, patch
+    assert rz.wall_planes(2) == planes, (rz.wall_planes(2), planes)
+
+    grid = rz.grid
+    occ = np.where(np.asarray(_patch_box().mask(grid), dtype=bool))
+    x0, x1 = int(occ[0].min()), int(occ[0].max())
+    y0, y1 = int(occ[1].min()), int(occ[1].max())
+    kp = planes[-1]
+    mx, my, _ = (np.asarray(m) for m in rz.edge_masks)
+    n_ex = len({int(i) for i in np.argwhere(mx[x0:x1 + 1, y0:y1 + 1, kp])[:, 0]})
+    n_ey = len({int(j) for j in np.argwhere(my[x0:x1 + 1, y0:y1 + 1, kp])[:, 1]})
+    assert (n_ex, n_ey) == (RASTER_CELLS[0] - 1, RASTER_CELLS[1] - 1), (n_ex,
+                                                                        n_ey)
 
 
 def test_realized_raster_is_the_board_this_band_was_pinned_on():

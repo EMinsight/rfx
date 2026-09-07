@@ -282,12 +282,34 @@ def _build(fed: bool):
     patch = Box((x_patch0, y_c - W / 2, z_tr_lo), (x_patch0 + L, y_c + W / 2, z_tr_hi))
 
     sim.add_material("ro4003c", eps_r=EPS_R, sigma=0.0)
-    sim.add(Box((0, 0, Z_GND), (DOM_X, DOM_Y, z_gnd_hi)), material="pec")   # ground
+    # The three metallizations are FOILS, declared as sheets (lattice
+    # ownership contract #931 §1.3). They used to be one-cell PEC Boxes,
+    # which the contract reads as VOLUMES — a wall on both bounding planes
+    # and the interior shorted — so the board would gain a wall it never
+    # had and the cavity would lose a cell.
+    #
+    # Measured at build time on this grid before the change, unfed leg:
+    #   as one-cell Boxes (volume)  z walls {28, 29, 33, 34}; patch 44 Ex
+    #                               and 52 Ey edges — one cell wider each
+    #                               way than the declared rectangle
+    #   as declared sheets          z walls {29, 34}; patch 42 Ex and 50
+    #                               Ey edges = the 43x51 node census this
+    #                               module already asserts, minus one edge
+    #                               per axis
+    # The sheet realization is the SAME edge set the pre-#931 rule gave
+    # these declarations (mid-plane of a face-registered one-cell Box is
+    # the half-cell tie, tie resolves LOWER; the in-plane faces are
+    # off-lattice, so closed and half-open footprints coincide). The pinned
+    # numbers are therefore NOT re-measured — they are the same
+    # measurement, now declared in the words that produce it.
+    sim.add_thin_conductor(Box((0, 0, Z_GND), (DOM_X, DOM_Y, z_gnd_hi)),
+                           sigma_bulk=5.8e7)                                # ground
     sim.add(substrate, material="ro4003c")
     if fed:
-        sim.add(Box((0, y_c - W_MSL / 2, z_tr_lo),
-                    (x_patch0, y_c + W_MSL / 2, z_tr_hi)), material="pec")  # feed trace
-    sim.add(patch, material="pec")
+        sim.add_thin_conductor(Box((0, y_c - W_MSL / 2, z_tr_lo),
+                                   (x_patch0, y_c + W_MSL / 2, z_tr_hi)),
+                               sigma_bulk=5.8e7)                            # feed trace
+    sim.add_thin_conductor(patch, sigma_bulk=5.8e7)
 
     if fed:
         sim.add_msl_port(
@@ -495,6 +517,49 @@ def arms():
 # --------------------------------------------------------------------------
 
 
+def test_the_board_realizes_three_sheets_and_no_conductor_volume():
+    """Build-time (no solve): the foils land on one plane each, owning no cell.
+
+    RASTER_CELLS below counts NODES of the declared patch (43 x 51). The
+    electrical patch is one edge shorter per axis (42 x 50) because an edge
+    needs both of its end nodes in the footprint — a distinction the old
+    ``shape.mask`` reading could not make, and one Leg A's centre already
+    absorbs as a constant. This test states both numbers so the next reader
+    does not have to re-derive which one the solve sees.
+    """
+    from tests._realized_geometry import realized
+
+    for fed in (False, True):
+        sim, patch, _sub = _build(fed)
+        rz = realized(sim)
+        assert rz.pec_mask is None or not bool(np.asarray(rz.pec_mask).any()), (
+            "ground, trace and patch are foils; none of them owns a cell")
+        assert rz.sheet_planes.keys() == {2}, rz.sheet_planes
+        # Ground plane and metallization plane. The fed leg adds the feed
+        # trace on the SAME plane as the patch, so there are three sheets
+        # but still two planes — and the two abutting footprints are
+        # UNIONED before the edge rule, so the join carries no slit
+        # (#931 §1.3).
+        planes = sorted(set(p for v in rz.sheet_planes.values() for p in v))
+        assert planes == [29, 34], (fed, planes)
+        assert len(rz.sheets) == (3 if fed else 2), len(rz.sheets)
+        assert rz.wall_planes(2) == [29, 34], (fed, rz.wall_planes(2))
+
+        mx, my, _mz = (np.asarray(m) for m in rz.edge_masks)
+        kp = 34
+        occ = np.argwhere(np.asarray(patch.mask(rz.grid), dtype=bool))
+        x0, x1 = int(occ[:, 0].min()), int(occ[:, 0].max())
+        y0, y1 = int(occ[:, 1].min()), int(occ[:, 1].max())
+        assert (x1 - x0 + 1, y1 - y0 + 1) == RASTER_CELLS, (x1 - x0 + 1,
+                                                            y1 - y0 + 1)
+        n_ex = len({int(i) for i in np.argwhere(mx[x0:x1 + 1, y0:y1 + 1,
+                                                  kp])[:, 0]})
+        n_ey = len({int(j) for j in np.argwhere(my[x0:x1 + 1, y0:y1 + 1,
+                                                  kp])[:, 1]})
+        assert (n_ex, n_ey) == (RASTER_CELLS[0] - 1, RASTER_CELLS[1] - 1), (
+            fed, n_ex, n_ey)
+
+
 def test_realized_raster_is_the_board_this_gate_was_measured_on():
     """Leg A's anchor is recomputed from the realized raster, which makes the RATIO
     nearly blind to a rasterization regression — anchor and FDTD frequency both follow
@@ -541,8 +606,34 @@ def test_realized_raster_agrees_with_the_public_fidelity_report():
             seen["substrate"] = axes
     assert "patch" in seen and "substrate" in seen, (
         f"fidelity_report() did not report the patch and substrate entities: {seen}")
-    assert abs(seen["patch"]["x"]["realized_extent_um"] - l_real * 1e6) < 1e-3
-    assert abs(seen["patch"]["y"]["realized_extent_um"] - w_real * 1e6) < 1e-3
+    # THE ONE-CELL RELATION, stated instead of asserted away (#729/#931).
+    #
+    # ``_realized_extent`` counts the NODES the declared shape rasterizes
+    # to and multiplies by dx, so a 43-node patch reads 43*dx. The
+    # electrical patch is the 42 Ex edges BETWEEN those nodes, 42*dx, and
+    # since #931 ``fidelity_report`` reports that — the realized wall
+    # planes, which is what the solve sees. The two readings therefore
+    # differ by exactly one cell, and always did; before #931 the report
+    # shared the node reading and the disagreement was invisible.
+    #
+    # This module does NOT close that gap, and the choice is deliberate.
+    # Leg A's centre (-6.17 pp) was measured with the node-count anchor;
+    # re-pointing ``_realized_extent`` at the wall planes would raise the
+    # Balanis anchor by about 43/42 and move Leg A's centre to roughly
+    # -8.3 pp with no field re-run at all — a number that must come from a
+    # fresh configuration sweep, not from this arithmetic. #931 §1.8 fences
+    # the inclusive-+1 debt (#729 class) out of the ownership contract, so
+    # it stays fenced here and is written down instead of absorbed.
+    #
+    # The gate keeps its teeth: the relation is exact, so either reading
+    # drifting breaks it.
+    dx_um = DX * 1e6
+    assert abs(seen["patch"]["x"]["realized_extent_um"]
+               - (l_real * 1e6 - dx_um)) < 1e-3, seen["patch"]["x"]
+    assert abs(seen["patch"]["y"]["realized_extent_um"]
+               - (w_real * 1e6 - dx_um)) < 1e-3, seen["patch"]["y"]
+    # The substrate is a DIELECTRIC volume: node-sampled, unchanged by the
+    # ownership contract, and reported as the same cell census.
     assert abs(seen["substrate"]["z"]["realized_extent_um"] - h_real * 1e6) < 1e-3
 
 

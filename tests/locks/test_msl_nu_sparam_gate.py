@@ -96,17 +96,26 @@ def _build_patch_sim_nu() -> Simulation:
         dz_profile=np.full(nz, DX),
     )
     sim.add_material("ro4003c", eps_r=EPS_R, sigma=0.0)
-    sim.add(Box((0, 0, 4e-3), (DOM_X, DOM_Y, 4e-3 + DX)), material="pec")
+    # Board S geometry, duplicated verbatim on the NU lane by design (the
+    # #782 single-source fix imports the BAND from the uniform module, not
+    # the builder). Foils are sheets (#931 §1.3) here for the same reason
+    # and with the same consequence as in the uniform twin; the two lanes
+    # must keep realizing the identical raster, which is what the #834
+    # contract suite pins.
+    sim.add_thin_conductor(Box((0, 0, 4e-3), (DOM_X, DOM_Y, 4e-3 + DX)),
+                           sigma_bulk=5.8e7)
     sim.add(Box((0, 0, 4e-3 + DX), (DOM_X, DOM_Y, 4e-3 + DX + H_SUB)),
             material="ro4003c")
-    sim.add(Box((0, Y_C - W_MSL / 2, 4e-3 + DX + H_SUB + DX),
-                (PORT_MARGIN + L_MSL, Y_C + W_MSL / 2,
-                 4e-3 + DX + H_SUB + 2 * DX)),
-            material="pec")
-    sim.add(Box((PORT_MARGIN + L_MSL, Y_C - W / 2, 4e-3 + DX + H_SUB + DX),
-                (PORT_MARGIN + L_MSL + L, Y_C + W / 2,
-                 4e-3 + DX + H_SUB + 2 * DX)),
-            material="pec")
+    sim.add_thin_conductor(
+        Box((0, Y_C - W_MSL / 2, 4e-3 + DX + H_SUB + DX),
+            (PORT_MARGIN + L_MSL, Y_C + W_MSL / 2,
+             4e-3 + DX + H_SUB + 2 * DX)),
+        sigma_bulk=5.8e7)
+    sim.add_thin_conductor(
+        Box((PORT_MARGIN + L_MSL, Y_C - W / 2, 4e-3 + DX + H_SUB + DX),
+            (PORT_MARGIN + L_MSL + L, Y_C + W / 2,
+             4e-3 + DX + H_SUB + 2 * DX)),
+        sigma_bulk=5.8e7)
     sim.add_msl_port(
         position=(PORT_MARGIN, Y_C, 4e-3 + DX),
         width=W_MSL, height=H_SUB, direction="+x", impedance=50.0,
