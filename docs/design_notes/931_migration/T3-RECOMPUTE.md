@@ -61,6 +61,24 @@ cluster `remilab-c0`, `JAX_PLATFORMS=cpu` inside the job.
 |---|---|---|
 | `rfx-931-post-t3-pytest` | 369367259208 | https://app.vessl.ai/remilab/runs/byungkwan/369367259208 |
 | `rfx-931-post-t3-measure` | 369367259209 | https://app.vessl.ai/remilab/runs/byungkwan/369367259209 |
+| `rfx-931-post-t3-pytest-r2` | 369367259214 | https://app.vessl.ai/remilab/runs/byungkwan/369367259214 |
+
+Run 369367259208 read commit 6b8f9fae and returned **865 passed, 4 failed,
+4 xfailed in 28 min**. All four reds are accounted for:
+
+* `test_distributed_nu_kernel.py` seam pair — the measured lane divergence,
+  now `xfail(strict=True)` (see the findings section of the group note);
+* `test_auto_config.py::test_auto_mesh_trigger_fires_thin_only_end_to_end` —
+  a missing import of the shared helper, fixed in `eadb30b3`, the file's 27
+  tests green;
+* `test_runner_import_binding.py::test_coax_then_refplane_order_does_not_leak_fake_run`
+  — pre-existing slow-lane brittleness, unrelated to #931 (its nested pytest
+  passes; the assertion greps the whole stdout for "failed" and a warning
+  says "one drive that failed to excite").
+
+`rfx-931-post-t3-pytest-r2` (369367259214) re-runs the same lane on
+`cffbb997`, which carries both fixes, so its expected verdict is 2 xfailed
+plus that one unrelated red.
 
 Both read this worktree
 (`/root/workspace/byungkwan-workspace/research/rfx-931-T3-nu-runners-grid-subgrid`)
