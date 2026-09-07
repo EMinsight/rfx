@@ -312,7 +312,10 @@ Relevant checks include `validation/crossval/05_patch_antenna.py`,
   degrees against that same 3-degree gate. Two independent-reference gates now run
   alongside it and are wired into the script's own pass/fail: each solver's
   measured `beta` against the Hammerstad-Jensen closed form of the realized
-  board (E2, 2.0% tolerance; measured 0.94% rfx / 0.31% openEMS), and the
+  board (E2, 2.0% tolerance; measured 0.94% rfx / 0.31% openEMS — a **pre-2.0**
+  realization, re-measured under #931: the contract moves rfx's realized MSL
+  trace, so both residuals are re-read from cv20's regenerated run and not
+  translated), and the
   **raw** cross-solver `angle(S21)` difference quoted above (E4, 3-degree
   tolerance; measured `0.342 degrees` on the #723 realized-board re-run),
   which was previously reported rather than gated. Do not cite the

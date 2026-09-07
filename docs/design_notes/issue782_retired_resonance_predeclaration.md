@@ -424,3 +424,43 @@ separation) and the surface sweep. Two findings applied:
    (house pattern: bounds imported, not restated), and adding the (2b)/(2c)
    witnesses. That file is gpu+slow; the re-pinned band's first NU execution rides
    the next VESSL validation-harness run.
+
+
+## #931 addendum (2026-09-07) — the pre-declaration is DISCHARGED, and the `retired` arm no longer exists
+
+This note's verification arm pair (§4) is not re-runnable at 2.0, and saying so
+is the point rather than deleting the section.
+
+**The `retired` arm is unbuildable.** It replaced
+`rfx.api._compile.resample_sheet_node_materials` with the identity. The lattice
+ownership contract deletes that function (design note
+`20260906_plan_realign_lattice_ownership.md` §2), and patching a name a module no
+longer has is a no-op — the arm would have reported `main`'s numbers under the
+`retired` label. `scripts/diagnostics/patch_edgefed_s11_band_repin.py` now refuses
+that arm with this explanation instead of running it, and the same holds for
+`patch_edgefed_s11_band_repin_replay.py`. The committed
+`docs/design_notes/patch_edgefed_s11_band_repin_retired.json` stays as the #782
+falsifier's dated evidence; it is not regenerable.
+
+**The question the arm pair asked has no object left.** It asked what the #702
+own-cell re-sample changes on this board. Under the contract a foil is declared as
+a SHEET, a sheet owns no cell, and the three lock boards are redrawn with each foil
+ON the laminate face it bounds — so there is no own cell to re-sample and both arms
+would be the same build. The honest successor is a DRAWING A/B (the board as drawn
+now against a board that reserves a vacuum cell for each foil), i.e. the same
+physics question asked in the declaration instead of in a monkeypatch. Its expected
+size is already on the record: preflight's #703 check read `+84.5 %` on `sum(d/eps)`
+for the reserved-cell board (Board H) and `+45.9 %` (Board S), and Leg A measured
+`+10.365 %` against a window centred on `-6.17`.
+
+**The bands are re-pinned from runs, not from this note.** Board H:
+VESSL **369367259225**, Leg A `-6.17 %` → `-1.871 %` at 120 periods and `-1.886 %`
+at 200 periods (the negative sign is the slot signature going away, not a
+threshold move). Board S: VESSL **369367259226**, the `Im(Zin) = 0` crossing
+`8.8189 GHz` → `7.7620 GHz` with `Re(Zin)` peak `4157 ohm`, `Re(Zin)` positive
+across the band, `Z0` median `60.87 ohm`, and the preflight cavity advisory silent.
+The NU twin (`tests/locks/test_msl_nu_sparam_gate.py`, the review addendum's
+same-class gate) reads Board S's re-pinned band on VESSL **369367259240**.
+
+Nothing in §§1–8 above is rewritten: they are the dated record of a pre-declaration
+that was made, run and scored under the pre-2.0 realization.
