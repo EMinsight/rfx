@@ -645,7 +645,7 @@ def test_aperture_nodes_match_the_reference_dimensions_and_the_builder(fixture):
     """
     cells = fixture["config"]["gated_cells_per_a"]
     dx = A / cells
-    nodes = fixture["gated_rfx"]["aperture_wall_nodes"]
+    nodes = _aperture_wall_nodes(fixture["gated_rfx"])
     aps_mm = fixture["reference"]["apertures_mm"]
     # #931: these are the two innermost realized WALL planes, so the aperture
     # is hi - lo cells exactly and lo is the fin's inner face. Until #931 the
@@ -1974,7 +1974,7 @@ def test_operating_point_is_grid_exact_on_every_row(fixture):
         cells = row["cells_per_a"]
         dx_mm = round(A / cells * 1e3, 4)
         assert row["dx_mm"] == dx_mm, (row["cells_per_a"], row["dx_mm"])
-        for lo, hi in row["aperture_wall_nodes"]:
+        for lo, hi in _aperture_wall_nodes(row):
             assert hi > lo, "empty aperture"
 
 

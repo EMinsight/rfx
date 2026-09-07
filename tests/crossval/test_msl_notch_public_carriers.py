@@ -203,7 +203,9 @@ def test_trace_and_stub_are_foil_on_the_substrate_top_plane(cv06b):
                                      assert_sheet_owns_no_cell,
                                      assert_sheet_planes, realize)
     realized = realize(sim)
-    assert_sheet_planes(realized, 2, [cv06b.H_SUB], what="cv06b trace/stub")
+    # two sheets (trace and stub), both on the substrate-top plane
+    assert_sheet_planes(realized, 2, [cv06b.H_SUB, cv06b.H_SUB],
+                        what="cv06b trace/stub")
     assert_sheet_owns_no_cell(realized, what="cv06b trace/stub")
     assert_normal_edge_live(realized, what="cv06b trace/stub")
     assert_no_wall_at(realized, 2, [cv06b.H_SUB + cv06b.DX],
