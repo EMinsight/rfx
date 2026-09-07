@@ -308,7 +308,8 @@ def assert_soft_pec_equals_hard(grid, sim) -> dict:
     """
     from rfx.boundaries.pec import (
         apply_pec_occupancy, realized_pec_edge_masks)
-    edges, sheets, wires, _pm, _g = RC.realize(sim, grid)
+    rz = RC.realize(sim, grid)
+    edges, sheets, wires = rz.edge_masks, rz.sheets, rz.wires
     occ_soft = build_stub_occ(grid, (2 * H_SUB + 8 * DX) + W_TRACE, 7.0e-3)
     occ = (np.asarray(occ_soft) > 0.5)
     hard = realized_pec_edge_masks(

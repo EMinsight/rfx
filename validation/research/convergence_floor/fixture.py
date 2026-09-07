@@ -206,7 +206,7 @@ def build_sim(scale: float, dz_profile: np.ndarray, antisym: bool = True,
             sim, 2, TRACE_Z[0], TRACE_Z[1],
             at=(0.5 * (TRACE_X[0] + TRACE_X[1]),
                 0.5 * (TRACE_Y[0] + TRACE_Y[1])),
-            lane="nonuniform", label="P-C trace", tol_m=1e-12)
+            label="P-C trace", tol_m=1e-12)
     sim.add_source(src_p, "ez",
                    waveform=GaussianPulse(amplitude=+src_amp, **WAVEFORM),
                    amplitude_kind="current")

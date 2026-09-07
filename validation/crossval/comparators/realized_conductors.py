@@ -1,46 +1,53 @@
-"""Build-time realized-conductor gate (lattice ownership contract, #931).
+"""Crossval-side build-time realized-conductor gate (#931).
 
-One place where every case in this group asks the SAME question of the SAME
-function: *does the conductor the script drew realize where the script says
-it does?*  No solve, no fields — grid construction plus material assembly
-only, so a case can assert its geometry in well under a second and a
-mis-realization is caught before any FDTD budget is spent.
+Thin ADAPTER over ``tests/_realized_geometry.py``, which is this branch's
+one implementation of "did the conductor realize where the script says it
+did".  Nothing here re-derives a realization: ``realize`` calls
+``tests._realized_geometry.realized`` and the plane comparison calls its
+``assert_wall_planes``.  A second hand-rolled ``argwhere`` over some mask
+is exactly the drift the single-owner rule (design note §1.7) exists to
+stop, and the pre-#931 tree had three of them (cv15, preflight, the MSL
+trace detector) that disagreed.
 
-The rule itself lives in ``rfx.boundaries.pec.realized_pec_edge_masks``
-(design note ``docs/design_notes/20260906_plan_realign_lattice_ownership.md``
-§1.7: one source, every consumer).  Nothing is re-derived here — this module
-only asks the shared function and compares against what the caller declared.
+What this module adds on top, and why it is not in the shared helper:
 
-Why a comparator module and not a per-case helper: the pre-#931 tree had a
-private wall-plane derivation in cv15, another in preflight and another in
-the MSL trace detector, and they disagreed.  The design-note answer is one
-owner; the crossval-side answer is one gate, imported.
+* a **physical column** (``at=(u, v)`` in metres on the two in-plane axes)
+  instead of node indices — a crossval script states its geometry in
+  metres, and converting per call site is where an off-by-one gets
+  introduced;
+* ``tol_m`` — the shared assertion matches a declared coordinate to its
+  NEAREST node and then compares indices, so a declaration half a cell
+  off-lattice still passes.  For a fixture that claims to be drawn on the
+  node line, that is the thing worth catching, so the offset is checked
+  explicitly;
+* :func:`assert_wall_span` — a solid body is PEC on EVERY node plane it
+  spans, not only its two faces, so a thick body's declaration is its two
+  faces and the contiguous run between them is filled in here rather than
+  spelled as an index list per mesh rung;
+* :func:`assert_no_conductor` — the dielectric controls (cv22, cv23, cv24)
+  claim bit-identity across the contract, and that claim is only checkable
+  if "this case realizes no conductor at all" is asserted rather than
+  assumed;
+* :func:`footprint_nodes` — a realized trace/patch width, read off the
+  edge set, for a script that wants to log it beside its own numbers.
 
-Vocabulary (design note §1):
+Vocabulary (design note §1): **volume** = a set of primal cells, every
+incident edge PEC, so a body drawn ``z_a -> z_b`` on node planes realizes
+walls at BOTH; **sheet** = a footprint on ONE node plane, zero thickness,
+normal edge live; **wire** = a 1-D lattice path of edges.
 
-* **volume** — a set of primal cells; every edge incident to an occupied cell
-  is PEC, so a body drawn ``z_a -> z_b`` on node planes realizes tangential
-  walls at BOTH planes;
-* **sheet** — a footprint on ONE node plane, zero thickness; the in-plane
-  edges whose two end nodes are both in the footprint are PEC and the normal
-  edge stays live;
-* **wire** — a 1-D lattice path of edges.
-
-The falsifier discipline is copied from ``nu_cavity_gates``
-(``extent_plus_one_fine_cell``): a gate that cannot fail by name on a
-deliberately mis-realized geometry is not evidence.  :func:`assert_wall_planes`
-raises with the declared and realized plane lists and their physical
-coordinates, so the failure message IS the diagnosis.
+The falsifier discipline is cv24's (``nu_cavity_gates``
+``extent_plus_one_fine_cell``): a gate that cannot fail by name on a
+deliberately mis-realized geometry is not evidence.  Every assertion here
+names the declared and realized plane lists, so the failure IS the
+diagnosis.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from rfx.boundaries.pec import (
-    realized_pec_edge_masks,
-    realized_wall_planes,
-)
+from tests import _realized_geometry as _RG
 
 __all__ = [
     "realize",
@@ -53,143 +60,87 @@ __all__ = [
 ]
 
 
-def _periodic_flags(sim) -> tuple[bool, bool, bool]:
-    """The run's per-axis periodic flags (#689) — the ONE spelling.
+def realize(sim, grid=None):
+    """``Realization`` for ``sim`` — grid, cell mask, sheets, wires, edges.
 
-    ``Simulation._periodic_flags`` is where the solver lanes read them, so
-    this asks it rather than re-deriving from the boundary spec: a gate
-    that realizes under different flags than the step function is not
-    measuring the run.
+    Build-time only (grid construction plus material assembly, no fields),
+    and the LANE is chosen by the shared helper from the simulation's own
+    ``_dx/_dy/_dz_profile``, not by a caller-supplied string: a gate that
+    realizes on the uniform grid for a graded fixture passes for the wrong
+    reason.  ``grid`` is accepted and ignored for call-site convenience.
+
+    One case the shared helper does not cover, handled here rather than by
+    editing it: a run that declares NO conductor at all gives
+    ``realized_pec_edge_masks`` nothing to take a grid shape from, and it
+    says so with a ``ValueError``. The controls (cv22/cv23/cv24) are
+    exactly that case and want the empty answer, so it is spelled out --
+    zero edges on the run's own grid -- instead of teaching the owner about
+    emptiness. Reported upstream as a small gap in the helper.
     """
-    return tuple(sim._periodic_flags())
+    try:
+        return _RG.realized(sim)
+    except ValueError as exc:
+        if "no cell mask, sheets or wires" not in str(exc):
+            raise
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            nu = any(getattr(sim, f"_{a}_profile", None) is not None
+                     for a in ("dx", "dy", "dz"))
+            g = (sim._build_nonuniform_grid() if nu else sim._build_grid())
+        zero = np.zeros(tuple(g.shape), dtype=bool)
+        return _RG.Realization(
+            g, None, [], [], (zero, zero.copy(), zero.copy()))
 
 
-def realize(sim, grid=None, *, lane: str = "uniform"):
-    """``(edge_masks, sheets, wires, pec_mask, grid)`` for ``sim``.
+def _ij(rz, axis: int, at):
+    """Physical ``(u, v)`` on the two in-plane axes -> node indices."""
+    in_plane = [a for a in range(3) if a != axis]
+    return tuple(_RG.node_index(rz.grid, a, float(u))
+                 for a, u in zip(in_plane, at))
 
-    Build-time only: ``_build_grid`` (or ``_build_nonuniform_grid``) plus
-    ``_assemble_materials``.  The sheet and wire collectors are passed, so a
-    sheet-declared conductor is present — a caller that omits them gets a
-    ``UserWarning`` and a silently conductor-free realization (design note §6
-    out-parameters), which is exactly the failure this module exists to make
-    impossible for the crossval scripts.
+
+def wall_planes(sim, axis: int, *, at=None, region=None, grid=None):
+    """``(planes, coords_m, grid)`` — realized tangential walls along ``axis``.
+
+    ``at`` names ONE column by its physical ``(u, v)`` on the two in-plane
+    axes (in axis order, skipping ``axis``); ``region`` is a tuple of three
+    index slices; neither means the whole grid.
     """
-    nu = lane == "nonuniform"
-    if grid is None:
-        grid = sim._build_nonuniform_grid() if nu else sim._build_grid()
-    sheets: list = []
-    wires: list = []
-    assemble = sim._assemble_materials_nu if nu else sim._assemble_materials
-    out = assemble(grid, pec_sheets=sheets, pec_wires=wires)
-    pec_mask = out[3]
-    if pec_mask is None and not sheets and not wires:
-        # A conductor-free case. The shared function has nothing to read a
-        # shape from and says so; a control still wants the empty answer,
-        # so spell it here rather than teach the owner about emptiness.
-        zero = np.zeros(tuple(grid.shape), dtype=bool)
-        return (zero, zero.copy(), zero.copy()), sheets, wires, pec_mask, grid
-    edges = realized_pec_edge_masks(
-        pec_mask, sheets, wires, periodic=_periodic_flags(sim))
-    return edges, sheets, wires, pec_mask, grid
-
-
-def _node_coords(grid, axis: int):
-    """Node coordinates along ``axis`` in metres, pad included.
-
-    Uniform and non-uniform lanes both, from the rasterizer's own node
-    builders — a graded z profile does NOT have nodes at ``k*dx``, and a
-    gate that assumed it would report the right plane INDEX with the wrong
-    physical coordinate, which is worse than no coordinate at all.
-    """
-    from rfx.geometry.rasterize_grid import (
-        coords_from_nonuniform_grid, coords_from_uniform_grid)
-    if getattr(grid, "dz", None) is not None:
-        coords = coords_from_nonuniform_grid(grid)
-    else:
-        coords = coords_from_uniform_grid(grid)
-    return np.asarray((coords.x, coords.y, coords.z)[axis], dtype=np.float64)
-
-
-def assert_wall_span(sim, axis: int, lo_m: float, hi_m: float, *, at=None,
-                     region=None, grid=None, lane: str = "uniform",
-                     label: str = "conductor", tol_m: float = 0.0):
-    """Assert a SOLID body realizes walls on every node plane from ``lo_m``
-    to ``hi_m`` and on no other.
-
-    A volume more than one cell thick is PEC on every plane it spans, not
-    only its two faces: the tangential edges of every interior node plane
-    are incident to an occupied cell.  Spelling that as an explicit index
-    list at every mesh rung would be arithmetic the caller has to redo per
-    rung, so the declaration here is the two physical FACES and the gate
-    fills in the contiguous run between them.  The falsifier property is
-    unchanged: a body realized one plane short, one plane long, or with a
-    hole loses exact equality and the failure names both lists.
-    """
-    nodes = _node_coords(_grid_of(sim, grid, lane), axis)
-    k_lo = int(np.argmin(np.abs(nodes - float(lo_m))))
-    k_hi = int(np.argmin(np.abs(nodes - float(hi_m))))
-    want = list(range(min(k_lo, k_hi), max(k_lo, k_hi) + 1))
-    return assert_wall_planes(sim, axis, want, at=at, region=region,
-                              grid=grid, lane=lane, label=label,
-                              tol_m=tol_m)
-
-
-def _grid_of(sim, grid, lane):
-    if grid is not None:
-        return grid
-    return (sim._build_nonuniform_grid() if lane == "nonuniform"
-            else sim._build_grid())
-
-
-def wall_planes(sim, axis: int, *, at=None, region=None, grid=None,
-                lane: str = "uniform"):
-    """Realized tangential-wall node planes along ``axis``.
-
-    ``at`` is a physical ``(u, v)`` pair on the two in-plane axes (in axis
-    order, skipping ``axis``) naming ONE column; ``region`` is a tuple of
-    three index slices.  Exactly one of the two, or neither for the whole
-    grid.  Returns ``(planes, coords_m, grid)``.
-    """
-    edges, _sheets, _wires, _pm, grid = realize(sim, grid, lane=lane)
+    rz = realize(sim, grid)
     kw = {}
     if at is not None:
-        in_plane = [a for a in range(3) if a != axis]
-        ij = []
-        for a, u in zip(in_plane, at):
-            nodes = _node_coords(grid, a)
-            ij.append(int(np.argmin(np.abs(nodes - float(u)))))
-        kw["ij"] = tuple(ij)
+        kw["ij"] = _ij(rz, axis, at)
     elif region is not None:
         kw["region"] = tuple(region)
-    planes = realized_wall_planes(
-        edges, axis, periodic=_periodic_flags(sim), **kw)
-    nodes = _node_coords(grid, axis)
-    return planes, [float(nodes[k]) for k in planes], grid
+    planes = rz.wall_planes(axis, **kw)
+    line = _RG._node_line(rz.grid, axis)
+    return planes, [float(line[k]) for k in planes], rz.grid
 
 
-def sheet_planes(sim, grid=None, *, lane: str = "uniform"):
-    """``[(name, normal_axis, plane, coordinate_m), ...]`` for every declared
+def sheet_planes(sim, grid=None):
+    """``[(name, normal_axis, plane, coordinate_m), ...]`` for every DECLARED
     sheet — what the SheetSpec says, before the edge rule is applied."""
-    _edges, sheets, _wires, _pm, grid = realize(sim, grid, lane=lane)
+    rz = realize(sim, grid)
     rows = []
-    for sp in sheets:
-        nodes = _node_coords(grid, sp.normal_axis)
+    for sp in rz.sheets:
+        line = _RG._node_line(rz.grid, int(sp.normal_axis))
         rows.append((sp.name, int(sp.normal_axis), int(sp.plane),
-                     float(nodes[sp.plane])))
+                     float(line[int(sp.plane)])))
     return rows
 
 
 def footprint_nodes(sim, axis: int, plane: int, *, component: int = 0,
                     along: int | None = None, at: int | None = None,
-                    grid=None, lane: str = "uniform"):
+                    grid=None):
     """Node indices of the realized ``component`` edges on ``(axis, plane)``.
 
     ``along`` is the axis to report node indices on and ``at`` the index on
-    the remaining in-plane axis (defaults to that axis' mid-index).  Used to
+    the remaining in-plane axis (default: that axis' mid-index). Used to
     check a realized trace/patch width against the drawn one.
     """
-    edges, _s, _w, _pm, grid = realize(sim, grid, lane=lane)
-    m = np.asarray(edges[component], dtype=bool)
+    rz = realize(sim, grid)
+    m = np.asarray(rz.edge_masks[component], dtype=bool)
     in_plane = [a for a in range(3) if a != axis]
     if along is None:
         along = in_plane[0]
@@ -200,75 +151,106 @@ def footprint_nodes(sim, axis: int, plane: int, *, component: int = 0,
     idx[axis] = int(plane)
     idx[other] = int(at)
     idx[along] = slice(None)
-    line = m[tuple(idx)]
-    return [int(v) for v in np.flatnonzero(line)]
+    return [int(v) for v in np.flatnonzero(m[tuple(idx)])]
 
 
 def assert_wall_planes(sim, axis: int, declared, *, at=None, region=None,
-                       grid=None, lane: str = "uniform", label: str = "conductor",
+                       grid=None, label: str = "conductor",
                        tol_m: float = 0.0):
     """Assert the realized wall planes along ``axis`` are exactly ``declared``.
 
-    ``declared`` is either a sequence of node-plane INDICES or, when every
-    entry is a float, a sequence of physical coordinates in metres (matched
-    to the nearest node, then compared as indices — and additionally required
-    to sit within ``tol_m`` of the declared coordinate when ``tol_m > 0``).
+    ``declared`` is a sequence of physical coordinates in metres when every
+    entry is a float, otherwise node-plane INDICES.  The comparison itself
+    is ``tests._realized_geometry.assert_wall_planes``; ``tol_m`` adds the
+    off-lattice check that one cannot make (it matches to the nearest node
+    first, so a declaration half a cell off the node line still passes).
 
     Returns the realized ``{"planes", "coords_m"}`` record so the caller can
-    log it beside its own numbers.  Raises ``AssertionError`` naming both
-    lists on a mismatch — the cv24 ``extent`` falsifier design: a gate that
-    fails BY NAME when the geometry is mis-realized by one plane.
+    log it beside its own numbers.
     """
-    planes, coords, grid = wall_planes(
-        sim, axis, at=at, region=region, grid=grid, lane=lane)
-    nodes = _node_coords(grid, axis)
+    rz = realize(sim, grid)
     declared = list(declared)
-    if declared and all(isinstance(v, float) for v in declared):
-        want = [int(np.argmin(np.abs(nodes - v))) for v in declared]
-        want_m = [float(v) for v in declared]
+    as_metres = bool(declared) and all(isinstance(v, float) for v in declared)
+    kw = {}
+    if at is not None:
+        kw["ij"] = _ij(rz, axis, at)
+    elif region is not None:
+        kw["region"] = tuple(region)
+    if as_metres:
+        planes = _RG.assert_wall_planes(
+            sim, axis, list(declared), what=label, **kw)
     else:
-        want = [int(v) for v in declared]
-        want_m = [float(nodes[k]) for k in want]
-    if planes != sorted(want):
-        raise AssertionError(
-            f"[{label}] realized wall planes along {'xyz'[axis]} are {planes} "
-            f"(z = {[round(c * 1e6, 4) for c in coords]} um) but the "
-            f"declaration says {sorted(want)} "
-            f"(= {[round(c * 1e6, 4) for c in want_m]} um). The conductor is "
-            "not where the script says it is; fix the drawing or the "
-            "declaration, never the gate (#931 §1.2/§1.3).")
-    if tol_m > 0.0:
-        for k, target in zip(planes, sorted(want_m)):
-            off = abs(float(nodes[k]) - target)
+        planes = _RG.assert_wall_planes(
+            sim, axis, expected_planes=[int(v) for v in declared],
+            what=label, **kw)
+    line = _RG._node_line(rz.grid, axis)
+    coords = [float(line[k]) for k in planes]
+    if tol_m > 0.0 and as_metres:
+        for k, target in zip(planes, sorted(float(v) for v in declared)):
+            off = abs(float(line[k]) - target)
             if off > tol_m:
                 raise AssertionError(
                     f"[{label}] realized wall plane {k} sits at "
-                    f"{nodes[k] * 1e6:.4f} um, {off * 1e6:.4f} um from the "
-                    f"declared {target * 1e6:.4f} um (tol {tol_m * 1e6:.4f} um). "
-                    "The declared plane is off-lattice; redraw the fixture on "
-                    "the node line (#931 §1.3 off-lattice interfaces).")
+                    f"{line[k] * 1e6:.4f} um, {off * 1e6:.4f} um from the "
+                    f"declared {target * 1e6:.4f} um (tol {tol_m * 1e6:.4f} "
+                    "um). The declared plane is off-lattice; redraw the "
+                    "fixture on the node line (#931 §1.3 off-lattice "
+                    "interfaces).")
     return {"planes": planes, "coords_m": coords}
 
 
-def assert_no_conductor(sim, grid=None, *, lane: str = "uniform",
-                        label: str = "control"):
+def assert_wall_span(sim, axis: int, lo_m: float, hi_m: float, *, at=None,
+                     region=None, grid=None, label: str = "conductor",
+                     tol_m: float = 0.0):
+    """Assert a SOLID body realizes walls on every node plane from ``lo_m``
+    to ``hi_m``, and on no other.
+
+    A volume more than one cell thick is PEC on every plane it spans: the
+    tangential edges of every interior node plane are incident to an
+    occupied cell.  The caller declares the two FACES and this fills in the
+    contiguous run, so the declaration does not have to be re-derived as an
+    index list at every mesh rung.  The falsifier property is unchanged: a
+    body realized one plane short, one plane long, or with a hole loses
+    exact equality and the failure names both lists.
+    """
+    rz = realize(sim, grid)
+    k_lo = _RG.node_index(rz.grid, axis, float(lo_m))
+    k_hi = _RG.node_index(rz.grid, axis, float(hi_m))
+    want = list(range(min(k_lo, k_hi), max(k_lo, k_hi) + 1))
+    out = assert_wall_planes(sim, axis, want, at=at, region=region,
+                             grid=grid, label=label)
+    if tol_m > 0.0:
+        line = _RG._node_line(rz.grid, axis)
+        for k, target in ((k_lo, float(lo_m)), (k_hi, float(hi_m))):
+            off = abs(float(line[k]) - target)
+            if off > tol_m:
+                raise AssertionError(
+                    f"[{label}] the declared face {target * 1e6:.4f} um is "
+                    f"{off * 1e6:.4f} um from node {k} at "
+                    f"{line[k] * 1e6:.4f} um (tol {tol_m * 1e6:.4f} um): "
+                    "off-lattice, so drawn != realized whatever the plane "
+                    "list says (#931 §1.3).")
+    return out
+
+
+def assert_no_conductor(sim, grid=None, label: str = "control"):
     """Assert the case realizes NO conductor at all — no PEC cell, no sheet,
     no wire, no PEC edge.
 
-    The dielectric controls (cv22, cv23, and every slab-rig arm) are the
-    regression that #931 did not leak outside the conductor path: the
+    The dielectric controls (cv22, cv23, cv24, and every slab-rig arm) are
+    the regression that #931 did not leak outside the conductor path: the
     contract changes PEC sampling only, and dielectric sampling (node,
     half-open) is untouched.  Asserting "no conductor" is what makes their
     bit-identity claim checkable rather than assumed.
     """
-    edges, sheets, wires, pec_mask, grid = realize(sim, grid, lane=lane)
-    n_cells = 0 if pec_mask is None else int(np.asarray(pec_mask).sum())
-    n_edges = int(sum(np.asarray(m, dtype=bool).sum() for m in edges))
-    if n_cells or sheets or wires or n_edges:
+    rz = realize(sim, grid)
+    n_cells = 0 if rz.pec_mask is None else int(np.asarray(rz.pec_mask).sum())
+    n_edges = int(sum(np.asarray(m, dtype=bool).sum() for m in rz.edge_masks))
+    if n_cells or rz.sheets or rz.wires or n_edges:
         raise AssertionError(
             f"[{label}] expected a conductor-free case but realized "
-            f"{n_cells} PEC cells, {len(sheets)} sheets, {len(wires)} wires "
-            f"and {n_edges} PEC E edges. Domain-boundary PEC is applied by "
-            "the boundary spec and is NOT a body (#931 §1.8), so it must not "
-            "appear here.")
+            f"{n_cells} PEC cells, {len(rz.sheets)} sheets, "
+            f"{len(rz.wires)} wires and {n_edges} PEC E edges. "
+            "Domain-boundary PEC is applied by the boundary spec and is NOT "
+            "a body (#931 §1.8), so it must not appear here.")
     return {"pec_cells": 0, "sheets": 0, "wires": 0, "pec_edges": 0}

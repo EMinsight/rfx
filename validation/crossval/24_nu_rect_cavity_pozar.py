@@ -112,7 +112,7 @@ def build_cavity(lane: str, dxy: float, dz_profile) -> Simulation:
     # #931 a conductor BODY did not — one rule for a wall you declare with
     # `boundary=`, another for the same wall drawn as a Box. The contract
     # is the boundary rule, applied to bodies.
-    RC.assert_no_conductor(sim, lane=lane, label=f"cv24 cavity ({lane})")
+    RC.assert_no_conductor(sim, label=f"cv24 cavity ({lane})")
     return sim
 
 

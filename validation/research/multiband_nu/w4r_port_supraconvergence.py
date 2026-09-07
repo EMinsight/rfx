@@ -157,7 +157,7 @@ def build_sim(scale: float, dz_profile: np.ndarray,
             material="pec")
     RC.assert_wall_span(
         sim, 2, fx.PC_H_SUB, fx.PC_H_SUB + fx.PC_H_TRACE_BAND,
-        at=(13.5e-3, 11.25e-3), lane="nonuniform",
+        at=(13.5e-3, 11.25e-3),
         label="W4R P-C trace", tol_m=1e-12)
     sim.add_source(SRC_P, "ez",
                    waveform=GaussianPulse(amplitude=+1.0, **WAVEFORM),

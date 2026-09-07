@@ -124,7 +124,7 @@ def build_fix_a(load: str | float, *, dx=DX_A, nz=NZ_A, extent=EXTENT_A):
     # showing up as a 50% electrical-gap error in the extracted rho(f).
     RC.assert_wall_planes(
         sim, 2, [2.5e-3, 3.0e-3, GAP_Z0, GAP_Z1, 5.0e-3, 5.5e-3],
-        at=(PLATE_XY0 + dx, PLATE_XY0 + dx), lane="nonuniform",
+        at=(PLATE_XY0 + dx, PLATE_XY0 + dx),
         label="FIX-A electrode plates", tol_m=1e-12)
     return sim
 

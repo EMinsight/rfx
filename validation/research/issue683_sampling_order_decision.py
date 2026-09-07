@@ -107,7 +107,7 @@ def build(nu: bool, r_load: float | None, boundary: str = "pec"):
     # (#931 §1.7) on the driven column, on whichever lane is being built.
     RC.assert_wall_planes(
         sim, 2, [3e-3, 4e-3, 5e-3, 7e-3, 8e-3, 9e-3],
-        at=(X_DRV, PORT_Y), lane=("nonuniform" if nu else "uniform"),
+        at=(X_DRV, PORT_Y),
         label="loop bars", tol_m=1e-12)
     return sim
 

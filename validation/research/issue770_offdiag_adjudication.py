@@ -116,7 +116,6 @@ def build_fix_t(*, nu: bool, drive: int | None, pulse=None):
     # on BOTH lanes. Asked of the shared owner (#931 §1.7).
     RC.assert_wall_planes(sim, 2, [float(H)], at=(0.5 * (X1 + X2), Y_MID),
                           label=f"FIX-T trace ({'NU' if nu else 'uniform'})",
-                          lane=("nonuniform" if nu else "uniform"),
                           tol_m=1e-12)
     return sim
 
