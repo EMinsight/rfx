@@ -453,16 +453,17 @@ def _wire_port_live_cells(grid, port, pec_edge_masks=None):
         When every extent cell is inside PEC (n_live == 0): such a port
         has no live cell to terminate or drive.
     """
-    from rfx.boundaries.pec import edge_is_pec
+    from rfx.boundaries.pec import edges_are_pec
 
     cells = _wire_port_cells(grid, port)
     if pec_edge_masks is None:
         return cells, [True] * len(cells), max(len(cells), 1)
 
-    live_flags = [
-        not edge_is_pec(pec_edge_masks, port.component, c[0], c[1], c[2])
-        for c in cells
-    ]
+    # One host transfer for the whole extent (``edge_is_pec`` pulls the
+    # full component mask per call, and the eager S-param loops read this
+    # three times per port per step).
+    live_flags = [not d for d in
+                  edges_are_pec(pec_edge_masks, port.component, cells)]
     n_live = sum(live_flags)
     if n_live == 0:
         raise ValueError(

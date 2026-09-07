@@ -577,6 +577,7 @@ def _setup_msl_ports_nu(sim, grid, materials, materials_concrete, sources,
     """
     from rfx.sources.msl_port import (
         _msl_yz_cells,
+        msl_normal_component as _msl_normal_component,
         compute_msl_mode_profile,
         make_msl_port_sources,
         msl_cell,
@@ -616,8 +617,13 @@ def _setup_msl_ports_nu(sim, grid, materials, materials_concrete, sources,
             ))
         if pec_edge_masks is not None:
             from rfx.boundaries.pec import clear_edges
+            # Only the SUBSTRATE-NORMAL component: the edge the modal
+            # source drives.  The three-component form opened a
+            # width-long slot in the ground plane at the feed (#931
+            # §1.9, corrected).
             pec_edge_masks = clear_edges(
-                pec_edge_masks, list(_msl_yz_cells(grid, mp)))
+                pec_edge_masks, list(_msl_yz_cells(grid, mp)),
+                component=_msl_normal_component(mp))
     return materials, pec_edge_masks
 
 
@@ -982,13 +988,11 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                     materials = materials._replace(
                         sigma=materials.sigma.at[ci, cj, ck].add(
                             sigma_port))
-                    # Release the realized PEC edges at LIVE cells only
-                    # (issue #318 commit 2; #931 §1.9): dead extent cells
-                    # stay shorted so the port does not punch an in-plane
-                    # hole in the DUT conductor.
-                    if pec_edge_masks is not None:
-                        pec_edge_masks = _clear_edges(
-                            pec_edge_masks, [(ci, cj, ck)])
+                    # No PEC clearing here (#931 §1.9, corrected): a cell
+                    # is LIVE exactly when the port component's own edge is
+                    # not PEC, so releasing that component is a no-op, and
+                    # releasing the two tangential edges would open the
+                    # conductor the port foot stands on.
 
             # Create per-cell sources — only when the port is excited.
             # Passive (excite=False) ports contribute just the σ
@@ -1074,7 +1078,10 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
             materials = materials._replace(
                 sigma=materials.sigma.at[i, j, k].add(sigma_port))
             if pec_edge_masks is not None:
-                pec_edge_masks = _clear_edges(pec_edge_masks, [(i, j, k)])
+                # The lumped port drives ONE edge: its own component at
+                # its own cell (#931 §1.9, corrected).
+                pec_edge_masks = _clear_edges(
+                    pec_edge_masks, [(i, j, k)], component=pe.component)
             if pe.excite:
                 src = make_current_source(
                     grid, idx, pe.component, pe.waveform, sizing_n, materials_concrete)

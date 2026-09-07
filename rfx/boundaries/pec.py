@@ -185,16 +185,19 @@ class WireSpec:
     name: str | None = None
 
 
-def wire_path_edge_masks(nodes, shape, periodic=(False, False, False)):
+def wire_path_edge_masks(nodes, shape):
     """E edges of the axis-aligned lattice path through ``nodes`` (§1.4).
 
     ``nodes`` is a sequence of integer ``(i, j, k)`` node indices; each
     consecutive pair must differ along exactly ONE axis (a diagonal
     segment raises — today such a wire silently rasterizes to nothing).
     The edge between node ``i`` and ``i+1`` along ``x`` is ``Ex[i, j, k]``,
-    so a segment from ``a`` to ``b`` marks ``E_ax[min(a,b) .. max(a,b)-1]``.
-    On a periodic axis a segment may cross the seam only by naming both
-    end nodes on either side of it explicitly.
+    so a segment from ``a`` to ``b`` marks ``E_ax[min(a,b) .. max(a,b)-1]``
+    — the interval BETWEEN the two indices, never the way round through
+    the seam.  A wire that is meant to cross a periodic seam is drawn as
+    two legs (… -> the hi rim node, then the lo rim node -> …); there is
+    no periodic argument here, because a path is a list of edges the
+    caller named, not a neighbour rule.
     """
     masks = [np.zeros(tuple(shape), dtype=bool) for _ in range(3)]
     pts = [tuple(int(v) for v in n) for n in nodes]
@@ -349,7 +352,8 @@ def realized_pec_edge_masks(cell_mask, sheets=(), wires=(),
     return tuple(out)
 
 
-def realized_wall_planes(edge_masks, axis, *, ij=None, region=None):
+def realized_wall_planes(edge_masks, axis, *, ij=None, region=None,
+                         periodic=(False, False, False)):
     """Sorted node-plane indices along ``axis`` where a tangential wall exists.
 
     A plane ``k`` counts when some E component tangential to ``axis`` (the
@@ -363,7 +367,15 @@ def realized_wall_planes(edge_masks, axis, *, ij=None, region=None):
       edge INCIDENT to the node ``(ij, k)`` is PEC, i.e. ``E_t`` at the
       node's own index or at the backward index along ``t`` — so a node on
       the hi rim of a footprint, whose incident edges are stored at
-      ``i-1``, is found.
+      ``i-1``, is found.  The backward neighbour follows the run's #689
+      convention: on a periodic (or length-1) in-plane axis the backward
+      neighbour of index 0 is ``n-1``, so a wall on the seam node is
+      found; on a non-periodic axis index 0 has no backward edge.
+
+    ``periodic`` is the run's per-axis flags; callers on a periodic lane
+    MUST pass their own (the default is the non-periodic convention).  It
+    only affects the ``ij=`` column form — ``region=`` already scans every
+    stored index.
 
     ``ij`` and ``region`` are exclusive.  Consumers: preflight cavity /
     guide-width checks, cv15 ``assert_realized_stack``, MSL trace
@@ -388,7 +400,10 @@ def realized_wall_planes(edge_masks, axis, *, ij=None, region=None):
                 back[t] = back[t] - 1
                 col = col | m[tuple(back)]
             elif m.shape[t] == 1:
-                pass  # length-1 axis: the node's own index is the wrap neighbour
+                pass  # length-1 axis: the node's own index IS the wrap neighbour
+            elif periodic[t]:
+                back[t] = m.shape[t] - 1   # #689 wrap: node 0's backward edge
+                col = col | m[tuple(back)]
             hit = col if hit is None else (hit | col)
     else:
         sel = tuple(region) if region is not None else (slice(None),) * 3
@@ -416,20 +431,51 @@ def edge_is_pec(edge_masks, component, i, j, k) -> bool:
     return bool(np.asarray(edge_masks[c])[int(i), int(j), int(k)])
 
 
-def clear_edges(edge_masks, cells):
-    """Un-zero the three E entries at the given cell indices (§1.9 clearing).
+def edges_are_pec(edge_masks, component, cells) -> list:
+    """:func:`edge_is_pec` for a LIST of cells, with ONE host transfer.
+
+    ``edge_is_pec`` pulls the whole component mask to the host per call,
+    which the eager S-parameter loops used to pay once per wire cell per
+    step.  Same rule, read once.
+    """
+    c = _COMPONENT_INDEX[
+        component.lower() if isinstance(component, str) else int(component)]
+    m = np.asarray(edge_masks[c], dtype=bool)
+    return [bool(m[int(i), int(j), int(k)]) for (i, j, k) in cells]
+
+
+def clear_edges(edge_masks, cells, component=None):
+    """Un-zero E entries at the given cell indices (§1.9 port clearing).
 
     ``cells`` is either a boolean grid-shaped mask or an iterable of
-    ``(i, j, k)`` index triples.  Replaces the old ``pec_mask[c] = False``
-    port clearing: the port's own E entries at those indices are released
-    while every other realized edge stays.
+    ``(i, j, k)`` index triples.  ``component`` names the ONE E component
+    to release (``"ex"``/``"ey"``/``"ez"``, ``"x"``/``"y"``/``"z"`` or
+    0/1/2); ``None`` releases all three.
+
+    A port must pass its own component.  Under the ownership contract
+    "live" is defined on the port's own component edge, so releasing the
+    two TANGENTIAL edges at a port foot releases whatever conductor owns
+    that node — a ground plane under an MSL feed, the top face of a body
+    under a probe feed.  That is a hole the port never asked for, so the
+    three-component form is only for callers that really mean "no
+    conductor at this index".
     """
-    if hasattr(cells, "shape") and tuple(getattr(cells, "shape", ())) == tuple(edge_masks[0].shape):
-        keep = ~jnp.asarray(cells, dtype=bool)
-        return tuple(m & keep for m in edge_masks)
+    if component is not None:
+        c = _COMPONENT_INDEX[
+            component.lower() if isinstance(component, str) else int(component)]
+        comps = (c,)
+    else:
+        comps = (0, 1, 2)
     out = list(edge_masks)
+    if (hasattr(cells, "shape")
+            and tuple(getattr(cells, "shape", ())) == tuple(edge_masks[0].shape)):
+        keep = ~jnp.asarray(cells, dtype=bool)
+        for c in comps:
+            out[c] = out[c] & keep
+        return tuple(out)
     for (i, j, k) in cells:
-        out = [m.at[int(i), int(j), int(k)].set(False) for m in out]
+        for c in comps:
+            out[c] = out[c].at[int(i), int(j), int(k)].set(False)
     return tuple(out)
 
 

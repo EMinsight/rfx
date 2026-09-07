@@ -419,18 +419,13 @@ def run_uniform(
                 sources.extend(_simulation.make_wire_port_sources(
                     grid, wp, materials, n_steps,
                     pec_edge_masks=pec_edge_masks))
-            # Release the realized PEC edges at LIVE wire cells only
-            # (issue #318 commit 2; #931 §1.9 turns "clear the cell" into
-            # "un-zero the three E entries at that index").  Dead extent
-            # cells stay shorted: the old all-cells clearing punched a
-            # one-cell in-plane hole in the DUT conductor.
-            if pec_edge_masks is not None:
-                from rfx.sources.sources import _wire_port_live_cells
-                wp_cells, wp_live, _ = _wire_port_live_cells(
-                    grid, wp, pec_edge_masks)
-                pec_edge_masks = _clear_edges(
-                    pec_edge_masks,
-                    [c for c, live in zip(wp_cells, wp_live) if live])
+            # No PEC clearing for a wire port (#931 §1.9, corrected):
+            # a cell is LIVE exactly when the port component's own edge at
+            # that index is not PEC, so releasing that component at the
+            # live cells is a no-op by construction, and releasing the two
+            # TANGENTIAL edges there would open the conductor the port
+            # foot stands on (a ground plane, a body's face).  Dead extent
+            # cells stay shorted and carry no port sigma and no source.
         else:
             # Single-cell lumped port
             lp = LumpedPort(
@@ -441,10 +436,14 @@ def run_uniform(
             materials = setup_lumped_port(grid, lp, materials)
             if pe.excite:
                 sources.append(_simulation.make_port_source(grid, lp, materials, n_steps))
-            # Release the realized PEC edges at the lumped port cell.
+            # Release the realized PEC edge the lumped port DRIVES — its
+            # own component at its own cell, and nothing else (#931 §1.9,
+            # corrected: the three-component form opened the conductor the
+            # port sits on).
             if pec_edge_masks is not None:
                 idx = grid.position_to_index(pe.position)
-                pec_edge_masks = _clear_edges(pec_edge_masks, [idx])
+                pec_edge_masks = _clear_edges(
+                    pec_edge_masks, [idx], component=pe.component)
 
     # Build wire port S-param specs for JIT-integrated DFT
     wire_sparam_specs = []
@@ -474,6 +473,7 @@ def run_uniform(
     if getattr(sim, "_msl_ports", None):
         from rfx.sources.msl_port import (
             _msl_yz_cells,
+            msl_normal_component as _msl_normal_component,
             compute_msl_mode_profile,
             make_msl_port_sources,
             make_msl_port_sources_jm,
@@ -529,8 +529,15 @@ def run_uniform(
                         mode_profile=mode_profile,
                     ))
             if pec_edge_masks is not None:
+                # Only the SUBSTRATE-NORMAL component over the
+                # cross-section: that is the edge the modal source drives
+                # (V = sum(E_n * d_n)).  Releasing the two in-plane
+                # components as well would punch a width-long slot through
+                # the ground plane and the trace at the feed column
+                # (#931 §1.9, corrected).
                 pec_edge_masks = _clear_edges(
-                    pec_edge_masks, list(_msl_yz_cells(grid, mp)))
+                    pec_edge_masks, list(_msl_yz_cells(grid, mp)),
+                    component=_msl_normal_component(mp))
 
     for pe in sim._probes:
         probes.append(_simulation.make_probe(grid, pe.position, pe.component))

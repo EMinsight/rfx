@@ -1590,9 +1590,12 @@ class _ExecuteMixin:
                     grid, wp, pec_edge_masks_local)
                 _wp_live_cells = [c for c, _l in zip(wp_cells, wp_live_flags)
                                   if _l]
-                if pec_edge_masks_local is not None and _wp_live_cells:
-                    pec_edge_masks_local = _clear_edges(
-                        pec_edge_masks_local, _wp_live_cells)
+                # No edge clearing (#931 §1.9, corrected): a cell is LIVE
+                # exactly when the port component's own edge is not PEC, so
+                # releasing that component is a no-op, and releasing the two
+                # tangential edges would open the conductor the port foot
+                # stands on.  The CELL clearing below stays: it is the
+                # volume/occupancy carrier the Kottke guard keys off.
                 for cell in _wp_live_cells:
                     if pec_mask_local is not None:
                         pec_mask_local = pec_mask_local.at[cell[0], cell[1], cell[2]].set(False)
@@ -1721,8 +1724,11 @@ class _ExecuteMixin:
                 sources.append(make_port_source(grid, lp, materials, n_steps))
             idx = grid.position_to_index(pe.position)
             if pec_edge_masks_local is not None:
+                # ONE edge: the port's own component at its own cell
+                # (#931 §1.9, corrected).
                 pec_edge_masks_local = _clear_edges(
-                    pec_edge_masks_local, [(idx[0], idx[1], idx[2])])
+                    pec_edge_masks_local, [(idx[0], idx[1], idx[2])],
+                    component=pe.component)
             if pec_mask_local is not None:
                 pec_mask_local = pec_mask_local.at[idx[0], idx[1], idx[2]].set(False)
             if pec_occupancy_local is not None:
@@ -1748,6 +1754,7 @@ class _ExecuteMixin:
             from rfx.sources.msl_port import (
                 MSLPort,
                 _msl_yz_cells,
+                msl_normal_component as _msl_normal_component,
                 compute_msl_mode_profile,
                 make_msl_port_sources,
                 setup_msl_port,
@@ -1835,8 +1842,11 @@ class _ExecuteMixin:
                 # are not zeroed by the PEC update.
                 _msl_cells = list(_msl_yz_cells(grid, mp))
                 if pec_edge_masks_local is not None and _msl_cells:
+                    # Only the SUBSTRATE-NORMAL component — the edge the
+                    # modal source drives (#931 §1.9, corrected).
                     pec_edge_masks_local = _clear_edges(
-                        pec_edge_masks_local, _msl_cells)
+                        pec_edge_masks_local, _msl_cells,
+                        component=_msl_normal_component(mp))
                 for cell in _msl_cells:
                     if pec_mask_local is not None:
                         pec_mask_local = pec_mask_local.at[cell[0], cell[1], cell[2]].set(False)
