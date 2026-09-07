@@ -528,10 +528,44 @@ def test_alpha_envelope_regression_lock():
     alpha 0.72494."""
     out = _base()
     alpha = out["alpha"][_F0_IDX]
+    a2 = _alpha_two_plane(out["xs"], out["profile"][_F0_IDX])
+
+    # R5 trace, added 2026-09-07 (#931). The two extractors disagreed about
+    # whether this fixture moved — the span-average fit stayed inside its 5 %
+    # pin while the endpoint ratio went 20 % — and neither the profile nor the
+    # endpoints it reads were ever printed, so the disagreement could not be
+    # read. The endpoint ratio uses only profile[0] and profile[-1]; the fit
+    # uses all of it. A profile whose ENDS move relative to its middle moves
+    # one and not the other, which is the "non-exponential profile / two-mode
+    # beat" this module's docstring already describes.
+    prof = np.asarray(out["profile"][_F0_IDX], dtype=float)
+    xs = np.asarray(out["xs"], dtype=float)
+    print(f"\n[LEONTOVICH/ENVELOPE] alpha_fit={alpha:.5f} (pin "
+          f"{MEASURED_ALPHA}), alpha_two_plane={a2:.5f} (pin "
+          f"{MEASURED_ALPHA_TWO_PLANE}), ln-RMS resid="
+          f"{out['resid'][_F0_IDX]:.5f}, settle={out['settle_db']:.1f} dB")
+    print(f"[LEONTOVICH/ENVELOPE] endpoints used by the two-plane extractor: "
+          f"|E|(x={xs[0] * 1e3:.2f} mm)={prof[0]:.6g}, "
+          f"|E|(x={xs[-1] * 1e3:.2f} mm)={prof[-1]:.6g}, "
+          f"ratio={prof[0] / prof[-1]:.6f}")
+    for i in range(0, len(xs), max(1, len(xs) // 25)):
+        print(f"[LEONTOVICH/PROFILE] {xs[i] * 1e3:8.3f} mm  {prof[i]:.6g}  "
+              f"ln={np.log(prof[i]):.5f}")
+
     assert abs(alpha / MEASURED_ALPHA - 1.0) <= 0.05, (
         f"measured alpha moved: {alpha:.5f} vs recorded {MEASURED_ALPHA}")
-    # two-plane comparator pin (same run, independent extractor shape)
-    a2 = _alpha_two_plane(out["xs"], out["profile"][_F0_IDX])
+    # Two-plane comparator pin (same run, independent extractor shape).
+    #
+    # RED under #931 and NOT re-pinned: measured 0.87333 against the recorded
+    # 0.72494 (+20.5 %), while the span-average fit above moved less than 5 %.
+    # The plates are drawn across the FULL cross-section, and the contract
+    # samples a sheet footprint CLOSED, so they now realize their last node row
+    # in x and in y — rows that sit ON the domain boundary planes the y-PMC and
+    # hi-x PEC own. That is drawn == realized and it is intended, but it means
+    # the fixture's mode structure is not bit-identical, and this pin is the
+    # instrument that says so. Re-centring it on 0.87333 would discard the one
+    # measurement that noticed. The profile dump above is what a re-pin has to
+    # be argued from.
     assert abs(a2 / MEASURED_ALPHA_TWO_PLANE - 1.0) <= 0.05, a2
     # forward-wave-purity witness (re-measure run: 0.00245 ln-RMS)
     assert out["resid"][_F0_IDX] < 0.02, out["resid"][_F0_IDX]
