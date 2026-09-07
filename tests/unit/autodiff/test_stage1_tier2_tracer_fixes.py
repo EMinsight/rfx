@@ -127,7 +127,7 @@ def test_the_pec_sampler_is_not_the_dielectric_sampler():
 
     dx = 1e-3
     axis = np.arange(11, dtype=np.float64) * dx      # nodes 0 .. 10 mm
-    co = GridCoords(x=axis, y=axis, z=axis)
+    co = GridCoords(x=axis, y=axis, z=axis, shape=(11, 11, 11))
     box = Box((0.002, 0.002, 0.002), (0.006, 0.006, 0.006))
 
     node = np.asarray(box.mask_on_coords(axis, axis, axis))
