@@ -60,6 +60,23 @@ F7_A = 4.5e-3            # transverse box; TE10 uses b = B_Y
 F7_CAP_REF = 1.4
 
 
+def _git_sha() -> str:
+    """HEAD of the tree the run was made on (provenance, as W2/W4 record
+    ``rfx.__file__``)."""
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except (subprocess.CalledProcessError, OSError):
+        return "unknown"
+
+
+def _git_dirty() -> bool:
+    """True when the worktree had uncommitted changes at run time."""
+    try:
+        return subprocess.check_output(["git", "status", "--porcelain"], text=True) != ""
+    except (subprocess.CalledProcessError, OSError):
+        return True
+
+
 def _old_make_dz_profile():
     """``_make_dz_profile`` exactly as committed on main d990e18c, loaded
     from ``git show`` into a throwaway module (provenance, not a retype)."""
@@ -288,7 +305,9 @@ def main(argv=None):
     ap.add_argument("--f7-only", action="store_true")
     args = ap.parse_args(argv)
     t0 = time.time()
-    results = {"rfx_file": rfx.__file__, "argv": sys.argv[1:]}
+    results = {"rfx_file": rfx.__file__, "argv": sys.argv[1:],
+               "git_sha": _git_sha(), "git_dirty": _git_dirty(),
+               "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0))}
     results["f7"] = run_f7()
     if not args.f7_only:
         widths = [int(w) for w in args.widths.split(",") if w]
