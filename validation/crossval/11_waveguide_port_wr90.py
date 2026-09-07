@@ -279,11 +279,59 @@ witness -- it is two specific things:
 So: tighten the magnitude gates after #729 settles, on a re-measured
 envelope, not here.
 
+  #931 LATTICE OWNERSHIP — APPENDED 2026-09-07. Three things in this
+  docstring change; nothing above is deleted.
+
+  (a) THE APERTURE TRIM IS DELETED, not re-tuned. "SEQUENCING" above says
+      the in-script `y_range`/`z_range` workaround "becomes redundant or a
+      double correction" once the rfx-side default is fixed. The default
+      was fixed — #889, `_node_span_to_cell_span` in
+      rfx/sources/waveguide_port.py, which solves the transverse mode on
+      the guide's N CELLS rather than the node span's N+1 — so the trim is
+      now the double correction. Measured on this checkout, build-only:
+      with the trim `cfg.f_cutoff` = 6.807677 GHz (+4.454% against the
+      quote-realized 6.517391 GHz); without it, 6.512162 GHz (-0.080%),
+      which is EXACTLY the figure this docstring credited to the trim in
+      2026-08. The compensation is removed and the rfx-side default now
+      supplies the same number. Consequences to re-measure in the re-run:
+      `u_hi == u_grid_size` holds again, so the PEC-ghost aperture-weight
+      zeroing the 2026-04-27 DROP-weight fix depends on fires again, and
+      the pec-short per-bin |S11| envelope is predicted to return from
+      [0.9980, 1.0019] toward [0.9995, 1.0000] with max_diff 0.0020 ->
+      ~0.0005. The RUN RESULT table above was measured WITH the trim and is
+      superseded by the post-#931 run.
+
+  (b) THE PEC SHORT STAYS A VOLUME, and its walls are now asserted. It is
+      a 2 mm metal plug across the guide — the Meep and openEMS legs this
+      case is byte-matched against terminate with metal — so under the
+      contract it realizes walls at BOTH bounding node planes with the
+      interior shorted: 145.000, 146.000 and 147.000 mm (measured
+      build-only). Pre-#931 the far face at 147.000 mm was never a wall;
+      that plane sits BEHIND the reflector, and the reflection plane the
+      round-trip phase reference uses is the FIRST wall, at 145.000 mm,
+      which does not move. `assert_realized_short()` now states this before
+      any solve: nothing in this case asserted where the short's walls land,
+      and the only thing that could have caught a mis-declaration was a
+      phase gate with +-4 cells of allowance — four times the effect it
+      would have to see. The cell-relative `2 * DX_M` extent this script
+      has flagged since #722/#724 is gone with it (PEC_SHORT_T_M = 2 mm,
+      absolute).
+
+  (c) "the longitudinal convention is genuinely unsettled ... make the
+      sensitivity to that half cell part of the reported envelope rather
+      than picking a rule" is superseded FOR CONDUCTORS: the contract picks
+      the rule, and drawn == realized (a body drawn x_a -> x_b stands walls
+      at both). It is NOT superseded for the DIELECTRIC slab below, whose
+      sampling §1.8 leaves untouched (node, half-open) — so the paragraph
+      that follows still holds for `slab_L`, and this case's slab legs must
+      come back bit-identical if #931 touched nothing it promised not to.
+
   `slab_L` (below, the dielectric-slab geometry) stays DECLARED at
   10.000 mm rather than quote-realized: the longitudinal/propagation-axis
-  convention is genuinely unsettled (rfx/geometry/csg.py:130-140 — "make
-  the sensitivity to that half cell part of the reported envelope rather
-  than picking a rule"). At dx=1mm and PRODUCTION precision (see below)
+  convention is genuinely unsettled FOR DIELECTRICS (rfx/geometry/csg.py —
+  "make the sensitivity to that half cell part of the reported envelope
+  rather than picking a rule"; #931 §1.8 keeps dielectric sampling as it
+  was). At dx=1mm and PRODUCTION precision (see below)
   the occupied-node band is [9.000, 10.000] mm with the declared value at
   the TOP edge (i.e. the realized slab may be up to one cell SHORTER, not
   longer). That half-cell sensitivity, `beta_d * 0.5 * DX_M` (up to ~9.76
@@ -408,6 +456,13 @@ MON_RIGHT_X = 0.150     # = +50 mm OpenEMS frame = Meep mon_right_x
 # That convention drift is corrected here so rfx vs Meep vs OpenEMS share
 # byte-identical PEC-short geometry.
 PEC_SHORT_X = MON_RIGHT_X - 0.005  # 0.145 m = +45 mm OE = Meep/OpenEMS canonical
+# Thickness of the shorting plug, as an ABSOLUTE extent (#931). The old
+# spelling was `2 * DX_M`, a cell-relative expression this script has flagged
+# since #722/#724; at dx = 1 mm it realizes the identical body. It is a
+# VOLUME under the lattice ownership contract: walls at 145.000 / 146.000 /
+# 147.000 mm with the interior shorted. Only the FIRST wall sets the
+# reflection plane, and it is at PEC_SHORT_X on any of these readings.
+PEC_SHORT_T_M = 0.002
 
 
 # =============================================================================
@@ -497,15 +552,22 @@ def _build_sim(
             sim.add_material(name, eps_r=eps_r, sigma=0.0)
             sim.add(Box(lo, hi), material=name)
     if pec_short_x is not None:
-        # NOTE (#722/#724): `pec_short_x + 2 * DX_M` is a cell-relative
-        # thickness (2 cells), not an absolute-coordinate extent — it
-        # violates the repo's absolute-coordinates convention. Inert here
-        # only because DX_M is frozen at 1 mm by this change (reflection
-        # plane stays exactly pec_short_x regardless of thickness); flag
-        # before ever moving DX_M in this script.
+        # A VOLUME, and it stays one (#931 §1.2). This is a 2 mm metal plug
+        # across the guide, not a foil: the Meep and openEMS legs this case
+        # is byte-matched against terminate with metal, and the contract
+        # realizes a drawn body with walls on BOTH bounding node planes
+        # plus a shorted interior — which is what a plug is.
+        #
+        # The thickness is now an ABSOLUTE extent. It used to read
+        # `pec_short_x + 2 * DX_M`, a cell-relative expression flagged in
+        # this script since #722/#724 as a violation of the repo's
+        # absolute-coordinates convention, inert only while DX_M is frozen
+        # at 1 mm. PEC_SHORT_T_M realizes the identical body at dx = 1 mm
+        # (measured: walls at 145.000 / 146.000 / 147.000 mm) and keeps
+        # meaning the same 2 mm plug at any other dx.
         sim.add(
             Box((pec_short_x, 0.0, 0.0),
-                (pec_short_x + 2 * DX_M, DOMAIN_Y, DOMAIN_Z)),
+                (pec_short_x + PEC_SHORT_T_M, DOMAIN_Y, DOMAIN_Z)),
             material="pec",
         )
     port_freqs = jnp.asarray(freqs)
@@ -515,32 +577,34 @@ def _build_sim(
     # referenced identically; otherwise an ~85° phase offset appears
     # purely from the plane difference (β·20 mm ≈ 190° at 10 GHz).
     #
-    # y_range/z_range (#722/#724): trim the port aperture to the last
-    # interior CELL column of the realized cross-section instead of the
-    # default n_nodes span (rfx/api/_compile.py `_range_to_slice`, the
-    # `value_range is None` branch). Zero-cost mitigation for the
-    # DOMINANT cv11 error term (comparator/extractor cutoff, see
-    # docstring): measured cfg.f_cutoff 6.241218 -> 6.512162 GHz, i.e.
-    # -0.080% against the 6.517391 GHz quote-realized reference instead
-    # of -4.237%.
-    # COST (measured 2026-08-28 by a full solve, see docstring): the trim
-    # makes `u_hi != u_grid_size`, which disables the PEC-ghost
-    # aperture-weight zeroing the pec-short 2026-04-27 DROP-weight fix
-    # depends on. The |S11| gates still pass, but the pec-short per-bin
-    # envelope widens [0.9995, 1.0000] -> [0.9980, 1.0019] and max_diff
-    # 0.0005 -> 0.0020, and the slab phase / complex-envelope lines move
-    # slightly the wrong way. Not "zero-cost" — see the RUN RESULT table.
-    aperture_kw = dict(
-        y_range=(0.0, A_WG_REALIZED - DX_M),
-        z_range=(0.0, B_WG_REALIZED - DX_M),
-    )
+    # THE APERTURE TRIM IS GONE (#931 / #889). Both ports used to carry
+    # `y_range=(0, A_WG_REALIZED - DX_M)`, `z_range=(0, B_WG_REALIZED -
+    # DX_M)` — an in-script correction for the port eigenproblem spanning
+    # n_nodes columns instead of n_cells, i.e. solving a guide one cell
+    # WIDER than the walls make. The docstring above predicted its own
+    # obsolescence: "if the rfx-side default is fixed the workaround
+    # becomes redundant or a double correction". The default WAS fixed
+    # (#889, `_node_span_to_cell_span` in rfx/sources/waveguide_port.py:
+    # the transverse mode is solved on the guide's N cells), so the trim
+    # is now the double correction.
+    #
+    # MEASURED on this checkout, build-only, no solve:
+    #     with the trim     cfg.f_cutoff = 6.807677 GHz  (+4.454%)
+    #     without the trim  cfg.f_cutoff = 6.512162 GHz  (-0.080%)
+    # against the quote-realized F_CUTOFF_TE10 = 6.517391 GHz. The
+    # untrimmed number is EXACTLY the 6.512162 GHz this docstring credits
+    # to the trim in 2026-08 — the rfx-side default now delivers what the
+    # workaround used to, so the compensation is deleted rather than
+    # re-tuned. It also restores `u_hi == u_grid_size`, which re-enables
+    # the PEC-ghost aperture-weight zeroing the 2026-04-27 DROP-weight fix
+    # depends on; the pec-short per-bin |S11| envelope is predicted to
+    # return from [0.9980, 1.0019] toward [0.9995, 1.0000].
     sim.add_waveguide_port(
         PORT_LEFT_X, direction="+x", mode=(1, 0), mode_type="TE",
         freqs=port_freqs, f0=f0, bandwidth=bandwidth,
         waveform="modulated_gaussian",
         reference_plane=0.050,
         name="left",
-        **aperture_kw,
     )
     sim.add_waveguide_port(
         PORT_RIGHT_X, direction="-x", mode=(1, 0), mode_type="TE",
@@ -548,9 +612,84 @@ def _build_sim(
         waveform="modulated_gaussian",
         reference_plane=0.150,
         name="right",
-        **aperture_kw,
     )
     return sim
+
+
+def realized_short_planes(sim) -> dict:
+    """Where the PEC short's electric walls actually land (#931 §1.7).
+
+    Build-time, no solve, read from
+    ``rfx.boundaries.pec.realized_pec_edge_masks`` — the one function the
+    solver realizes with — so this cannot drift from what is solved.
+    Returns the wall-plane indices along the propagation axis, their
+    physical x, and the PEC cell count.
+    """
+    import numpy as _np
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+    from rfx.geometry.rasterize_grid import coords_from_uniform_grid
+
+    grid = sim._build_grid()
+    sheets: list = []
+    wires: list = []
+    assembled = sim._assemble_materials(grid, pec_sheets=sheets,
+                                        pec_wires=wires)
+    pec_mask = assembled[3]
+    if pec_mask is None and not sheets and not wires:
+        return dict(planes=[], planes_m=[], n_cells=0, n_sheets=0)
+    edges = realized_pec_edge_masks(pec_mask, sheets=tuple(sheets),
+                                    wires=tuple(wires),
+                                    periodic=sim._periodic_flags())
+    nodes = _np.asarray(coords_from_uniform_grid(grid).x)
+    planes = realized_wall_planes(edges, 0)
+    return dict(
+        planes=[int(k) for k in planes],
+        planes_m=[float(nodes[k]) for k in planes],
+        n_cells=0 if pec_mask is None else int(_np.asarray(pec_mask).sum()),
+        n_sheets=len(sheets))
+
+
+def assert_realized_short(sim) -> dict:
+    """MANDATORY build-time check (#931): the short's realized walls are the
+    drawn ones. No FDTD step runs here.
+
+    Nothing in this case asserted WHERE the short's walls land. The only
+    thing that could have caught a mis-declaration was the round-trip phase
+    gate, whose derivation allows +-4 cells of reference-plane uncertainty
+    — four times the effect it would need to see — so the case passed
+    whether the short realized at 145/146 or at 146. This is the direct
+    statement, in the shape of cv09's gate 0.
+
+    Under the contract a body drawn ``x_a -> x_b`` on node planes realizes
+    tangential walls at BOTH and shorts the interior, so the 2 mm plug
+    stands walls at 145.000, 146.000 and 147.000 mm. The FIRST is the
+    reflection plane and the one the phase reference uses; it must be at
+    PEC_SHORT_X exactly.
+    """
+    r = realized_short_planes(sim)
+    xs = r["planes_m"]
+    expected = [PEC_SHORT_X + n * DX_M
+                for n in range(int(round(PEC_SHORT_T_M / DX_M)) + 1)]
+    problems = []
+    if r["n_sheets"]:
+        problems.append(
+            f"{r['n_sheets']} PEC sheet(s) declared; the short is a VOLUME "
+            "(a 2 mm metal plug), not a foil")
+    if len(xs) != len(expected) or any(
+            abs(a - b) > 1e-9 for a, b in zip(xs, expected)):
+        problems.append(
+            f"realized wall planes {[round(x*1e3, 3) for x in xs]} mm != drawn "
+            f"{[round(x*1e3, 3) for x in expected]} mm")
+    elif abs(xs[0] - PEC_SHORT_X) > 1e-12:
+        problems.append(
+            f"the reflection plane realizes at {xs[0]*1e3:.3f} mm, declared "
+            f"{PEC_SHORT_X*1e3:.3f} mm")
+    if problems:
+        raise RuntimeError(
+            "assert_realized_short: the realized PEC short is not the drawn "
+            "one — refusing to quote a round-trip phase. "
+            + "; ".join(problems) + f" [measured: {r}]")
+    return r
 
 
 def _s_params(
@@ -585,6 +724,12 @@ def run_rfx_pec_short() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     extraction reaches Meep-class min |S11| ≥ 0.99.
     """
     sim = _build_sim(FREQS_HZ, pec_short_x=PEC_SHORT_X)
+    r = assert_realized_short(sim)
+    print(f"[#931] realized PEC-short walls at "
+          f"{[round(x*1e3, 3) for x in r['planes_m']]} mm "
+          f"({r['n_cells']} PEC cells, {r['n_sheets']} sheets); reflection "
+          f"plane {r['planes_m'][0]*1e3:.3f} mm == declared "
+          f"{PEC_SHORT_X*1e3:.3f} mm")
     return _s_params(sim, normalize=False)
 
 
