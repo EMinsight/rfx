@@ -23,9 +23,10 @@ is, so the branch must be committed before submitting.
 
 ---
 
-## R1 — `golden_msl_sheet_thread_{s,freqs}_13de212.npy` (**DONE — awaiting ingest**)
+## R1 — `golden_msl_sheet_thread_{s,freqs}_13de212.npy` (**DONE — INGESTED**)
 
-* Consumer: `tests/unit/sparams/test_msl_sheet_threading.py::test_o1_no_sheet_identity_vs_13de212_golden`
+* Consumer: `tests/unit/sparams/test_msl_sheet_threading.py::test_o1_no_sheet_identity_vs_931_golden`
+  (renamed from `..._vs_13de212_golden` at ingest)
   (byte identity, `@pytest.mark.slow`).
 * Why: the golden records a board this tree no longer builds. The trace was a
   one-cell PEC Box on a bisecting mesh (dx = 80 µm, h_sub/dx = 3.175, single
@@ -85,11 +86,15 @@ is, so the branch must be committed before submitting.
   not gated.
 * Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-msl-sheet-golden-20260907T144330Z/`
   (`capture.log`, `produced/tests/fixtures/golden_msl_sheet_thread_{s,freqs}_931.npy`).
-* Ingest: copy the two `.npy` files from `produced/tests/fixtures/` onto the
-  branch, point the test's `_FIXTURES` load at them, keep the two pre-#931
-  files beside them as history, and quote `max |new - old| = 0.1128` plus the
-  `|S11|` pair above in the commit. Deliberately NOT committed here: this
-  phase does not commit fixtures.
+* **INGESTED 2026-09-07** (phase 2b): the two `.npy` files were copied
+  verbatim from `produced/tests/fixtures/` (no hand edit), the test loads
+  `..._931.npy`, and the two pre-#931 files stay beside them as history,
+  loaded by nothing. Verified after the copy, on the branch:
+  `max |new - old| = 0.11281412094831467`, `freqs` arrays equal, dtype
+  `complex64 (2, 2, 16)`. Full-band `|S11|`: pre-#931
+  `0.01007 ... 0.09705`, post `0.00178 ... 0.01624` (the RECOMPUTE line
+  above quotes the first nine bins, `0.0101 ... 0.0577` -> `0.00178 ...
+  0.00998`; the band edges give the same 5.7-6.0x ratio).
 
 ## R2 — `tests/unit/sparams/test_msl_port_integration.py` gate values
 
