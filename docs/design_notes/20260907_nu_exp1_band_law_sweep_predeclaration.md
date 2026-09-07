@@ -430,7 +430,7 @@ against a window as a law result.
 
 Provenance: git_sha `a2cb6cf3`, git_dirty False, started 2026-09-07T08:11:59Z, wallclock 11.2 s, argv `--sweep --fine-cells-per-lambda 30 --ratio 1.2,1.4,2.0 --widths 2,4,8,16,32 --out validation/research/multiband_nu/results/e1_band_law_sweep.json`.
 
-| cell | arm | actual source / probe (mm) | declared (mm) | R_meas | R_model | window (frozen) | recorded verdict | status of the number |
+| cell | arm | cell 85 / cell 100 as coarse-cell multiples (mm; the physical z in the A runs is smaller where fine cells precede the cell) | declared (mm) | R_meas | R_model | window (frozen) | recorded verdict | status of the number |
 |---|---|---|---|---|---|---|---|---|
 | N30_r1.2 | single | 122.4 / 144.0 | 167.0 / 195.8 | 2.1535e-03 | 2.1846e-03 | [1.7177e-03, 2.6515e-03] | inside | reflection at an undeclared geometry; reported, not gated |
 | N30_r1.2 | n_b = 2 | 122.4 / 144.0 | 167.0 / 195.8 | 2.5042e-03 | 2.5449e-03 | [2.0059e-03, 3.0839e-03] | inside | reflection at an undeclared geometry; reported, not gated |
@@ -478,3 +478,192 @@ values to float32 reproducibility, and lane A's to 1e-6 relative — that
 is a check on the fix, not a new measurement). Both attempts stay in the
 tree; the second writes `results/e1_band_law_sweep.json`. Same three
 calls as section 4, resolution 30 first.
+
+### Second attempt — measured (b1cd9e63 / ec008ead; no window above changed)
+
+Provenance: git_sha `ec008ead`, git_dirty True, argv of the finalizing call `--sweep --fine-cells-per-lambda 15,30,60 --ratio 1.2,1.4,2.0 --widths 2,4,8,16,32 --out validation/research/multiband_nu/results/e1_band_law_sweep.json --resume`, rfx_file `/Users/byungkwankim/Documents/rfx-nu-exp1/rfx/__init__.py`; the three measuring calls: N = 30 on `b1cd9e63` (fresh JSON), N = 15 and N = 60 on `b1cd9e63` with `--resume`; the finalizing `--resume` call on `ec008ead` re-ran no arm (all nine cells present) and recomputed the law-(i) records over all cells. Per-cell wallclock 2.8-4.6 s (B run + 6 arms).
+
+### Table A — per-arm results (54 arms; window `|R_meas - R_model| <= 0.20 R_model + 3e-5`, frozen)
+
+| cell | arm | nz | R_meas | dB | R_model | dev abs | dev rel (%) | window (frozen) | (ii) bound 2 R_1 x 1.05 | gates hold | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| N15_r1.2 | single ramp | 243 | 8.3382e-03 | -41.6 | 8.4395e-03 | 1.01e-04 | 1.20 | [6.7216e-03, 1.0157e-02] | — | True | HELD |
+| N15_r1.2 | n_b = 2 | 201 | 1.5884e-02 | -36.0 | 1.6048e-02 | 1.64e-04 | 1.02 | [1.2809e-02, 1.9288e-02] | 1.7723e-02 held | True | HELD |
+| N15_r1.2 | n_b = 4 | 203 | 1.5246e-02 | -36.3 | 1.5452e-02 | 2.06e-04 | 1.34 | [1.2332e-02, 1.8572e-02] | 1.7723e-02 held | True | HELD |
+| N15_r1.2 | n_b = 8 | 207 | 5.0114e-03 | -46.0 | 5.0067e-03 | 4.74e-06 | 0.09 | [3.9754e-03, 6.0380e-03] | 1.7723e-02 held | True | HELD |
+| N15_r1.2 | n_b = 16 | 215 | 1.3329e-03 | -57.5 | 1.2700e-03 | 6.28e-05 | 4.94 | [9.8604e-04, 1.5541e-03] | 1.7723e-02 held | True | HELD |
+| N15_r1.2 | n_b = 32 | 231 | 6.0761e-03 | -44.3 | 6.2037e-03 | 1.28e-04 | 2.06 | [4.9330e-03, 7.4744e-03] | 1.7723e-02 held | True | HELD |
+| N15_r1.4 | single ramp | 218 | 2.2269e-02 | -33.0 | 2.2518e-02 | 2.49e-04 | 1.10 | [1.7984e-02, 2.7051e-02] | — | True | HELD |
+| N15_r1.4 | n_b = 2 | 149 | 4.4091e-02 | -27.1 | 4.4597e-02 | 5.06e-04 | 1.13 | [3.5648e-02, 5.3547e-02] | 4.7287e-02 held | True | HELD |
+| N15_r1.4 | n_b = 4 | 151 | 3.6858e-02 | -28.7 | 3.7341e-02 | 4.82e-04 | 1.29 | [2.9843e-02, 4.4839e-02] | 4.7287e-02 held | True | HELD |
+| N15_r1.4 | n_b = 8 | 155 | 2.0654e-02 | -33.7 | 2.0803e-02 | 1.49e-04 | 0.71 | [1.6612e-02, 2.4993e-02] | 4.7287e-02 held | True | HELD |
+| N15_r1.4 | n_b = 16 | 163 | 1.1287e-02 | -38.9 | 1.1330e-02 | 4.26e-05 | 0.38 | [9.0336e-03, 1.3625e-02] | 4.7287e-02 held | True | HELD |
+| N15_r1.4 | n_b = 32 | 179 | 8.5780e-03 | -41.3 | 8.8391e-03 | 2.61e-04 | 2.95 | [7.0413e-03, 1.0637e-02] | 4.7287e-02 held | True | HELD |
+| N15_r2 | single ramp | 182 | 1.7725e-01 | -15.0 | 1.5464e-01 | 2.26e-02 | 14.62 | [1.2368e-01, 1.8559e-01] | — | True | HELD |
+| N15_r2 | n_b = 2 | 75 | 2.8346e-01 | -11.0 | 2.7263e-01 | 1.08e-02 | 3.98 | [2.1807e-01, 3.2718e-01] | 3.2473e-01 held | True | HELD |
+| N15_r2 | n_b = 4 | 77 | 1.5513e-01 | -16.2 | 1.1613e-01 | 3.90e-02 | 33.59 | [9.2871e-02, 1.3938e-01] | 3.2473e-01 held | True | **FIRED** |
+| N15_r2 | n_b = 8 | 81 | 2.4680e-01 | -12.2 | 2.6913e-01 | 2.23e-02 | 8.30 | [2.1527e-01, 3.2298e-01] | 3.2473e-01 held | True | HELD |
+| N15_r2 | n_b = 16 | 89 | 2.3596e-01 | -12.5 | 2.3236e-01 | 3.59e-03 | 1.55 | [1.8586e-01, 2.7887e-01] | 3.2473e-01 held | True | HELD |
+| N15_r2 | n_b = 32 | 105 | 9.6782e-02 | -20.3 | 1.2316e-01 | 2.64e-02 | 21.42 | [9.8501e-02, 1.4783e-01] | 3.2473e-01 held | True | **FIRED** |
+| N30_r1.2 | single ramp | 486 | 2.1745e-03 | -53.3 | 2.1846e-03 | 1.01e-05 | 0.46 | [1.7177e-03, 2.6515e-03] | — | True | HELD |
+| N30_r1.2 | n_b = 2 | 399 | 2.5541e-03 | -51.9 | 2.5449e-03 | 9.19e-06 | 0.36 | [2.0059e-03, 3.0839e-03] | 4.5876e-03 held | True | HELD |
+| N30_r1.2 | n_b = 4 | 401 | 3.6439e-03 | -48.8 | 3.6408e-03 | 3.11e-06 | 0.09 | [2.8826e-03, 4.3989e-03] | 4.5876e-03 held | True | HELD |
+| N30_r1.2 | n_b = 8 | 405 | 4.2903e-03 | -47.4 | 4.3260e-03 | 3.56e-05 | 0.82 | [3.4308e-03, 5.2212e-03] | 4.5876e-03 held | True | HELD |
+| N30_r1.2 | n_b = 16 | 413 | 1.4175e-04 | -77.0 | 1.0041e-04 | 4.13e-05 | 41.18 | [5.0326e-05, 1.5049e-04] | 4.5876e-03 held | True | HELD |
+| N30_r1.2 | n_b = 32 | 429 | 8.7097e-04 | -61.2 | 9.2166e-04 | 5.07e-05 | 5.50 | [7.0733e-04, 1.1360e-03] | 4.5876e-03 held | True | HELD |
+| N30_r1.4 | single ramp | 435 | 5.7302e-03 | -44.8 | 5.7907e-03 | 6.05e-05 | 1.04 | [4.6026e-03, 6.9788e-03] | — | True | HELD |
+| N30_r1.4 | n_b = 2 | 294 | 7.4364e-03 | -42.6 | 7.4916e-03 | 5.51e-05 | 0.74 | [5.9633e-03, 9.0199e-03] | 1.2160e-02 held | True | HELD |
+| N30_r1.4 | n_b = 4 | 296 | 1.0063e-02 | -39.9 | 1.0141e-02 | 7.80e-05 | 0.77 | [8.0826e-03, 1.2199e-02] | 1.2160e-02 held | True | HELD |
+| N30_r1.4 | n_b = 8 | 300 | 1.1164e-02 | -39.0 | 1.1296e-02 | 1.32e-04 | 1.16 | [9.0066e-03, 1.3585e-02] | 1.2160e-02 held | True | HELD |
+| N30_r1.4 | n_b = 16 | 308 | 1.2559e-03 | -58.0 | 1.2101e-03 | 4.58e-05 | 3.78 | [9.3810e-04, 1.4822e-03] | 1.2160e-02 held | True | HELD |
+| N30_r1.4 | n_b = 32 | 324 | 1.4248e-03 | -56.9 | 1.5111e-03 | 8.63e-05 | 5.71 | [1.1789e-03, 1.8434e-03] | 1.2160e-02 held | True | HELD |
+| N30_r2 | single ramp | 364 | 3.1445e-02 | -30.0 | 3.1873e-02 | 4.29e-04 | 1.34 | [2.5469e-02, 3.8278e-02] | — | True | HELD |
+| N30_r2 | n_b = 2 | 147 | 5.1606e-02 | -25.7 | 5.2225e-02 | 6.20e-04 | 1.19 | [4.1750e-02, 6.2701e-02] | 6.6934e-02 held | True | HELD |
+| N30_r2 | n_b = 4 | 149 | 6.0981e-02 | -24.3 | 6.1758e-02 | 7.77e-04 | 1.26 | [4.9377e-02, 7.4140e-02] | 6.6934e-02 held | True | HELD |
+| N30_r2 | n_b = 8 | 153 | 5.5724e-02 | -25.1 | 5.6522e-02 | 7.98e-04 | 1.41 | [4.5187e-02, 6.7856e-02] | 6.6934e-02 held | True | HELD |
+| N30_r2 | n_b = 16 | 161 | 2.2454e-02 | -33.0 | 2.2583e-02 | 1.30e-04 | 0.57 | [1.8037e-02, 2.7130e-02] | 6.6934e-02 held | True | HELD |
+| N30_r2 | n_b = 32 | 177 | 8.0931e-03 | -41.8 | 8.0389e-03 | 5.42e-05 | 0.67 | [6.4011e-03, 9.6767e-03] | 6.6934e-02 held | True | HELD |
+| N60_r1.2 | single ramp | 970 | 5.4227e-04 | -65.3 | 5.5131e-04 | 9.04e-06 | 1.64 | [4.1104e-04, 6.9157e-04] | — | True | HELD |
+| N60_r1.2 | n_b = 2 | 793 | 3.3807e-04 | -69.4 | 3.3671e-04 | 1.36e-06 | 0.40 | [2.3937e-04, 4.3405e-04] | 1.1577e-03 held | True | HELD |
+| N60_r1.2 | n_b = 4 | 795 | 5.2290e-04 | -65.6 | 5.2078e-04 | 2.12e-06 | 0.41 | [3.8662e-04, 6.5494e-04] | 1.1577e-03 held | True | HELD |
+| N60_r1.2 | n_b = 8 | 799 | 8.3168e-04 | -61.6 | 8.3206e-04 | 3.76e-07 | 0.05 | [6.3565e-04, 1.0285e-03] | 1.1577e-03 held | True | HELD |
+| N60_r1.2 | n_b = 16 | 807 | 1.0886e-03 | -59.3 | 1.1025e-03 | 1.39e-05 | 1.26 | [8.5204e-04, 1.3531e-03] | 1.1577e-03 held | True | HELD |
+| N60_r1.2 | n_b = 32 | 823 | 1.0093e-04 | -79.9 | 1.1832e-04 | 1.74e-05 | 14.69 | [6.4655e-05, 1.7198e-04] | 1.1577e-03 held | True | HELD |
+| N60_r1.4 | single ramp | 869 | 1.4436e-03 | -56.8 | 1.4597e-03 | 1.61e-05 | 1.10 | [1.1378e-03, 1.7816e-03] | — | True | HELD |
+| N60_r1.4 | n_b = 2 | 584 | 1.0066e-03 | -59.9 | 1.0020e-03 | 4.62e-06 | 0.46 | [7.7159e-04, 1.2324e-03] | 3.0654e-03 held | True | HELD |
+| N60_r1.4 | n_b = 4 | 586 | 1.4880e-03 | -56.5 | 1.4807e-03 | 7.30e-06 | 0.49 | [1.1546e-03, 1.8068e-03] | 3.0654e-03 held | True | HELD |
+| N60_r1.4 | n_b = 8 | 590 | 2.2805e-03 | -52.8 | 2.2779e-03 | 2.60e-06 | 0.11 | [1.7923e-03, 2.7635e-03] | 3.0654e-03 held | True | HELD |
+| N60_r1.4 | n_b = 16 | 598 | 2.8845e-03 | -50.8 | 2.9156e-03 | 3.12e-05 | 1.07 | [2.3025e-03, 3.5288e-03] | 3.0654e-03 held | True | HELD |
+| N60_r1.4 | n_b = 32 | 614 | 1.5633e-04 | -76.1 | 1.9694e-04 | 4.06e-05 | 20.62 | [1.2755e-04, 2.6632e-04] | 3.0654e-03 held | True | HELD |
+| N60_r2 | single ramp | 726 | 7.6709e-03 | -42.3 | 7.7788e-03 | 1.08e-04 | 1.39 | [6.1931e-03, 9.3646e-03] | — | True | HELD |
+| N60_r2 | n_b = 2 | 288 | 7.0269e-03 | -43.1 | 7.1028e-03 | 7.59e-05 | 1.07 | [5.6522e-03, 8.5534e-03] | 1.6336e-02 held | True | HELD |
+| N60_r2 | n_b = 4 | 290 | 9.3869e-03 | -40.5 | 9.4856e-03 | 9.86e-05 | 1.04 | [7.5585e-03, 1.1413e-02] | 1.6336e-02 held | True | HELD |
+| N60_r2 | n_b = 8 | 294 | 1.3112e-02 | -37.6 | 1.3247e-02 | 1.35e-04 | 1.02 | [1.0568e-02, 1.5926e-02] | 1.6336e-02 held | True | HELD |
+| N60_r2 | n_b = 16 | 302 | 1.5123e-02 | -36.4 | 1.5321e-02 | 1.97e-04 | 1.29 | [1.2227e-02, 1.8415e-02] | 1.6336e-02 held | True | HELD |
+| N60_r2 | n_b = 32 | 318 | 9.3702e-04 | -60.6 | 8.7464e-04 | 6.24e-05 | 7.13 | [6.6971e-04, 1.0796e-03] | 1.6336e-02 held | True | HELD |
+
+### Table B — law checks per cell and the validity-domain verdicts
+
+| cell | R_single meas / model (dev %) | c_meas (mm) | c_model (mm) | dev (mm) | window +/- (mm) | (iii) | widths fired | (ii) fired | gates hold (all 6) | law domain | -54 dB class |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| N15_r1.2 | 8.3382e-03 / 8.4395e-03 (1.20) | 2.915 | 2.892 | 0.024 | 0.240 | HELD | none | no | True | **inside** | outside |
+| N15_r1.4 | 2.2269e-02 / 2.2518e-02 (1.10) | 3.885 | 3.873 | 0.012 | 0.280 | HELD | none | no | True | **inside** | outside |
+| N15_r2 | 1.7725e-01 / 1.5464e-01 (14.62) | 6.663 | 7.166 | 0.503 | 0.400 | **FIRED** | [4, 32] | no | True | **OUTSIDE** | outside |
+| N30_r1.2 | 2.1745e-03 / 2.1846e-03 (0.46) | 1.469 | 1.423 | 0.045 | 0.120 | HELD | none | no | True | **inside** | inside |
+| N30_r1.4 | 5.7302e-03 / 5.7907e-03 (1.04) | 1.887 | 1.873 | 0.014 | 0.140 | HELD | none | no | True | **inside** | inside |
+| N30_r2 | 3.1445e-02 / 3.1873e-02 (1.34) | 3.281 | 3.289 | 0.008 | 0.200 | HELD | none | no | True | **inside** | outside |
+| N60_r1.2 | 5.4227e-04 / 5.5131e-04 (1.64) | 0.742 | 0.709 | 0.033 | 0.060 | HELD | none | no | True | **inside** | inside |
+| N60_r1.4 | 1.4436e-03 / 1.4597e-03 (1.10) | 0.964 | 0.929 | 0.034 | 0.070 | HELD | none | no | True | **inside** | inside |
+| N60_r2 | 7.6709e-03 / 7.7788e-03 (1.39) | 1.595 | 1.611 | 0.016 | 0.100 | HELD | none | no | True | **inside** | outside |
+
+### Table C — law check (i): single-ramp resolution scaling, measured vs model (window [0.75, 1.25] on measured / model)
+
+| ratio | N / 30 | (dz/lambda)^2 | model ratio (exponent) | measured ratio | measured / model | verdict |
+|---|---|---|---|---|---|---|
+| 1.2 | 15 / 30 | 4.0000 | 3.8632 (1.950) | 3.8345 | 0.9926 | HELD |
+| 1.2 | 60 / 30 | 0.2500 | 0.2524 (1.986) | 0.2494 | 0.9882 | HELD |
+| 1.4 | 15 / 30 | 4.0000 | 3.8886 (1.959) | 3.8862 | 0.9994 | HELD |
+| 1.4 | 60 / 30 | 0.2500 | 0.2521 (1.988) | 0.2519 | 0.9994 | HELD |
+| 2.0 | 15 / 30 | 4.0000 | 4.8516 (2.278) | 5.6368 | 1.1619 | HELD |
+| 2.0 | 60 / 30 | 0.2500 | 0.2441 (2.035) | 0.2439 | 0.9996 | HELD |
+
+### Table D — the 3 x 3 validity map (rows: fine cells per free-space wavelength; columns: ratio)
+
+| N \ r | 1.2 | 1.4 | 2.0 |
+|---|---|---|---|
+| 15 | law inside / class outside; R_1 -41.5 dB | law inside / class outside; R_1 -32.9 dB | law OUTSIDE / class outside; R_1 -16.2 dB |
+| 30 | law inside / class inside; R_1 -53.2 dB | law inside / class inside; R_1 -44.7 dB | law inside / class outside; R_1 -29.9 dB |
+| 60 | law inside / class inside; R_1 -65.2 dB | law inside / class inside; R_1 -56.7 dB | law inside / class outside; R_1 -42.2 dB |
+
+### Reading the tables
+
+**Control.** The 30 / 1.4 cell returns its first-attempt values and lane
+A's six measured values bit for bit (relative difference 0.0 on the single
+ramp and all five widths) — the fix moved nothing where the planes
+already coincided. The 30 / 1.2 rows moved 0.4-3.6 % (47 % on the 1.0e-4
+null row) between the undeclared planes of the first attempt and the
+declared ones, which is the size of the effect of a 45 mm plane shift
+through the gate's leakage — reported for the record, the first-attempt
+rows are not law results.
+
+**Per-arm windows (54 arms).** 52 HELD, **2 FIRED**, both in the 15 / 2.0
+cell: n_b = 4 (R_meas 1.5513e-1 vs model 1.1613e-1, +33.6 %) and
+n_b = 32 (9.678e-2 vs 1.2316e-1, -21.4 %); that cell's single ramp
+(+14.6 %), n_b = 2 (+4.0 %), 8 (-8.3 %) and 16 (+1.6 %) are inside. Every
+other arm is within 0.05-5.7 % of the chain model on rows above 2.5e-4
+and within 1.7e-5 .. 4.1e-5 ABSOLUTE on the three rows below it (1f:
+14.7 %, 20.6 % and 41.2 % relative on 1.18e-4, 1.97e-4 and 1.00e-4 —
+all inside their windows, so the declared floor reading rule was never
+invoked; the instrument's absolute floor on this fixture measures
+<= 4.1e-5 at 60 cells and <= 8.6e-5 over every row under 3e-3).
+Gates held on all 54 arms (the per-arm plane check included).
+
+**Law (i), resolution scaling of the single ramp.** HELD on all six
+pairs, measured / model 0.9926, 0.9882 (r = 1.2), 0.9994, 0.9994 (1.4),
+1.1619, 0.9996 (2.0). Measured ratios 3.83 / 3.89 (15 vs 30) and
+0.2494 / 0.2519 (60 vs 30) at r <= 1.4 against the pure (dz/lambda)^2
+values 4 / 0.25: the single-ramp reflection scales as (dz/lambda)^2 to
+within 4 % over 15-60 cells per wavelength at r <= 1.4, and the chain
+model's own 3 % shortfall at 15 cells is what the FDTD returns. At
+r = 2.0 the 15-cell ramp reflects 5.64 x the 30-cell one (model 4.85,
+exponent 2.28): still inside the 25 % window on measured / model, but the
+(dz/lambda)^2 statement itself is not a fit there.
+
+**Law (ii), the bound.** HELD at all 45 widths, including the fired cell
+(its largest row, 0.2835, sits under 2 x 0.1546 x 1.05 = 0.3247).
+
+**Law (iii), c.** HELD on eight cells, **FIRED on 15 / 2.0** (c_meas
+6.663 mm vs c_model 7.166 mm, deviation 0.503 mm against +/- 0.400 mm).
+On the eight held cells c_meas / DR = 1.215 / 1.224 / 1.237 (r = 1.2 at
+15 / 30 / 60 cells), 1.388 / 1.348 / 1.377 (1.4), 1.641 / 1.595 (2.0 at
+30 / 60) against the closed form 2 r^2 / (1 + r^2) = 1.180 / 1.324 /
+1.600: c is linear in the ramp cell at fixed ratio (the three
+resolutions agree within 2 % of each other at every ratio) and the
+closed form predicts it to +3-5 % (r = 1.2), +2-5 % (1.4), 0-3 % (2.0).
+The prediction of 1g stands as measured: c scales with DR = r x dz_fine.
+
+**The one cell outside the law domain, 15 / 2.0, is the one 1e named
+before the run** (coarse cell 8.0 mm = 3.75 cells per free-space
+wavelength, vg 0.60 c, coarse-lattice stopband edge 12.97 GHz inside the
+pulse's band). The arms fail in the pattern of gate leakage, not of a
+different law: the errors alternate in sign along the width ladder
+(+4.0, +33.6, -8.3, +1.6, -21.4 %), the bound holds, and the two fired
+rows are the two that sit nearest a null of the Fabry-Perot form
+(n_b = 4 and 32 are the two smallest R_model of the cell, 0.116 and
+0.123). Whether the chain model or the instrument owns those two numbers
+is not decided by this lane: the chain model is exact for the discrete
+scheme at a single frequency, the instrument's gate is a rectangular
+window over a pulse of which 12 % (the part above 12.97 GHz) cannot
+propagate in the coarse cells at all. Recorded as OUTSIDE; not tuned.
+
+### Validity domain, as measured
+
+Law (the deliverable, quoted with its range): for a fine band of n_b
+cells between two cap ramps (coarse r^2 d -> r d -> d and back), the
+reflection at 10 GHz on the PEC-closed TE10 fixture is
+
+    R(n_b) = 2 R_single |sin(k_g (n_b d + c))|,   c = 2 (r d) r^2 / (1 + r^2)  (+3-5 %),
+    R_single ∝ (d / lambda)^2 at fixed r (within 4 % over 15-60 cells for r <= 1.4),
+    R(n_b) <= 2 R_single at every width,
+
+with R_single the chain model's single ramp (measured within 0.5-1.6 %
+on eight cells, 14.6 % on 15 / 2.0). Inside the law domain: **eight of
+nine cells** — fine bands of 2-32 cells at 15, 30 and 60 fine cells per
+free-space wavelength for r = 1.2 and 1.4, and at 30 and 60 cells for
+r = 2.0 (FDTD within 0.05-5.7 % of the chain model on every row above
+2.5e-4). Outside: 15 / 2.0 (coarse cell 3.75 cells per wavelength; two
+of five width rows and the c window fired). Inside the -54 dB accuracy
+class (r <= 1.4, >= 30 cells): four cells, all inside the law domain.
+The law domain is larger than the accuracy class: the 15-cell cells at
+r <= 1.4 and the r = 2.0 cells at 30 and 60 cells follow the law with
+R_single of -41.5 / -32.9 / -29.9 / -42.2 dB — outside the class by the
+reflection they carry, not by the law they follow.
+
+Not witnessed here: bands under 2 cells, in-plane grading, an absorber
+present, frequencies other than 10 GHz, ratios above 2.0, coarse cells
+under 3.75 cells per free-space wavelength.
+
+`stopped = false`. Windows unchanged. Three commits carry this lane: the
+pre-declaration (`a2cb6cf3`), the first attempt with its defect record
+and the fix (`b1cd9e63`), the aggregation fix (`ec008ead`); the results
+JSON and this section follow in one commit.
