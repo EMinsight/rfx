@@ -270,6 +270,27 @@ is judged against the board that produced it:
   250 um that beta falls inside the envelope and the G1 finding disappears
   by arithmetic. It stays at 300 um.
 
+**One inconsistency left standing on purpose, with the measurement that says
+it is safe to leave.** The #830 SIGNED beta-envelope leg (reported, not
+gated) still builds its envelope and its `eps_eff` from
+`h_sub_realized_m` = 300 um, so inside one artifact the gated E2 leg now
+judges rfx's beta at 250 um while the reported signed leg judges the same
+array at 300 um. Moving it was measured rather than argued, on the current
+fixture:
+
+| h | admissible band | rfx signed deviation | verdict |
+|---|---|---|---|
+| 300 um (as shipped) | [-0.017176, +0.005624] | [0.019908, 0.021306] | above hi by 0.015682 |
+| 250 um | [-0.018157, +0.005483] | [0.012733, 0.014122] | above hi by 0.008639 |
+
+The finding does not flip: rfx is above hi either way, and the excess
+exceeds that board's own half-cell rasterization band either way (0.004954
+at 300 um, 0.005861 at 250 um), so the attribution sentence is the same
+too. The excess roughly halves. #830 is an open question with its own
+committed record and its own owner, so the leg is left where it is and this
+table is the input a future owner needs; it is not a defect this branch
+should decide.
+
 ---
 
 ## 3. tmtt beam-steer — ingested as a record; nothing to commit
