@@ -17,11 +17,28 @@ twice over and is no longer gated here:
     cancelling — the #702 sheet-node material fix moved the fed TM010 to
     8.16 GHz on the harminv-gate board (issue #782).
 
-The committed gates are tests/locks/test_patch_edgefed_s11_passivity.py
-(passivity + edge-fed signature) and
-tests/locks/test_patch_edgefed_resonance_harminv.py (signed resonance
-envelopes). This script stays as a runnable trace dump + passivity check
-on the same geometry.
+WHICH BOARD THIS IS (#782 one-mesh anchor rule, #931 redraw). There are two
+committed gates and they sit on two DIFFERENT realized boards on purpose:
+
+  * tests/locks/test_patch_edgefed_resonance_harminv.py — "Board H",
+    dx = H_SUB/4 = 196.75 um, ground plane at round(4 mm / dx) * dx =
+    3.935 mm, patch raster 43 x 51 cells;
+  * tests/locks/test_patch_edgefed_s11_passivity.py — "Board S",
+    dx = 0.197 mm exactly, ground plane 3.940 mm, patch raster 44 x 51.
+
+This script is on BOARD H: same dx, same ground plane, same W / L / W_MSL /
+PORT_MARGIN / L_MSL / DOM_X / DOM_Y / DOM_Z. Its trace is comparable with the
+harminv gate's numbers and NOT with the passivity gate's — Board S's band
+(7.4, 8.2 GHz), its Re(Zin) floor and its 44-cell raster were measured on a
+board this script does not build. Mixing a constant from one into a reading
+from the other describes a board that exists on no mesh, which is the ~2-point
+error class issue #782 documents. The passivity check below is the generic
+max|S11| <= 1.05 defect gate from issue #80, which is a physics bound rather
+than a per-board pin, so it applies to either.
+
+(The passivity gate module still carries a comment calling its geometry a
+mirror of this script. That was true before #931 redrew the boards; it is
+Board S's file to correct.)
 
 S11 = gamma/alpha is a pure voltage-wave amplitude ratio (it does NOT
 use Z0), so the Fix-C N-probe voltage decomposition is what this tests.

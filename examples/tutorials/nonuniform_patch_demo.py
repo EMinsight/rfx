@@ -39,10 +39,30 @@ air.  This tutorial shows the practical recipe AND the trap that comes with it:
      see ``examples/tutorials/patch_antenna_demo.py`` for that workflow.
      This script prints the full mode list and gates on no single frequency.
 
-Runtime: measured 2026-09-05, 64-core CPU, run alone: 1169 s (19 min), of
-which the num_periods=120 FDTD run is 1160 s.  Settling at 120 periods:
--53.8 dB (the witness in part [5] prints it every run).  Parts [1]-[3], the
-mesh lesson itself, are grid-only arithmetic and cost nothing to run.
+Runtime: the pre-#931 board measured 1169 s (19 min) at num_periods=120 on a
+64-core CPU run alone, settling -53.8 dB.  Under the ownership contract the
+foils are sheets and the cavity lost its two vacuum cells, which raised the
+modal Q: the same 120 periods measured -30.9 dB, under-settled by the witness
+in part [5].  The run is 200 periods for that reason and measures -41.4 dB,
+in 840 s of FDTD (VESSL 369367259280, CPU lane).  Parts [1]-[3], the mesh
+lesson itself, are grid-only arithmetic and cost nothing to run.
+
+The modes this now resolves, and why they are the patch's and not the mesh's
+(VESSL 369367259280):
+
+    1.9037 GHz  Q =  99.9   TM01 on the 38 mm width
+    2.4446 GHz  Q =  51.6   TM10 on the 29.5 mm length — the design mode
+    3.1847 GHz  Q =  97.9   TM11
+    3.7588 GHz  Q = 116.7   TM02
+
+TM10 sits 0.9 % under the Balanis estimate 2.4235 GHz.  The check that the
+list is a patch and not four numbers: TM11 predicted from the measured pair as
+sqrt(TM01^2 + TM10^2) is 3.100 GHz against 3.1847 measured, and TM02 predicted
+as 2 x TM01 is 3.807 GHz against 3.7588 — both inside the coarse-mode spread,
+so the ladder closes on itself.  The pre-contract board showed only three
+modes (2.1393 / 2.7266 / 3.5067 GHz, VESSL 369367259021); every one of them
+was HIGH, because a vacuum cell on each face of the cavity put air in series
+with the laminate and lowered eps_eff.
 
 Run:
   python examples/tutorials/nonuniform_patch_demo.py
@@ -300,7 +320,25 @@ assert abs(float(_z_nodes[k_patch] - _z_nodes[k_gnd]) - h_sub) < 1e-9, \
 print("\n[4] Preflight (advisories below are part of the result):")
 sim.preflight(strict=False)
 
-n_periods = 120   # the witness in [5] measured -53.8 dB here (2026-09-05)
+# 120 periods settled the PRE-#931 board (-53.8 dB, 2026-09-05). It does not
+# settle this one: with the vacuum cells gone from the cavity the modes are
+# higher-Q, and the #931 re-solve (VESSL 369367259177) measured -30.9 dB at
+# 120 — UNDER-SETTLED by the script's own witness. The binding mode is TM01
+# on the 38 mm width (1.9037 GHz, Q = 99.9), the slowest decayer in the set.
+#
+# 200 periods measures -41.4 dB (VESSL 369367259280). That clears the -40 dB
+# bar, but by 1.4 dB, which is less margin than the number below was chosen
+# for — worth knowing before anyone shortens this run or quotes a Q off it.
+# The two estimates that picked 200 bracketed badly: TM01's free decay says
+# -43.0 dB at 200 (1.6 dB pessimistic, close), while extrapolating the
+# measured -30.9 dB linearly in time says -51.5 dB (10 dB optimistic, wrong —
+# it charges the source ramp to the decay). The MEASURED slope between the two
+# runs is 0.131 dB/period (-30.9 at 120, -41.4 at 200); size any future change
+# from that, not from either estimate.
+#
+# Raising the run length is the response to an unsettled run; lowering the bar
+# would not be.
+n_periods = 200   # -41.4 dB measured; see the docstring runtime note
 print(f"\nRunning NU simulation (num_periods={n_periods})...")
 t0 = time.time()
 result = sim.run(num_periods=n_periods)
