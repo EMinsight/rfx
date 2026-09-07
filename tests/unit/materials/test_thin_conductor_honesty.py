@@ -215,9 +215,19 @@ def test_warning_names_the_deciding_quantity_and_states_no_false_inequality():
 def test_warning_does_not_invent_an_effective_thickness():
     """It must not report a cell-derived thickness as if it were the model.
 
-    A one-cell PEC layer is a SURFACE (rfx/boundaries/pec.py zeroes tangential
-    E only where the mask has a neighbour on that axis), so quoting
-    "dx thick = N oz" would replace a silent falsehood with a loud one.
+    The warning under test is ``add_thin_conductor``'s, and under the lattice
+    ownership contract (#931 §1.3) what that call declares is a SHEET: a
+    footprint on one node plane with ZERO thickness, owning no cell. So there
+    is no thickness to quote at all, and "dx thick = N oz" would replace a
+    silent falsehood with a loud one.
+
+    The docstring used to justify the same rule from the deleted #677 reading
+    ("a one-cell PEC layer is a surface, because apply_pec_mask zeroes
+    tangential E only where the mask has a neighbour on that axis"). That
+    reading is now wrong in the opposite direction: a one-cell PEC ``Box`` is a
+    VOLUME, dx thick, with a wall on each face — which is why declaring foil
+    that way is the thing the contract stopped, not a thing to describe more
+    honestly.
     """
     m = _warn_for(sigma_bulk=5.8e7, thickness=35e-6)[0]
     for forbidden in ("oz", "effective thickness", "modelled thickness"):
