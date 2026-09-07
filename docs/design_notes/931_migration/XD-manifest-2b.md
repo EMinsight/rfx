@@ -10,9 +10,9 @@ apply them the way the phase-2a replacement docs were applied. **§3** is the ch
 for landing pass 2, written so it can be executed without re-deriving anything.
 
 Everything quoted below is measured. Pass-1 runs: cv18 **369367259159**, cv19
-**369367259160**. Pass-2 runs submitted 2026-09-07 19:28/19:29 UTC: cv18
-**369367259291**, cv19 **369367259293**. Source commits the pass-2 runs execute:
-`901a3ad9` (cv18 gates) and `e861d280` (cv19 gates).
+**369367259160**. Pass-2 runs: cv18 **369367259291** (submitted 19:28 UTC, source `901a3ad9`), cv19
+**369367259297** (submitted 19:47 UTC, source `88b695b2`). An earlier cv19 pass-2
+submission, **369367259293**, was terminated before it consumed cluster time — see §2.2.
 
 ---
 
@@ -135,34 +135,51 @@ design.
 The f0 gate not moving is the pre-declared falsifier passing, and the manifest should say
 so in those words.
 
-### 2.2 GATING POSTURE — decided: edges and bandwidth are now GATED
+### 2.2 GATING POSTURE — decided: edges and bandwidth stay REPORTED, with a new reason
 
-The merge-time text ("band edges and bandwidth stay REPORTED … at ingest, either gate
-them at round-UP(measured envelope × 1.5) or restate here why not") is discharged. The
-decision is to **gate them**, and the arithmetic is:
+The merge-time text left this open ("at ingest, either gate them at round-UP(measured
+envelope × 1.5) or restate here why not"). Both halves of the decision are now settled by
+measurement, and the answer is **do not gate**, for a reason that is not the old one.
 
-| gate | envelope over the 9-config population | derivation | value |
-|---|---|---|---|
-| `GATE_EDGE_MHZ` | max(\|d_lo\|, \|d_hi\|) = **17.0553 MHz** | ceil(17.0553 × 1.5 = 25.583) | **26.0** |
-| `GATE_BW_MHZ` | \|d_bw\| = **9.9024 MHz** | ceil(9.9024 × 1.5 = 14.854) | **15.0** |
+What the regenerated record supplies, and what the manifest should now state:
 
-Both halves of the old objection are answered by measurement, not by argument: the
-half-cell comparator-input uncertainty is what the contract removes, and the regenerated
-population supplies the envelope the gate was waiting on. The population is the SAME nine
-configurations and the SAME settling criterion the f0 gate uses; `d_bw ≡ d_hi − d_lo`, so
-the two gates are one fact read twice and neither corroborates the other. Read them as
-regression locks with 50 % headroom, exactly like f0.
+| quantity | envelope over the 9-config population | what a gate would be |
+|---|---|---|
+| band edges, max(\|d_lo\|, \|d_hi\|) | **17.0553 MHz** | ceil(17.0553 × 1.5 = 25.583) = **26.0** |
+| bandwidth, \|d_bw\| | **9.9024 MHz** | ceil(9.9024 × 1.5 = 14.854) = **15.0** |
 
-Replace `REPORTED, NEVER GATED: individual band edges (+17.08 / +7.09 MHz) and bandwidth
-(-9.99 MHz), which are ONE fact and not two …` with the newly-gated form; the measured
-gated-row values are **+17.05 / +7.20 MHz** and **−9.85 MHz**.
+Committed as `gates.edge_measured_envelope_mhz`, `gates.bw_measured_envelope_mhz`,
+`gates.edge_bw_envelope_population` (nine rows) and
+`gates.edge_bw_gate_would_be_mhz` (`applied: false`, with the reason inline). No
+`edge_gate_mhz` / `bw_gate_mhz` key is emitted.
 
-`gates` key renames (meaning changed, so the names changed):
-`edge_reported_residual_mhz` → `edge_measured_envelope_mhz`,
-`bw_reported_residual_mhz` → `bw_measured_envelope_mhz`, plus new `edge_gate_mhz`,
-`bw_gate_mhz`, `edge_bw_envelope_population` (nine rows). The ring-down and b-invariance
-rows gain `lo` / `hi`, so the population reads recorded band edges rather than ones
-reconstructed from f0 and bw.
+**Why not, stated so it can be argued with.** The old reason — a half-cell
+comparator-input ambiguity about what the lattice built — is removed by the contract, and
+the second blocker (a gate needs a measured envelope, which only the regenerated record
+could produce) is discharged above. What stands is a *different* objection, and it is
+already written into this case's own gate file, in the module docstring and in
+`test_gate_is_hard_pinned_and_equals_the_derived_relation`, which actively refuses a
+record carrying those keys:
+
+> Band edges and bandwidth are NOT gated: they move ~22-40 MHz per cell of lattice
+> rounding against f0's ~2.4 MHz, so a gate on them would pin the mesh choice, not the
+> solver. … What is left is lattice rounding, which is smaller but still dominant for
+> these two quantities; re-gating them needs its own pre-declaration, not this migration.
+
+The measured envelope does not answer that, because the nine-configuration population is
+**single-mesh** — every member is a/90, and the axes it varies (guide height, run length,
+port standoff, absorber depth) are exactly the axes these observables are insensitive to.
+The a/60 diagnostic rung reads +24.5 / +15.2 MHz on the same quantities, which is the
+scale of the term the population cannot see. A 1.5× lock over a population blind to the
+dominant term is a lock on one mesh, not a bound on the solver.
+
+So: the gate is one line away and the number is committed, but applying it needs a
+pre-declaration and a cross-mesh sensitivity measurement, which is separate work.
+**This was reconsidered mid-ingest**: the gates were briefly implemented and committed
+(`e861d280`), then withdrawn (see the correction commit) when the gate file's standing
+refusal was read. The cv19 pass-2 run submitted against the gated source
+(**369367259293**) was terminated before it consumed cluster time and resubmitted against
+the corrected source.
 
 ### 2.3 Other measured digits
 
@@ -193,8 +210,9 @@ text says 20 MHz over the one-sided 8.00–8.50 window. The `-0.68` fit clause a
 
 ### 2.5 INGEST STATE
 
-Replace with: regenerated on VESSL **369367259293** (pass 2, source `e861d280`); pass 1
-was 369367259160, exited 0, and its envelopes are what the constants were derived from.
+Replace with: regenerated on VESSL **369367259297** (pass 2, source `88b695b2`); pass 1
+was 369367259160, exited 0, and its envelopes are what the constants were derived from
+and what §2.2's would-be gates are computed from.
 
 ---
 
@@ -291,11 +309,15 @@ tests between this commit and the fixture landing.
   value that cannot be prepared in advance.
 - `_PINS_REPINNED_FOR_931 = False` → **`True`**, in that same commit and no earlier;
   the flag exists so the pins skip rather than red while the fixture is pre-#931.
-- Add pins for the new gates: `edge_gate_mhz == 26.0`, `bw_gate_mhz == 15.0`, each with
-  the derived relation `gate_from_envelope(env, quantum=1)` recomputed from
-  `edge_bw_envelope_population` — hard pin AND derived relation, both, the way the f0
-  gate is pinned; and assert the population is nine rows and the same configs as
-  `f0_envelope_population`.
+- Do NOT add edge/BW gate pins. `test_gate_is_hard_pinned_and_equals_the_derived_relation`
+  asserts `"edge_gate_mhz" not in g and "bw_gate_mhz" not in g` and that refusal stands
+  (§2.2). What CAN be pinned, and is worth pinning, is the new evidence: the
+  `edge_bw_envelope_population` has nine rows and the same config names as
+  `f0_envelope_population`; `edge_measured_envelope_mhz` and `bw_measured_envelope_mhz`
+  equal the max over that population; and `edge_bw_gate_would_be_mhz.applied is False`
+  with its two values equal to `gate_from_envelope(env, quantum=1)`. That pins the
+  arithmetic of a gate that is deliberately not applied, so a future pre-declaration
+  starts from a checked number.
 - `test_non_gated_quantities_are_declared_non_gated` still passes: the posture keeps the
   literal phrase "band edges and bandwidth", now on the GATED side.
 

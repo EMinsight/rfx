@@ -231,7 +231,11 @@ def test_gates_are_hard_pinned_and_equal_recomputed_envelopes(fixture):
         gate_from_envelope(env_fine, quantum=100), abs=1e-9)
     assert g["richardson_gate_abs"] == pytest.approx(
         gate_from_envelope(env_rich, quantum=100), abs=1e-9)
-    assert g["fine_gate_abs"] == 0.04       # hard pin — root-cause to change
+    # Hard pins, one per realization — root-cause to change either. #931
+    # re-derived the pooled fine gate DOWN from the corrected-thickness
+    # envelope (0.0232 -> 0.0106, ceil(0.0106 x 1.5) at quantum 100 = 0.02);
+    # the Richardson gate came out unchanged (0.0051 -> 0.0046, still 0.01).
+    assert g["fine_gate_abs"] == (0.02 if _fixture_is_post_931(fixture) else 0.04)
     assert g["richardson_gate_abs"] == 0.01
 
 
@@ -299,11 +303,13 @@ def test_prose_numbers_are_recomputed_from_rows(fixture):
     scope = " ".join(fixture["claim_scope"].split())
     freqs = fixture["config"]["freqs_hz"]
     # ripple envelopes per tier
+    post = _fixture_is_post_931(fixture)
     rip_fine = max(_residual_ripple_pp(r) for r in fixture["gated_fine"])
     rip_coarse = max(_residual_ripple_pp(r) for r in fixture["coarse_diagnostic"])
-    assert f"{rip_fine:.4f}" == "0.0077", rip_fine
-    assert f"{rip_coarse:.4f}" == "0.0158", rip_coarse
-    assert "fine <= 0.0077, coarse <= 0.0158" in scope
+    want_fine, want_coarse = ("0.0076", "0.0152") if post else ("0.0077", "0.0158")
+    assert f"{rip_fine:.4f}" == want_fine, rip_fine
+    assert f"{rip_coarse:.4f}" == want_coarse, rip_coarse
+    assert f"fine <= {want_fine}, coarse <= {want_coarse}" in scope
     assert "MINUS the oracle" in scope       # the metric is named, not implied
     # pointwise raw-vs-flux difference (NOT the max_gap statistic)
     diffs = []
@@ -314,12 +320,14 @@ def test_prose_numbers_are_recomputed_from_rows(fixture):
                     == (fixture["config"]["canonical_glen_m"],
                         fixture["config"]["canonical_iris_frac"]))
         diffs.append(max(abs(a - b) for a, b in zip(raw["s11"], flux["s11"])))
-    assert max(diffs) == pytest.approx(0.033, abs=1e-3)
-    assert "up to 0.033" in scope
+    want_rawflux = 0.0068 if post else 0.033
+    assert max(diffs) == pytest.approx(want_rawflux, abs=1e-3)
+    assert f"up to {want_rawflux:g}" in scope
     # coarse-rung range and the frequency count
     coarse_gaps = [r["max_gap_abs"] for r in fixture["coarse_diagnostic"]]
-    assert f"{min(coarse_gaps):.3f}" == "0.018" and f"{max(coarse_gaps):.3f}" == "0.043"
-    assert "0.018-0.043 abs" in scope
+    want_lo, want_hi = ("0.008", "0.025") if post else ("0.018", "0.043")
+    assert f"{min(coarse_gaps):.3f}" == want_lo and f"{max(coarse_gaps):.3f}" == want_hi
+    assert f"{want_lo}-{want_hi} abs" in scope
     assert len(freqs) == 29 and "29 frequency" in scope
 
 
@@ -335,7 +343,9 @@ def test_modal_fence_is_retracted_with_data(fixture):
     for r in mw["rows"]:
         assert r["max_colpow"] <= 1.05, r      # clean on the corrected setup
         assert r["extractor_warnings"] == []
-    assert max(r["max_colpow"] for r in mw["rows"]) == pytest.approx(1.0207, abs=1e-3)
+    want_colpow = 1.0200 if _fixture_is_post_931(fixture) else 1.0207
+    assert max(r["max_colpow"] for r in mw["rows"]) == pytest.approx(
+        want_colpow, abs=1e-3)
     # PR #480 R2: accuracy rides with the retraction — modal must be recorded
     # AND be comparable to flux (a little worse, which is why flux gates).
     deltas = []
@@ -393,8 +403,19 @@ def test_one_cell_volume_witness_is_recorded_and_passing(fixture):
     this: the thin-limit anchor is a t -> 0 statement, and every assert in the
     case counted masked planes, which agree with the drawing by construction.
     Here the lattice-blind mode-matching oracle is run against rfx across
-    t = 1..8 cells; the t = 1 residual must lie inside the range the t = 2..8
-    rungs span, and every row's realized thickness must equal its drawn one.
+    t = 1..8 cells and every row's realized thickness must equal its drawn one.
+
+    THE CRITERION CHANGED, and the change is recorded rather than swapped in.
+    The witness first read "the t = 1 residual lies inside the range t = 2..8
+    spans". VESSL 369367259159 measured the residual MONOTONE decreasing in t,
+    and for a monotone family t = 1 is the extremum for every possible outcome
+    -- a perfect 0.0000 fails it too -- so the criterion could not pass and
+    said nothing in either direction. It is retired for vacuity, its verdict
+    kept in the record, and replaced by an identification test with no tunable
+    constant: the oracle at t-1, t and t+1 cells, argmin on t, every rung. At
+    t = 1 the t-1 alternative IS the pre-#931 realization (one wall, a
+    zero-thickness screen), so this is a direct discriminator between the two
+    rules at the one place they disagree.
     """
     if "one_cell_volume_witness" not in fixture:
         pytest.skip("the one-cell volume witness is written by the cv18 "
@@ -410,12 +431,37 @@ def test_one_cell_volume_witness_is_recorded_and_passing(fixture):
             r["t_cells"] * 22.86 / w["cells_per_a"], abs=1e-3), r
     one = next(r["max_gap_abs"] for r in rows if r["t_cells"] == 1)
     multi = [r["max_gap_abs"] for r in rows if r["t_cells"] >= 2]
-    assert min(multi) <= one <= max(multi), (
-        "the one-cell rung is an outlier against t = 2..8, so a one-cell PEC "
-        "volume is not realizing a dx-thick iris", one, multi)
-    assert w["passed"] is True
     assert w["one_cell_gap_abs"] == one
     assert list(w["multi_cell_gap_range_abs"]) == [min(multi), max(multi)]
+    if "identification" not in rows[0]:
+        # the retired criterion, on a record that predates the replacement
+        assert min(multi) <= one <= max(multi), (one, multi)
+        assert w["passed"] is True
+        return
+    # the retired criterion is kept as evidence, not as a gate, and it is
+    # recorded as having failed on a monotone residual
+    assert w["monotone_range_criterion"]["status"].startswith("RETIRED")
+    gaps = [r["max_gap_abs"] for r in rows]
+    assert gaps == sorted(gaps, reverse=True), (
+        "the residual is no longer monotone in t, so the retired criterion "
+        "was not vacuous on this record and the retirement needs re-arguing",
+        gaps)
+    for r in rows:
+        idn = r["identification"]
+        assert idn["argmin_t_cells"] == r["t_cells"], (
+            "a rung does not identify its own realized thickness", r["t_cells"], idn)
+        assert idn["identified_own_thickness"] is True
+        assert idn["gap_at_t"] < idn["gap_at_t_minus_1"], r["t_cells"]
+        assert idn["gap_at_t"] < idn["gap_at_t_plus_1"], r["t_cells"]
+        assert idn["margin_vs_runner_up_x"] > 1.0
+    one_idn = next(r["identification"] for r in rows if r["t_cells"] == 1)
+    # the #931 claim itself: at one cell the two-wall oracle beats the
+    # one-wall (zero-thickness) alternative by a clear factor, not a hair
+    assert w["one_cell_two_wall_vs_one_wall_x"] == pytest.approx(
+        one_idn["gap_at_t_minus_1"] / one_idn["gap_at_t"], rel=1e-3)
+    assert w["one_cell_two_wall_vs_one_wall_x"] > 3.0, w
+    assert w["identified_every_thickness"] is True
+    assert w["passed"] is True
 
 
 def test_diagnostics_and_witnesses_are_recorded(fixture):
@@ -605,9 +651,16 @@ def test_per_config_fine_gates_are_derived_bound_and_strictly_tighter(fixture):
     # that carried the most unearned slack (both d = 7.620 rows, whose one-cell
     # sensitivity is the smallest, and d = 18.288 canonical) gain >= 2x.
     assert max(script_gates.values()) < pooled
-    assert sum(1 for v in script_gates.values() if v <= pooled / 2) == 3
-    assert script_gates[_cfg_key(7.62, 0.2, 0.5)] == 0.015
-    assert script_gates[_cfg_key(7.62, 0.2, 0.42)] == 0.015
+    post = _fixture_is_post_931(fixture)
+    # The two d = 7.620 rows carry the smallest one-cell sensitivity, so they
+    # are the ones the pooled ceiling over-served most; they are still the
+    # tightest after #931 (0.006 against a 0.02 pooled ceiling). The count of
+    # rows at or under half the ceiling is 2 post-#931 and was 3 before, which
+    # is arithmetic on a ceiling that itself halved, not a loosening.
+    assert sum(1 for v in script_gates.values() if v <= pooled / 2) == (2 if post else 3)
+    want_weak = 0.006 if post else 0.015
+    assert script_gates[_cfg_key(7.62, 0.2, 0.5)] == want_weak
+    assert script_gates[_cfg_key(7.62, 0.2, 0.42)] == want_weak
 
 
 def test_the_audit_one_cell_defect_fails_the_new_gate_and_passed_the_old(fixture):
@@ -624,18 +677,25 @@ def test_the_audit_one_cell_defect_fails_the_new_gate_and_passed_the_old(fixture
               if r["d_mm"] == 7.62 and r["iris_frac"] == 0.5 and r["glen_m"] == 0.2)
     cr = next(r for r in fixture["coarse_diagnostic"]
               if r["d_mm"] == 7.62 and r["iris_frac"] == 0.5 and r["glen_m"] == 0.2)
-    assert fr["max_gap_abs"] == pytest.approx(0.0097, abs=5e-4)
-    assert cr["richardson_dev_abs"] == pytest.approx(0.0010, abs=5e-4)
+    post = _fixture_is_post_931(fixture)
+    # The audit's numbers were measured on the pre-#931 geometry, whose iris
+    # was one cell thinner than drawn; closing that shrinks every residual.
+    # The SHAPE of the finding is what this test locks, and it survives: the
+    # defect passes the pooled and Richardson gates and fails the per-config
+    # one, by a wider margin than before.
+    want = dict(own=0.0034, rich_own=0.0012, gap=0.0134, rich=0.0027) if post \
+        else dict(own=0.0097, rich_own=0.0010, gap=0.0265, rich=0.0030)
+    assert fr["max_gap_abs"] == pytest.approx(want["own"], abs=5e-4)
+    assert cr["richardson_dev_abs"] == pytest.approx(want["rich_own"], abs=5e-4)
     gap, rich = _one_cell_defect(fr, cr, +1, freqs)
-    # the audit's two numbers, reproduced
-    assert gap == pytest.approx(0.0265, abs=5e-4), gap
-    assert rich == pytest.approx(0.0030, abs=5e-4), rich
+    assert gap == pytest.approx(want["gap"], abs=5e-4), gap
+    assert rich == pytest.approx(want["rich"], abs=5e-4), rich
     # what the OLD gates did with them
     assert gap <= fixture["gates"]["fine_gate_abs"]          # 0.0265 <= 0.04
     assert rich <= fixture["gates"]["richardson_gate_abs"]   # 0.0030 <= 0.01
     # what the NEW gate does with them
     cfg_gate = _script_per_config_gates()[_cfg_key(7.62, 0.2, 0.5)]
-    assert cfg_gate == 0.015
+    assert cfg_gate == (0.006 if post else 0.015)
     assert gap > cfg_gate, (gap, cfg_gate)
     assert gap / cfg_gate >= 1.7, gap / cfg_gate
 
@@ -660,10 +720,18 @@ def test_one_cell_aperture_resolution_is_declared_and_pinned(fixture):
             rich_detected += rich > fixture["gates"]["richardson_gate_abs"]
     # over-aperture: every configuration, with margin above the repo's x1.5
     assert len(detected[+1]) == 8, detected
-    assert min(detected[+1]) == pytest.approx(1.77, abs=0.02), min(detected[+1])
-    # under-aperture: NOT resolved with margin anywhere -- the honest limit
-    assert len(detected[-1]) == 2, detected
-    assert max(detected[-1]) < 1.5, detected[-1]
+    if _fixture_is_post_931(fixture):
+        # BOTH signs resolved at every configuration once the thickness
+        # deficit is closed. The pre-#931 asymmetry was the deficit reading
+        # out on the aperture axis, not an aperture property.
+        assert min(detected[+1]) == pytest.approx(1.62, abs=0.02), min(detected[+1])
+        assert len(detected[-1]) == 8, detected
+        assert min(detected[-1]) >= 1.5, detected[-1]
+    else:
+        assert min(detected[+1]) == pytest.approx(1.77, abs=0.02), min(detected[+1])
+        # under-aperture: NOT resolved with margin anywhere -- the honest limit
+        assert len(detected[-1]) == 2, detected
+        assert max(detected[-1]) < 1.5, detected[-1]
     # Richardson is blind to the whole class, both signs, all configs
     assert rich_detected == 0
     scope = " ".join(fixture["claim_scope"].split())
@@ -788,17 +856,25 @@ def test_aperture_resolution_artifact_is_rederived_from_committed_traces(
     s = art["summary"]
     over = [p["one_cell_defect"]["over"] for p in art["pairs"]]
     under = [p["one_cell_defect"]["under"] for p in art["pairs"]]
+    post_art = "under_aperture_min_margin_x" in s
     assert s["n_pairs"] == 8
     assert s["over_aperture_detected"] == sum(
         d["detected_by_fine_gate"] for d in over) == 8
     assert s["under_aperture_detected"] == sum(
-        d["detected_by_fine_gate"] for d in under) == 2
+        d["detected_by_fine_gate"] for d in under) == (8 if post_art else 2)
     assert s["over_aperture_min_margin_x"] == pytest.approx(
         min(d["fine_margin_x"] for d in over), abs=1e-9)
     assert s["under_aperture_max_margin_x"] == pytest.approx(
         max(d["fine_margin_x"] for d in under), abs=1e-9)
-    assert s["under_aperture_max_margin_x"] < 1.5      # the honest limit
     assert s["over_aperture_min_margin_x"] >= 1.5      # the repo's own margin
+    if post_art:
+        # with every configuration detecting, the binding number is the WORST
+        # margin, so the artifact emits it and it too clears the repo margin
+        assert s["under_aperture_min_margin_x"] == pytest.approx(
+            min(d["fine_margin_x"] for d in under), abs=1e-9)
+        assert s["under_aperture_min_margin_x"] >= 1.5
+    else:
+        assert s["under_aperture_max_margin_x"] < 1.5  # the honest limit
     assert s["richardson_detected_either_sign"] == 0
     assert s["under_aperture_detected_configs"] == [
         p["config"] for p in art["pairs"]
@@ -819,23 +895,37 @@ def test_the_round1_narrow_oracle_claim_is_refuted_at_every_configuration(
     one-cell UNDER-aperture cancels rather than adds, and why the two d = 7.620
     configurations score BETTER defective than nominal.
     """
+    summary = aperture_resolution["summary"]
+    post_art = "under_aperture_min_margin_x" in summary
     pairs = aperture_resolution["pairs"]
     for p in pairs:
         dist = p["oracle_distance_abs"]
-        assert dist["-1.0"] > dist["+0.0"], p["config"]     # farther, not closer
-        assert p["nearest_offset_fine_cells"] > 0, p["config"]
-    assert aperture_resolution["summary"][
-        "nearest_offset_fine_cells_values"] == [0.5]
-    assert aperture_resolution["summary"][
-        "nearest_offset_is_positive_at_all_pairs"] is True
-    # the sole place the trace IS closer to a shifted oracle than to its own
-    # is on the WIDE side, at the strong aperture
+        # the retracted claim, refuted at every configuration under BOTH
+        # realizations: the trace is FARTHER from the narrow oracle, not closer
+        assert dist["-1.0"] > dist["+0.0"], p["config"]
     closer_than_nominal_wide = [p["config"] for p in pairs
                                 if p["oracle_distance_abs"]["+1.0"]
                                 < p["oracle_distance_abs"]["+0.0"]]
-    assert closer_than_nominal_wide == ["7.620|0.20|0.50", "7.620|0.20|0.42"]
-    assert (aperture_resolution["summary"]["under_aperture_scores_better_configs"]
-            == closer_than_nominal_wide)
+    if post_art:
+        # #931: the half-cell WIDE bias is gone with the thickness deficit --
+        # the nearest oracle is the declared aperture at every configuration,
+        # so nothing scores better defective than nominal any more.
+        for p in pairs:
+            assert p["nearest_offset_fine_cells"] == 0.0, p["config"]
+        assert summary["nearest_offset_fine_cells_values"] == [0.0]
+        assert summary["nearest_offset_is_positive_at_all_pairs"] is False
+        assert closer_than_nominal_wide == []
+        assert summary["under_aperture_scores_better_configs"] == []
+    else:
+        for p in pairs:
+            assert p["nearest_offset_fine_cells"] > 0, p["config"]
+        assert summary["nearest_offset_fine_cells_values"] == [0.5]
+        assert summary["nearest_offset_is_positive_at_all_pairs"] is True
+        # the sole place the trace IS closer to a shifted oracle than to its
+        # own is on the WIDE side, at the strong aperture
+        assert closer_than_nominal_wide == ["7.620|0.20|0.50", "7.620|0.20|0.42"]
+        assert (summary["under_aperture_scores_better_configs"]
+                == closer_than_nominal_wide)
 
 
 def test_claim_scope_cites_the_artifact_and_not_the_retracted_sentence(fixture):
@@ -844,7 +934,8 @@ def test_claim_scope_cites_the_artifact_and_not_the_retracted_sentence(fixture):
     assert "aperture_resolution.json" in scope
     assert "summary.under_aperture_scores_better_configs" in scope
     assert "summary.nearest_offset_fine_cells_values" in scope
-    assert "CORRECTION (issue #812 round 2)" in scope
+    assert ("CORRECTION (issue #812 round 2)" in scope
+            or "CORRECTION HISTORY (issue #812 round 2)" in scope)
     # the withdrawn assertion, in every form it was written
     assert "CLOSER to the oracle at d minus one fine cell" not in scope
     assert "-0.6 to -1 cell of effective aperture" not in scope
