@@ -650,3 +650,48 @@ def test_sub_cell_margin_does_not_swallow_a_real_sub_cell_body():
                 material="sub")
         item = _geo(sim.fidelity_report(print_report=False), 0)
         assert item["axes"][2]["sub_cell"] is True, (frac, item["axes"][2])
+
+
+@pytest.mark.parametrize("lane", ["uniform", "nonuniform"])
+def test_off_lattice_pec_box_reports_the_cell_count_the_solve_builds(lane):
+    """The report samples a PEC volume where the SOLVE samples it (#931 §1.1).
+
+    A PEC volume's occupancy is read at primal-cell CENTRES, half-open;
+    the report used to read every entity at NODE coordinates, which is the
+    dielectric sampler. On-lattice the two agree, so the disagreement was
+    invisible on every fixture in the repo. Off-lattice they do not: this
+    Box is drawn 0.3 dx .. 10.6 dx on x, whose centres (0.5 .. 10.5 dx)
+    give 11 occupied cells while the node sampler gives 10 — the report
+    would under-count the conductor by a cell and place its realized x_hi
+    face one cell short of the wall the solve puts there.
+
+    The expectation is not a hand-computed number: it is the cell mask the
+    assembly itself built, read through the shared realization helper.
+    """
+    from tests._realized_geometry import realized
+
+    D = _D_HALF_MM
+    from rfx.boundaries.spec import BoundarySpec
+    kw = dict(dz_profile=np.full(30, D)) if lane == "nonuniform" else {}
+    sim = Simulation(freq_max=6e9, domain=(20 * D, 20 * D, 30 * D), dx=D,
+                     cpml_layers=8,
+                     boundary=BoundarySpec(x="cpml", y="cpml", z="cpml"), **kw)
+    sim.add(Box((0.3 * D, 0.3 * D, 10 * D), (10.6 * D, 10.6 * D, 12 * D)),
+            material="pec")
+
+    rz = realized(sim)
+    n_solve = int(np.asarray(rz.pec_mask, dtype=bool).sum())
+    item = _geo(sim.fidelity_report(print_report=False), 0)
+
+    assert item["n_cells"] == n_solve, (item["n_cells"], n_solve)
+    # 11 x 11 x 2 cells: the centre sampler keeps the cell whose centre is
+    # at 10.5 dx, inside the drawn 10.6 dx face.
+    assert n_solve == 11 * 11 * 2, n_solve
+    x = item["axes"][0]
+    assert x["realized_um"] == (0.0, 11 * D * 1e6), x
+    # ... and the walls the solve realizes are the ones the row quotes:
+    # a solid 11-cell body shorts every plane it spans, so the bounding
+    # pair is what carries the sampler question.
+    planes = item["realized_wall_planes"]["x"]["planes_um"]
+    assert round(planes[0], 6) == 0.0 and round(planes[-1], 6) == 11 * D * 1e6, planes
+    assert len(planes) == 12, planes

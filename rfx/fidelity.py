@@ -95,7 +95,27 @@ def _node_arrays(sim, grid, nonuniform):
     return sizes, nodes
 
 
-def _entity_mask(entry, sim, grid, nonuniform):
+def _entity_mask(entry, sim, grid, nonuniform, *, pec_volume: bool = False):
+    """The cells this entity occupies, sampled the way the SOLVE samples it.
+
+    ``pec_volume=True`` is the lattice-ownership contract's VOLUME sampler
+    (#931 §1.1): a PEC volume's occupancy is read at primal-cell CENTRES,
+    half-open ``lo <= c < hi``. The report used to read every entity at
+    NODE coordinates, which is the DIELECTRIC sampler (§1.1, unchanged) —
+    for a conductor drawn off-lattice the two disagree by a cell, so the
+    per-entity cell count and realized extents in this report could differ
+    from what the solve actually built. Two samplers, one report: the
+    report is only honest if the PEC rows read the PEC sampler.
+
+    Dielectrics keep the node sampler, because that is what the assembly
+    writes their ``eps_r`` / ``sigma`` with.
+    """
+    if pec_volume:
+        from rfx.geometry.rasterize_grid import (
+            cell_centres_from_nodes, pec_volume_cell_mask)
+        coords, sizes = _contract_coords(sim, grid, nonuniform)
+        centres = cell_centres_from_nodes(coords, sizes)
+        return np.asarray(pec_volume_cell_mask(entry.shape, centres), dtype=bool)
     if nonuniform:
         from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid
         c = coords_from_nonuniform_grid(grid)
@@ -484,7 +504,8 @@ def fidelity_report(sim, print_report: bool = True):
             report.append(nb_item)
             if kind_src == "geometry" and _assembled_as_pec(sim, entry):
                 try:
-                    nb_mask = _entity_mask(entry, sim, grid, nonuniform)
+                    nb_mask = _entity_mask(entry, sim, grid, nonuniform,
+                                           pec_volume=(i not in refused))
                 except Exception as exc:
                     pec_unrasterized.append((i, name, type(exc).__name__))
                     nb_item["findings"].append(dict(
@@ -505,7 +526,6 @@ def fidelity_report(sim, print_report: bool = True):
                     pec_cells_by_entity[i] = np.flatnonzero(nb_mask)
             continue
         boxlike = type(entry.shape).__name__ == "Box"
-        mask = _entity_mask(entry, sim, grid, nonuniform)
         pec_assembled = kind_src == "geometry" and _assembled_as_pec(sim, entry)
         # #931 §1.3: a SHEET owns no cell, so its realized geometry is its
         # footprint on ONE node plane — not the cells the (node-sampled)
@@ -514,6 +534,15 @@ def fidelity_report(sim, print_report: bool = True):
         sheet_spec = _pec_sheet_spec(sim, entry, kind_src, grid, nonuniform)
         sheet_fp = (np.asarray(sheet_spec.footprint, dtype=bool)
                     if sheet_spec is not None else None)
+        # #931 §1.1: a PEC VOLUME is realized from cell CENTRES, so the row
+        # must be sampled from centres too or the report and the solve
+        # disagree by a cell on any off-lattice conductor. Sheets carry no
+        # cell (sheet_fp above) and a refused entry never reaches the
+        # assembly, so both keep the node sampler.
+        mask = _entity_mask(
+            entry, sim, grid, nonuniform,
+            pec_volume=(pec_assembled and sheet_spec is None
+                        and i not in refused))
         item = dict(entity=name, material=_declared_material(sim, mat_name),
                     declared_lo=tuple(float(v) for v in lo),
                     declared_hi=tuple(float(v) for v in hi),
