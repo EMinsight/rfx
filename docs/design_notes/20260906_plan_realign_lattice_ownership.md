@@ -108,6 +108,16 @@ both candidate planes and the one chosen. On a length-1 axis (2-D lane) a sheet 
 normal is that axis has no tangential components; it is realized as a 2-D volume of its
 footprint cells, with a notice.
 
+**Off-lattice interfaces.** A sheet meant to sit on a dielectric interface must have that
+interface on a node plane. If it does not (the canonical dx = 80 µm / h_sub = 254 µm
+microstrip: nodes at 240 and 320 µm), the sheet snaps to the nearest node — 240 µm, inside
+the substrate — while the old rule happened to put its single wall at 320 µm, on top of the
+substrate the mesh realized as four cells. Neither is the declared board. The contract does
+not paper over this: the assembly warns when a sheet plane lies strictly inside one
+dielectric (same material on both sides), preflight reports the declared-vs-realized
+offset, and the fixtures are redrawn ON-LATTICE (dx = h_sub / n, as cv06b already does) —
+the #325/#802 class, now made visible instead of absorbed by a tie rule.
+
 A lossy (`surface_impedance_f0`) sheet uses the SAME footprint and the SAME edge set; the
 #677 G4 identity ("f0 toggles loss, never geometry") is then true by construction, not by
 a test that compares two rules.
