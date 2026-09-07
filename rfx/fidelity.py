@@ -492,6 +492,10 @@ def fidelity_report(sim, print_report: bool = True):
     # never reads as a clean one (the #303 class: "All checks passed" with
     # a silently skipped family).
     pec_unrasterized: list = []
+    # Which of those entities realized as SHEETS, so the finding can print
+    # "footprint nodes" where it means nodes and "cells" where it means
+    # cells (a sheet contributes neither cells nor eps).
+    pec_sheet_entities: set = set()
 
     for kind_src, i, entry in entries:
         if kind_src == "thin_conductor":
@@ -604,20 +608,47 @@ def fidelity_report(sim, print_report: bool = True):
                         contributors.append((m, n_m))
                 who = ", ".join(
                     f"geometry[{m}] '{sim._geometry[m].material_name}' "
-                    f"({n_m} cells)" for m, n_m in contributors)
+                    f"({n_m} "
+                    f"{'sheet footprint nodes' if m in pec_sheet_entities else 'cells'})"
+                    for m, n_m in contributors)
+                # A VOLUME claims the cell, so the eps written there is
+                # discarded and "no-op" is literally true. A SHEET owns no
+                # cell and writes no eps (#931 §1.3): the dielectric IS
+                # solved, and what does not exist is the clearance. Both are
+                # the same #589 defect -- a later dielectric cannot carve a
+                # conductor -- but only one of them discards material, so
+                # they get different sentences. The volume-only text is
+                # unchanged byte for byte.
+                if any(m in pec_sheet_entities for m, _ in contributors):
+                    detail = (
+                        f"{n_ov} of this entity's {item['n_cells']} cells "
+                        f"({100.0 * n_ov / item['n_cells']:.1f}%) meet a "
+                        f"conductor declared EARLIER: {who}. "
+                        "_assemble_materials is PEC-OR-only and there is no "
+                        "CSG subtraction, so a dielectric declared after a "
+                        "conductor cannot carve it. A sheet contributor owns "
+                        f"no cell, so these {n_ov} cells keep the eps_r/sigma "
+                        "declared here — what does not exist is the "
+                        "CLEARANCE: the sheet's metal stays on its node "
+                        "plane and shorts the tangential E there. If a "
+                        "clearance/hole was intended, build the conductor "
+                        "with the hole")
+                else:
+                    detail = (
+                        f"{n_ov} of this entity's {item['n_cells']} cells "
+                        f"({100.0 * n_ov / item['n_cells']:.1f}%) are "
+                        f"already PEC from an entity declared EARLIER: "
+                        f"{who}. _assemble_materials is PEC-OR-only, so a "
+                        "dielectric declared after a conductor cannot "
+                        f"carve it — these {n_ov} cells are a no-op (the "
+                        "eps_r/sigma written there is never solved); if a "
+                        "clearance/hole was intended, build the conductor "
+                        "with the hole")
                 item["findings"].append(dict(
                     kind="dielectric-after-conductor-no-op",
                     overlap_cells=n_ov,
                     conductor_entities=[m for m, _ in contributors],
-                    detail=(f"{n_ov} of this entity's {item['n_cells']} cells "
-                            f"({100.0 * n_ov / item['n_cells']:.1f}%) are "
-                            f"already PEC from an entity declared EARLIER: "
-                            f"{who}. _assemble_materials is PEC-OR-only, so a "
-                            "dielectric declared after a conductor cannot "
-                            f"carve it — these {n_ov} cells are a no-op (the "
-                            "eps_r/sigma written there is never solved); if a "
-                            "clearance/hole was intended, build the conductor "
-                            "with the hole"),
+                    detail=detail,
                     remedy="if the overlap is intended (e.g. a slab drawn "
                            "through a ground sheet) no action is needed; if a "
                            "hole/clearance was intended, build the conductor "
@@ -638,11 +669,22 @@ def fidelity_report(sim, print_report: bool = True):
                             "that conductor is still possible"),
                     remedy="fix that conductor's shape so it rasterizes, "
                            "then re-run fidelity_report"))
-        # A SHEET owns no cell (#931 §1.3), so it claims none: a dielectric
-        # drawn after it is not overwritten by it.
-        if pec_assembled and sheet_fp is None:
-            pec_before |= mask
-            pec_cells_by_entity[i] = np.flatnonzero(mask)
+        # The REALIZED conductor footprint of this entity, in the same
+        # node-indexed array the dielectric rows are sampled on: a volume's
+        # cells, a SHEET's footprint nodes. A sheet owns no cell (#931
+        # §1.3) and writes no eps — which is why ``claimed-by-conductor``,
+        # an eps-fraction finding, correctly ignores it — but #589 is not
+        # about eps ownership: a dielectric declared after a conductor
+        # cannot carve it, and a sheet is no more carvable than a slab.
+        # Reading VOLUME cells only made the ordered finding go silent
+        # under a sheet ground, i.e. on the exact fixture it was written
+        # for (docs/design_notes/931_migration/T1-fidelity-sheet-overlap.md).
+        if pec_assembled:
+            realized_fp = mask if sheet_fp is None else sheet_fp
+            pec_before |= realized_fp
+            pec_cells_by_entity[i] = np.flatnonzero(realized_fp)
+            if sheet_fp is not None:
+                pec_sheet_entities.add(i)
         # Absorber overlap: cells outside [0, domain) live in the CPML pad.
         pad_hit = []
         for a in range(3):
