@@ -1,0 +1,55 @@
+# Group T (tests) — recompute ledger for #931
+
+Branch `feat/931-t4-materials-api-misc`, worktree
+`/root/workspace/byungkwan-workspace/research/rfx-931-T4-materials-api-misc`.
+Directories: tests/unit/{materials,api,misc,sources,farfield}.
+
+## VESSL runs submitted: NONE
+
+Every fixture in this group is a unit test. The migrations changed geometry
+DECLARATIONS (foil drawn as a one-cell Box -> foil declared as a sheet) and the
+tests that read them; none of them carries a committed fixture file, an oracle
+number, or a gate bound derived from a previous solve, so there is nothing to
+re-solve and no artifact to regenerate. The tests that DO solve re-derive their
+own numbers every run and gate on relative or self-consistency properties:
+
+| test | solve | what it gates | why the contract does not move it |
+|---|---|---|---|
+| `misc/test_flux_monitor_finite_size` | 2200 steps, 2-D 116x44x1 | finite-size flux == full-plane integrand over the SAME window | both monitors are on ONE run; the SWR witness is a `> 2.0` floor |
+| `farfield/test_ntff_box_nu_pads`, `test_farfield_chunking` | 120 / 300 steps | CPML pad indices; chunked == whole bitwise | index and self-consistency checks, not magnitudes |
+| `farfield/test_farfield_inplane_nonuniform` | short NU runs | uniform-valued profile == plain uniform grid; graded total radiated power in the discretization envelope | relative both ways |
+| `api/test_api::test_four_port_waveguide_boundary_ports_through_api` | `compute_waveguide_s_matrix(num_periods=30)` | channel-is-alive (`> 0.2`), relative isolation, and a `pytest.warns(..., "passivity")` LOCK | see below |
+| `api/test_visualize3d` | 50 steps | a PNG / VTK file appears | plotting smoke |
+
+The one fixture whose PHYSICS moved is the four-port septum: a volume now
+realizes walls on both of its bounding planes, so each guide either side is one
+cell narrower. Its gates are loose channel-alive bounds plus the passivity
+warning lock, and the whole test runs locally in well under the machine's
+one-minute ceiling, so it is re-run in place rather than on VESSL. If the
+passivity warning ever stops firing, the test's own docstring says the answer
+is to upgrade it to real magnitude / passivity gates — not to relax it, and not
+to delete the wrapper.
+
+`farfield/test_oblique_rcs_absolute_sigma` keeps its +0.86 / +0.85 dB locks
+untouched: its plate is a `rasterize(..., PEC_SIGMA)` sigma fill, which design
+note §1.8 fences out of the contract. crossval-C and the critic pass agree on
+this; tests-crossval's four GPU re-runs for the RCS family are unnecessary
+unless the PI extends the contract to sigma fills.
+
+## Local runs (this machine, JAX_PLATFORMS=cpu, -n 4)
+
+* `tests/unit/materials` at the branch tip, before any T edit: 154 passed
+  (178 s) — stages B and D had already migrated this directory.
+* migrated fixtures + the new ownership file: 59 passed, 1 skipped (120 s).
+* tests/unit/{materials,sources} + both viewer files after the migration:
+  255 passed (927 s).
+* tests/unit/api/test_api.py + test_conductor_mask_accessor.py + the four
+  volume-scatterer farfield files: 68 passed, 1 skipped (372 s). The four-port
+  septum's passivity-warning lock still fires under the new realization, and
+  the waveguide advisory now names "the REALIZED guide (40.0000 mm (y,
+  aperture) x 20.0000 mm (z, aperture))" — the #868 "40 mm guide reads 42 mm"
+  case, closed.
+* tests/unit/farfield + tests/unit/misc: 132 of 141 reported with zero
+  failures before the run hit its 1700 s wall-clock cap (machine load average
+  was 90-150 from the other #931 agents); the files T touched in that set are
+  all covered green by the runs above. Nothing failed in any of the five runs.
