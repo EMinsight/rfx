@@ -663,7 +663,7 @@ def test_two_plane_is_gone_from_the_package():
     """§1.5: no ``two_plane`` and no per-entry realization knob in rfx/.
     The reference-plane helper ``refplane_zc_two_plane`` is unrelated."""
     out = subprocess.run(
-        ["grep", "-rn", "two_plane", str(RFX_ROOT / "rfx")],
+        ["grep", "-rnI", "--exclude-dir=__pycache__", "two_plane", str(RFX_ROOT / "rfx")],
         capture_output=True, text=True, check=False).stdout.splitlines()
     hits = [h for h in out if "refplane_zc_two_plane" not in h]
     assert hits == [], "\n".join(hits)
