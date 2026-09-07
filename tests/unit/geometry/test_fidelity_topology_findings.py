@@ -379,19 +379,22 @@ def test_rule_i_does_not_fire_on_pec_after_dielectric_the_intended_contacts():
         assert _findings(sub, RULE_I_KIND) == []
 
 
-def test_rule_i_minimal_sheet_then_cylinder_fires_and_reverse_is_silent():
+def test_rule_i_minimal_slab_then_cylinder_fires_and_reverse_is_silent():
     def _sim(dielectric_first: bool):
         sim = Simulation(freq_max=10e9, domain=(10e-3, 10e-3, 10e-3), dx=1e-3,
                          boundary="cpml", cpml_layers=4)
         sim.add_material("ptfe", eps_r=2.1)
-        sheet = Box((0.0, 0.0, 4.5e-3), (10e-3, 10e-3, 5.5e-3))
+        # a one-cell PEC VOLUME drawn on-lattice (cell 4 under centre
+        # sampling, §1.1), not a sheet -- the accumulator must hold for
+        # both kinds
+        slab = Box((0.0, 0.0, 4e-3), (10e-3, 10e-3, 5e-3))
         hole = Cylinder(center=(5e-3, 5e-3, 5e-3), radius=1.5e-3, height=3e-3,
                         axis="z")
         if dielectric_first:
             sim.add(hole, material="ptfe")
-            sim.add(sheet, material="pec")
+            sim.add(slab, material="pec")
         else:
-            sim.add(sheet, material="pec")
+            sim.add(slab, material="pec")
             sim.add(hole, material="ptfe")
         return sim
 
@@ -411,9 +414,9 @@ def test_rule_i_minimal_sheet_then_cylinder_fires_and_reverse_is_silent():
 
 
 def test_rule_i_lists_every_earlier_conductor_and_sums_the_union():
-    """Two earlier PEC sheets overlapping the same dielectric: the finding
+    """Two earlier PEC volumes overlapping the same dielectric: the finding
     names both indices and counts the UNION of their cells (a cell claimed by
-    both sheets is one no-op cell, not two)."""
+    both is one no-op cell, not two)."""
     sim = Simulation(freq_max=10e9, domain=(10e-3, 10e-3, 10e-3), dx=1e-3,
                      boundary="cpml", cpml_layers=4)
     sim.add_material("d", eps_r=4.0)
@@ -424,11 +427,23 @@ def test_rule_i_lists_every_earlier_conductor_and_sums_the_union():
     (d,) = _rows(rep, "d")
     (f,) = _findings(d, RULE_I_KIND)
     assert f["conductor_entities"] == [0, 1]
+    # The oracle must use the samplers the code uses, or it agrees for the
+    # wrong reason: a PEC VOLUME is realized from cell CENTRES and a
+    # dielectric from NODES (#931 §1.1). On this geometry the two PEC
+    # samplers select DIFFERENT z layers (node 4 vs cell 3) that happen to
+    # give the same count, so a node-sampled oracle here would not
+    # discriminate.
+    from rfx.geometry.rasterize_grid import (
+        centres_from_uniform_grid, pec_volume_cell_mask)
     grid = sim._build_grid()
-    m0 = np.asarray(sim._geometry[0].shape.mask(grid), bool)
-    m1 = np.asarray(sim._geometry[1].shape.mask(grid), bool)
+    centres = centres_from_uniform_grid(grid)
+    m0 = np.asarray(pec_volume_cell_mask(sim._geometry[0].shape, centres), bool)
+    m1 = np.asarray(pec_volume_cell_mask(sim._geometry[1].shape, centres), bool)
     m2 = np.asarray(sim._geometry[2].shape.mask(grid), bool)
     assert f["overlap_cells"] == int(((m0 | m1) & m2).sum())
+    # and the discrimination the comment claims, measured here
+    n0 = np.asarray(sim._geometry[0].shape.mask(grid), bool)
+    assert not bool((m0 == n0).all()), "centre and node samplers must differ here"
 
 
 def test_rule_i_keys_on_assembled_pec_not_on_the_name_pec():
@@ -597,15 +612,24 @@ class _NoBoundsBox(Box):
         raise AttributeError("no analytic bounds")
 
 
-def _sheet_then_cylinder_sim(sheet_cls):
-    """Minimal ordered pair: a one-node PEC sheet at node 4, then a
-    dielectric Cylinder through it (the shape of the #589 no-op)."""
+def _slab_then_cylinder_sim(slab_cls):
+    """Minimal ordered pair: a one-cell PEC VOLUME at cell 4, then a
+    dielectric Cylinder through it (the shape of the #589 no-op).
+
+    A volume, not a sheet, and deliberately so: rule (i) has to hold for
+    both realizations, and the volume half is the one whose accumulator
+    never moved. The sheet half is the junction fixture above.
+
+    Drawn ON-LATTICE (``4*dx .. 5*dx``), because ``_half_cell(4, 4)`` names
+    node 4 under the two node samplers and cell 3 under the volume sampler
+    (§1.1) -- the trap this file's own fixture was caught by.
+    """
     sim = Simulation(freq_max=20e9, domain=(1.0e-3, 1.0e-3, 1.0e-3), dx=DX,
                      cpml_layers=4,
                      boundary=BoundarySpec(x="pec", y="pec", z="pec"))
     sim.add_material("d", eps_r=2.0)
-    z_lo, z_hi = _half_cell(4, 4)
-    sim.add(sheet_cls((0.0, 0.0, z_lo), (1.0e-3, 1.0e-3, z_hi)), material="pec")
+    z_lo, z_hi = 4 * DX, 5 * DX
+    sim.add(slab_cls((0.0, 0.0, z_lo), (1.0e-3, 1.0e-3, z_hi)), material="pec")
     sim.add(Cylinder(center=(0.5e-3, 0.5e-3, 0.5e-3), radius=0.25e-3,
                      height=0.6e-3, axis="z"), material="d")
     return sim
@@ -636,7 +660,7 @@ def test_rule_i_reports_a_conductor_whose_mask_fails_instead_of_dropping_it(monk
     is incomplete and names the conductor."""
     _failing_entity_mask(monkeypatch, _NoBoundsBox,
                          RuntimeError("synthetic rasterization failure"))
-    sim = _sheet_then_cylinder_sim(_NoBoundsBox)
+    sim = _slab_then_cylinder_sim(_NoBoundsBox)
     report = sim.fidelity_report(print_report=False)
 
     (gnd,) = [it for it in report if it["entity"].startswith("geometry[0]")]
@@ -659,10 +683,10 @@ def test_rule_i_reports_a_conductor_whose_mask_fails_instead_of_dropping_it(monk
 
 
 def test_rule_i_control_the_same_pair_with_a_working_mask_fires_normally():
-    """Control for the test above: identical geometry, the sheet as a plain
+    """Control for the test above: identical geometry, the slab as a plain
     Box, no injected failure -> the ordered no-op finding fires on the
     Cylinder row and no rasterization/unaudited finding exists anywhere."""
-    report = _sheet_then_cylinder_sim(Box).fidelity_report(print_report=False)
+    report = _slab_then_cylinder_sim(Box).fidelity_report(print_report=False)
     (d,) = _rows(report, "d")
     (f,) = _findings(d, RULE_I_KIND)
     assert f["conductor_entities"] == [0] and f["overlap_cells"] > 0

@@ -4119,6 +4119,15 @@
           },
           "findings": [
             {
+              "conductor_entities": [
+                0
+              ],
+              "detail": "5810 of this entity's 23240 cells (25.0%) meet a conductor declared EARLIER: geometry[0] 'pec' (5810 sheet footprint nodes). _assemble_materials is PEC-OR-only and there is no CSG subtraction, so a dielectric declared after a conductor cannot carve it. A sheet contributor owns no cell, so these 5810 cells keep the eps_r/sigma declared here \u2014 what does not exist is the CLEARANCE: the sheet's metal stays on its node plane and shorts the tangential E there. If a clearance/hole was intended, build the conductor with the hole",
+              "kind": "dielectric-after-conductor-no-op",
+              "overlap_cells": 5810,
+              "remedy": "if the overlap is intended (e.g. a slab drawn through a ground sheet) no action is needed; if a hole/clearance was intended, build the conductor WITH the hole (split it into boxes around the aperture) \u2014 no later entity can remove PEC"
+            },
+            {
               "axis": "x",
               "detail": "PLACEMENT off by 731.2 um (1.31% of the declared 56000.0 um extent); SIZE 55562.5 um (-437.5 um, -0.78%)",
               "kind": "off-lattice-face",
