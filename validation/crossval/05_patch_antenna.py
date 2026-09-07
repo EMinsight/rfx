@@ -473,16 +473,20 @@ def assert_realized_sheets(sim, grid):
     # planes must carry FR4, and the first node above the patch must not. This
     # is the half-cell-of-the-wrong-medium error (#702 / the buried-sheet
     # warning) stated as a build assertion instead of a run-log sentence.
-    eps = np.asarray(mats.eps_r)
+    # Material arrays are float32, so the comparison tolerance is storage
+    # resolution (~2e-7 relative on 4.3), not an accuracy allowance: the
+    # question here is "FR4 or vacuum", a factor of 4.3 apart.
+    _EPS_TOL = 1e-5
+    eps = np.asarray(mats.eps_r, dtype=np.float64)
     col = eps[i_c, j_c, :]
     if SHEET_PLANE_DELTA == 0:
         inner = col[K_GND:K_PATCH]
-        if not np.allclose(inner, eps_r, rtol=0, atol=1e-9):
+        if not np.allclose(inner, float(eps_r), rtol=0, atol=_EPS_TOL):
             raise RuntimeError(
                 "assert_realized_sheets: the cavity nodes between the sheet "
                 f"planes carry eps_r={np.unique(inner).tolist()}, not "
                 f"{eps_r}; the sheet is not on the laminate face")
-        if abs(float(col[K_PATCH]) - 1.0) > 1e-9:
+        if abs(float(col[K_PATCH]) - 1.0) > _EPS_TOL:
             raise RuntimeError(
                 "assert_realized_sheets: the node at the patch plane carries "
                 f"eps_r={float(col[K_PATCH])}, so the substrate leaks into the "
@@ -655,12 +659,22 @@ print_realized_stack(REALIZED)
 # no FDTD. This is the case's cheap smoke — it exercises exactly the thing the
 # #931 migration changed (which node planes the two conductors land on and what
 # the cavity between them is made of) and costs seconds instead of the hour the
-# openEMS leg needs. tests/crossval/test_cv05_realized_sheet_planes.py drives
-# the same two builds directly.
+# openEMS leg needs. RFX_CV05_REALIZED_JSON=<path> writes the measured stack
+# so a gate reads numbers rather than parsing prose;
+# tests/crossval/test_cv05_realized_sheet_planes.py drives exactly this pair.
 if os.environ.get("RFX_CV05_BUILD_ONLY"):
     _sim_p = build_patch(with_port=True)
     _rp = assert_realized_sheets(_sim_p, _sim_p._build_nonuniform_grid())
     print_realized_stack(_rp)
+    _rj = os.environ.get("RFX_CV05_REALIZED_JSON")
+    if _rj:
+        os.makedirs(os.path.dirname(os.path.abspath(_rj)), exist_ok=True)
+        with open(_rj, "w", encoding="utf-8") as _f:
+            json.dump({"source": True, "with_port": _rp,
+                       "no_port": REALIZED,
+                       "dz_sub_mm": dz_sub * 1e3, "dx_mm": dx * 1e3,
+                       "n_sub": n_sub, "h_sub_mm": h_sub * 1e3}, _f, indent=2)
+        print(f"  realized-stack JSON: {_rj}")
     print("RFX_CV05_BUILD_ONLY: realization asserted on both builds, no solve run.")
     raise SystemExit(0)
 
