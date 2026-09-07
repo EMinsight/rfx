@@ -661,3 +661,66 @@ def conductor_footprint(
                 "nothing' (#695).")
         return jnp.zeros(tuple(shape), dtype=bool)
     return out
+
+
+def warn_sheet_planes_inside_dielectric(sheets, eps_r) -> None:
+    """#931: a realized sheet plane buried strictly inside a dielectric.
+
+    A sheet is realized ON one node plane.  When the primal cells on BOTH
+    sides of that plane along the sheet's normal carry the SAME dielectric,
+    the declared conductor is sitting half a cell inside a dielectric body
+    rather than on its interface — the geometry the declaration described
+    (a foil ON the laminate) is not the geometry the lattice realized.
+    That is the #702 measurement in its honest form: the cavity gains a
+    half-cell of the wrong medium in series, 17 % on a 127 µm stack.
+
+    Reported through the ordinary ``warnings`` channel, once per sheet.
+    Nothing is re-sampled and nothing is refused — the remedy is to draw
+    the dielectric boxes up to the sheet plane, or the sheet on the
+    interface.  Preflight formalises this as a named check; this guard is
+    preflight-independent so the assembly warns even when preflight is
+    skipped.
+
+    A no-op when there are no sheets or when ``eps_r`` is traced (the
+    comparison would concretize a tracer).
+    """
+    import warnings as _warnings
+
+    from rfx.core.jax_utils import is_tracer
+
+    if not sheets or eps_r is None or is_tracer(eps_r):
+        return
+    eps = np.asarray(eps_r, dtype=float)
+    for sp in sheets:
+        a = int(sp.normal_axis)
+        k = int(sp.plane)
+        if k <= 0 or k >= eps.shape[a]:
+            continue                      # a domain-face plane has no "below"
+        foot = np.asarray(sp.footprint, dtype=bool)
+        if not foot.any():
+            continue
+        below = np.take(eps, k - 1, axis=a)
+        above = np.take(eps, k, axis=a)
+        sel = np.any(foot, axis=a)
+        if not sel.any():
+            continue
+        same = np.isclose(below, above, rtol=0.0, atol=1e-12)
+        buried = sel & same & (below > 1.0 + 1e-12)
+        n_buried = int(buried.sum())
+        if n_buried == 0:
+            continue
+        eps_val = float(below[buried][0])
+        _warnings.warn(
+            f"PEC sheet {getattr(sp, 'name', None) or '<unnamed>'!s} realizes "
+            f"on node plane {k} of axis {'xyz'[a]}, and the cells on BOTH "
+            f"sides of that plane carry the same dielectric (eps_r = "
+            f"{eps_val:.4g}) over {n_buried} of its footprint nodes. The "
+            "sheet is therefore buried half a cell inside the dielectric "
+            "instead of lying on its interface, so the realized cavity "
+            "carries half a cell of the wrong medium in series (#931; the "
+            "#702 measurement was 17 % on a 127 um stack). Draw the "
+            "dielectric bodies up to the sheet plane, or move the sheet to "
+            "the interface. Nothing is re-sampled.",
+            UserWarning,
+            stacklevel=3,
+        )

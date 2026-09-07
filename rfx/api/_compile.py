@@ -423,6 +423,13 @@ class _CompileMixin:
         except jax.errors.TracerBoolConversionError:
             has_pec = has_pec_cells
         kerr_chi3 = chi3_arr if has_kerr else None
+        # #931: a sheet plane buried strictly inside a dielectric body is
+        # the geometry the declaration did NOT describe. Warn (preflight
+        # names it too); nothing is re-sampled.
+        from rfx.materials.thin_conductor import (
+            warn_sheet_planes_inside_dielectric,
+        )
+        warn_sheet_planes_inside_dielectric(_pec_sheets, materials.eps_r)
         return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, boundary_pec_shapes, kerr_chi3
 
     @staticmethod

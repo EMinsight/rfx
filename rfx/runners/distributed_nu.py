@@ -42,7 +42,10 @@ from rfx.core.yee import (
     _shift_bwd,
 )
 from rfx.core.jax_utils import is_tracer  # noqa: F401  (Phase 2C reuse target)
-from rfx.boundaries.pec import tangential_edge_masks
+from rfx.boundaries.pec import (
+    realized_pec_edge_masks,
+    _volume_occupancy_masks,
+)
 from rfx.runners._distributed_common import (
     cpml_coeff_e_vacuum,
     cpml_coeff_h_vacuum,
@@ -771,13 +774,13 @@ def _apply_pec_mask_nu_shmap(state: FDTDState, sharded_pec_mask, mesh,
     seam ghost cells must not be acted on.
 
     The implementation:
-      * computes the per-component tangential mask on the local slab
+      * computes the per-component edge masks on the local slab
         including ghost cells by CALLING
-        ``rfx.boundaries.pec.tangential_edge_masks`` — the same function
-        ``apply_pec_mask`` calls, so the two lanes cannot drift apart
-        again (they did: this site kept an inlined ``jnp.roll`` copy of
-        the rule through #689 and wrapped at the y and z domain faces
-        after the single-device lane stopped);
+        ``rfx.boundaries.pec.realized_pec_edge_masks`` — the same
+        function every single-device lane calls (#931 §1.7), so the two
+        lanes cannot drift apart again (they did twice: an inlined
+        ``jnp.roll`` copy through #689, then the pre-#931 sheet rule
+        after the single-device lanes moved to the volume rule);
       * gates the mask so ghost-cell rows are forced to ``False`` before
         zeroing the field — interior real cells use their slab-local
         neighbour computation, and the **first/last real cells** see the
@@ -814,8 +817,8 @@ def _apply_pec_mask_nu_shmap(state: FDTDState, sharded_pec_mask, mesh,
         # y and z have no ghosts and no periodic BC on this lane (the NU
         # runners install none), so they take the same zero-pad convention
         # ``rfx/nonuniform.py``'s ``apply_pec_mask(st, pec_mask)`` takes.
-        mask_ex, mask_ey, mask_ez = tangential_edge_masks(
-            mask, (True, False, False))
+        mask_ex, mask_ey, mask_ez = realized_pec_edge_masks(
+            mask, periodic=(True, False, False))
 
         # Force ghost rows to False so we never touch a neighbour rank's
         # cells.  Real cells span [ghost, nx_local - ghost).
@@ -854,9 +857,8 @@ def _apply_pec_occupancy_nu_shmap(state: FDTDState, sharded_pec_occupancy,
 
     The occupancy at the first / last real cell sees the seam-neighbour's
     occupancy via the ghost row populated by
-    :func:`shard_pec_occupancy_x_slab`, which keeps the
-    ``jnp.maximum(roll(+1), roll(-1))`` neighbour rule consistent with
-    the single-device path.
+    :func:`shard_pec_occupancy_x_slab`, which keeps the shared §1.6
+    noisy-OR rule consistent with the single-device path.
     """
     if sharded_pec_occupancy is None:
         return state
@@ -871,12 +873,14 @@ def _apply_pec_occupancy_nu_shmap(state: FDTDState, sharded_pec_occupancy,
     def _pec_occ(ex, ey, ez, occ):
         occ = jnp.clip(occ.astype(ex.dtype), 0.0, 1.0)
 
-        occ_ex = occ * jnp.maximum(
-            jnp.roll(occ, 1, axis=0), jnp.roll(occ, -1, axis=0))
-        occ_ey = occ * jnp.maximum(
-            jnp.roll(occ, 1, axis=1), jnp.roll(occ, -1, axis=1))
-        occ_ez = occ * jnp.maximum(
-            jnp.roll(occ, 1, axis=2), jnp.roll(occ, -1, axis=2))
+        # ONE soft rule for both lanes (#931 §1.6): the noisy-OR of the
+        # four incident cells, from the shared helper.  The inlined
+        # ``occ * max(roll(+1), roll(-1))`` copy that stood here was a
+        # different rule altogether — a per-axis two-neighbour product,
+        # not the incident four — so this lane's soft PEC did not match
+        # its own hard PEC, let alone the single-device soft lane.
+        occ_ex, occ_ey, occ_ez = _volume_occupancy_masks(
+            occ, (True, False, False))
 
         # Force ghost rows to 0.0 so seam cells in another rank's slab are
         # not double-applied; real cells span [ghost, nx_local - ghost).

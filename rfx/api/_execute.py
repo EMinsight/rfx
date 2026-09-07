@@ -2471,9 +2471,25 @@ class _ExecuteMixin:
                 )
 
         # ---- Assemble full-domain materials ----
+        _dnu_pec_sheets: list = []
+        _dnu_pec_wires: list = []
         materials, debye_spec, lorentz_spec, pec_mask = (
-            self._assemble_materials_nu(grid)
+            self._assemble_materials_nu(
+                grid, pec_sheets=_dnu_pec_sheets, pec_wires=_dnu_pec_wires)
         )
+        if _dnu_pec_sheets or _dnu_pec_wires:
+            # #931: this lane shards a CELL mask along x and realizes it
+            # per slab.  A sheet and a sub-cell wire own no cell, so they
+            # have no sharded carrier here yet and would be silently
+            # absent from every rank.  Refuse instead of running the wrong
+            # geometry.
+            raise NotImplementedError(
+                "distributed=True on the non-uniform forward lane does not "
+                "realize PEC sheets or sub-cell wires (#931): the lane "
+                "shards a primal-cell mask along x and a sheet owns no "
+                "cell, so a declared sheet would vanish on every rank. "
+                "Draw the conductor as a volume (a Box at least one cell "
+                "thick) or run the single-device non-uniform lane.")
 
         # ``eps_override`` / ``sigma_override`` may be JAX tracers (the
         # caller is differentiating w.r.t. eps/sigma).  Keep the original

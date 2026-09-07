@@ -88,23 +88,64 @@ class TestStackup:
     # -- z positions -------------------------------------------------------
 
     def test_stackup_z_positions(self, simple_stackup):
-        """Verify that layers tile z-space continuously and are centred at z=0."""
-        shapes = simple_stackup.to_shapes()
-        total = simple_stackup.total_thickness
+        """Dielectric layers tile z-space; conductor layers are SHEETS.
 
-        # First layer starts at -total/2
-        first_box = shapes[0][0]
-        assert math.isclose(first_box.corner_lo[2], -total / 2, rel_tol=1e-12)
+        #931 §1.5: a 35 um copper foil is thinner than any cell a board
+        simulation uses, and a PEC Box with 0 < extent < one local cell is
+        refused. ``to_shapes`` therefore emits each conductor layer as a
+        ZERO-THICKNESS Box on the foil's mid-plane. The stack's own z
+        arithmetic (``total_thickness``, ``get_layer_z``) is unchanged, so
+        the dielectric boxes still tile the interior continuously.
+        """
+        stack = simple_stackup
+        shapes = stack.to_shapes()
+        total = stack.total_thickness
 
-        # Last layer ends at +total/2
-        last_box = shapes[-1][0]
-        assert math.isclose(last_box.corner_hi[2], total / 2, rel_tol=1e-12)
+        z = -total / 2.0
+        for layer, (box, _mat) in zip(stack.layers, shapes):
+            z_lo, z_hi = z, z + layer.thickness
+            if layer.material == "copper":
+                z_mid = 0.5 * (z_lo + z_hi)
+                assert math.isclose(box.corner_lo[2], z_mid, rel_tol=1e-12)
+                assert math.isclose(box.corner_hi[2], z_mid, rel_tol=1e-12)
+            else:
+                assert math.isclose(box.corner_lo[2], z_lo, rel_tol=1e-12)
+                assert math.isclose(box.corner_hi[2], z_hi, rel_tol=1e-12)
+            z = z_hi
+        assert math.isclose(z, total / 2.0, abs_tol=1e-15)
 
-        # Each layer's top equals the next layer's bottom (continuity)
-        for i in range(len(shapes) - 1):
-            z_hi = shapes[i][0].corner_hi[2]
-            z_lo_next = shapes[i + 1][0].corner_lo[2]
-            assert math.isclose(z_hi, z_lo_next, rel_tol=1e-12)
+    def test_conductor_layers_are_sheet_declarations(self, simple_stackup):
+        """Every copper layer is a zero-thickness Box (a sheet, #931)."""
+        for layer, (box, mat) in zip(simple_stackup.layers,
+                                     simple_stackup.to_shapes()):
+            is_zero = box.corner_hi[2] == box.corner_lo[2]
+            assert is_zero == (mat == "copper"), (
+                f"layer {layer.name!r} ({mat}): zero-thickness={is_zero}")
+
+    def test_stackup_layers_realize_as_sheets_on_a_simulation(self):
+        """A Stackup added to a Simulation collects one PEC sheet per foil.
+
+        Before #931 a 35 um copper Box on any realistic dx rasterized to
+        zero cells (silently) or, at HEAD, is refused as a sub-cell volume.
+        The sheet declaration is what makes the public class usable.
+        """
+        import warnings
+
+        import rfx
+
+        stack = Stackup.standard_2layer()
+        sim = rfx.Simulation(freq_max=10e9, domain=(0.02, 0.02, 0.01),
+                             dx=2e-4)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for box, mat in stack.to_shapes(size_xy=(0.01, 0.01)):
+                sim.add(box, material=mat)
+            sheets: list = []
+            _mats, _, _, pec_mask, *_ = sim._assemble_materials(
+                sim._build_grid(), pec_sheets=sheets)
+        assert len(sheets) == 2, "one sheet per copper layer"
+        assert all(sp.normal_axis == 2 for sp in sheets)
+        assert pec_mask is None, "a sheet owns no cell"
 
     # -- to_shapes geometry details ----------------------------------------
 

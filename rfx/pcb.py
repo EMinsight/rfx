@@ -27,6 +27,21 @@ from typing import Sequence
 
 from rfx.geometry.csg import Box
 
+# A layer whose resolved material carries at least this conductivity is a
+# CONDUCTOR layer, and #931 makes it a sheet declaration (see
+# ``Stackup.to_shapes``).  Same threshold as
+# ``Simulation._PEC_SIGMA_THRESHOLD``.
+_PCB_PEC_SIGMA_THRESHOLD = 1e6
+
+
+def _is_conductor_layer(material_name: str) -> bool:
+    """True when *material_name* resolves to a PEC-grade conductor."""
+    from rfx.api._spec import MATERIAL_LIBRARY
+    entry = MATERIAL_LIBRARY.get(material_name)
+    if entry is None:
+        return False
+    return float(entry.get("sigma", 0.0)) >= _PCB_PEC_SIGMA_THRESHOLD
+
 
 # ---------------------------------------------------------------------------
 # Material aliases for common PCB dielectrics not in MATERIAL_LIBRARY
@@ -162,6 +177,17 @@ class Stackup:
         list of (Box, material_name) tuples
             Each tuple contains the layer geometry and the resolved
             material name suitable for ``sim.add(shape, material=...)``.
+
+        Conductor layers are SHEETS (#931 §1.5).  A 35 µm copper foil is
+        thinner than any cell a board simulation uses, and a PEC Box with
+        ``0 < extent < one local cell`` is refused by the rasterizer — it
+        is a volume declaration the lattice cannot honour.  So a conductor
+        layer is emitted as a ZERO-THICKNESS Box on the foil's MID-plane
+        (``z_lo + thickness/2``), which is the canonical sheet
+        declaration: it realizes as one node plane, the nearest to that
+        mid-plane.  Dielectric layers keep their finite extent, so the
+        stack-up's z arithmetic (``get_layer_z``, ``total_thickness``) is
+        unchanged.
         """
         cx, cy = center_xy
         sx, sy = size_xy
@@ -176,11 +202,18 @@ class Stackup:
         for layer in self.layers:
             z_lo = z
             z_hi = z + layer.thickness
-            box = Box(
-                corner_lo=(x_lo, y_lo, z_lo),
-                corner_hi=(x_hi, y_hi, z_hi),
-            )
             mat = resolve_pcb_material(layer.material)
+            if _is_conductor_layer(mat):
+                z_mid = z_lo + 0.5 * layer.thickness
+                box = Box(
+                    corner_lo=(x_lo, y_lo, z_mid),
+                    corner_hi=(x_hi, y_hi, z_mid),
+                )
+            else:
+                box = Box(
+                    corner_lo=(x_lo, y_lo, z_lo),
+                    corner_hi=(x_hi, y_hi, z_hi),
+                )
             shapes.append((box, mat))
             z = z_hi
 

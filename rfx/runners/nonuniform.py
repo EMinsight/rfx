@@ -300,6 +300,10 @@ def assemble_materials_nu(
                 sigma=jnp.where(m, sigma_eff, materials.sigma),
                 mu_r=materials.mu_r,
             )
+    from rfx.materials.thin_conductor import (
+        warn_sheet_planes_inside_dielectric,
+    )
+    warn_sheet_planes_inside_dielectric(_pec_sheets, materials.eps_r)
     return materials, debye_spec, lorentz_spec, pec_mask
 
 
