@@ -204,6 +204,15 @@ def test_sub_aperture_walls_are_realized_where_they_are_drawn():
         "the drawn 40 mm gap must be the realized one")
 
 
+@pytest.mark.xfail(
+    reason="_port_transverse_spans still measures the guide from the "
+           "primal CELL mask, so it reads 42.0000 mm / 7.138 GHz / "
+           "6.424 GHz (#931 design note §6, 'not yet implemented'; owned "
+           "by the preflight migration). The numbers asserted below are "
+           "the contract's, unchanged; this marker is the pre-declared "
+           "falsifier for that migration and comes off when it lands.",
+    strict=True,
+)
 def test_sub_aperture_guide_is_measured_from_the_pec_walls():
     """The interior PEC Boxes leave a 40 mm guide inside a 120 mm domain.
     The cutoffs the finding quotes must come from those walls.

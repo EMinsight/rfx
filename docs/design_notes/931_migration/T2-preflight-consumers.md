@@ -1,11 +1,23 @@
 # T2 → owner of `rfx/api/_preflight.py`
 
-Two tests in `tests/unit/sparams` / `tests/unit/ports` are RED on branch
-`feat/931-t2-sparams-ports` and stay red until preflight stops measuring metal
-from the primal CELL mask (design note §6, "Not yet implemented"). Both are
-pre-declared falsifiers for that migration; neither is a tolerance to widen.
-The expected post-migration numbers are written into the tests already, so the
+Four tests in `tests/unit/sparams` / `tests/unit/ports` fail on branch
+`feat/931-t2-sparams-ports` until preflight stops measuring metal from the
+primal CELL mask (design note §6, "Not yet implemented"). All four are
+pre-declared falsifiers for that migration; none is a tolerance to widen. The
+expected post-migration numbers are written into the tests already, so the
 preflight change flips them green without anyone re-deriving anything.
+
+They are marked `@pytest.mark.xfail(strict=True)`, not left red. Strict is the
+whole point: the moment preflight lands, the test XPASSes and pytest FAILS the
+run, so the marker cannot be forgotten and the assertions cannot quietly stop
+meaning anything. A red that everybody learns to skip is not a falsifier. When
+you land the change, delete the marker — the body underneath is already the
+post-migration expectation.
+
+Sections 1 and 2 below are the two whose numbers this branch measured; section
+3 covers the two added 2026-09-07 (`test_thru_preflight_code_set_is_the_contract_set`
+in `test_lumped_twoport_vi_validation_battery.py`, and the referee-record gate,
+whose owner is a diagnostics script and which has its own note).
 
 ## 1. `test_port_aperture_rasterization.py::test_sub_aperture_guide_is_measured_from_the_pec_walls`
 

@@ -1182,6 +1182,16 @@ def _d5_gap_ground_truth(sim, position, component, extent, impedance=50.0):
     return bool(live_flags[-1]), (end_node + 1) in walls
 
 
+@pytest.mark.xfail(
+    reason="the #556 end-gap advisory still finds metal by scanning "
+           "pec_mask cells, and a foil sheet owns no cell, so it cannot "
+           "fire on this fixture at all (#931 design note §6, 'not yet "
+           "implemented'; owned by the preflight migration). The "
+           "ground-truth premise this file owns is asserted first and "
+           "passes; the marker is the pre-declared falsifier for the "
+           "advisory's move onto realized wall planes.",
+    strict=True,
+)
 def test_wire_port_end_gap_advisory_fires_on_a_declared_one_cell_gap():
     """POSITIVE (issue #556), re-declared on the lattice (#931).
 
