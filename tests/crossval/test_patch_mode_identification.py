@@ -319,22 +319,27 @@ def test_cv05_correct_build_passes_with_margin():
     assert (1, 1) in {o for _f, o, _r in ident.assignments if o}
 
 
-@pytest.mark.parametrize("run,f_ghz,rel", [
-    # values are the committed fixture's (rebuilt on the lab cluster, jax 0.6.2,
-    # VESSL 369367257743 -- the round-1 macOS build read 2.87308 / 2.98956 /
-    # 3.11259 here, i.e. within 2e-4 relative at two of three lengths and
-    # 1.3e-3 at 22.0 mm; design note 6.11)
-    ("patch_len_22p5mm", 2.87272, +0.1854),
-    ("patch_len_22p0mm", 2.99346, +0.2352),   # the audit's +24% point
-    ("patch_len_21p0mm", 3.11189, +0.2840),
+@pytest.mark.parametrize("run,f_low_ghz,f_drift_ghz,rel", [
+    # REPINNED for #931 (VESSL 369367259142). Values are the rebuilt fixture's,
+    # which was produced on the SHEET-declared board: ground and patch are
+    # zero-thickness PEC on the laminate's own node planes, so the cavity is
+    # 1.5000 mm of FR4 over six cells with no vacuum layer in it, and the patch
+    # x-extent is counted in realized metal EDGES instead of masked nodes (every
+    # census row but 22.0 and 38.0 reads one lower). Pre-#931 rows for the
+    # record: 2.87272 / +0.1854, 2.99346 / +0.2352, 3.11189 / +0.2840, all read
+    # off freqs[0] because the old board resolved no TM010 at these lengths.
+    ("patch_len_22p5mm", 1.92161, 3.04321, +0.2557),
+    ("patch_len_22p0mm", 1.92161, 3.04321, +0.2557),   # the audit's +24% point
+    ("patch_len_21p0mm", 1.92851, 3.31317, +0.3671),
 ])
-def test_cv05_mis_realized_resonant_length_fails_for_the_stated_reason(run, f_ghz, rel):
+def test_cv05_mis_realized_resonant_length_fails_for_the_stated_reason(
+        run, f_low_ghz, f_drift_ghz, rel):
     """(B) LIVE FDTD reproductions: the patch's realized resonant length is
     mis-built while every declaration -- including the anchor -- still says
     29.5 mm. Frequencies and the realized-cell census:
     ``cv05_ringdown_spectra.json::runs`` and ``::_realized_x_cell_census``.
 
-    The audit's +24% point is measured directly by the 22-cell realization
+    The audit's +24% point is measured directly by the 22-edge realization
     (``runs.patch_len_22p0mm``); the parametrization's ``rel`` column is
     re-derived from the fixture in the body below, so these digits are checked,
     not asserted. Exactly +24.00% is pinned algebraically by
@@ -343,12 +348,24 @@ def test_cv05_mis_realized_resonant_length_fails_for_the_stated_reason(run, f_gh
     In every case the drifted design mode is captured by a NEIGHBOURING
     declared member -- the cross-mode capture the audit described -- and the
     gate reports TM100 MISSING rather than reporting the neighbour as the
+    resonance.
+
+    #931 changed WHICH pole is which, not the verdict. On the sheet board every
+    mis-realized length also resolves TM010 (the b-axis mode, untouched by the
+    x-extent hook), so the lowest pole is no longer the drifted design mode --
+    it is a correctly identified TM010 sitting under 1% of its declared member.
+    The drifted a-axis mode is the SECOND pole and it now drifts UPWARD past
+    TM110 rather than into it. The identification verdict is unchanged: TM100
+    has no measured mode inside the window and nothing else is reported as the
     resonance."""
     data = _fixture("cv05_ringdown_spectra.json")["runs"][run]
     members = _members(CV05)
     freqs = [m["freq"] for m in data["modes"]]
-    assert freqs[0] / 1e9 == pytest.approx(f_ghz, abs=1e-5)
-    assert freqs[0] / members[(1, 0)] - 1 == pytest.approx(rel, abs=5e-4)
+    assert freqs[0] / 1e9 == pytest.approx(f_low_ghz, abs=1e-5)
+    assert freqs[1] / 1e9 == pytest.approx(f_drift_ghz, abs=1e-5)
+    assert freqs[1] / members[(1, 0)] - 1 == pytest.approx(rel, abs=5e-4)
+    # the lowest pole is TM010, identified with margin -- it is not the drift
+    assert abs(freqs[0] / members[(0, 1)] - 1) < 0.01
     ident = identify_patch_modes(freqs, members)
     assert not ident.ok
     assert ident.f_design is None
@@ -356,6 +373,27 @@ def test_cv05_mis_realized_resonant_length_fails_for_the_stated_reason(run, f_gh
                for r in ident.reasons), ident.reasons
     # the drifted mode did NOT become the reported resonance
     assert all(o != (1, 0) for _f, o, _r in ident.assignments)
+
+
+def test_cv05_22p5_and_22p0_are_one_realization_since_931():
+    """The two shortest mis-realized rows are now the SAME board, and the
+    fixture says so in its own realized_stack: 22.5 mm and 22.0 mm both realize
+    22 metal edges, so their ring-downs are identical.
+
+    Pre-#931 the node census read 23 and 22 and the two rows were distinct
+    builds (2.87272 vs 2.99346 GHz). Counting edges removed that distinction.
+    This is a property of the census, not a copied file -- if a future change
+    separates the two realizations again, this test fails and the
+    parametrization above must grow its second distinct row back."""
+    runs = _fixture("cv05_ringdown_spectra.json")["runs"]
+    a, b = runs["patch_len_22p5mm"], runs["patch_len_22p0mm"]
+    assert a["realized_stack"]["patch"]["x_edge_cells"] == 22
+    assert b["realized_stack"]["patch"]["x_edge_cells"] == 22
+    assert [(m["freq"], m["Q"]) for m in a["modes"]] == \
+           [(m["freq"], m["Q"]) for m in b["modes"]]
+    census = _fixture("cv05_ringdown_spectra.json")["_realized_x_cell_census"]
+    assert census["22.5"] == census["22.0"] == 22
+    assert "edges" in census["_unit"]
 
 
 def test_cv15_two_wall_realization_would_pass_with_margin():
@@ -608,20 +646,30 @@ def test_cv05_38mm_build_is_not_caught_on_the_cluster_host_a_fired_falsifier():
     """(B) at L = 38.0 mm (-25 %, a square patch) fired on the macOS build
     (two poles: 1.81365 GHz -> TM010, 3.5769 -> none; TM100 MISSING) and
     does NOT fire on the committed cluster build: a third, weak pole appears
-    at 2.6096 GHz (+7.68 % of TM100, amplitude an order below the others)
     inside the identification window and is named TM100. Recorded as a
     fired falsifier against the INSTRUMENT (a spurious low-amplitude pole
     in the design window is accepted), not softened: no amplitude floor is
     added after the fact. The three other mis-realized lengths still fail
-    by name (test above); the audit's +24 % point is among them."""
+    by name (test above); the audit's +24 % point is among them.
+
+    REPINNED for #931 (VESSL 369367259142, sheet-declared board). The falsifier
+    still fires and for the same reason -- a weak third pole in the window --
+    but on a 1.5000 mm all-FR4 cavity the whole spectrum sits higher: pre-#931
+    the three poles read 1.81334 / 2.60961 / 3.57690 GHz with the accepted pole
+    at +7.68 % of TM100; they now read 1.84005 / 2.70263 / 3.72514 GHz with the
+    accepted pole at +11.52 %. 38.0 mm is one of the two census rows whose
+    realized extent did NOT change (its faces are on the lattice), so this is
+    the cavity, not the footprint."""
     data = _fixture("cv05_ringdown_spectra.json")["runs"]["patch_len_38p0mm"]
     members = _members(CV05)
     modes = sorted(data["modes"], key=lambda m: m["freq"])
     freqs = [m["freq"] for m in modes]
     assert len(freqs) == 3
-    assert freqs[0] / 1e9 == pytest.approx(1.81334, abs=1e-5)
-    assert freqs[1] / 1e9 == pytest.approx(2.60961, abs=1e-5)
-    assert freqs[1] / members[(1, 0)] - 1 == pytest.approx(+0.0768, abs=5e-4)
+    assert freqs[0] / 1e9 == pytest.approx(1.84005, abs=1e-5)
+    assert freqs[1] / 1e9 == pytest.approx(2.70263, abs=1e-5)
+    assert freqs[1] / members[(1, 0)] - 1 == pytest.approx(+0.1152, abs=5e-4)
+    # the footprint did not move: 38.0 mm is on-lattice in both censuses
+    assert data["realized_stack"]["patch"]["x_edge_cells"] == 38
     amps = [m["amplitude"] for m in modes]
     assert amps[1] < 0.1 * max(amps), "the accepted pole is the weak one"
     ident = identify_patch_modes(freqs, members)

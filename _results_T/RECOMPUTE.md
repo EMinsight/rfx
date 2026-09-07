@@ -103,7 +103,7 @@ options are in `docs/design_notes/931_migration/T-tests-crossval.md` §3.
 | `rfx-931-post-cv19` | crossval-D | `19_wr90_iris_filter_aghanim.py --write-fixture` on the migrated builder. Until it lands, six tests in `test_wr90_iris_filter_gates.py` skip with that name, and `_PINS_REPINNED_FOR_931 = False` holds the four hard pins. |
 | `rfx-931-post-cv18` | crossval-D | `18_wr90_iris_modematch.py --write-fixture` with the aperture `- 1` deleted and a `t_c = 1` row added (design note §5 one-cell witness). Two tests skip naming it. |
 | `rfx-931-post-cv15` | crossval-C | cv15 re-solved on sheet declarations. All eight tests in `test_crossval_cv15_wall_planes.py` skip until the script imports. |
-| `rfx-931-post-cv05` | crossval-A | the canonical patch re-solved on the sheet-declared board. `_ENVELOPES_REDERIVED_FOR_931 = False` holds three slow gates. |
+| `rfx-931-post-cv05` | crossval-A | **DONE 2026-09-07 (VESSL 369367259302, phase-2b ingest).** `_ENVELOPES_REDERIVED_FOR_931 = True`; the three slow gates run. `D_ABS_TOL_DB` held at 1.0 (measured 0.0659 dB), `F_RES_REL_LO/HI` +0.06/+0.16 -> -0.02/+0.09 (measured +3.51 %, was +11.3 %), mode-pair band unchanged. The resonance band now straddles zero, so that gate is no longer sign-locked — a change of kind, stated in its docstring. Constants moved to lines 157/163/164. |
 | `rfx-931-post-cv06b` | crossval-B | cv06b re-solved with the trace and stub as sheets. The Z0-anchor test skips naming it; the run-log/live width comparison reds if the log is not refreshed with the declaration. |
 | `rfx-931-post-cv07`, cv20 Stage B | crossval-B / E | same foil decision; annotated in the test files. |
 
