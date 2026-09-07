@@ -512,7 +512,12 @@ def _pec_short_sim(*, conformal: bool):
         ),
         cpml_layers=10,
     )
-    sim.add(Box((0.085, 0, 0), (0.087, 0.04, 0.02)), material="pec")
+    # #931: the old 2 mm slab on a 3 mm grid is a sub-cell VOLUME the
+    # contract refuses (it was realized by the thin branch as one wall at
+    # x = 0.087 m). Drawn as one full cell, 0.084 -> 0.087 m: a solid
+    # short with walls on both drawn planes, the far one still at 0.087 m.
+    # The |S11| magnitude gate below is unchanged.
+    sim.add(Box((0.084, 0, 0), (0.087, 0.04, 0.02)), material="pec")
     freqs = jnp.linspace(5e9, 7e9, 6)
     sim.add_waveguide_port(
         0.010, direction="+x", mode=(1, 0), mode_type="TE",

@@ -350,7 +350,12 @@ def test_a_patterned_body_is_counted_as_skipped_not_silently_undrawn():
                      boundary="cpml")
     sim.add_material("sub", eps_r=4.0, sigma=0.0)
     sim.add(Box((0, 0, 0), (DOM[0], DOM[1], H_SUB)), material="sub")
-    sim.add(Cylinder(center=(1.5e-3, 1.5e-3, H_SUB + 0.05e-3), radius=0.5e-3,
+    # One cell ABOVE the substrate's top plane: under #931 centre sampling
+    # the cylinder occupies the cell whose centre it contains, and the
+    # auto-picked plane must not coincide with the substrate Box's own
+    # (closed) outline plane, or the dashed rectangle below is the
+    # substrate's, not a bounding-box lie.
+    sim.add(Cylinder(center=(1.5e-3, 1.5e-3, H_SUB + 0.15e-3), radius=0.5e-3,
                      height=0.1e-3, axis="z"), material="pec")
     fig = plot_rasterized_slice(sim, axis=2)
     t = fig.axes[0].get_title()

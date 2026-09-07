@@ -374,7 +374,8 @@
         "conductor",
         "materials",
         "pec_mask",
-        "sheet_specs"
+        "sheet_specs",
+        "sheets"
       ]
     },
     "apply_thirds_rule": {
@@ -2301,8 +2302,7 @@
     ],
     "add": [
       "shape",
-      "material",
-      "two_plane"
+      "material"
     ],
     "add_coaxial_matched_load": [
       "port_index",
