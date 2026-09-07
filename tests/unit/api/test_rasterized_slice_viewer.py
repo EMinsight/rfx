@@ -23,7 +23,17 @@ DOM = (3e-3, 3e-3, 2e-3)
 
 
 def _board(*, f0=None, dz_profile=None):
-    """Substrate + a ONE-CELL metal sheet on top of it."""
+    """Substrate + a ONE-CELL metal trace on top of it.
+
+    Ownership (#931 §1.2): with ``f0=None`` this trace is a one-cell PEC
+    VOLUME, deliberately — the viewer needs a case that OWNS conductor cells,
+    which is what its overlay draws and what ``conductor_mask()`` returns. It
+    is not "a sheet drawn one cell thick"; a real foil would be declared with
+    a zero-extent axis and own no cell at all, and ``_board(f0=...)`` is this
+    file's genuine sheet case. ``test_far_face_wall_is_drawn_on_its_own_plane``
+    is the volume's other half: the hi node plane is an electric wall with no
+    conductor cell on it.
+    """
     sim = Simulation(freq_max=20e9, domain=DOM, dx=DX, cpml_layers=4,
                      boundary="cpml", dz_profile=dz_profile)
     sim.add_material("sub", eps_r=4.0, sigma=0.0)
@@ -51,7 +61,7 @@ def _assembled(sim):
 def test_one_cell_metal_is_invisible_in_permittivity_but_present_in_the_mask():
     """The reason an eps_r plot cannot answer 'where is my metal'.
 
-    A one-cell PEC sheet contributes no permittivity contrast of its own, so
+    A one-cell PEC trace contributes no permittivity contrast of its own, so
     on an eps_r slice its cells are indistinguishable from the air (or
     dielectric) around them. The conductor mask is the only place it exists.
     This premise is then held against the VIEWER itself: an eps_r-only
@@ -60,16 +70,16 @@ def test_one_cell_metal_is_invisible_in_permittivity_but_present_in_the_mask():
     """
     sim = _board()
     _, cond, eps = _assembled(sim)
-    assert cond.any(), "the sheet produced no conductor cells at all"
+    assert cond.any(), "the trace produced no conductor cells at all"
     k = int(np.argmax(cond.reshape(-1, cond.shape[2]).sum(axis=0)))
     metal = cond[:, :, k]
     assert metal.any()
     inside = eps[:, :, k][metal]
     outside = eps[:, :, k][~metal]
-    assert np.isclose(inside.min(), inside.max()), "sheet cells not uniform in eps"
+    assert np.isclose(inside.min(), inside.max()), "metal cells not uniform in eps"
     assert np.isclose(float(inside[0]), float(np.median(outside))), (
         "this fixture is supposed to make the metal INVISIBLE in eps_r; if the "
-        "sheet cell now carries its own permittivity the premise moved")
+        "metal cell now carries its own permittivity the premise moved")
     fig = plot_rasterized_slice(sim, axis=2, index=k)
     n_shown = int(fig.axes[0].get_title().split("—")[1].split()[0])
     assert n_shown == int(metal.sum()), (
@@ -79,7 +89,7 @@ def test_one_cell_metal_is_invisible_in_permittivity_but_present_in_the_mask():
 
 
 def test_surface_impedance_sheet_is_in_neither_pec_mask_nor_sigma():
-    """#677 made the f0 sheet a node-thin operator.
+    """#677 made the f0 sheet a per-step operator on one node plane.
 
     A viewer that draws ``pec_mask | (sigma > thr)`` shows NOTHING for a board
     whose traces are all surface-impedance sheets. conductor_mask() is the
@@ -107,7 +117,7 @@ def test_edges_are_cell_lower_edges_not_node_midpoints():
     dz[k] on a graded axis. Building edges as node MIDPOINTS instead shifts
     every drawn cell by half a cell and distorts widths where the grading
     changes, which is the same node-vs-cell confusion that puts `position=`
-    one plane above a one-cell sheet.
+    one plane above a one-cell body.
 
     ``_axis_edges`` does NOT append a closing edge at all: a NonUniformGrid
     already carries N+1 nodes for N real cells (``_append_bounding_node``,
@@ -223,10 +233,10 @@ def test_last_real_cells_extent_and_data_are_not_lost_past_the_fence_post():
         f"(grid.ny-1={grid.ny - 1})")
 
 
-def test_position_lands_on_the_plane_that_holds_the_sheet():
-    """A one-cell sheet's mask sits on the LOWER node of its cell.
+def test_position_lands_on_the_plane_that_holds_the_metal():
+    """A one-cell body's CELL mask sits on the LOWER node of its cell.
 
-    Asking for the sheet's geometric centre and taking the nearest node lands
+    Asking for the trace's geometric centre and taking the nearest node lands
     one plane high and draws whatever else is there — the exact mistake that
     put a via column under the label 'a driven patch' while this was being
     developed.
@@ -239,8 +249,8 @@ def test_position_lands_on_the_plane_that_holds_the_sheet():
     fig = plot_rasterized_slice(sim, axis=2, position=centre)
     shown = int(fig.axes[0].get_title().split("—")[1].split()[0])
     assert shown == int(per_plane[k_true]), (
-        f"asked for the sheet centre and got {shown} conductor cells; the "
-        f"plane holding the sheet has {int(per_plane[k_true])}")
+        f"asked for the trace centre and got {shown} conductor cells; the "
+        f"plane holding the metal has {int(per_plane[k_true])}")
 
 
 def test_index_and_position_are_mutually_exclusive_and_axis_is_checked():
@@ -402,7 +412,7 @@ def test_a_relocated_plane_says_so_in_the_title():
     empty = [k for k in range(cond.shape[2]) if per_plane[k] == 0
              and any(per_plane[max(k - 1, 0):k + 2])]
     if not empty:
-        pytest.skip("this fixture has no empty plane adjacent to a sheet")
+        pytest.skip("this fixture has no empty plane adjacent to the metal")
     from rfx.geometry.rasterize_grid import coords_from_uniform_grid
     z = np.asarray(coords_from_uniform_grid(sim._build_grid()).z, dtype=float)
     fig = plot_rasterized_slice(sim, axis=2, position=float(z[empty[0]]))
@@ -730,7 +740,7 @@ def test_position_search_reaches_the_same_physical_distance_on_a_graded_axis():
 
     Fixture: 50 um cells below index 10, 200 um cells from index 10 on.
     Querying `position` at the transition node makes the search radius the
-    WIDER touching cell (200 um). A one-cell sheet placed three 50 um cells
+    WIDER touching cell (200 um). A one-cell PEC body placed three 50 um cells
     before the transition (150 um away -- more than 1 INDEX, less than the
     200 um radius) must be found; a fixed +/-1 index window would only
     reach the immediate neighbour index and miss it (measured: index 14 /
@@ -747,8 +757,8 @@ def test_position_search_reaches_the_same_physical_distance_on_a_graded_axis():
     from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid
     nodes = np.asarray(coords_from_nonuniform_grid(grid).z, dtype=float)
     t_idx = grid.pad_z_lo + 10
-    sheet_idx = t_idx - 3
-    z_lo, z_hi = float(nodes[sheet_idx]), float(nodes[sheet_idx + 1])
+    body_idx = t_idx - 3
+    z_lo, z_hi = float(nodes[body_idx]), float(nodes[body_idx + 1])
     sim.add(Box((0, 0, z_lo), (dom[0], dom[1], z_hi)), material="pec")
 
     pos = float(nodes[t_idx])
@@ -756,7 +766,7 @@ def test_position_search_reaches_the_same_physical_distance_on_a_graded_axis():
     title = fig.axes[0].get_title()
     shown = int(title.split("—")[1].split()[0])
     assert shown > 0, (
-        f"a sheet 150 um away (three 50 um cells, inside the 200 um "
+        f"metal 150 um away (three 50 um cells, inside the 200 um "
         f"coarse-side cell touching the query node) must be found; a fixed "
         f"+/-1 index window only reaches 50 um on the fine side. title: "
         f"{title!r}")
@@ -785,7 +795,7 @@ def test_title_with_every_honesty_note_fits_the_default_canvas():
     empty = [k for k in range(cond.shape[2]) if per_plane[k] == 0
              and any(per_plane[max(k - 1, 0):k + 2])]
     if not empty:
-        pytest.skip("this fixture has no empty plane adjacent to a sheet")
+        pytest.skip("this fixture has no empty plane adjacent to the metal")
     from rfx.geometry.rasterize_grid import coords_from_uniform_grid
     z = np.asarray(coords_from_uniform_grid(grid).z, dtype=float)
     fig = plot_rasterized_slice(sim, axis=2, position=float(z[empty[0]]))

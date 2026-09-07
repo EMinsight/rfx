@@ -43,6 +43,11 @@ def _sim(dx_profile=None, dy_profile=None):
         kw["dy_profile"] = dy_profile
     sim = Simulation(freq_max=40e9, domain=(22e-3, 22e-3, 22e-3), dx=250e-6,
                      boundary="cpml", cpml_layers=6, **kw)
+    # a solid scatterer: a VOLUME (6 cells per axis, node to node), left one.
+    # Under #931 §1.2 it realizes 7 wall planes per axis instead of 6, so its
+    # absolute pattern moved; both gates here are relative (uniform-valued
+    # profile == the plain uniform grid; graded total radiated power inside
+    # the discretization envelope), so neither reads that magnitude.
     sim.add(Box((10.25e-3, 10.25e-3, 10.25e-3),
                 (11.75e-3, 11.75e-3, 11.75e-3)), material="pec")
     sim.add_source(position=(11e-3, 11e-3, 9.5e-3), component="ez",

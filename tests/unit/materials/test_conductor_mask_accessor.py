@@ -1,7 +1,7 @@
 """Issue #695 — one accessor for the WHOLE conductor footprint.
 
-Since #677 a ``surface_impedance_f0`` thin conductor is a node-thin
-per-step operator: it appears in NEITHER ``pec_mask`` NOR
+Since #677 a ``surface_impedance_f0`` thin conductor is a per-step
+operator on ONE node plane: it appears in NEITHER ``pec_mask`` NOR
 ``materials.sigma``.  A conductor-connectivity check written the obvious
 way (``pec_mask | (sigma > 1e3)``) therefore finds nothing and reports a
 healthy model as disconnected.  ``Simulation.conductor_mask()`` /
@@ -341,3 +341,62 @@ def test_driver_drive_pass_registers_planes_on_the_sheet_trace():
         assert (spec.v_lo_leg, spec.v_hi_leg) == (1, 3), key
         assert (spec.u_span_lo, spec.u_span_hi) == (23, 35), key
         assert (spec.v_span_lo, spec.v_span_hi) == (2, 4), key
+
+
+# --------------------------------------------------------------------------
+# What conductor_mask() MEANS under the lattice ownership contract (#931)
+# --------------------------------------------------------------------------
+
+def test_conductor_mask_is_a_cell_footprint_not_the_realized_edge_set():
+    """The two objects, and the exact relation between them.
+
+    Under the contract there are two different things a consumer can want and
+    they must not be confused (they were, which is what #931 fixes):
+
+    * ``conductor_mask()`` — a CELL / node footprint: the cells of every PEC
+      VOLUME, the cells above the sigma threshold, and the node footprints of
+      f0 and PEC SHEETS. This is what a connectivity, occupancy or
+      cross-section check wants ("is there metal here").
+    * ``realized_pec_edge_masks()`` — the E EDGES the solver zeroes. This is
+      what the field update applies, and it is NOT derivable from the
+      footprint by any local rule: a volume's edge set reaches ONE PLANE
+      FURTHER than its cells on every axis (the far face, which owns no
+      cell), and a sheet's reaches one index LESS in each in-plane direction
+      (both end nodes must be in the footprint).
+
+    Both directions are asserted, so collapsing either object into the other
+    turns this red.
+    """
+    from tests._realized_geometry import node_index, realized
+
+    dx = 0.5e-3
+    sim = Simulation(freq_max=20e9, domain=(4e-3, 4e-3, 4e-3), dx=dx,
+                     boundary="pec")
+    sim.add(Box((1e-3, 1e-3, 1e-3), (3e-3, 3e-3, 2e-3)), material="pec")
+    rz = realized(sim)
+    assert rz.sheets == []
+    cells = np.asarray(sim.conductor_mask(rz.grid), dtype=bool)
+    np.testing.assert_array_equal(cells, np.asarray(rz.pec_mask, dtype=bool))
+    k_lo = node_index(rz.grid, 2, 1e-3)
+    k_hi = node_index(rz.grid, 2, 2e-3)
+    occupied = sorted(set(np.nonzero(cells.any(axis=(0, 1)))[0].tolist()))
+    assert occupied == list(range(k_lo, k_hi))          # cells: lo .. hi-1
+    assert rz.wall_planes(2) == list(range(k_lo, k_hi + 1))
+    assert len(rz.wall_planes(2)) == len(occupied) + 1, (
+        "a volume's far face is a wall with no conductor cell on it")
+
+    # the sheet half: footprint one index WIDER than the in-plane edge set
+    sim_s = Simulation(freq_max=20e9, domain=(4e-3, 4e-3, 4e-3), dx=dx,
+                       boundary="pec")
+    sim_s.add(Box((1e-3, 1e-3, 2e-3), (3e-3, 3e-3, 2e-3)), material="pec")
+    rs = realized(sim_s)
+    assert rs.pec_mask is None, "a sheet owns no cell"
+    (spec,) = rs.sheets
+    foot = np.asarray(sim_s.conductor_mask(rs.grid), dtype=bool)
+    np.testing.assert_array_equal(foot, np.asarray(spec.footprint, dtype=bool))
+    n_i = int(foot.any(axis=(1, 2)).sum())
+    n_j = int(foot.any(axis=(0, 2)).sum())
+    ex, ey, ez = rs.edge_masks
+    assert int(np.asarray(ex).sum()) == (n_i - 1) * n_j
+    assert int(np.asarray(ey).sum()) == n_i * (n_j - 1)
+    assert not bool(np.asarray(ez).any()), "the normal edge stays live"

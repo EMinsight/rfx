@@ -1,4 +1,4 @@
-"""The node-thin surface-impedance (Leontovich, ``surface_impedance_f0``) sheet:
+"""The surface-impedance (Leontovich, ``surface_impedance_f0``) SHEET:
 operator, identities, lane fences, stacked-layer gap veto, non-Box shapes.
 
 One file for the #677 sheet realization (tier 3b of the 2026-09 test-corpus
@@ -15,7 +15,7 @@ Sections, each formerly its own file:
    registers exactly one live ``SheetImpedanceSpec``, de-PECs the sheet and
    no longer overwrites ``eps_r``. O7: one f0-mode case through the
    ``vmap_sweep`` batched material build vs the serial assembly.
-2. **#677 node-thin sheet operator — unit + limit gates** — was
+2. **#677 sheet operator — unit + limit gates** — was
    ``test_sheet_impedance_operator.py``. Design B (exponential stepping):
    ``E^{n+1} = A*E^n + B*curlH`` with ``A = exp(-x2)``,
    ``B = -expm1(-x2)/sigma_tot``, ``x2 = sigma_tot*dt/(eps0*eps_r)``,
@@ -175,7 +175,7 @@ def test_default_off_identity_and_negative_control_o6():
         d_on, mats_on, pec_on, specs_on = _digests(sim_on)
         assert d_on["sigma"] == _sha(jnp.zeros_like(mats_on.sigma)), (
             f"{kind}: f0 mode wrote into materials.sigma — the #677 "
-            f"node-thin realization must not fold the sheet into arrays")
+            f"sheet realization must not fold the sheet into arrays")
         assert d_on["eps_r"] == _sha(jnp.ones_like(mats_on.eps_r)), (
             f"{kind}: f0 mode overwrote eps_r (removed by #677)")
         assert int(np.asarray(pec_on).sum()) == 0, (
@@ -757,8 +757,24 @@ def _wr90(n_modes=1):
 def _mixed_probe_fed_msl():
     """Probe-fed MSL board for the mixed (wire + MSL) lane. Ladder geometry
     copied from the working fixture in tests/unit/sparams/test_mixed_port_sparam.py so
-    the earlier port-geometry guards pass and the #677 fence is reached."""
-    eps_r, h_sub, w_trace, dx = 3.66, 254e-6, 600e-6, 80e-6
+    the earlier port-geometry guards pass and the #677 fence is reached.
+
+    Ownership (#931): the trace is FOIL, so it is declared a sheet on the
+    substrate-top node plane (a zero-thickness Box, §1.5) instead of the
+    one-cell PEC Box it used to be — which the contract realizes as a filled
+    slab of solid metal with a wall on each face. The board is also redrawn
+    ON-LATTICE for it: at the copied dx = 80 um the 254 um laminate has no
+    node at its top face (254/80 = 3.175), so the sheet would land at 240 um,
+    a fifth of a cell INSIDE the substrate. `dx = h_sub / 3` puts the face on
+    a node and keeps the physical board, which is what design note §1.3 says
+    to do with an off-lattice interface (cv06b's recipe) rather than let the
+    declaration snap. Nothing here gates a field magnitude: the only consumer
+    is `test_fence_mixed_sparams`, which expects a ValueError before any
+    solve, so the redraw costs nothing and stops the file from teaching the
+    declaration the contract removed.
+    """
+    eps_r, h_sub, w_trace = 3.66, 254e-6, 600e-6
+    dx = h_sub / 3.0                    # 84.667 um: h_sub is node 3
     lx, ly, lz = 8e-3, 3e-3, 754e-6
     sim = Simulation(freq_max=5e9, domain=(lx, ly, lz), dx=dx, cpml_layers=8,
                      boundary=BoundarySpec(x="cpml", y="cpml",
@@ -767,7 +783,7 @@ def _mixed_probe_fed_msl():
     sim.add(Box((0.0, 0.0, 0.0), (lx, ly, h_sub)), material="sub")
     y_c = ly / 2.0
     sim.add(Box((0.0, y_c - w_trace / 2, h_sub),
-                (lx, y_c + w_trace / 2, h_sub + dx)), material="pec")
+                (lx, y_c + w_trace / 2, h_sub)), material="pec")
     _sheet(sim, Box((3e-3, 1e-3, 5e-4), (5e-3, 2e-3, 5e-4)))
     sim.add_port(position=(2e-3, y_c, 0.0), component="ez", impedance=50.0,
                  extent=h_sub)
@@ -776,6 +792,40 @@ def _mixed_probe_fed_msl():
                      waveform=GaussianPulse(f0=2.5e9, bandwidth=0.5),
                      n_probe_offset=10, n_probe_spacing=4)
     return sim
+
+
+def test_the_mixed_board_trace_realizes_on_the_substrate_top_plane():
+    """Build-time (no solve) ownership check for the fixture above: one
+    sheet, one wall plane, on the laminate face the board declares — the
+    redraw is only worth anything if the plane really lands there."""
+    from rfx.geometry.rasterize_grid import coords_from_uniform_grid
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, node_index, realized)
+
+    h_sub = 254e-6
+    sim = _mixed_probe_fed_msl()
+    rz = realized(sim)
+    assert rz.pec_mask is None, "foil declared as a sheet owns no cell"
+    assert len(rz.sheets) == 1, (
+        "only the PEC trace is a declared PEC sheet — the f0 sheet is a "
+        f"per-step operator, not a conductor declaration; got {rz.sheets}")
+    assert_sheet_planes(sim, 2, expected_m=(h_sub,), what="the PEC trace")
+    assert_wall_planes(sim, 2, expected_m=(h_sub,), what="the PEC trace")
+    k = node_index(rz.grid, 2, h_sub)
+    assert not bool(np.asarray(rz.edge_masks[2])[:, :, k].any()), (
+        "the normal E through a sheet stays live (§1.3)")
+
+    # ...and the plane is ON the laminate face, which is the half the two
+    # assertions above CANNOT see: they resolve `expected_m` to the nearest
+    # node and compare INDICES, so at the old dx = 80 um they both pass while
+    # node 3 sits at 240 um — the sheet 14 um inside the substrate. Measured
+    # both ways 2026-09-07: dx = 80 um -> plane 3 at 240.000 um;
+    # dx = h_sub/3 -> plane 3 at 254.000 um. This line is the difference.
+    z = np.asarray(coords_from_uniform_grid(rz.grid).z, dtype=float)
+    assert abs(float(z[k]) - h_sub) < 1e-9, (
+        f"the trace plane realizes at {float(z[k]) * 1e6:.3f} um, the board "
+        f"declares {h_sub * 1e6:.3f} um — the laminate face is off the node "
+        "line and the fixture must be redrawn (design note §1.3), not snapped")
 
 
 # ---------------------------------------------------------------------------
