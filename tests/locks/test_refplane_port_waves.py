@@ -420,11 +420,21 @@ def test_nonuniform_lane_guard_fails_loudly():
 # ===========================================================================
 
 def _raw_drive(sim, n_steps=8, drive_idx=0):
+    # The trace is a SHEET, and a sheet owns no cell (#931 §1.3), so it is
+    # not in ``pec_mask``. This helper must collect it and hand it on, or
+    # the reference-plane machinery scans a bare cell mask, finds no metal
+    # on a perfectly healthy board and raises. ``_assemble_materials``
+    # warns when a caller drops a classified sheet; that warning was this
+    # helper's, not the library's.
     grid = sim._build_grid()
-    mats, dsp, lsp, pm, _, _, _ = sim._assemble_materials(grid)
+    pec_sheets: list = []
+    pec_wires: list = []
+    mats, dsp, lsp, pm, _, _, _ = sim._assemble_materials(
+        grid, pec_sheets=pec_sheets, pec_wires=pec_wires)
     return sim._forward_from_materials(
         grid, mats, dsp, lsp, n_steps=n_steps, checkpoint=False,
-        pec_mask=pm, port_s11_freqs=_FREQS,
+        pec_mask=pm, pec_sheets=tuple(pec_sheets),
+        pec_wires=tuple(pec_wires), port_s11_freqs=_FREQS,
         _sparam_drive_idx=drive_idx, _return_raw_port_sparams=True)
 
 
@@ -435,9 +445,12 @@ def test_refplane_registers_two_planes_per_port_with_phase0_geometry():
     x/y, PEC z_lo): port 1 at x=8mm -> i=24; planes at 9.5/11.0mm ->
     27/30; port 2 at 24mm -> i=56; planes at 22.5/21.0mm -> 53/50.  Ampere
     loop legs half a cell outside the trace bbox (y 7.5..12.5mm -> j
-    23..32 padded; z 1.0..1.5mm -> k 2): Hz columns at j=22/33 spanning
-    k=[2,4), Hy rows at k=1/3 spanning j=[23,34) — the exact Phase-0
-    probe layout (x=9.5mm plane: legs at y=7.25/12.75mm, z=0.75/1.75mm).
+    23..33 realized; z 1.0..1.5mm -> k 2): Hz columns at j=22/34 spanning
+    k=[2,4), Hy rows at k=1/3 spanning j=[23,34) — the Phase-0 probe
+    layout with the hi leg one node out (#931: the trace footprint is
+    sampled CLOSED, so the drawn 5.0 mm strip realizes y 23..33 where the
+    old half-open rule stopped at 32, and the loop leg half a cell outside
+    the bbox follows it).
     """
     raw = _raw_drive(_build_thru(reference_plane_cells=3))
     rp = raw["wire_refplane"]
@@ -460,7 +473,13 @@ def test_refplane_registers_two_planes_per_port_with_phase0_geometry():
         # 2-cell integral that measured Zc = 47.9-48.6 ohm.
         assert (spec.e_lo, spec.e_hi) == (0, 2)
         assert spec.third_index == 28                # y = 10mm (padded)
-        assert (spec.u_lo_leg, spec.u_hi_leg) == (22, 33)
+        # #931: the trace footprint is sampled CLOSED, so the drawn
+        # 5.0 mm strip realizes y-nodes 23..33 where the old half-open
+        # rule stopped at 32. The Ampere loop leg half a cell OUTSIDE the
+        # bbox therefore sits at j = 34 rather than 33 — the loop follows
+        # the realized conductor, which is the point. u_span is unchanged
+        # because it was already the padded [23, 34).
+        assert (spec.u_lo_leg, spec.u_hi_leg) == (22, 34)
         assert (spec.v_lo_leg, spec.v_hi_leg) == (1, 3)
         assert (spec.u_span_lo, spec.u_span_hi) == (23, 34)
         assert (spec.v_span_lo, spec.v_span_hi) == (2, 4)
