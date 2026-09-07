@@ -85,6 +85,23 @@ scripts group), and the predeclaration in
 recording that the device lane changed operator. Handover:
 `docs/design_notes/931_migration/T6-waveguide-chain-battery.md`.
 
+**Waveguide port validation battery, PEC short** — measured on this pod after
+the §1.5 redraw (the old body was 0.93 of ONE cell against a `dx` the module
+never pinned):
+
+```
+min |S11| = 0.9670   against this module's 0.99 Meep-class gate
+reciprocity advisory 0.0242 vs 0.011 at 7 GHz
+```
+
+Left RED, gate not widened. Two changes hit this fixture together — the
+geometry (a thicker reflector whose leading face moved up to half a cell) and
+the operator (stage C's realized edges replacing the sigma fold on the waveguide
+S-matrix lane). Pre-declared separation, in the module docstring and repeated
+here: re-run at `SHORT_CELLS = 1` and `4`. If |S11| tracks thickness it is the
+geometry and this module re-pins itself; if it does not move it is the operator
+and belongs with the chain-battery re-measure. Same class, same handover file.
+
 ## Not re-run, and why
 
 * `tests/oracle/test_sheet_film_rta_analytic.py` — measured identical
