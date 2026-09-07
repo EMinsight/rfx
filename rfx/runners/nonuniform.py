@@ -922,7 +922,16 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
             lo_k = min(idx[axis], idx_end[axis])
             hi_k = max(idx[axis], idx_end[axis])
 
-            wire_cells = list(range(lo_k, hi_k + 1))
+            # HALF-OPEN in edges, from the shared spelling: the driven
+            # edges are the ones whose own location lies inside the
+            # declared extent. This lane had its own endpoint-INCLUSIVE
+            # copy, so the same declaration drove one more edge here than
+            # on the uniform lane once that lane was corrected.
+            from rfx.sources.sources import wire_port_edge_span
+            _first_k, _last_k = wire_port_edge_span(
+                grid, axis, lo_k, hi_k,
+                float(pe.position[axis]), float(end_pos[axis]))
+            wire_cells = list(range(_first_k, _last_k + 1))
 
             # Live-cell split (issue #318): a cell whose extent lies inside
             # PEC (assembled-geometry mask, read BEFORE this port's own

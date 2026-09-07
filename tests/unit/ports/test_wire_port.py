@@ -173,7 +173,11 @@ def test_wire_port_live_cell_split_and_all_dead_guard():
     )
     from rfx.sources.sources import _wire_port_cells
     cells = _wire_port_cells(grid, port)
-    assert len(cells) == 3
+    # The extent is 2 mm on a 1 mm mesh and the driven edges are HALF-OPEN
+    # in edges (#931 R8): 2 mm of extent is 2 Ez edges, k = 2 and 3. It
+    # used to be endpoint-INCLUSIVE and gave 3, the third spanning
+    # 4 -> 5 mm, one cell ABOVE the declared end.
+    assert len(cells) == 2, cells
 
     from rfx.boundaries.pec import realized_pec_edge_masks
 

@@ -12,6 +12,12 @@ suite's unchanged no-dead-cell locks).
 Fixture: an ez wire port whose extent starts two cells inside a PEC
 block — 3 extent cells, the lower two dead, so the all-extent midpoint
 (the middle cell) is DEAD and the live run is the single top cell.
+
+The extent is 3 mm, not the 2 mm this fixture carried before the #931 R8
+correction: the driven edges are half-open in edges, so 3 mm of extent
+from z = 4 mm is the three Ez edges k = 4, 5, 6. Under the old
+endpoint-inclusive rule 2 mm gave those same three; it also drove one
+edge past every declared end, which is the defect R8 closes.
 """
 from __future__ import annotations
 
@@ -25,8 +31,8 @@ from rfx.sources.sources import GaussianPulse
 DX = 1e-3
 DOMAIN = (12e-3, 12e-3, 12e-3)
 PORT_X, PORT_Y = 6e-3, 6e-3
-Z0_PORT = 4e-3            # port start (cell k=4); extent 2 mm -> cells 4,5,6
-EXTENT = 2e-3
+Z0_PORT = 4e-3            # port start (cell k=4); extent 3 mm -> edges 4,5,6
+EXTENT = 3e-3
 FREQS = jnp.array([1.0e9])
 PULSE = GaussianPulse(f0=2e9, bandwidth=0.9)
 
