@@ -131,3 +131,82 @@ Read the result at
 `gate_realized_planes.log` first (it must show one plane per foil in the sheet
 arm and two in the volume arm), then `sheet_vs_volume_ab.log` and
 `patch_sheet_realization_ladder.log`. Read the settling witness before any Q.
+
+
+---
+
+# RESULT — run 369367259157 (`rfx-931-post-docs-ab`), read 2026-09-07
+
+Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-docs-ab-20260907T101615Z/`
+
+## Gate 0 — build-time realized planes, no solve: PASS
+
+```
+[sheet]  ground 4.1318 mm (node 29) -> walls ['4.1318']
+[sheet]  feed   4.9188 mm (node 33) -> walls ['4.9188']
+[sheet]  patch  4.9188 mm (node 33) -> walls ['4.9188']
+[volume] ground 4.1318 mm (node 29) -> walls ['4.1318', '4.3285']
+[volume] feed   4.9188 mm (node 33) -> walls ['4.9188', '5.1155']
+[volume] patch  4.9188 mm (node 33) -> walls ['4.9188', '5.1155']
+```
+
+One plane per foil declared as a sheet, two per foil declared as a one-cell
+volume, each at the declared node. Drawn equals realized in both arms.
+
+## Step 2 — the A/B: **NOT READ**, by its own pre-declared rule
+
+| arm | settling witness (bar −40 dB) | ring-down spectrum |
+|---|---|---|
+| S (sheet) | **−43.2 dB — SETTLED** | 8.51/Q73/a0.068, 10.87/Q23/a0.025, 12.58/Q20/a0.0056 |
+| V (one-cell volume) | **−37.0 dB — NOT SETTLED** | 8.33/Q87/a0.098, 10.75/Q24/a0.037, 12.25/Q71/a0.0023 |
+
+The volume arm failed its witness, so **no Q ratio was computed and none is
+claimed**. That is the docstring's rule, applied: "a settling witness must pass
+in BOTH arms or the arm's numbers are not read at all."
+
+What may be said, and no more: the two arms are consistent with the volume arm
+ringing LONGER (Q87 against Q73 on the TM010, and 3 dB less drained at the same
+120 periods), which is the direction the pre-declaration named as "the VOLUME
+arm narrows — the 196.75 µm plate closes the cavity". **That is a hypothesis
+the run did not test**, because a truncated record inflates apparent Q by the
+same sign. The honest next step is a longer record for the volume arm with the
+new length pre-declared before it runs — not a re-read of these numbers.
+
+**The public "foil is a sheet" guidance is not contradicted by this run.** The
+arm that supports it settled; the arm that did not settle is the one drawing
+foil as a plate, which is the drawing the guidance tells you not to use.
+
+## Step 3 — the ladder
+
+Stage 1 (no solve) reproduced the committed table exactly: sheet / vol1 / vol2
+all at 787.0 µm gap, `sum(d/eps)` 232.8 µm, **−0.0 %** against the physical
+stack. Stage 2 had not written its `.rc` when this was read; re-read
+`patch_sheet_realization_ladder.log` in the same directory for its arms.
+
+## MEASURED CONTRADICTION — preflight still describes the deleted rule
+
+Both scripts print preflight verbatim, and on the SAME geometry in the SAME
+run preflight says the opposite of what the realization does. This is a
+measured finding, not an inference, and it is group **P**'s:
+
+* `'pec' z-extent 196.7µm = 1.0 cells — … A conductor thinner than a cell is
+  modelled as a one-cell PEC surface — tangential E is zeroed on it and the
+  normal component survives as surface charge … switching to
+  add_thin_conductor() would not change it` — **false at 2.0.** A one-cell PEC
+  Box is a volume: it shorts its normal edge, and switching to
+  `add_thin_conductor()` changes exactly that.
+* `2 sheet-bounded cavities differ from the physical stack by more than 1% …
+  sum(d/eps) mesh 232.8µm vs physical 174.6µm (+33.3%) … of which 58.21µm is
+  geometry[1]'s OWN cell … that sheet fills one cell, and rfx zeroes only
+  TANGENTIAL E on a one-cell PEC sheet, so the cell's normal-E edge stays live
+  and sits INSIDE the cavity` — the ladder measures the same cavity at
+  **−0.0 %** from the realized edge set, and a sheet has **no own cell**. The
+  check is comparing node-to-node against face-to-face across a foil thickness
+  the sheet model does not have.
+* The `[PREFLIGHT] _assemble_materials (uniform lane): PEC sheets/wires were
+  classified but the caller passed no collector` line appears as an ADVISORY in
+  a run whose sheets are realized correctly — preflight's own assembly is the
+  caller that dropped them. Same root as the `first-patch.mdx` strict failure.
+
+Design note §6 already fences these under "Not yet implemented — preflight".
+This run is the evidence with numbers attached.
