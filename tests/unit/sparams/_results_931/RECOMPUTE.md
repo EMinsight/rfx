@@ -23,7 +23,7 @@ is, so the branch must be committed before submitting.
 
 ---
 
-## R1 — `golden_msl_sheet_thread_{s,freqs}_13de212.npy` (SUBMITTED)
+## R1 — `golden_msl_sheet_thread_{s,freqs}_13de212.npy` (**DONE — awaiting ingest**)
 
 * Consumer: `tests/unit/sparams/test_msl_sheet_threading.py::test_o1_no_sheet_identity_vs_13de212_golden`
   (byte identity, `@pytest.mark.slow`).
@@ -68,9 +68,28 @@ is, so the branch must be committed before submitting.
   preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`. Expected wall clock ~12 min
   (env install + two captures + a diff against the old golden).
   Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-msl-sheet-golden-<ts>/`.
-* Ingest: copy the two `.npy` files onto the branch, point the test's
-  `_FIXTURES` load at them, and quote the max deviation against the pre-#931
-  golden in the commit (it will be large — the board changed).
+* **RESULT (run 369367259234, completed 14:49 UTC, rc=0).** Both captures
+  byte-equal, `max |cap0 - cap1| = 0.0`, `settling_db = [-95.72, -103.10]`
+  on both. Golden written as `complex64 (2, 2, 16)`.
+  Realized geometry as the script printed it before capturing:
+  `dx = 84.667 µm`, `h_sub/dx = 3.0`, sheet planes `{2: [3]}`,
+  wall planes z `[3]`, owns no cell.
+* **Against the pre-#931 golden: `max |new - old| = 0.1128`, and the
+  reflection dropped by about 5.6x** — `|S11|` goes from 0.0101 … 0.0577 to
+  0.00178 … 0.00998 across the band. That is the direction the contract
+  predicts and the size the geometry implies: the old board realized its
+  254 µm substrate as 320 µm (+26 %) and its 35 µm foil as an 85 µm slab, so
+  the line was mismatched against its own 50 Ω port; the new board realizes
+  254 µm exactly with a zero-thickness foil. This is a witness for the
+  contract, not just a re-baseline — but it is one solve, so it is REPORTED,
+  not gated.
+* Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-msl-sheet-golden-20260907T144330Z/`
+  (`capture.log`, `produced/tests/fixtures/golden_msl_sheet_thread_{s,freqs}_931.npy`).
+* Ingest: copy the two `.npy` files from `produced/tests/fixtures/` onto the
+  branch, point the test's `_FIXTURES` load at them, keep the two pre-#931
+  files beside them as history, and quote `max |new - old| = 0.1128` plus the
+  `|S11|` pair above in the commit. Deliberately NOT committed here: this
+  phase does not commit fixtures.
 
 ## R2 — `tests/unit/sparams/test_msl_port_integration.py` gate values
 
