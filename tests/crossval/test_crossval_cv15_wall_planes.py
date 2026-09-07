@@ -110,34 +110,33 @@ def test_cv15_committed_geometry_realizes_declared_walls(capsys):
 
 
 def test_cv15_both_conductors_are_declared_sheets(capsys):
-    """#931 §1.3: a sheet owns NO cell. Both conductors must come back in the
-    ``pec_sheets`` collector on their declared node planes, and NEITHER may
-    contribute a cell to ``pec_mask`` -- the substrate is the only body that
-    occupies cells here, so if a conductor leaked into the cell mask the
-    realized stack would gain a face the openEMS reference has no counterpart
-    for. Checked on the collector, not on the wall planes, so the two
-    assertions fail independently."""
+    """#931 §1.3: a sheet owns NO cell. Both conductors must come back as
+    DECLARED sheets on the two substrate faces, and NEITHER may contribute a
+    cell -- the substrate is the only body that occupies cells here, so a
+    conductor leaking into the cell mask would give the realized stack a face
+    the openEMS zero-thickness reference has no counterpart for.
+
+    Read through ``tests/_realized_geometry`` -- the branch's one spelling of
+    the build-time realization check -- rather than a local ``argwhere`` over a
+    mask, which is the drift the single-owner rule (§1.7) exists to stop. The
+    sheet-declaration check and the wall-plane check below fail independently:
+    one reads the declarations, the other the realized edge set.
+    """
     import numpy as np
 
+    from tests._realized_geometry import assert_sheet_planes, realized
+
     cv15 = _load_cv15()
-    sim, grid, _ = _build_test_sim(cv15)
-    pec_sheets: list = []
-    pec_wires: list = []
-    _mats, _d, _l, pec_mask, *_ = sim._assemble_materials(
-        grid, pec_sheets=pec_sheets, pec_wires=pec_wires)
+    sim, _grid, _ps = _build_test_sim(cv15)
+    z_sub_lo = cv15.AIR_BELOW
+    z_sub_hi = cv15.AIR_BELOW + cv15.H_SUB
+
+    assert_sheet_planes(sim, 2, [z_sub_lo, z_sub_hi],
+                        what="cv15 ground and patch foil")
+    rz = realized(sim)
     capsys.readouterr()
-
-    k_ground = grid.position_to_index(
-        (cv15.DOM_X / 2, cv15.DOM_Y / 2, cv15.AIR_BELOW))[2]
-    k_patch = grid.position_to_index(
-        (cv15.DOM_X / 2, cv15.DOM_Y / 2, cv15.AIR_BELOW + cv15.H_SUB))[2]
-
-    planes = sorted(sp.plane for sp in pec_sheets if sp.normal_axis == 2)
-    assert planes == [k_ground, k_patch], (
-        f"declared sheet planes {planes}, want [{k_ground}, {k_patch}]")
-    assert not pec_wires
-    # No PEC volume at all: pec_mask is either None or empty.
-    assert pec_mask is None or not bool(np.asarray(pec_mask).any()), (
+    assert not rz.wires
+    assert rz.pec_mask is None or not bool(np.asarray(rz.pec_mask).any()), (
         "a declared sheet occupied cells -- it must own none (#931 §1.3)")
 
 
@@ -147,43 +146,38 @@ def test_cv15_no_wall_above_the_patch_plane(capsys):
     wall at ``k_patch + 1`` is the thing cv15 measured and rejected in 2026-08
     (11.9062 mm, no counterpart in the openEMS zero-thickness patch); before
     #931 its absence rested on a realization DEFAULT, and defaults are not
-    evidence."""
+    evidence.
+
+    Checked at the patch footprint's centre column AND its four rims -- the rim
+    is where a closed-vs-half-open footprint disagreement would show, because
+    the edge leaving the rim node points out of the patch.
+    """
     import numpy as np
-    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+
+    from tests._realized_geometry import assert_wall_planes, node_index, realized
 
     cv15 = _load_cv15()
-    sim, grid, _ = _build_test_sim(cv15)
-    pec_sheets: list = []
-    pec_wires: list = []
-    _mats, _d, _l, pec_mask, *_ = sim._assemble_materials(
-        grid, pec_sheets=pec_sheets, pec_wires=pec_wires)
+    sim, _grid, _ps = _build_test_sim(cv15)
+    rz = realized(sim)
     capsys.readouterr()
-    periodic = sim._periodic_flags()
-    edges = realized_pec_edge_masks(pec_mask, sheets=pec_sheets,
-                                    wires=pec_wires, periodic=periodic)
 
-    k_ground = grid.position_to_index(
-        (cv15.DOM_X / 2, cv15.DOM_Y / 2, cv15.AIR_BELOW))[2]
-    k_patch = grid.position_to_index(
-        (cv15.DOM_X / 2, cv15.DOM_Y / 2, cv15.AIR_BELOW + cv15.H_SUB))[2]
+    z_sub_lo = cv15.AIR_BELOW
+    z_sub_hi = cv15.AIR_BELOW + cv15.H_SUB
+    k_patch = node_index(rz.grid, 2, z_sub_hi)
 
-    patch_fp = np.zeros(tuple(grid.shape)[:2], dtype=bool)
-    for sp in pec_sheets:
+    patch_fp = np.zeros(tuple(rz.grid.shape)[:2], dtype=bool)
+    for sp in rz.sheets:
         if sp.normal_axis == 2 and sp.plane == k_patch:
             patch_fp |= np.asarray(sp.footprint).any(axis=2)
     assert patch_fp.any()
 
-    # Centre column of the patch, plus its four footprint rims -- the rim is
-    # where a closed-vs-half-open footprint disagreement would show.
     ii, jj = np.nonzero(patch_fp)
     columns = {(int(ii.mean()), int(jj.mean())),
                (int(ii.min()), int(jj.min())), (int(ii.max()), int(jj.max())),
                (int(ii.min()), int(jj.max())), (int(ii.max()), int(jj.min()))}
     for (i, j) in columns:
-        planes = set(realized_wall_planes(edges, 2, ij=(i, j), periodic=periodic))
-        assert planes == {k_ground, k_patch}, (
-            f"column ({i}, {j}) realizes z-wall planes {sorted(planes)}, "
-            f"want exactly {{{k_ground}, {k_patch}}}")
+        assert_wall_planes(sim, 2, [z_sub_lo, z_sub_hi], ij=(i, j),
+                           what=f"cv15 patch footprint column ({i}, {j})")
 
 
 def test_cv15_negative_control_ground_sheet_one_plane_low_raises(capsys):
