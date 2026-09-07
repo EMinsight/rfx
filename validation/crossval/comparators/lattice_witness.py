@@ -519,6 +519,50 @@ FALSIFIER_KINDS = ("thickness_plus_cell", "thickness_minus_cell", "continuum",
                    "eps_x1p01", "eps_continuum")
 
 
+def wall_plane_separation(length_m: float, cell_m: float, *, n_planes: int = 1,
+                          observable: str = "frequency") -> dict:
+    """First-order size of a CONDUCTOR wall-plane error, for triage (#931).
+
+    The conductor sibling of ``thickness_plus_cell`` /
+    ``thickness_minus_cell``, and deliberately NOT one of
+    ``FALSIFIER_KINDS``: those are RTA separations replayed through
+    ``lattice_rta``, and this rig has no conductor to run an RTA on. This
+    is an analytic estimator, used the way the dielectric separations are
+    used -- BEFORE spending an FDTD re-run, to say whether a one-plane
+    realization change can even reach a case's committed window.
+
+    A resonant dimension bounded by two realized wall planes and realized
+    ``n_planes`` cells long/short detunes to first order by
+
+        df/f = -dL/L = -/+ n_planes * cell / length,
+
+    and an electrical length (phase, beta*L) by the same fraction with the
+    opposite sign convention (``observable='electrical_length'`` reports
+    ``dphi/phi = +dL/L``). Second order is ignored on purpose: the point is
+    to compare against a window, not to predict a number -- if the estimate
+    sits far inside the window the case does not need a re-solve, and if it
+    straddles it, it does.
+
+    Under the contract a wall plane is not supposed to move at all: drawn
+    is realized (section 1.2). This exists for the migration, where every
+    committed number was measured on a realization that WAS one plane off,
+    and for any later case whose declared plane cannot be put on the node
+    line.
+    """
+    if length_m <= 0 or cell_m <= 0:
+        raise ValueError("length_m and cell_m must be positive")
+    frac = float(n_planes) * float(cell_m) / float(length_m)
+    if observable == "frequency":
+        signed = -frac
+    elif observable == "electrical_length":
+        signed = +frac
+    else:
+        raise ValueError(observable)
+    return {"kind": "wall_plane_separation", "observable": observable,
+            "n_planes": int(n_planes), "cell_m": float(cell_m),
+            "length_m": float(length_m), "frac": frac, "signed_frac": signed}
+
+
 # ---------------------------------------------------------------------------
 # Case-level driver: one JSON per case, one entry per arm x rung
 # ---------------------------------------------------------------------------
