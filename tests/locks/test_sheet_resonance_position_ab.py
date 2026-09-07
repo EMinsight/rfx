@@ -205,9 +205,30 @@ def test_g1_resonance_position_ab():
         runs[mode] = (_peaks(ts, dt), ts, dt)
 
     (pk_pec, df), _, _ = runs["pec"]
+
+    # --- R5 trace: the whole peak census, never two headline numbers -----
+    # The two pinned modes used to be reported with nothing behind them, so
+    # a run that moved could not be told from a run whose PEAK PICKER had
+    # swapped two peaks of similar height. Every arm's census is printed
+    # with amplitudes, in one place, before any assertion reads it.
+    for mode in ("pec", "f0", "prefix"):
+        (pk, dfm), _, _ = runs[mode]
+        loud = max((a for _f, a in pk), default=1.0)
+        print(f"[SHEET-AB/{mode.upper()}] df = {dfm / 1e6:.3f} MHz; peaks "
+              f"(f_GHz, amp/loudest):")
+        for f, a in sorted(pk, key=lambda q: q[0]):
+            print(f"[SHEET-AB/{mode.upper()}-TRACE]   {f / 1e9:8.4f} GHz  "
+                  f"{a / loud:.4f}")
+
     base = sorted(p[0] for p in sorted(pk_pec, key=lambda p: -p[1])[:2])
     assert len(base) == 2
-    # provenance pin: the fixture's PEC modes stay where they were measured
+    # Provenance pin: the fixture's PEC modes stay where they were measured.
+    # Re-pinned under #931 — the sheet footprint is sampled CLOSED, so this
+    # patch realizes the 5.500 mm it declares instead of the 5.250 mm the old
+    # half-open node sampling gave it (measured at build time on this grid:
+    # Ex rows 13..34 on both patch planes, node span 5.5000 mm). The modes
+    # move with the patch; the GATE below (f0 vs pec residual) is unchanged
+    # and is what this module actually tests.
     for b, m in zip(base, MEASURED_PEC_MODES):
         assert abs(b - m) <= 2 * df, (b, m)
 

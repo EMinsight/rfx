@@ -49,6 +49,94 @@ safe — each run stages its own copy of the worktree and writes its own
 timestamped output directory — which is why the duplicate `msl-nu-gate` was left
 alone rather than deleted (VESSL runs are never deleted here).
 
+## Read back (2026-09-07) — every submitted run against its pre-declaration
+
+The runs below finished; each row is the pre-declaration from the table
+above against what the run measured. Three confirmations, four
+falsifications, three stale.
+
+| case | run | pre-declared | measured | verdict |
+|---|---|---|---|---|
+| `conformal-convergence` | 369367259182 | staircase `boundary_error` FALLS; a both-legs collapse would retire the observable | 4 passed, both legs still separated | CONFIRMED |
+| `farfield-dipole` | 369367259186 | D stays 2.380 dBi within +/- 0.5 dBi; a move falsifies the byte-identity check | 7 passed | CONFIRMED |
+| `ram-backings` | 369367259193 | abs Gamma envelope and both AD-vs-FD legs UNCHANGED on both modules | 20 passed | CONFIRMED |
+| `patch-harminv` | 369367259172 | Leg A -6.17 +/- 1.125 pp HOLDS ("a miss falsifies the identical-realization claim") | Leg A **+10.365 %**; Leg B, settling, band and raster all passed | **FALSIFIED — and it named its own cause** |
+| `patch-s11` | 369367259174 | crossing 8.8189 GHz, in-band max Re(Zin) 4326 ohm, in-band min abs S11 0.8794 all HOLD | crossing **9.3453 GHz**, in-band max Re(Zin) **0 ohm**, min abs S11 0.9775, Re(Zin) negative across most of the band, Z0 median 79.74 ohm | **FALSIFIED** |
+| `msl-nu-gate` | 369367259178 | same as patch-s11 | crossing **9.3407 GHz** — the NU lane reproduces the uniform lane's move to 4 significant figures | **FALSIFIED, consistently** |
+| `sheet-perturbation-q` | 369367259167 | f_mode 24.7530 -> ~23.62 GHz (-4.6 %) | f_mode **25.3992 GHz (+2.6 %)** — the wrong way, same family and same sign as the A/B module | **FALSIFIED — cause open** |
+| `sheet-resonance-ab` | 369367259168 | modes 24.5646 -> ~23.44 and 28.1318 -> ~26.85 GHz | second mode 30.2153 GHz — the WRONG WAY for a longer patch. **Re-run at HEAD on this pod: identical to 4 significant figures (301 s), so this is NOT staleness** | **FALSIFIED — cause open, see below** |
+| `leontovich-alpha` | 369367259169 | alpha UNCHANGED | 3 failed; re-run at HEAD on this pod reproduces the same 3 (o3 field-fit residual 0.0108 vs the 0.01 trust gate) | NOT stale — a real, marginal move; open |
+| `refplane-thru` | 369367259170 | Zc falls below [46.0, 50.5], beta rises above [1.03, 1.08]; both bands re-derived from this run | ran at b884b83f, before the refplane helper collected its own sheet: 6 errors + 2 fast-lane failures. At HEAD the fast lane is **27 passed** | STALE — re-submitted |
+
+### What the three board falsifications turned out to be
+
+Not the sheet declaration and not the edge set: the PEC edges are
+byte-identical to the pre-#931 rule, which is what the first pass checked.
+The MATERIAL under those edges moved. Each board drew its foils as
+one-cell PEC Boxes in cells RESERVED for them, with the laminate starting
+at the next node; rfx used to re-sample a sheet's own cell material onto
+its live edge (#702) so the reserved cell silently became dielectric. The
+contract deletes that re-sample, so the reserved cell is vacuum and sits
+in series with the cavity. Preflight's own #703 cavity check fired in
+every one of those runs and printed the size:
+
+```
+Board H  walls 29/34, five cells between, eps_r [1.0, 3.38, 3.38, 3.38, 3.38]
+         sum(d/eps) mesh 429.6 um vs physical 232.8 um   (+84.5 %)
+Board S  walls 29/34, sum(d/eps) mesh 627.1 um vs physical 429.8 um (+45.9 %)
+```
+
+Board H's own docstring names the signature: pre-#702 the isolated patch
+read +7.430 % "the ground sheet's own cell assembled as vacuum, diluting
+the cavity permittivity". The run measured +10.365 %.
+
+The redraw (commit "the three patch boards put their foils on the laminate
+faces") puts each foil ON the laminate face it bounds and snaps the z
+origin to the node line. Realized after it, asserted with no solve: walls
+28/32, four cells, all eps_r = 3.38, node-to-node 787.000 um = H_SUB
+(Board S 788.0 um, the 0.005-cell mesh incommensurability). Preflight's
+cavity advisory is silent; the advisory count drops 6 -> 3.
+
+### The two sheet-cavity modules — falsified in DIRECTION, cause open
+
+Both fixtures declare zero-thickness sheets on exact node planes and both
+moved UP where a longer patch must move DOWN. What is settled, measured
+at build time at HEAD:
+
+```
+sheet-resonance-ab, mode "pec": sheet planes {2: [6, 11, 14]}
+  plane 11 and plane 14: Ex rows 13..34, Ey cols 15..32
+  realized patch node span 5.5000 mm = the declared L_PATCH
+```
+
+So the realization is right — the contract's closed footprint gives the
+drawn 5.500 mm where the old half-open sampling gave 5.250 mm. A cavity
+mode set by that length must fall by the length ratio (24.5646 -> 23.45,
+28.1318 -> 26.85, 24.7530 -> 23.63). Both modules moved the other way.
+
+Two candidates, and the module could not tell them apart because it
+reported two headline numbers with no trace: the modes really moved up
+(which the footprint measurement contradicts), or the two-loudest PEAK
+PICKER swapped peaks between arms. This commit adds the R5 census — every
+peak with its amplitude, for all three arms — so the next run answers it
+by inspection rather than by argument. NOT re-pinned until it does; a
+provenance pin re-centred on a number whose mode identity is unknown is
+worse than a red gate.
+
+### Re-submitted at the redrawn geometry
+
+| case | run id | pre-declaration (written before submission) | expected runtime |
+|---|---|---|---|
+| `patch-harminv` | **369367259225** | Leg A moves UP from -6.17 % by roughly the mesh term this module attributes to it (~2 pp), toward its own refinement-ladder plateau near -4.4 %, and STAYS NEGATIVE. A positive value means the slot is still there. Leg B moves < 1 pp (the stub is untouched, and this module measures 0.85 pp per node of stub length) | 40-60 min |
+| `patch-s11` | **369367259226** | an Im(Zin) = 0 crossing with Re(Zin) > 500 ohm appears BETWEEN 8.8189 GHz (the pre-#931 pin, on a 983.75 um electrical cavity) and 9.3453 GHz (the un-redrawn run), because the cavity is now 787 um; Re(Zin) stops being negative across the band; Z0 median Re falls from 79.74 ohm toward the Hammerstad-Jensen 50.6 | 1-3 h |
+| `msl-nu-gate` | **369367259227** | the same, and the two lanes agree within one DFT bin (#834) | 1-3 h |
+| `refplane-thru` | **369367259228** | the 6 physics legs run for the first time at HEAD; Zc and beta/(w/c) are re-derived from this run against the Phase-0 closed-box flux referee | 20-40 min |
+
+`vessl run create -f /tmp/t6vessl2/<case>.yaml`, submitted from a plain
+directory (the worktree crash above still applies). The band constants in
+those three lock modules are re-pinned FROM these runs, never from the
+arithmetic in this file.
+
 ## Measured on this pod, no VESSL needed
 
 **Waveguide chain battery LIVE layer** —
