@@ -678,9 +678,13 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     pec_mask_override : jnp.ndarray or None
         Extra hard-PEC mask ORed into the geometry-derived pec_mask.
     strip_interior_pec : bool
-        When True, drop the interior-geometry ``pec_mask`` returned by
-        ``assemble_materials_nu`` (the rasterized iris / wall / post),
-        forcing a clean vacuum-plus-boundary-walls reference run. The
+        When True, drop the interior-geometry PEC returned by
+        ``assemble_materials_nu`` — both the ``pec_mask`` VOLUME cells
+        (the rasterized iris / wall / post) and the declared SHEETS and
+        WIRES (#931 §1.9: a sheet iris owns no cell, so stripping only
+        ``pec_mask`` would leave it in the "empty guide" reference and the
+        two-run S11 would come out 0) — forcing a clean
+        vacuum-plus-boundary-walls reference run. The
         boundary-wall PEC (the y/z guide walls from the BoundarySpec) is
         NOT carried in ``pec_mask`` — it is enforced separately via
         ``pec_faces`` (grid pad=0 + ``apply_pec`` / CPML face split), so

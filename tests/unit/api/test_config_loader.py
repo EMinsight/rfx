@@ -317,3 +317,64 @@ def test_full_run_matches_direct():
         np.asarray(res_cfg.s_params), np.asarray(res_dir.s_params),
         rtol=1e-6, atol=1e-8,
     )
+
+
+# --------------------------------------------------------------------------
+# thin_conductors — the YAML spelling of a sheet declaration (#931 §1.3)
+# --------------------------------------------------------------------------
+
+def test_thin_conductor_entry_declares_a_sheet():
+    """A zero-thickness Box under ``thin_conductors:`` becomes a sheet.
+
+    Before #931 the front end had no way to say "sheet": a foil written as
+    a geometry entry is a VOLUME, and one thinner than a cell is refused.
+    """
+    import warnings
+
+    cfg = {
+        "frequency": {"freq_max": 10e9},
+        "domain": {"x": 0.02, "y": 0.02, "z": 0.02},
+        "boundary": "pec",
+        "dx": 0.001,
+        "thin_conductors": [
+            {"shape": "box",
+             "bounds": [[0.004, 0.004, 0.010], [0.016, 0.016, 0.010]],
+             "sigma_bulk": 5.8e7},
+        ],
+    }
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sim = simulation_from_dict(cfg)
+        sheets: list = []
+        _m, _d, _l, pec_mask, *_ = sim._assemble_materials(
+            sim._build_grid(), pec_sheets=sheets)
+    assert len(sim._thin_conductors) == 1
+    assert len(sheets) == 1 and sheets[0].normal_axis == 2
+    assert pec_mask is None, "a sheet owns no cell"
+
+
+def test_thin_conductor_entry_needs_a_conductivity_or_an_f0():
+    cfg = {
+        "frequency": {"freq_max": 10e9},
+        "domain": {"x": 0.02, "y": 0.02, "z": 0.02},
+        "boundary": "pec",
+        "dx": 0.001,
+        "thin_conductors": [
+            {"shape": "box",
+             "bounds": [[0.004, 0.004, 0.010], [0.016, 0.016, 0.010]]},
+        ],
+    }
+    with pytest.raises(ValueError, match="sigma_bulk"):
+        simulation_from_dict(cfg)
+
+
+def test_thin_conductors_must_be_a_list():
+    cfg = {
+        "frequency": {"freq_max": 10e9},
+        "domain": {"x": 0.02, "y": 0.02, "z": 0.02},
+        "boundary": "pec",
+        "dx": 0.001,
+        "thin_conductors": {"shape": "box"},
+    }
+    with pytest.raises(TypeError, match="thin_conductors"):
+        simulation_from_dict(cfg)

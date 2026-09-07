@@ -23,6 +23,7 @@ import numpy as np
 
 from rfx.core.yee import EPS_0, MU_0
 from rfx.adi import adi_step_3d
+from rfx.boundaries.pec import realized_pec_edge_masks
 
 C0 = 1.0 / np.sqrt(EPS_0 * MU_0)
 
@@ -66,11 +67,16 @@ def test_adi_step_3d_gradient_is_finite_and_nonzero():
     assert abs(grad) > 0.0, "gradient through adi_step_3d is exactly zero"
 
 
-def test_adi_step_3d_gradient_with_internal_pec_mask_is_finite():
-    """The same AD path with an internal pec_mask applied (rfx/adi.py:748-750
-    post-solve-projection path) must also stay finite — the jnp.where-based
-    masking is the mechanism most likely to break reverse-mode AD if it were
-    ever changed to a non-differentiable indexing form.
+def test_adi_step_3d_gradient_with_internal_pec_edges_is_finite():
+    """The same AD path with internal PEC applied (rfx/adi.py post-solve
+    projection) must also stay finite — the jnp.where-based masking is the
+    mechanism most likely to break reverse-mode AD if it were ever changed
+    to a non-differentiable indexing form.
+
+    #931: the ADI lane takes the REALIZED edge masks (Mx, My, Mz) from
+    ``rfx.boundaries.pec.realized_pec_edge_masks``, not a primal-cell
+    mask — zeroing all three components at the occupied cell indices was
+    this lane's own realization of the geometry.
     """
     nx = ny = nz = 8
     dx = dy = dz = 2e-3
@@ -80,8 +86,9 @@ def test_adi_step_3d_gradient_with_internal_pec_mask_is_finite():
 
     eps_r = jnp.ones((nx, ny, nz), dtype=jnp.float32)
     sigma = jnp.zeros((nx, ny, nz), dtype=jnp.float32)
-    pec_mask = jnp.zeros((nx, ny, nz), dtype=bool)
-    pec_mask = pec_mask.at[nx // 2, ny // 2, :].set(True)  # a thin internal post
+    cell_mask = jnp.zeros((nx, ny, nz), dtype=bool)
+    cell_mask = cell_mask.at[nx // 2, ny // 2, :].set(True)  # internal post
+    pec_edge_masks = realized_pec_edge_masks(cell_mask)
 
     def loss(amplitude):
         zeros = jnp.zeros((nx, ny, nz), dtype=jnp.float32)
@@ -90,7 +97,7 @@ def test_adi_step_3d_gradient_with_internal_pec_mask_is_finite():
         for _ in range(n_steps):
             ex, ey, ez, hx, hy, hz = adi_step_3d(
                 ex, ey, ez, hx, hy, hz, eps_r, sigma, dt, dx, dy, dz,
-                pec_mask=pec_mask,
+                pec_edge_masks=pec_edge_masks,
             )
         return jnp.sum(ex ** 2) + jnp.sum(ey ** 2) + jnp.sum(ez ** 2)
 
@@ -99,10 +106,10 @@ def test_adi_step_3d_gradient_with_internal_pec_mask_is_finite():
 
     val = float(val)
     grad = float(grad)
-    print(f"\nadi_step_3d AD (with pec_mask): loss={val:.6e}, grad={grad:.6e}")
+    print(f"\nadi_step_3d AD (with pec edges): loss={val:.6e}, grad={grad:.6e}")
 
     assert np.isfinite(val), f"loss is not finite: {val}"
     assert np.isfinite(grad), (
-        f"gradient through adi_step_3d with an internal pec_mask is not "
+        f"gradient through adi_step_3d with internal PEC edges is not "
         f"finite: {grad}"
     )

@@ -729,21 +729,36 @@ class TestVmapBatchedPadByteIdentity:
         on which field is swept.
 
         The PEC row is the must-pass companion, not filler: it measured
-        0 mismatched cells on every tree (a PEC conductor routes to
-        ``pec_mask``, not to the material arrays), so it is the case that
-        had to keep passing while the non-PEC case went from red to
-        green. An equality test can be satisfied by a fixture where
-        nothing could differ; ``test_thin_conductor_fixture_is_live``
-        below rules that out for the non-PEC row."""
+        0 mismatched cells on every tree (a PEC conductor writes no
+        eps_r/sigma at all), so it is the case that had to keep passing
+        while the non-PEC case went from red to green. An equality test
+        can be satisfied by a fixture where nothing could differ;
+        ``test_thin_conductor_fixture_is_live`` below rules that out for
+        the non-PEC row.
+
+        #931: the PEC row's Box is drawn ZERO-THICKNESS. A PEC thin
+        conductor is a SHEET — a footprint on one node plane — and a shape
+        thicker than one local cell along its normal is refused ("not a
+        sheet; use add() for a volume"). The old 2x2-cell bar was never a
+        sheet; it only looked like one because the pre-#931 rule realized
+        any masked body as a stack of node planes. The DC-fold (non-PEC)
+        row keeps the finite box: that is a lossy VOLUME model and is out
+        of the contract's scope (design note §1.8)."""
         field = param.split(".")[1]
 
         def sim_fn(val):
             kw = {"eps_r": 4.0, "sigma": 0.0, "mu_r": 1.0}
             kw[field] = val
             sim = _matrix_sim((0.0, 0.0, 0.0), (0.02, 0.02, 0.02), **kw)
-            sim.add_thin_conductor(
-                Box((0.0, 0.008, 0.008), (0.02, 0.012, 0.012)),
-                sigma_bulk=sigma_bulk, thickness=35e-6)
+            box = (
+                # PEC -> a sheet: zero thickness on its normal (#931 §1.3)
+                Box((0.0, 0.008, 0.010), (0.02, 0.012, 0.010))
+                if sigma_bulk >= 1.0e6 else
+                # DC fold -> a lossy volume, unchanged (§1.8)
+                Box((0.0, 0.008, 0.008), (0.02, 0.012, 0.012))
+            )
+            sim.add_thin_conductor(box, sigma_bulk=sigma_bulk,
+                                   thickness=35e-6)
             return sim
 
         base_sim = sim_fn(base_value)
