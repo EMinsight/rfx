@@ -146,7 +146,10 @@ Relevant checks include `validation/crossval/05_patch_antenna.py`,
   The committed 2026-08-27 GPU run log
   (`validation/crossval/_06b_notch_uniform_logs/20260827T131217Z_run.log`)
   reports `1.40%` frequency error against the analytic notch evaluated on the
-  realized `635.0 um` trace width, `-43.3 dB` notch depth, and median
+  realized `635.0 um` trace width (a **pre-2.0** realized width: under the
+  lattice ownership contract the trace's footprint is sampled closed on the
+  in-plane axes, so this number is re-read from the recomputed run's own
+  `fidelity_report()`), `-43.3 dB` notch depth, and median
   `Re(Z0)=46.5 ohm` (port 0, median over the 100 bins); it passes the gates
   IN FORCE WHEN IT RAN -- frequency error `<15%`, notch depth `<-10 dB`, and
   median `Re(Z0)` in `(40, 65) ohm`. **Those are not the case's current
@@ -312,9 +315,15 @@ A `True` entry is not an accuracy guarantee.
 - Surface-impedance sheets (`add_thin_conductor(...,
   surface_impedance_f0=...)`) are applied on this lane's device runs (#679):
   every FDTD dispatch goes through `run()`/`forward()`, which realize the
-  sheet node-thin via the #677 per-step operator. The trace itself must stay
-  a PEC `Box` (an f0 sheet never enters the PEC mask the Ampere-loop current
-  and V span anchor on, and the lane raises if no PEC trace is found).
+  sheet on its node plane. The trace itself must stay **hard PEC** — a `Box`
+  volume, a zero-thickness `Box`, or a PEC `add_thin_conductor` sheet — because
+  the Ampere-loop current and the V span anchor on realized PEC wall planes,
+  and an `f0` sheet realizes no PEC edge. The lane reads the trace from
+  `realized_wall_planes()`, so a sheet-declared trace is found the same way a
+  volume one is; it raises when no realized PEC trace sits above the substrate
+  top. Use `f0` sheets for auxiliary lossy metal only. (Before 2.0 the trace had
+  to be a `Box` specifically, because the detector scanned the primal cell mask
+  — a companion volume under every sheet. That workaround is gone.)
   Combination refusals (dispersive substrate, subpixel/conformal, UPML,
   ADI/subgridded/distributed) fire at the run-lane entry. A sheet lying
   inside a probed span biases the lossless-line N-probe `Z0`/`q` fit (the
@@ -346,7 +355,7 @@ A `True` entry is not an accuracy guarantee.
   loudly when a short feed cannot satisfy both clearances (#469). Library
   witness probes are excluded from preflight advisories (#470).
 
-**cv06b re-gate, judged on its own board (2026-09-02, VESSL 369367257702, issue #812 P3 round 2).** Every gate passed on the shipped dx = 63.5 µm mesh: notch error `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.err_pct = 1.453` % (window 4.0 %), −10 dB width ratio `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.bw_ratio = 0.9684` (window 0.80–1.20). The build-level narrow-stub falsifier fires the width gate while the retained depth witness stays blind. One pre-declared falsifier FIRED and is recorded, not softened: a one-cell stub-length error (analytic shift 0.532 %, `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.true_shift_pct = 0.532`) moved the refined notch estimate by `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.refined_delta_pct = 0.145` % — non-zero, but below the declared half-of-predicted visibility criterion — so sub-bin resolution of the notch frequency on this board is not demonstrated; cause not attributed (design note section 7.6 names the two candidates and the finer-DFT experiment that separates them).
+**cv06b re-gate, judged on its own board (2026-09-02, VESSL 369367257702, issue #812 P3 round 2 — PRE-2.0 realization; recomputed under #931).** Every gate passed on the shipped dx = 63.5 µm mesh: notch error `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.err_pct = 1.453` % (window 4.0 %), −10 dB width ratio `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::criterion_A_baseline.bw_ratio = 0.9684` (window 0.80–1.20). The build-level narrow-stub falsifier fires the width gate while the retained depth witness stays blind. One pre-declared falsifier FIRED and is recorded, not softened: a one-cell stub-length error (analytic shift 0.532 %, `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.true_shift_pct = 0.532`) moved the refined notch estimate by `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json::stub_1cell.refined_delta_pct = 0.145` % — non-zero, but below the declared half-of-predicted visibility criterion — so sub-bin resolution of the notch frequency on this board is not demonstrated; cause not attributed (design note section 7.6 names the two candidates and the finer-DFT experiment that separates them).
 
 ## Rectangular-waveguide port
 
@@ -712,59 +721,43 @@ stays replayable because its reference values are embedded (#574 scope item 3).
   otherwise relative error is dominated by the numerical noise floor.
 - Choose `dx` so the slab length is an integer number of cells; staircase
   quantization directly perturbs the round-trip phase.
-- Draw interior PEC obstacles (irises, septa, posts) with their interior faces
-  on **cell midpoints**, keep the metal depth an exact number of cells, and
-  assert the realized footprint. `Box` rasterizes half-open `[lo, hi)` over node
-  coordinates, so a box drawn between two node planes occupies one cell fewer
-  than drawn, asymmetrically at the `hi` face. Two facing fins drawn to leave a
-  nominal opening `d` therefore leave an electrical opening of `d + dx` **or
-  `d + 2*dx`, and which one is not predictable from the nominal dimensions**.
-  The pair's two interior faces are different corner types: the lo fin's is a
-  `hi` corner, which half-openness always drops, so it always retreats one
-  cell; the hi fin's is a `lo` corner, which is kept unless float32 rounding
-  puts the node just below it. One retreat gives `d + dx` with the opening
-  **asymmetric** (centre `dx/2` low); two retreats give `d + 2*dx`, **centred**.
-  Measured on WR-90 at both a/30 and a/60: 7.620 mm and 18.288 mm give
-  `d + dx` off-centre, 12.192 mm gives `d + 2*dx` centred. **Transverse** to
-  the propagation direction the electrical dimension is the span between the
-  innermost zeroed planes, `(n_open + 1) * dx` — the measure that reproduces
-  `a = cells * dx` exactly, and an independent refit of 16 committed
-  single-iris configurations across two meshes pins the realized aperture to
-  within 1/20 of a cell of it (a stage-S3 / issue #499 review observation; no
-  committed record carries the refit yet — a caution-grade number, like the
-  longitudinal one below). **That identity does not carry into the
-  propagation direction:** an obstacle's electrical *thickness* is set by field
-  interaction with the discontinuity rather than by a cutoff, is measured to
-  fall between `t_cells * dx` and `(t_cells - 1) * dx` so neither integer rule
-  holds, and is not settled — treat it as an unknown of order half a cell and
-  fold the sensitivity into the reported envelope instead of picking a rule.
-  (This measured *effective* thickness is a different quantity from a cascade
-  comparator's electrical-length bookkeeping — issue #499's comparator draws
-  `t_c = round(t/dx) + 1` so `(t_c - 1)*dx` conserves total electrical
-  length; that choice answers a different question and is not contradicted
-  here.)
-  Offsetting each
-  interior face half a cell the wrong way retreats both faces by construction
-  rather than by luck, giving `d + 2*dx` deterministically at every aperture;
-  that is the drawing case 18's blocked revision used. In
-  the WR-90 single-iris lane this inflated the `|S11|` difference against an
-  analytic mode-matching oracle by 4-6x (0.0193 to 0.1262 at `d = 7.620 mm`,
-  a/30). Because the error scales with `dx` it mimics first-order convergence,
-  and on a resonant structure it shifts the passband instead of widening a
-  magnitude tolerance. Midpoint corners are rounding-independent, and with
-  `(cells - d_cells)` even the realized opening equals the nominal one exactly;
-  at odd parity a symmetric opening of that width is not representable on the
-  grid and costs one cell **more** however it is drawn. Odd parity is a fork
-  rather than a dead end — change `dx`/the aperture so the parity works, or
-  place the fins asymmetrically on purpose and accept a recorded half-cell
-  offset instead of rounding the aperture (the quantity that sets the cutoff)
-  to the wrong parity. Neither is recommended here, because the cost of the
-  offset has not been measured; what is required is that the offset be recorded
-  and representable by the comparator, since an off-centre aperture compared
-  against a centred oracle silently becomes comparator error. See the `Box`
-  docstring for the
-  arithmetic and `run_point` in
-  `validation/crossval/18_wr90_iris_modematch.py` for the assert pattern.
+- Draw interior PEC obstacles (irises, septa, posts) at the dimensions you
+  mean, and assert the realized footprint. Under the lattice ownership contract
+  (#931) a PEC `Box` is a **volume**: it is sampled at cell centres, realizes
+  tangential walls at **both** of its drawn faces, and shorts every normal edge
+  between them. Drawn extent equals realized extent, so two facing fins drawn to
+  leave a nominal opening `d` leave an electrical opening of `d`, transverse and
+  longitudinal alike, and the obstacle's realized thickness is the drawn
+  thickness. Read the planes back from `realized_wall_planes()` (or
+  `fidelity_report()`, which prints them per entry in input units) and assert
+  them — a build-time check, no solve.
+
+  What that deletes, and why the deletions are deletions rather than re-tunings:
+
+  * the `d + dx` / `d + 2*dx` fork, and the "which one is not predictable from
+    the nominal dimensions" caveat under it. Both faces are now walls, so the
+    corner-type asymmetry that produced the fork is gone;
+  * the transverse identity `(n_open + 1) * dx`. The realized aperture is
+    `n_open * dx` — the drawn one;
+  * the requirement that interior faces sit on **cell midpoints**. Midpoint
+    corners are still harmless (centre sampling puts them on the plane they
+    intend, `lo` inclusive and `hi` exclusive at the tie), but they are no
+    longer load-bearing and the crossval scripts no longer draw that way;
+  * the #499 comparator's `t_c = round(t/dx) + 1` and its `(t_c - 1)*dx`
+    electrical-length bookkeeping. The comparator is fed the drawn thickness.
+
+  What survives: **parity and representability**. A symmetric opening still has
+  to be representable on the grid — at odd `(cells - d_cells)` parity a centred
+  opening of that width does not exist, and the fork is the same one as before
+  (change `dx` or the aperture so the parity works, or place the fins
+  asymmetrically on purpose and record the offset, since an off-centre aperture
+  compared against a centred oracle silently becomes comparator error). And the
+  *effective* electrical thickness of an obstacle — field interaction with the
+  discontinuity, not a cutoff — remains a measured quantity rather than a
+  geometric one; what changed is that its geometric starting point is now the
+  drawn thickness with no `±1` correction. See `run_point` in
+  `validation/crossval/18_wr90_iris_modematch.py` for the realized-plane assert
+  pattern.
 - Size the absorber from the guide wavelength at the **lowest** measured
   frequency, where `lambda_g` is longest and the `cpml_layers=16` default is
   weakest. `compute_waveguide_s_matrix` documents `>= 0.5 * lambda_g` and now
@@ -1110,7 +1103,9 @@ wavelength) that would justify a future, separately pre-declared retry (a
 longer MSL probe ladder, e.g. >= 0.25 lambda_g) — not attempted in this PR.
 `sim.preflight()` on this fixture also independently flags the same general
 resolution class from a different angle: the pin post's 4-cell diameter is
-under the ≥5-cell PEC-volume floor, and the 3-cell substrate is flagged for
+under the ≥5-cell PEC-volume floor (a pre-2.0 cell count — a `Cylinder` is
+sampled at cell centres from 2.0, so the realized count is re-read from the
+fixture's own preflight), and the 3-cell substrate is flagged for
 >5% Z0 staircase bias.
 
 | aspect | status |
