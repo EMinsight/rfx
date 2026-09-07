@@ -42,12 +42,22 @@ What this tutorial teaches, in order:
 
 Error budget at this deliberately coarse resolution (dx = 2 mm):
 
-- The resonance reads HIGH against openEMS-with-thirds: +11.3 % at dx = 2 mm,
-  2.6953 GHz here against 2.4221 GHz.  Both numbers are the 32 mm feed-axis
-  design mode; the 40 mm cross mode is a separate entry in the printed mode
-  list (2.2157 GHz here).  (Mode pairing repinned 2026-08-27, #693.)  The
-  committed lock ``tests/crossval/test_patch_canonical_farfield_e4.py`` gates
-  the [+6 %, +16 %] magnitude envelope and the sign on the cv05 fixture.
+- The resonance reads HIGH against openEMS-with-thirds: +3.5 % at dx = 2 mm,
+  2.5072 GHz here against 2.4221 GHz (VESSL 369367259175).  Both numbers are
+  the 32 mm feed-axis design mode; the 40 mm cross mode is a separate entry in
+  the printed mode list (2.0345 GHz here).  (Mode pairing repinned 2026-08-27,
+  #693.)  Before the ownership contract this board read +11.3 % (2.6953 GHz,
+  cross mode 2.2157 GHz — VESSL 369367259020, which reproduces the numbers
+  this docstring used to carry).  The committed lock
+  ``tests/crossval/test_patch_canonical_farfield_e4.py`` gated a
+  [+6 %, +16 %] magnitude envelope, but that window was measured on the board
+  with a vacuum ground cell, which no longer exists; the lock SKIPS its gated
+  legs until crossval-A re-derives the envelope from the cv05 re-solve.  Do
+  not read +3.5 % as passing a live gate — it is a measurement waiting for
+  one.  It did move the way #740's two_plane arm predicted (that arm measured
+  -4.7 % at dx = 2), but only part of the way: -7.8 points, landing at +3.5 %
+  rather than the predicted -4.7 %.  The direction is confirmed, the size is
+  not, and the 8.2-point remainder is unattributed here.
 - The sign is not a settled coarse-grid bias that finer cells remove.  Two
   discretization errors push opposite ways: the substrate under-resolved in z
   reads high, the staircased PEC patch edge reads low, and they are not
@@ -63,21 +73,37 @@ Error budget at this deliberately coarse resolution (dx = 2 mm):
   the realized cavity is the declared one and the run asserts it at build
   time.
 - The far field is the observable that agrees.  This configuration prints
-  D = 7.39 dBi at its radiating bin against openEMS 6.79 dBi, +0.60 dB, inside
-  the committed envelope lock (``D_ABS_TOL_DB = 1.0``).  The demo trims the air
-  above the patch to 84 mm with ``num_periods = 125``; the research frame
-  behind the reference numbers used 95 mm and ``num_periods = 250``.
+  D = 6.72 dBi at its radiating bin against openEMS 6.79 dBi, -0.07 dB, well
+  inside the 1.0 dB the lock's ``D_ABS_TOL_DB`` carries — though that leg
+  skips with the rest of the file, so this too is a measurement rather than a
+  pass.  The pre-contract board printed 7.39 dBi, +0.60 dB.  The demo trims the air above
+  the patch to 84 mm with ``num_periods = 125``; the research frame behind the
+  reference numbers used 95 mm and ``num_periods = 250``.
+- Read the per-bin radiated-power trace, not just the headline.  The mode is
+  identified by the peak of that spectrum, and on the pre-contract board the
+  peak sat on 2.8 GHz — the LAST monitored bin, with the spectrum still rising
+  into it, so the selector was pinned at the edge of its own frequency list.
+  On the corrected board the spectrum peaks at 2.5 GHz with 2.4 GHz at
+  -11.4 dB below it and 2.8 GHz at -19.4 dB: an interior maximum, which is
+  what the mode-identification rule assumes it is looking at.
 
 Run as::
 
     python examples/tutorials/patch_antenna_demo.py
 
-Measured 2026-09-05, 64-core CPU, run alone: 1345 s (22 min).
-``NUM_PERIODS = 125`` is sized from measurement: 90 periods gave -36.5 dB and
-204 periods gave -52.6 dB, which puts the -40 dB settling bar near 115 on the
-average slope, and the multi-mode tail beats rather than decaying smoothly.
-The 2026-09-05 run measured -50.9 dB, SETTLED.  The witness below re-measures
-the end-of-run envelope every run.
+Runtime measured 2026-09-05 on a 64-core CPU run alone: 1345 s (22 min); the
+same script on the VESSL CPU lane is 587 s of FDTD in 600 s wall
+(369367259175), and the pre-contract board was 535 s / 543 s there
+(369367259020) — the shared pod, not the migration, is what the 22 min was
+measuring.
+``NUM_PERIODS = 125`` is sized from measurement on the PRE-contract board:
+90 periods gave -36.5 dB and 204 periods gave -52.6 dB, which put the -40 dB
+settling bar near 115 on the average slope, and the multi-mode tail beats
+rather than decaying smoothly.  The corrected board's cavity is thinner and
+its modes are higher-Q, so that ladder is not transferable; what is measured
+on it is the endpoint, -45.4 dB at 125 periods (369367259175), SETTLED with
+5.4 dB of margin against -50.9 dB before.  The witness below re-measures the
+end-of-run envelope every run — trust it over this paragraph.
 """
 
 from __future__ import annotations
@@ -513,11 +539,13 @@ def main():
         f"  f_res {radiating.freq / 1e9:.4f} GHz vs openEMS "
         f"{OPENEMS_F_RES / 1e9:.4f} GHz: {dev_pct:+.1f}% — the design mode "
         "reads HIGH at dx = 2 mm. The committed lock "
-        "(tests/crossval/test_patch_canonical_farfield_e4.py) gates the sign "
-        "and the [+6%, +16%] envelope. Two coarse-grid mechanisms compete "
-        "here (substrate under-resolved in z reads high, staircased patch "
-        "edge reads low) and are not separated, so finer dx is not a "
-        "predictable direction."
+        "(tests/crossval/test_patch_canonical_farfield_e4.py) gated a "
+        "[+6%, +16%] envelope measured on the pre-#931 board, whose vacuum "
+        "ground cell is gone; its gated legs SKIP until that envelope is "
+        "re-derived, so this number is not currently checked against one. "
+        "Two coarse-grid mechanisms compete here (substrate under-resolved "
+        "in z reads high, staircased patch edge reads low) and are not "
+        "separated, so finer dx is not a predictable direction."
     )
     print(
         f"  D {d_dbi[k_star]:.2f} dBi vs openEMS {OPENEMS_D_DBI:.2f} dBi "
