@@ -83,3 +83,22 @@ Three sites the first pass left, none of them needing a solve:
   expects a ValueError before any solve, so nothing is re-measured.
 
 VESSL runs after this pass: still NONE, for the same reason.
+
+### Verification after the second pass (2026-09-07, pod load average 50-60)
+
+* `tests/unit/materials` + `tests/unit/farfield`: 230 passed, 0 failed (110 s)
+* `tests/unit/api` + `tests/unit/sources`: 279 passed, 2 skipped, 0 failed (438 s)
+* `tests/unit/materials/test_sheet_impedance.py`: 62 passed (173 s), and the
+  two tests touching the redrawn board 2 passed (27 s) after the coordinate
+  assertion was added
+* `tests/unit/farfield/test_ntff_smatrix_drop_warning.py`: 7 passed (6.5 s)
+* `tests/unit/misc/test_review_tier1_validation_battery.py`: 7 passed (9.2 s);
+  `test_flux_monitor_finite_size::test_the_short_realizes_walls_on_both_drawn_planes`
+  + `test_ris.py`: 1 passed, 12 skipped (6 s)
+* a whole-`tests/unit/misc` run hit the 1150 s cap with 64 reported and zero
+  failures; its two long solves (`test_flux_monitor_finite_size`, 2200 steps
+  each) were green in the first pass's full five-directory run and are not
+  touched by the second pass, which changed one block comment in that
+  directory.
+
+All runs `-n 4`, `JAX_PLATFORMS=cpu`.
