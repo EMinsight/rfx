@@ -171,6 +171,153 @@ grepping the CHANGELOG should not follow their recipes):
   Live/dead is now `edge_is_pec` on the port's own component; clearing is
   `clear_edges`. "The thin-sheet rule" names the deleted rule.
 
+**Landed with the phase-2a migration branches (2026-09-07).** Per-area entries
+contributed by the migration groups; every number below is measured on the
+merged tree, and each artifact it names is re-solved or it does not ship.
+
+*Preflight* (input-fidelity only; owns no solved artifact):
+
+- NEW findings `pec_box_subcell`, `pec_zero_cells`, `pec_realization_refused`
+  (errors), `pec_box_one_cell` (warning), `sheet_plane_realized` (info; warning
+  on a half-cell tie), `sheet_slot_vacuum` (warning, error-grade) — the lattice
+  ownership contract's per-declaration realization report (#931 §3).
+- REMOVED `sheet_live_edge_material_mismatch` (#703 check 2) with the #702
+  resample it guarded; `_LIVE_EDGE_RTOL`, `_CAVITY_SHEET_CELL_FILL_FRAC`,
+  `_CAMPAIGN_SUBCELL_FACTOR` gone; `_CONGRUENCE_SPREAD_TOL_CELLS` →
+  `_CONGRUENCE_SPREAD_TOL_EDGES`.
+- Every conductor-reading preflight check (`port_in_pec`, the wire-port
+  advisories, the waveguide guide width, the coax junction ring, the NTFF wall
+  test, the sheet-cavity report, thin metal on NU) reads
+  `realized_pec_edge_masks` / `realized_wall_planes` / `edge_is_pec` instead of
+  a cell mask or a bounding box; the `≤ 1.5·dx` thin-PEC H exemption is gone
+  (#929); a sub-aperture waveguide fixture's guide reads 40 mm, not 42 (#868).
+- Preflight builds its conductor context once per configuration
+  (`Simulation._campaign_ctx`).
+
+*Examples and the declarative front end* (BREAKING):
+
+- Every etched conductor in `examples/` is now declared with
+  `add_thin_conductor` on a zero-thickness Box — a SHEET, one node plane, no
+  cell — instead of a one- or two-cell `Box(..., material="pec")`. Affected:
+  `patch_antenna_demo` (ground, patch), `nonuniform_patch_demo` (ground,
+  patch), `ports_and_sparams_101` (microstrip ground, trace),
+  `examples/config/microstrip_thru.yaml` (ground, trace). A conductor with
+  physical thickness — an imported CAD solid, a plate, a PEC sphere — stays a
+  Box and gains its far wall.
+- `examples/config/microstrip_thru.yaml` gains a `thin_conductors:` block. A
+  config file that declares foil as a `geometry:` PEC box now gets a VOLUME,
+  and a box thinner than one cell is refused outright.
+- Two shipped tutorials solved a board thicker than the one they declared,
+  because the mesh reserved a cell for a foil that the old rule realized as a
+  plane: `patch_antenna_demo` solved 1.905 mm against a declared 1.524 mm,
+  `nonuniform_patch_demo` 2.0 mm against 1.5 mm. Their recorded frequencies
+  and mode lists move (VESSL 369367259175 / 369367259177).
+- `examples/tutorials/ports_and_sparams_101.py` reports microstrip readiness
+  from `report.ok` rather than an empty report, matching its waveguide leg.
+- Fixed: `examples/tutorials/slab_rt_flux_monitor.py` no longer nudges its
+  slab's upper corner down by `dx/2`. The stated reason ("an inclusive-bounds
+  Box") named a convention that does not exist; what the nudge actually dodged
+  was a float knife edge — `CENTER_X + D_SLAB/2` lands one ulp above the node
+  and the slab realizes eleven cells against a ten-cell Fresnel oracle. The
+  corners are built from cell indices and the realized extent is asserted.
+- Fixed: `scripts/msl_flux_ratio_dof.py` imported rfx from a hard-coded clone
+  path, which is a prefix of every sibling worktree's path, so its "is this
+  checkout" guard passed while running a different tree's rfx.
+- Changed: `scripts/_gallery_v3_patch_figs.py` moves from 1 mm to 0.5 mm cells
+  so both faces of the 1.5 mm board are node planes (its ground and patch were
+  half-cell PEC Boxes, which §1.5 refuses; the old rule realized a 2.0 mm board
+  while every label said 1.5 mm; gallery assets cost ~10x per case).
+  `scripts/patch_edgefed_s11_validation.py` moves from dx = 0.197 mm to
+  dx = h_sub/4 = 0.19675 mm with its three foils ON the board faces (realized
+  board 788 µm with a buried trace sheet → 787.0 µm = declared; its committed
+  locks move). `scripts/precompute_gallery_artifacts.py` reads its stack
+  coordinates back from the built graded mesh (fixed coordinates realized a
+  1.361 mm cavity against a declared 1.5 mm).
+
+*Validation scripts under `validation/research/` and `validation/tmtt_paper/`*:
+
+- BREAKING: `validation/crossval/20_msl_phase_referee.py` refuses a pre-#931
+  rfx fixture by name (`_stage_b_layout` raises when `meta` carries no
+  `trace_wall_planes_realized`) instead of falling back to the declared board,
+  and `scripts/diagnostics/build_msl_thru_phase_dx50um_reference.py` refuses
+  `--patch-realized-only` on one. Both re-pins are a re-solve: the contract
+  changed rfx's realized MSL trace, so the committed arrays are stale physics
+  and a metadata patch would label them as current.
+- Every microstrip foil in `validation/research/` and `validation/tmtt_paper/`
+  is declared as a sheet (a zero-thickness Box) at the interface it sits on,
+  instead of a 1-cell PEC Box that used to realize as a single wall plane and
+  now realizes as a slab of metal: `thru_feedpost_deembed.build_thru`,
+  `thru_feedpost_twoseg_extraction.build_singlepost`,
+  `issue770_offdiag_adjudication.build_fix_t`, `msl_stub_notch_tuning.build_sim`.
+- The beam-steering reflector plate is declared on the simulation
+  (`validation/tmtt_paper/beam_steering_superstrate.py`) instead of being
+  injected as `forward(pec_mask_override=)`. Preflight now sees it, and its
+  realized aperture is the declared 1.5 λ exactly — the cell write was one
+  cell too wide.
+- The P-C trace in `validation/research/convergence_floor/fixture.py` and
+  `validation/research/multiband_nu/w4r_port_supraconvergence.py` is drawn on
+  NODE planes; the half-cell "knife-edge-free" margins are deleted. They were
+  a workaround for the old node sampler dropping a face exactly on a node, and
+  under centre sampling they shift the body by a cell.
+- The rfx MSL phase-referee trace (cv20) stays a VOLUME by decision, with the
+  measurement that forced it recorded in the script: a sheet at the declared
+  254 µm snaps to the 250 µm node on this off-lattice board and ends up buried
+  under 50 µm of realized laminate.
+- Known issue, not fixed here: `rfx/fidelity.py` audits a PEC VOLUME's
+  declared-vs-realized bounds with the shape's NODE sampler (`_entity_mask`
+  calls `entry.shape.mask(grid)`) while the solver realizes PEC volumes from
+  cell CENTRES (`pec_volume_cell_mask`). Measured on the cv20 board they
+  disagree by exactly one cell on both y and z. Consumers that need a
+  conductor's realized bounds must read `realized_pec_edge_masks` /
+  `realized_wall_planes` (design note §1.7); the cv20 fixture producer was
+  switched to it.
+
+*Tests, locks and measured consequences*:
+
+- BREAKING (measured on the workspace's own patch board, `dx = 196.75 µm`): a
+  fixture that drew a foil as a one-cell PEC Box gets two walls where it had
+  one unless it is migrated — as one-cell Boxes the ground and patch realize z
+  walls `{28, 29, 33, 34}` and a patch 44 × 52 edges wide; declared as sheets,
+  `{29, 34}` and 42 × 50, which is what the pre-2.0 rule gave the same
+  declaration.
+- A sheet's closed in-plane footprint moves in-plane extents: a 5.0 mm strip on
+  a 0.5 mm cell realizes 5.0 mm where it realized 4.5 mm before. Boards whose
+  in-plane faces are OFF-lattice are unaffected (closed and half-open pick the
+  same nodes).
+- The waveguide S-parameter lane applies the realized PEC edges instead of
+  folding the PEC cell mask back into a `sigma = 1e10` fill. A hard electric
+  wall and a 1e10 S/m lossy volume both reflect with magnitude ~1 and not with
+  the same phase; measured on the chain battery's `pec_short` DUT,
+  `max|ΔS| = 0.938` (coarse rung) and `0.498` (mid rung), while the empty
+  guide reproduces to 2.5e-6. On the same lane cv11's pec-short |S11|
+  magnitude deficit moved 0.0146 → 0.0560 (VESSL 369367259194; the trim A/B
+  369367259198 attributes it to this change, not to the script) — an open
+  item for the core, recorded, not absorbed into a gate.
+- Microstrip trace width (BREAKING for quoted numbers): a trace declared as
+  foil is a sheet, and a sheet's footprint is the closed node rectangle. On the
+  canonical dx = 63.5 µm / 254 µm board the realized GEOMETRIC width (node
+  span, what `fidelity_report` prints) is 571.5 µm where the pre-2.0 rule
+  reported 635.0 µm for the same drawing. Which width a quasi-TEM formula
+  should take is a measurement, not a translation, and two groups read it
+  differently: crossval-B takes the ELECTRICAL width n_rows·dx = 635.0 µm
+  (Re(Z0) 46.48 Ω on the committed cv06b run matches Hammerstad-Jensen at 635
+  µm to 0.65 % and at 571.5 µm by 5.9 %), tests-crossval takes 571.5 µm
+  (HJ 49.39 Ω). The cv06b re-solve (VESSL 369367259191) and its Z0 median are
+  the pre-declared falsifier; every publicly quoted Z0 and notch frequency for
+  that board is re-solved, not translated.
+- Added: `tests/locks/test_volume_sheet_cavity_ladder.py` — the eigenmode
+  witness for the two declarations. One parallel-plate cavity, metal starting
+  at the same coordinates, declared twice: volume 52.3341 GHz on the 16-cell
+  ladder, sheet 49.8924 GHz on the 17-cell ladder, each within 0.07 % of its
+  own prediction and more than 4.7 % from the other.
+- The three patch lock boards (`tests/locks/test_patch_edgefed_*`, the NU twin)
+  are redrawn with each foil ON the laminate face it bounds: their reserved
+  foil cell was vacuum in series with the cavity once the #702 resample went
+  (preflight's #703 check read +84.5 % / +45.9 % on `sum(d/eps)`). Locks
+  re-pinned from confirm runs: Board H Leg A −6.17 → −1.886 % (`NUM_PERIODS`
+  120 → 200), Board S crossing 8.8189 → 7.7620 GHz, sheet-cavity pair
+  (25.1741, 30.2153) GHz, Leontovich endpoint 0.87333.
+
 **Recomputed artifacts.** No number in this repository was translated,
 re-tuned or hand-edited for this release: a crossval case, example, fixture or
 lock with a conductor body is re-solved from its migrated declaration or it
