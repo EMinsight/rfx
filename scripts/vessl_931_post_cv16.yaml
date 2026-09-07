@@ -1,5 +1,5 @@
 name: rfx-931-post-cv16
-description: "cv16 PEC-sphere Mie ka sweep, GATED BINS ONLY (no --write-fixture: the committed fixture must NOT be regenerated -- it still carries the pre-a_eff deltas and regenerating it would move the derived fine gate to 4.1 dB). Post-#931 CONTROL: cv16's conductor is a high-sigma material fill, fenced (1.8), so every gated delta_db and a_eff_over_a must reproduce. Checkout under test: worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC on branch feat/931-crossval-C at 762d39b917679ab81ecdcd456581c30d3f333a02. Submit: vessl run create -f scripts/vessl_931_post_cv16.yaml"
+description: "cv16 PEC-sphere Mie ka sweep, GATED BINS ONLY (no --write-fixture: the committed fixture must NOT be regenerated -- it still carries the pre-a_eff deltas and regenerating it would move the derived fine gate to 4.1 dB). Post-#931 CONTROL: cv16's conductor is a high-sigma material fill, fenced (1.8), so every gated delta_db and a_eff_over_a must reproduce. Checkout under test: worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC on branch feat/931-crossval-C, the working tree as it stands at submission (the exact commit is recorded at runtime in $OUT/commit.txt). Submit: vessl run create -f scripts/vessl_931_post_cv16.yaml"
 tags: [rfx, issue-931, post, cv16, control]
 resources:
   cluster: remilab-c0
@@ -28,7 +28,7 @@ run: |-
   echo "$OUT" > "$RUNS/issue931-post-cv16.latest"
   trap 'chmod -R a+rX "$OUT" 2>/dev/null || true' EXIT
   echo "artifacts: $OUT"
-  echo "worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC @ 762d39b917679ab81ecdcd456581c30d3f333a02 (branch feat/931-crossval-C)" | tee "$OUT/commit.txt"
+  { git -C "$SRC" log -1 --format="worktree $SRC @ %H (%D) %s" 2>/dev/null || echo "worktree $SRC (git metadata unavailable)"; } | tee "$OUT/commit.txt"
   WORK=/root/work/rfx931post-cv16
   rm -rf "$WORK"
   mkdir -p "$WORK"

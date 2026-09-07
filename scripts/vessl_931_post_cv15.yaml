@@ -1,5 +1,5 @@
 name: rfx-931-post-cv15
-description: "cv15 RT5880 patch antenna, POST-#931 re-solve: both conductors declared as SHEETS (zero-thickness PEC Boxes at z_sub_lo / z_sub_hi) and the feed spanning the full substrate from the ground sheet plane. Reproduces the committed leg's command (num_periods 45.0 with NTFF directivity, NOT the argparse default 70.0), then the compare leg. Runs IN the worktree so _15_patch_results/rfx.json lands on the branch for the ingest phase. Checkout under test: worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC on branch feat/931-crossval-C at 762d39b917679ab81ecdcd456581c30d3f333a02. Submit: vessl run create -f scripts/vessl_931_post_cv15.yaml"
+description: "cv15 RT5880 patch antenna, POST-#931 re-solve: both conductors declared as SHEETS (zero-thickness PEC Boxes at z_sub_lo / z_sub_hi) and the feed spanning the full substrate from the ground sheet plane. Reproduces the committed leg's command (num_periods 45.0 with NTFF directivity, NOT the argparse default 70.0), then the compare leg. Runs IN the worktree so _15_patch_results/rfx.json lands on the branch for the ingest phase. Checkout under test: worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC on branch feat/931-crossval-C, the working tree as it stands at submission (the exact commit is recorded at runtime in $OUT/commit.txt). Submit: vessl run create -f scripts/vessl_931_post_cv15.yaml"
 tags: [rfx, issue-931, post, cv15, openems, patch]
 resources:
   cluster: remilab-c0
@@ -28,7 +28,7 @@ run: |-
   echo "$OUT" > "$RUNS/issue931-post-cv15.latest"
   trap 'chmod -R a+rX "$OUT" 2>/dev/null || true' EXIT
   echo "artifacts: $OUT"
-  echo "worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC @ 762d39b917679ab81ecdcd456581c30d3f333a02 (branch feat/931-crossval-C); run IN PLACE so the leg lands on the branch" | tee "$OUT/commit.txt"
+  { git -C "$WORK" log -1 --format="worktree $WORK @ %H (%D) %s" 2>/dev/null || echo "worktree $WORK (git metadata unavailable)"; } | tee "$OUT/commit.txt"
   cd "$WORK"
   touch "$OUT/.tstamp"
   cp -p validation/crossval/_15_patch_results/rfx.json "$OUT/rfx_before.json"

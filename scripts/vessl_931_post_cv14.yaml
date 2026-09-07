@@ -1,5 +1,5 @@
 name: rfx-931-post-cv14
-description: "cv14 rectangular cavity vs the exact Pozar spectrum. Post-#931 CONTROL: cv14's only PEC is the domain boundary, fenced out of the ownership contract (design note 1.8), so all four gates must reproduce. Gate 0 now MEASURES the realized wall planes through realized_wall_planes instead of computing (n-1)*dx from the grid shape. Checkout under test: worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC on branch feat/931-crossval-C at 762d39b917679ab81ecdcd456581c30d3f333a02. Submit: vessl run create -f scripts/vessl_931_post_cv14.yaml"
+description: "cv14 rectangular cavity vs the exact Pozar spectrum. Post-#931 CONTROL: cv14's only PEC is the domain boundary, fenced out of the ownership contract (design note 1.8), so all four gates must reproduce. Gate 0 now MEASURES the realized wall planes through realized_wall_planes instead of computing (n-1)*dx from the grid shape. Checkout under test: worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC on branch feat/931-crossval-C, the working tree as it stands at submission (the exact commit is recorded at runtime in $OUT/commit.txt). Submit: vessl run create -f scripts/vessl_931_post_cv14.yaml"
 tags: [rfx, issue-931, post, cv14, control]
 resources:
   cluster: remilab-c0
@@ -28,7 +28,7 @@ run: |-
   echo "$OUT" > "$RUNS/issue931-post-cv14.latest"
   trap 'chmod -R a+rX "$OUT" 2>/dev/null || true' EXIT
   echo "artifacts: $OUT"
-  echo "worktree /root/workspace/byungkwan-workspace/research/rfx-931-XC-crossvalC @ 762d39b917679ab81ecdcd456581c30d3f333a02 (branch feat/931-crossval-C)" | tee "$OUT/commit.txt"
+  { git -C "$SRC" log -1 --format="worktree $SRC @ %H (%D) %s" 2>/dev/null || echo "worktree $SRC (git metadata unavailable)"; } | tee "$OUT/commit.txt"
   WORK=/root/work/rfx931post-cv14
   rm -rf "$WORK"
   mkdir -p "$WORK"
