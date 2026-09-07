@@ -43,25 +43,23 @@ run: |-
   cd "$WORK"
   touch "$OUT/.tstamp"
   "$PY" -m pip uninstall -y -q jax-cuda12-plugin jax-cuda12-pjrt 2>/dev/null || true
-  "$PY" -m pip install -q "jax[cpu]==0.6.2" "numpy<2" "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7"
+  # pytest is in this list because the GATE FILE imports it at module scope
+  # (pytest.approx, the slow markers) and the measuring script imports that
+  # file rather than copying its build. The image does not carry pytest; the
+  # first attempt at this job died on exactly that, before touching physics.
+  # No test is RUN through pytest here — the four fast gates are called as
+  # plain functions inside the script.
+  "$PY" -m pip install -q "jax[cpu]==0.6.2" "numpy<2" "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7" "pytest>=8"
   export RFX_REPO_ROOT="$WORK"
   export PYTHONPATH="$WORK"
   export MPLBACKEND=Agg
   "$PY" -c "import jax, rfx, os; print('probe ok | jax', jax.__version__, '| backend', jax.default_backend(), '| rfx from', os.path.dirname(rfx.__file__))"
-  echo "=== step build-time gate first: the board must realize the planes it declares ==="
-  set +e
-  timeout 900 "$PY" -m pytest tests/crossval/test_patch_canonical_farfield_e4.py -q \
-      -k "realizes_the_planes or fixture" > "$OUT/e4_fast_gates.log" 2>&1
-  rc0=$?
-  set -e
-  echo "$rc0" > "$OUT/e4_fast_gates.rc"
-  tail -n 15 "$OUT/e4_fast_gates.log" || true
-  if [ "$rc0" -ne 0 ]; then
-    echo "REFUSING TO MEASURE: the fast gates fail, so the board is not the declared board."
-    echo "$rc0" > "$OUT/measure.rc"
-    exit "$rc0"
-  fi
-  echo "=== step measure (one FDTD run through the gate file's own fixture) ==="
+  # The gate file's four fast, no-FDTD tests run INSIDE the measuring script
+  # (it calls them directly) and it exits 3 without solving if any fails. The
+  # first attempt at this job ran them through pytest, which the solver image
+  # does not carry, and the run refused on a missing test runner rather than on
+  # the board — a wasted allocation. No pytest here.
+  echo "=== step measure (fast gates, then one FDTD run through the gate file's own fixture) ==="
   set +e
   timeout 7200 "$PY" -u scripts/diagnostics/measure_patch_canonical_farfield_e4.py \
       --out "$OUT/canonical_farfield_e4_measured.json" > "$OUT/measure.log" 2>&1

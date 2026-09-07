@@ -98,6 +98,38 @@ def _ceil_pct(x: float) -> float:
     return math.ceil(x * 100.0 - 1e-9) / 100.0
 
 
+# The gate file's fast, no-FDTD tests. They are the precondition for the
+# measurement: an envelope derived from a board that does not realize the
+# planes it declares, or checked against a reference fixture whose provenance
+# block has been stripped, is not evidence. Called directly rather than through
+# pytest — the solver image has no pytest, and a measurement that refuses on a
+# missing test runner instead of on physics is a wasted cluster run.
+_PRECHECKS = (
+    "test_reference_fixture_pins_the_recorded_openems_numbers",
+    "test_reference_fixture_provenance_and_reproduce_gate_are_recorded",
+    "test_reference_fixture_geometry_matches_this_test",
+    "test_the_board_realizes_the_planes_it_declares",
+)
+
+
+def _run_prechecks(mod) -> list[str]:
+    """Return the names that failed, with their reason; empty means proceed."""
+    failed = []
+    for name in _PRECHECKS:
+        fn = getattr(mod, name, None)
+        if fn is None:
+            failed.append(f"{name}: MISSING from the gate file")
+            continue
+        try:
+            fn()
+        except BaseException as exc:  # noqa: BLE001 — reported, not raised
+            first = str(exc).strip().splitlines()
+            failed.append(f"{name}: {first[0] if first else type(exc).__name__}")
+        else:
+            print(f"  precheck OK  {name}")
+    return failed
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", required=True)
@@ -105,6 +137,14 @@ def main(argv=None) -> int:
 
     mod = _load_test_module()
     ref = json.loads(mod._FIXTURE.read_text(encoding="utf-8"))
+
+    print("=== fast gates (no FDTD) — the board and the reference fixture ===")
+    bad = _run_prechecks(mod)
+    if bad:
+        print("REFUSING TO MEASURE — the gate file's own fast tests fail:")
+        for line in bad:
+            print(f"  ! {line}")
+        return 3
 
     print("=== canonical patch, sheet-declared board — one FDTD run ===")
     run = mod.rfx_run.__wrapped__()          # the gate fixture's own function
