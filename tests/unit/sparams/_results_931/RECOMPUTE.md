@@ -166,7 +166,7 @@ is, so the branch must be committed before submitting.
   array — while production had already moved to
   `realized_trace_planes_on_column` on the realized edge masks (§1.9). A
   sheet-declared trace owns no cell, so the copy found nothing. Fixed in
-  `d3f9…` (the replica now calls the same owner with the same collectors, so
+  `32090ab2` (the replica now calls the same owner with the same collectors, so
   there is one spelling of the trace search and not two). The accumulators that
   run wrote are NOT ingested: the golden they pair with was never computed.
 * **VESSL run 369367259296** — resubmitted 2026-09-07 19:43 UTC after that fix.
