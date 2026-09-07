@@ -20,15 +20,20 @@ def simple_sim():
     zero-thickness Boxes on the substrate's two faces. Drawn one cell thick
     they were volumes, and the ground's cell then overlapped the substrate's,
     which is exactly the stack-up ambiguity #702 was about: under the contract
-    a sheet owns no cell, so the substrate keeps the whole 0 .. 2 mm.
+    a sheet owns no cell, so the substrate keeps its whole 2 mm.
+
+    The board is lifted one cell off z = 0 so the ground has vacuum under it.
+    Sitting on the domain floor it did not: the CPML pad extension replicates
+    the substrate into the pad, which puts laminate on BOTH sides of the ground
+    plane and (correctly) trips the buried-sheet warning.
     """
     sim = Simulation(freq_max=5e9, domain=(0.02, 0.02, 0.01), dx=0.001)
     sim.add_material("substrate", eps_r=4.4, sigma=0.01)
-    sim.add(Box((0, 0, 0), (0.02, 0.02, 0)), material="pec")
-    sim.add(Box((0, 0, 0), (0.02, 0.02, 0.002)), material="substrate")
-    sim.add(Box((0.005, 0.005, 0.002), (0.015, 0.015, 0.002)), material="pec")
+    sim.add(Box((0, 0, 0.001), (0.02, 0.02, 0.001)), material="pec")
+    sim.add(Box((0, 0, 0.001), (0.02, 0.02, 0.003)), material="substrate")
+    sim.add(Box((0.005, 0.005, 0.003), (0.015, 0.015, 0.003)), material="pec")
     sim.add_port(
-        position=(0.01, 0.01, 0.001),
+        position=(0.01, 0.01, 0.002),
         component="ez",
         waveform=GaussianPulse(f0=3e9),
         extent=0.001,
@@ -102,8 +107,8 @@ def test_the_two_foils_realize_as_sheets_and_leave_the_substrate_whole(simple_si
         grid, pec_sheets=sheets)
     assert pec_mask is None, "foil declared as a sheet owns no cell"
     planes = sorted(sp.plane for sp in sheets)
-    assert planes == [grid.position_to_index((0.0, 0.0, 0.0))[2],
-                      grid.position_to_index((0.0, 0.0, 0.002))[2]]
+    assert planes == [grid.position_to_index((0.0, 0.0, 0.001))[2],
+                      grid.position_to_index((0.0, 0.0, 0.003))[2]]
     edges = realized_pec_edge_masks(pec_mask, sheets=sheets)
     assert realized_wall_planes(edges, 2) == planes
     i, j = grid.shape[0] // 2, grid.shape[1] // 2
