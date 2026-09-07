@@ -47,26 +47,46 @@ check. It covers the substrate's z EXTENT only, NOT which node plane the
 bounding PEC walls realize -- see #740 GEOMETRY FIDELITY below, the check that
 covers the wall plane.
 
-#740 GEOMETRY FIDELITY (mandatory) -- realized wall PLANES, not Box extents
+#931 CONDUCTOR OWNERSHIP -- both conductors are SHEETS, and the check measures
 ----------------------------------------------------------------------------
-Issue #740: the #325 check above kept passing while the ground wall sat one
-full cell BELOW the declared substrate floor (the #693 "vacuum ground cell"
-trap, closed on the canonical patch lane by PRs #716/#718) -- a one-cell
-one-plane PEC Box (the default, #677-validated) presents an electric wall on
-its LOWER node plane only, so the ground Box here realized its wall at
-z_sub_lo - DX, not z_sub_lo, leaving a live VACUUM cell in the cavity
-(measured: +55.0% electrical thickness). Fixed with two_plane=True on the
-GROUND Box ONLY (issue #706, the #693-precedent remedy: 0.0% electrical-
-thickness error measured against the mask-derived realized planes) -- NOT on
-the patch, whose default one-plane wall already sits on its LOWER face at
-z_sub_hi (two_plane there would add an unreferenced wall the openEMS
-zero-thickness-patch reference has no counterpart for).
-``assert_realized_stack()`` (called from ``run_rfx()``) asserts the
-REALIZED electric-wall planes -- ground at z_sub_lo, patch at z_sub_hi --
-across the whole patch-footprint, not the declared Box coordinates, and
-refuses to quote f0 if they disagree. ``compare()`` re-verifies the measured
-planes against this module's own constants (not a recorded label) before
-gating the f0 comparison.
+The ground and the patch are FOIL: zero-thickness metal on a laminate face.
+Under the lattice ownership contract (docs/design_notes/
+20260906_plan_realign_lattice_ownership.md §1.3/§1.5) that is declared, not
+inferred -- a PEC ``Box`` with one zero-extent axis IS a sheet declaration, and
+a sheet is realized as tangential E zeroed on exactly ONE node plane, owning no
+cell and writing no material. So:
+
+  ground : Box(z = z_sub_lo -> z_sub_lo)  -> sheet on node plane z_sub_lo
+  patch  : Box(z = z_sub_hi -> z_sub_hi)  -> sheet on node plane z_sub_hi
+
+That is the SAME structure both openEMS legs build (lines ~619-631 and
+~725-737: ``AddBox(start=[...,0], stop=[...,0])`` and ``[...,h] -> [...,h]``,
+zero thickness both). Before #931 the rfx side was neither: the ground was a
+one-cell Box drawn in the cell BELOW the floor, flagged ``two_plane=True`` so a
+second wall landed on z_sub_lo, and the patch was a one-cell Box relying on the
+one-plane default to NOT grow a far wall. Both were repairs of an undeclared
+sheet rule. Under the contract a one-cell PEC Box is a filled slab with two
+faces at every thickness, so the old patch spelling would now put an
+unreferenced wall one cell ABOVE z_sub_hi (11.90625 mm) that the openEMS
+zero-thickness patch has no counterpart for -- this file measured and rejected
+that wall in 2026-08, and the sheet declaration is how it stays rejected by
+construction instead of by a default.
+
+History (dated, not current mechanics): the #325 check kept passing while the
+ground wall sat one full cell BELOW the declared substrate floor -- the #693
+"vacuum ground cell" trap, +55.0% electrical thickness, read +6.09% vs openEMS
+(preserved as ``_15_patch_results/rfx_one_plane_ground_<commit>.json``). #740
+patched it with ``two_plane=True``; #931 deletes the flag and the patch both.
+
+``assert_realized_stack()`` (called from ``run_rfx()``) reads the ONE realized
+edge set -- ``rfx.boundaries.pec.realized_pec_edge_masks`` -- and asserts,
+across the whole patch footprint, that the realized wall planes are EXACTLY
+{z_sub_lo, z_sub_hi}: walls where the declarations say, and NO wall anywhere
+else, in particular none at z_sub_hi + DX. It also asserts the sheets wrote no
+material (cv17's G17-B pattern: the assembled eps array still holds exactly the
+two declared values), which is the witness for the deleted #702 resample.
+``compare()`` re-verifies the measured planes against this module's own
+constants (not a recorded label) before gating the f0 comparison.
 
 rfx f0 = ring-down Harminv (NOT the |S11| dip)
 ----------------------------------------------
@@ -89,13 +109,17 @@ HONEST SCOPE (PI penalises overclaiming)
     stack; staircase PEC edges + a coarse 4-cell substrate under-resolve the
     patch-edge fringing capacitance in the SAME direction, while openEMS
     (thirds-rule edge meshing) reads lower and drifts down with refinement; the
-    thin-substrate demo shows the opposite low bias. Post-#740-fix (two_plane
-    ground, 4-cell electrical gap matching the declared stack), MEASURED and
-    committed as ``_15_patch_results/rfx.json`` (CPU, 206.5 s): rfx
-    f_primary 2.3139 GHz vs openEMS 2.330 GHz -- 0.69% and now LOW, not
-    HIGH; rfx -4.21% vs analytic, openEMS -3.54%, i.e. both solvers sit on
-    the same side of the closed form by a similar margin. The vacuum ground
-    cell, not edge fringing, was the dominant term in the +6.09%. All of
+    thin-substrate demo shows the opposite low bias. Under #740 (two_plane
+    ground, 4-cell electrical gap matching the declared stack) rfx measured
+    f_primary 2.3139 GHz vs openEMS 2.330 GHz -- 0.69% LOW, and -4.21% vs
+    analytic against openEMS's -3.54%, i.e. both solvers on the same side of
+    the closed form by a similar margin; the vacuum ground cell, not edge
+    fringing, was the dominant term in the +6.09%. Those digits are DATED
+    (pre-#931, CPU 206.5 s) and are kept here as history only. The current
+    numbers are whatever the committed leg holds --
+    ``_15_patch_results/rfx.json::f_primary_hz`` against
+    ``_15_patch_results/openems.json::f_dip_hz`` -- and ``compare()`` prints
+    the distances from those files rather than from this paragraph. All of
     this is discretisation, reported not hidden, and always against the
     STRUCTURE actually solved, not the declared one.
   - Open (CPML) domain -> the -40 dB ring-down settling witness IS required and
@@ -166,6 +190,12 @@ GP_Y = 66.0e-3
 FEED_OFFSET_X = -9.0e-3    # inset feed, 9 mm off centre along L
 
 N_SUB = 4
+# Distinct eps_r values the declared build may produce: vacuum (1.0) and the
+# laminate (EPS_R). #931: a PEC sheet owns no cell and writes no material, so
+# declaring the ground and the patch must not add a third -- cv17's G17-B
+# pattern (validation/crossval/17_dielectric_sphere_mie.py) applied to the
+# sheet side, and the witness for the deleted #702 own-cell resample.
+N_DISTINCT_EPS_EXPECTED = 2
 DX = H_SUB / N_SUB         # 793.75 um uniform (H_SUB == 4*DX exactly)
 N_CPML = 8                 # CPML pads OUTSIDE `domain` (rfx Grid convention)
 AIR_LAT = 8.0e-3
@@ -213,10 +243,9 @@ def _geom_banner():
 # ===========================================================================
 # rfx side
 # ===========================================================================
-def assert_realized_stack(sim, grid, patch_shape):
-    """MANDATORY geometry-fidelity self-check (issue #740): assert the
-    REALIZED electric-wall PLANES the solver actually built match the
-    declared stack, not the declared Box extents.
+def assert_realized_stack(sim, grid, patch_shape=None):
+    """MANDATORY geometry-fidelity self-check: assert the REALIZED electric
+    wall PLANES the solver actually built are EXACTLY the declared ones.
 
     This is the check the module docstring's "#325 AVOIDANCE (mandatory)"
     section does NOT cover: that section (see the ``[#325 CHECK]`` print in
@@ -224,134 +253,244 @@ def assert_realized_stack(sim, grid, patch_shape):
     ``N_SUB`` cells, and it kept passing throughout issue #740 while the
     ground wall sat one full cell BELOW the declared substrate floor -- a
     check named "geometry fidelity" that covers one axis and not the wall
-    PLANE is worse than none, because a passing check gets read as
-    evidence. This function is the wall-plane check.
+    PLANE is worse than none, because a passing check gets read as evidence.
+    This function is the wall-plane check.
 
-    A one-cell one-plane PEC ``Box`` (``rfx.api.__init__.add()``'s default,
-    #677-validated) presents an electric wall on its LOWER node plane only
-    (rfx.boundaries.pec.tangential_edge_masks: the tangential Ex/Ey edges
-    zeroed at the cell's own z-index), so the ground Box here -- occupying
-    the cell BELOW ``z_sub_lo`` -- realizes its wall one cell below the
-    declared substrate floor unless flagged ``two_plane=True`` (issue #706,
-    the #693-precedent remedy applied in ``run_rfx``), which also
-    zeroes the NEXT node plane and lands the wall exactly at ``z_sub_lo``.
+    #931 (lattice ownership contract): both conductors are declared SHEETS
+    -- zero-thickness PEC ``Box``es on the two substrate faces -- and this
+    function reads the ONE function that turns geometry into PEC edges,
+    ``rfx.boundaries.pec.realized_pec_edge_masks``, through its plane reader
+    ``realized_wall_planes``. It does NOT re-derive an edge rule from a cell
+    mask; the previous version did (base ``tangential_edge_masks`` OR'd with
+    a ``two_plane`` extension), and hand-copying the rule is the defect class
+    the contract exists to close.
 
-    Evaluated over the WHOLE patch-cap substrate footprint (every (i, j)
-    cell ``patch_shape`` rasterizes to -- the patch lies entirely inside
-    the substrate's footprint, so patch-footprint == patch-intersect-
-    substrate-footprint here), not one feed column, so an in-plane
-    rasterization edge case cannot hide.
+    Three assertions, all build-time (``_assemble_materials`` + the edge
+    masks; no solve):
 
-    Reads the PRE-port-clearing ``pec_mask`` (``sim._assemble_materials``,
-    called before ``run()``'s per-port live-cell clearing runs). The feed
-    port sits at z in [``z_sub_lo`` + DX, ``z_sub_lo`` + 3*DX] here (see
-    ``run_rfx``'s ``port_z0``/``port_extent``), off BOTH the ground
-    wall plane (``z_sub_lo``) and the patch wall plane (``z_sub_hi``)
-    checked below, so port clearing cannot move this check's verdict.
+    1. POSITIVE -- every column of the patch footprint carries a wall at
+       ``z_sub_lo`` and at ``z_sub_hi``.
+    2. NEGATIVE -- no column of the patch footprint carries a wall anywhere
+       ELSE, in particular NOT at ``k_patch + 1`` (z = 11.90625 mm). Before
+       #931 that absence was guaranteed only by the one-plane default the
+       contract deletes: a patch mistakenly declared as a one-cell VOLUME
+       ``Box`` would grow a wall there and pass every other check in this
+       file while solving a metal-clad patch the openEMS zero-thickness
+       reference has no counterpart for.
+    3. MATERIAL -- the assembled ``eps_r`` array holds exactly the declared
+       number of distinct values (vacuum + laminate). A sheet owns no cell
+       and writes no material (§1.3), so declaring one must not add a third.
+       This is cv17's G17-B pattern applied to the sheet side, and it is the
+       witness for the deleted #702 "resample the sheet's own cell" family --
+       before #931 the ground's own cell was deliberately handed the live
+       edge's material.
 
-    Raises RuntimeError (refusing to quote f0) if either wall plane is
-    missing across the footprint. Returns a dict of the MEASURED planes for
-    the caller to embed verbatim in the result leg, so ``compare()`` can
-    re-verify them against the module's OWN constants independently rather
-    than trust a recorded label (issue #740 review, required change 1).
+    The footprint comes from the patch's OWN realized ``SheetSpec``, not from
+    a re-derived index range and not from ``patch_shape.mask(grid)``: under
+    the contract a sheet footprint is sampled CLOSED on the in-plane axes, so
+    re-deriving it from the node sampler would drop the ``hi`` row and hide a
+    rasterization edge case at exactly the place the contract changed. When
+    the patch is declared as a VOLUME instead (the pre-#931 spelling, reachable
+    as ``build_rfx_sim(patch_kind='volume_1cell')``) the footprint falls back
+    to the conductor cells on the patch plane, so assertion 2 still runs and
+    NAMES the extra wall rather than refusing with "no sheet here".
+    ``patch_shape`` is accepted for call-compatibility and is not read.
+
+    Wall planes per column are read with ``realized_wall_planes(..., ij=)``,
+    whose documented rule counts a wall at node ``(i, j, k)`` when any
+    tangential edge INCIDENT to that node is PEC -- so the ``hi`` rim of the
+    footprint, whose incident edge is stored at ``i-1``, is found. A naive
+    ``all(Ex[footprint])`` would fail there by construction, because the edge
+    leaving the rim node points out of the patch.
+
+    Reads the PRE-port-clearing geometry (``sim._assemble_materials``, called
+    before ``run()``'s per-port release runs). Under the contract a port
+    releases only the ONE component it drives (design note §6), so the ``ez``
+    feed cannot touch the tangential Ex/Ey walls this function measures even
+    though it now stands ON the ground sheet plane.
+
+    Raises RuntimeError (refusing to quote f0) on any of the three. Returns a
+    dict of the MEASURED planes for the caller to embed verbatim in the
+    result leg, so ``compare()`` can re-verify them against the module's OWN
+    constants independently rather than trust a recorded label (issue #740
+    review, required change 1).
     """
-    from rfx.boundaries.pec import tangential_edge_masks, two_plane_extension_masks
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
 
-    mats, _, _, pec_mask, *_ = sim._assemble_materials(grid)
-    if pec_mask is None:
+    pec_sheets: list = []
+    pec_wires: list = []
+    mats, _, _, pec_mask, *_ = sim._assemble_materials(
+        grid, pec_sheets=pec_sheets, pec_wires=pec_wires)
+    if pec_mask is None and not pec_sheets and not pec_wires:
         raise RuntimeError(
-            "assert_realized_stack: no PEC cells rasterized -- refuse to "
-            "quote f0 for a patch antenna with no conductor")
-    two_plane_mask = sim._two_plane_cell_mask(grid)
-    ex, ey, _ = tangential_edge_masks(pec_mask)
-    if two_plane_mask is not None:
-        ex2, ey2, _ = two_plane_extension_masks(pec_mask, two_plane_mask)
-        ex = ex | ex2
-        ey = ey | ey2
-    ex = np.asarray(ex)
-    ey = np.asarray(ey)
-    eps = np.asarray(mats.eps_r)
+            "assert_realized_stack: no PEC volume, sheet or wire realized -- "
+            "refuse to quote f0 for a patch antenna with no conductor")
 
-    # Footprint from the shape's OWN rasterization (not a recomputed index
-    # range): avoids an off-by-one at the box edge from re-deriving (i, j)
-    # bounds via ``position_to_index`` on the corner coordinates separately.
-    footprint = np.asarray(patch_shape.mask(grid)).any(axis=2)
-
-    def _full_wall(k):
-        return bool(np.all(ex[:, :, k][footprint])) and \
-            bool(np.all(ey[:, :, k][footprint]))
+    periodic = sim._periodic_flags()
+    edges = tuple(np.asarray(m) for m in realized_pec_edge_masks(
+        pec_mask, sheets=pec_sheets, wires=pec_wires, periodic=periodic))
 
     z_sub_lo = AIR_BELOW
     z_sub_hi = AIR_BELOW + H_SUB
     k_ground = grid.position_to_index((DOM_X / 2, DOM_Y / 2, z_sub_lo))[2]
     k_patch = grid.position_to_index((DOM_X / 2, DOM_Y / 2, z_sub_hi))[2]
-    ground_ok = _full_wall(k_ground)
-    patch_ok = _full_wall(k_patch)
 
-    if not (ground_ok and patch_ok):
-        realized_wall_k = [k for k in range(ex.shape[2]) if _full_wall(k)]
+    def _z_mm(k):
+        """Physical z of node plane ``k`` in mm -- the CPML pad OFFSET removed
+        (rfx Grid convention: index = round(z/dx) + pad_z_lo). The pre-#931
+        message printed k*DX and labelled it 'pad included', which reads as a
+        z 6 mm above the real one; a diagnostic that has to be decoded is not
+        a diagnostic."""
+        return round((int(k) - int(grid.pad_z_lo)) * DX * 1e3, 4)
+
+    patch_sheets = [sp for sp in pec_sheets
+                    if sp.normal_axis == 2 and sp.plane == k_patch]
+    footprint = np.zeros(tuple(grid.shape)[:2], dtype=bool)
+    for sp in patch_sheets:
+        footprint |= np.asarray(sp.footprint).any(axis=2)
+    if not patch_sheets and pec_mask is not None:
+        # The patch was declared as a VOLUME (the pre-#931 one-cell Box, or
+        # ``build_rfx_sim(patch_kind='volume_1cell')``). Take the footprint
+        # from the conductor cells that START on the patch plane so the wall
+        # census below still runs and reports the wall at k_patch+1 the
+        # contract's volume rule adds -- a bare "no sheet here" would refuse
+        # without ever naming the unreferenced wall, which is the finding.
+        footprint |= np.asarray(pec_mask, dtype=bool)[:, :, k_patch]
+    if not footprint.any():
+        raise RuntimeError(
+            "assert_realized_stack: no PEC sheet or conductor cell realized on "
+            f"the patch plane z_sub_hi={z_sub_hi*1e3:.4f} mm (k={k_patch}); "
+            "realized z-normal sheet planes = "
+            f"{sorted(sp.plane for sp in pec_sheets if sp.normal_axis == 2)}. "
+            "Refuse to quote f0 for a patch antenna whose patch is not where "
+            "it was declared (#931 §1.3).")
+
+    columns = list(zip(*np.nonzero(footprint)))
+    missing_ground, missing_patch, extra = [], [], set()
+    for (i, j) in columns:
+        planes = realized_wall_planes(edges, 2, ij=(int(i), int(j)),
+                                      periodic=periodic)
+        if k_ground not in planes:
+            missing_ground.append((int(i), int(j)))
+        if k_patch not in planes:
+            missing_patch.append((int(i), int(j)))
+        extra |= set(planes) - {k_ground, k_patch}
+
+    if missing_ground or missing_patch:
         raise RuntimeError(
             "assert_realized_stack: realized electric-wall plane(s) do not "
-            f"match the declared stack -- no electric wall at "
-            f"z_sub_lo={z_sub_lo*1e3:.4f} mm (k={k_ground}, ok={ground_ok}) "
-            f"and/or z_sub_hi={z_sub_hi*1e3:.4f} mm (k={k_patch}, "
-            f"ok={patch_ok}); realized full-footprint wall planes at "
-            f"k={realized_wall_k} "
-            f"(z~{[round(k*DX*1e3, 4) for k in realized_wall_k]} mm, pad "
-            "included). Refuse to quote f0 for a cavity taller than the "
-            "declared substrate (issue #740).")
+            "match the declared stack -- no electric wall at "
+            f"z_sub_lo={z_sub_lo*1e3:.4f} mm (k={k_ground}) on "
+            f"{len(missing_ground)}/{len(columns)} footprint columns "
+            f"and/or at z_sub_hi={z_sub_hi*1e3:.4f} mm (k={k_patch}) on "
+            f"{len(missing_patch)}/{len(columns)}; other realized wall "
+            f"planes over the footprint = {sorted(extra)} "
+            f"(z~{[_z_mm(k) for k in sorted(extra)]} mm). Refuse to "
+            "quote f0 for a cavity that is not the "
+            "declared substrate (#931 §1.3).")
+    if extra:
+        raise RuntimeError(
+            "assert_realized_stack: the realized wall planes over the patch "
+            f"footprint are {sorted({k_ground, k_patch} | extra)}, not exactly "
+            f"the declared {{{k_ground}, {k_patch}}} -- unreferenced wall(s) at "
+            f"k={sorted(extra)} (z~{[_z_mm(k) for k in sorted(extra)]}"
+            " mm). A wall at k_patch+1 means the patch was "
+            "realized as a one-cell VOLUME, which the openEMS zero-thickness "
+            "reference has no counterpart for; declare it as a sheet "
+            "(zero-thickness PEC Box) instead. Refuse to quote f0.")
+
+    eps = np.asarray(mats.eps_r)
+    n_distinct_eps = int(np.unique(eps).size)
+    if n_distinct_eps != N_DISTINCT_EPS_EXPECTED:
+        raise RuntimeError(
+            "assert_realized_stack: the assembled eps_r array holds "
+            f"{n_distinct_eps} distinct values, expected "
+            f"{N_DISTINCT_EPS_EXPECTED} (vacuum + laminate). A PEC sheet owns "
+            "no cell and writes no material (#931 §1.3); a third value means "
+            "something re-sampled a conductor's own cell (the deleted #702 "
+            "family) or a partial fill appeared. Refuse to quote f0.")
 
     n_sub_cells = k_patch - k_ground
     eps_between = [float(np.mean(eps[:, :, k][footprint]))
                    for k in range(k_ground, k_patch)]
-    print(f"\n[STACK CHECK #740] realized walls: ground z={z_sub_lo*1e3:.4f} "
+    print(f"\n[STACK CHECK #931] realized walls: ground z={z_sub_lo*1e3:.4f} "
           f"mm (k={k_ground}), patch z={z_sub_hi*1e3:.4f} mm (k={k_patch}); "
-          f"n_sub_cells={n_sub_cells} (intended {N_SUB}); eps_between="
-          f"{['%.3f' % e for e in eps_between]} (intended {EPS_R})")
+          f"no other wall plane over the {len(columns)}-column patch "
+          f"footprint; n_sub_cells={n_sub_cells} (intended {N_SUB}); "
+          f"eps_between={['%.3f' % e for e in eps_between]} (intended "
+          f"{EPS_R}); distinct eps values={n_distinct_eps}")
 
+    ground_is_sheet = any(sp.normal_axis == 2 and sp.plane == k_ground
+                          for sp in pec_sheets)
     return dict(
         ground_wall_z=z_sub_lo, patch_wall_z=z_sub_hi,
         n_sub_cells=n_sub_cells, eps_between=eps_between,
+        n_distinct_eps=n_distinct_eps,
         # Recorded PROVENANCE only -- the gate above (and compare()'s
         # re-check) is on the MEASURED planes, not this label, so a later
         # realization landing the same walls by a different mechanism does
         # not need this string to match to pass.
-        ground_realization="two_plane" if two_plane_mask is not None else "one_plane",
+        ground_realization="sheet" if ground_is_sheet else "volume",
+        patch_realization="sheet" if patch_sheets else "volume",
     )
 
 
-def build_rfx_sim(*, do_gain: bool = False, two_plane: bool = True):
+def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
+                  patch_kind: str = "sheet"):
     """Build cv15's rfx Simulation WITHOUT solving it -- the production
     geometry, feed, probe and (optionally) NTFF box exactly as ``run_rfx``
     uses them. Returns ``(sim, patch_shape, geom)`` with ``geom`` the
     derived z-planes and feed location the caller needs.
 
-    Separated from ``run_rfx`` for the #740 review: the first version of
-    this fix kept build and solve fused, so the wall-plane tests had to
-    MIRROR the geometry in a test-local copy -- and deleting
-    ``two_plane=True`` from the production script left every test green.
-    With the builder separable, the tests exercise THIS function with the
-    production toggle, and the example-fidelity contract gate audits cv15
-    (it was classified builder_fused_with_solve before; now ``audited``).
+    Separated from ``run_rfx`` for the #740 review: the first version of that
+    fix kept build and solve fused, so the wall-plane tests had to MIRROR the
+    geometry in a test-local copy -- and deleting the fix from the production
+    script left every test green. With the builder separable, the tests
+    exercise THIS function with the production declarations, and the
+    example-fidelity contract gate audits cv15 (it was classified
+    builder_fused_with_solve before; now ``audited``).
 
-    ``two_plane`` is the #740 fix itself and defaults to the fixed value;
-    the negative-control test passes ``two_plane=False`` to reproduce the
-    pre-fix one-plane ground and confirm ``assert_realized_stack`` rejects
-    it through the production path.
+    ``ground_plane_z`` selects the node plane the GROUND SHEET is declared on.
+    ``None`` (the production value, what every positive test uses) means
+    ``z_sub_lo`` -- the substrate floor, where the openEMS reference puts its
+    zero-thickness ground. It replaces the deleted ``two_plane`` toggle
+    (#931): the negative control is no longer "a different realization rule
+    for the same Box" but "the same rule applied to a sheet declared one plane
+    low", ``ground_plane_z=z_sub_lo - DX``, which reproduces the pre-#740
+    realization exactly -- one wall at ``z_sub_lo - DX``, a live vacuum cell
+    in the cavity, and the +6.09% vs openEMS preserved in
+    ``_15_patch_results/rfx_one_plane_ground_<commit>.json``. That artifact's
+    geometry therefore stays REACHABLE through the public API after the
+    contract lands; two public documents cite its number.
+
+    ``patch_kind`` selects how the PATCH is declared. ``"sheet"`` is the
+    production value: a zero-thickness PEC ``Box`` on ``z_sub_hi``.
+    ``"volume_1cell"`` is the second negative control, the pre-#931 spelling
+    -- a one-cell PEC ``Box`` from ``z_sub_hi`` to ``z_sub_hi + DX``. Under
+    the contract that is a filled slab with BOTH faces, so it grows a wall at
+    ``k_patch + 1`` (z = 11.90625 mm) that the openEMS zero-thickness patch
+    has no counterpart for. It exists so the k_patch+1 assertion in
+    ``assert_realized_stack`` has a live falsifier through the PRODUCTION
+    builder rather than a test-local mirror (the #740 review's finding): the
+    check is only evidence if some reachable declaration makes it fire.
     """
+    if patch_kind not in ("sheet", "volume_1cell"):
+        raise ValueError(
+            f"build_rfx_sim: patch_kind must be 'sheet' (production) or "
+            f"'volume_1cell' (the pre-#931 negative control), got {patch_kind!r}")
     from rfx import Simulation, Box, GaussianPulse
     from rfx.boundaries.spec import BoundarySpec
 
     cx, cy = DOM_X / 2, DOM_Y / 2
-    z_sub_lo = AIR_BELOW                          # top face of ground plane
+    z_sub_lo = AIR_BELOW                          # substrate floor = ground foil
     # Lattice-arithmetic spelling (#802): z_sub_hi is INTENDED on-lattice
     # (AIR_BELOW = 10 cells, H_SUB == N_SUB*DX exactly), but the sum
     # AIR_BELOW + H_SUB lands one f64 ulp ABOVE the node value 14*DX, so
-    # under exact node coordinates the patch's lo corner would miss its
-    # node (the Box docstring's knife-edge class). Same real number,
-    # bit-exact spelling.
+    # under exact node coordinates the patch's plane would miss its node
+    # (the Box docstring's knife-edge class). Same real number, bit-exact
+    # spelling.
     z_sub_hi = (10 + N_SUB) * DX                  # == AIR_BELOW + H_SUB
-    z_patch_lo, z_patch_hi = z_sub_hi, z_sub_hi + DX
+    z_ground = z_sub_lo if ground_plane_z is None else float(ground_plane_z)
     feed_x = cx + FEED_OFFSET_X
 
     sim = Simulation(
@@ -359,35 +498,51 @@ def build_rfx_sim(*, do_gain: bool = False, two_plane: bool = True):
         boundary=BoundarySpec.uniform("cpml"), cpml_layers=N_CPML,
     )
     sim.add_material("sub", eps_r=EPS_R, sigma=SIGMA_SUB)
-    # finite ground plane (1 cell), substrate (4 cells), patch (1 cell).
     #
-    # #740 (the #693 "vacuum ground cell" trap, closed on the canonical
-    # patch lane by PRs #716/#718): a one-cell one-plane PEC Box's electric
-    # wall sits on its LOWER node plane only (rfx/api/__init__.py add()
-    # docstring), so this ground Box's realized wall would land at
-    # z_sub_lo - DX -- one cell BELOW the declared substrate floor, leaving
-    # a live VACUUM cell between the wall and z_sub_lo (measured: +55.0% of
-    # the cavity's electrical thickness). two_plane=True (issue #706, the
-    # #693-precedent remedy) also zeroes the ground body's UPPER node
-    # plane, landing the wall exactly at z_sub_lo -- 0.0% versus declared.
-    # GROUND ONLY: two_plane on the patch would add an unreferenced wall
-    # one cell ABOVE z_sub_hi (measured 11.9062 mm) that the openEMS
-    # reference's zero-thickness patch has no counterpart for -- the
-    # patch's default one-plane wall already sits on its LOWER face, which
-    # IS z_sub_hi, so the patch Box is left at the one-plane default.
-    sim.add(Box((cx - GP_X / 2, cy - GP_Y / 2, z_sub_lo - DX),
-                (cx + GP_X / 2, cy + GP_Y / 2, z_sub_lo)), material="pec",
-            two_plane=two_plane)
+    # #931 lattice ownership contract: ground and patch are FOIL, so they are
+    # declared as SHEETS -- zero-thickness PEC Boxes, one zero-extent axis,
+    # which §1.5 makes a sheet declaration rather than an inference. Each is
+    # realized as tangential E zeroed on ONE node plane, owning no cell and
+    # writing no material, which is exactly the structure both openEMS legs
+    # build (AddBox with start z == stop z at 0 and at h).
+    #
+    # What this replaces: the ground used to be a one-cell PEC Box drawn in
+    # the cell BELOW the floor with two_plane=True so a second wall landed on
+    # z_sub_lo, and the patch a one-cell Box relying on the one-plane default
+    # NOT to grow a far wall at z_sub_hi + DX (11.90625 mm, which the openEMS
+    # zero-thickness patch has no counterpart for). Under the contract a
+    # one-cell PEC Box is a filled slab with BOTH faces at every thickness, so
+    # the old patch spelling would now grow that wall; the sheet declaration
+    # is how it stays absent by construction rather than by a default.
+    # assert_realized_stack() asserts that absence explicitly.
+    sim.add(Box((cx - GP_X / 2, cy - GP_Y / 2, z_ground),
+                (cx + GP_X / 2, cy + GP_Y / 2, z_ground)), material="pec")
     sim.add(Box((cx - GP_X / 2, cy - GP_Y / 2, z_sub_lo),
                 (cx + GP_X / 2, cy + GP_Y / 2, z_sub_hi)), material="sub")
-    patch_shape = Box((cx - L_PATCH / 2, cy - W_PATCH / 2, z_patch_lo),
+    z_patch_hi = z_sub_hi if patch_kind == "sheet" else z_sub_hi + DX
+    patch_shape = Box((cx - L_PATCH / 2, cy - W_PATCH / 2, z_sub_hi),
                       (cx + L_PATCH / 2, cy + W_PATCH / 2, z_patch_hi))
     sim.add(patch_shape, material="pec")
 
-    # probe/lumped feed: sit ~1.5 cells above the substrate floor so the port
-    # cell does NOT land in the ground-plane PEC (verified via preflight).
-    port_z0 = z_sub_lo + 1.0 * DX
-    port_extent = 2.0 * DX                       # cells strictly between GP & patch
+    # Probe/lumped feed spanning the FULL substrate, z_sub_lo -> z_sub_hi,
+    # i.e. standing ON the ground sheet plane and reaching the patch sheet
+    # plane -- byte-for-byte the openEMS lumped port below (AddLumpedPort
+    # over [feed, 0, 0] -> [feed, 0, h]).
+    #
+    # Before #931 this port started 1.0*DX above the floor and spanned 2*DX,
+    # "cells strictly between GP & patch": a compensation for cell ownership,
+    # because the ground Box owned the cell below the floor and the patch cell
+    # was PEC. The committed preflight recorded what it cost -- "the port
+    # terminates in vacuum/dielectric one cell short of a rasterized
+    # conductor, so the feed never galvanically reaches it and coupling is
+    # capacitive only (#556)". Under the contract neither conductor owns a
+    # cell, the sheets leave the substrate-normal Ez live everywhere, and a
+    # port that STARTS on a conductor's node plane is GALVANIC, not "inside
+    # PEC" (#929 defect 1). A port also releases only the ONE component it
+    # drives (design note §6), so this ez feed cannot punch a hole in the
+    # ground sheet's tangential walls.
+    port_z0 = z_sub_lo
+    port_extent = H_SUB
     sim.add_port(position=(feed_x, cy, port_z0), component="ez",
                  impedance=50.0, extent=port_extent,
                  waveform=GaussianPulse(f0=F_DESIGN, bandwidth=1.0))
@@ -403,11 +558,12 @@ def build_rfx_sim(*, do_gain: bool = False, two_plane: bool = True):
         sim.add_ntff_box(corner_lo=(pad, pad, pad),
                          corner_hi=(DOM_X - pad, DOM_Y - pad, DOM_Z - pad),
                          freqs=np.array([2.2e9, 2.3e9, 2.4e9, 2.5e9]))
-    geom = dict(z_sub_lo=z_sub_lo, z_sub_hi=z_sub_hi, feed_x=feed_x, cy=cy)
+    geom = dict(z_sub_lo=z_sub_lo, z_sub_hi=z_sub_hi, z_ground=z_ground,
+                patch_kind=patch_kind, feed_x=feed_x, cy=cy)
     return sim, patch_shape, geom
 
 
-def run_rfx(num_periods, n_freqs, do_gain, *, two_plane: bool = True):
+def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None):
     sys.path.insert(0, REPO_ROOT)
     import io
     import contextlib
@@ -418,7 +574,8 @@ def run_rfx(num_periods, n_freqs, do_gain, *, two_plane: bool = True):
     print("=" * 72)
     _geom_banner()
 
-    sim, patch_shape, _geom = build_rfx_sim(do_gain=do_gain, two_plane=two_plane)
+    sim, patch_shape, _geom = build_rfx_sim(do_gain=do_gain,
+                                            ground_plane_z=ground_plane_z)
     z_sub_lo, z_sub_hi = _geom["z_sub_lo"], _geom["z_sub_hi"]
 
     # ---- Build the actual grid: exact dt + FAITHFUL substrate rasterization ----
@@ -813,11 +970,12 @@ def _stack_check_ok(sc, tol=1e-9, eps_tol=1e-4):
     """Re-verify a leg's ``stack_check`` dict against THIS MODULE's OWN
     constants -- issue #740 review, required change 1: gate on the
     MEASURED planes recomputed against ``AIR_BELOW``/``H_SUB``/``N_SUB``/
-    ``EPS_R``, not a recorded label. A missing ``stack_check`` (a leg from
-    before this check existed) is a FAIL, not a skip: the #740 defect is
-    exactly a leg that looks fine without it. ``ground_realization`` is
-    NOT part of this test -- it is provenance only, so a later realization
-    that lands the same walls by a different mechanism still passes.
+    ``EPS_R``/``N_DISTINCT_EPS_EXPECTED``, not a recorded label. A missing
+    ``stack_check`` (a leg from before this check existed) is a FAIL, not a
+    skip: the #740 defect is exactly a leg that looks fine without it.
+    ``ground_realization``/``patch_realization`` are NOT part of this test --
+    they are provenance only, so a later realization that lands the same walls
+    by a different mechanism still passes.
 
     Pure function (synthetic dicts in, bool+detail out) so
     ``tests/crossval/test_crossval_cv15_wall_planes.py`` can pin the gate MATH
@@ -835,13 +993,20 @@ def _stack_check_ok(sc, tol=1e-9, eps_tol=1e-4):
         and sc.get("n_sub_cells") == N_SUB
         and len(eps_between) == N_SUB
         and all(abs(e - EPS_R) < eps_tol for e in eps_between)
+        # #931: a sheet owns no cell and writes no material. A leg recorded
+        # before this key existed FAILS, same reasoning as a missing
+        # stack_check: the property was not measured, so it is not evidence.
+        and sc.get("n_distinct_eps") == N_DISTINCT_EPS_EXPECTED
     )
     detail = (
         f"ground_wall_z={sc.get('ground_wall_z')} (want {z_sub_lo:.6g}), "
         f"patch_wall_z={sc.get('patch_wall_z')} (want {z_sub_hi:.6g}), "
         f"n_sub_cells={sc.get('n_sub_cells')} (want {N_SUB}), "
-        f"eps_between={eps_between} (want {N_SUB}x{EPS_R}); "
-        f"ground_realization(provenance)={sc.get('ground_realization')}"
+        f"eps_between={eps_between} (want {N_SUB}x{EPS_R}), "
+        f"n_distinct_eps={sc.get('n_distinct_eps')} "
+        f"(want {N_DISTINCT_EPS_EXPECTED}); "
+        f"realization(provenance)=ground:{sc.get('ground_realization')}, "
+        f"patch:{sc.get('patch_realization')}"
     )
     return ok, detail
 
@@ -915,7 +1080,8 @@ def compare(f0_env_pct):
     gate("f0 agreement (rfx ring-down vs openEMS)", d_rfx_oe <= f0_env_pct,
          f"{d_rfx_oe:.2f}% <= {f0_env_pct:.0f}%")
     sc_ok, sc_detail = _stack_check_ok(R.get("stack_check"))
-    gate("stack geometry fidelity (realized wall planes, #740)", sc_ok, sc_detail)
+    gate("stack geometry fidelity (realized wall planes + sheet writes no "
+         "material, #931)", sc_ok, sc_detail)
     gate("settling witness (open CPML, -40 dB bar)", bool(R["settled"]),
          f"{R['settle_db']:.1f} dB")
     # Passivity is GATED on both legs: |S11| > ~1.05 on a passive radiator is an
