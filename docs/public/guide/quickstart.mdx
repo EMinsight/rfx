@@ -123,10 +123,12 @@ it does not include the derived `cfg.n_steps`. Materials,
 geometry, sources, ports, and probes must be registered on the `Simulation`.
 Before registering the final geometry, align thin material boundaries with the
 actual `dz_profile` edges as shown in the [Non-Uniform Mesh
-guide](/rfx/guide/nonuniform-mesh/). A zero-thickness `Box` rasterizes no
-volume. Represent the 35 µm ground shape with the finite bounds above for mesh
-planning, then register it with `sim.add_thin_conductor(..., thickness=35e-6)`
-rather than as a volumetric material. Add the substrate, source, and observables,
+guide](/rfx/guide/nonuniform-mesh/). The `geometry` list above is a *planning*
+input, not a solver registration — the finite 35 µm bounds are what
+`auto_configure()` needs to see the thin feature. Register the ground on the
+`Simulation` with `sim.add_thin_conductor(..., thickness=35e-6)`. Handing that
+same 35 µm PEC `Box` to `sim.add()` raises: a `Box` is a volume, and 35 µm is
+under one cell ([How conductors land on the lattice](/rfx/guide/materials-geometry/#how-conductors-land-on-the-lattice)). Add the substrate, source, and observables,
 run preflight, and resolve every relevant issue before `run()`.
 When the planned time budget is intended, call `sim.run(n_steps=cfg.n_steps)`
 explicitly.

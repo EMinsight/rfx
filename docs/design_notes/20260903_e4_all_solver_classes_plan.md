@@ -1,5 +1,16 @@
 # E4 expansion: every crossval case × every external solver class — inventory and lane plan
 
+> **SUPERSEDED IN PART by #931 (the lattice ownership contract), 2026-09-07.**
+> Kept as dated history and deliberately NOT rewritten.
+> Its cv05 row calls the f0 gate "blind to the #740 one-plane-ground
+> realization". That realization no longer exists — the ground is declared a
+> sheet — so the blindness it hedged against is not the current risk; the leg
+> still adds a third independent f0.
+> The current rule is
+> `docs/design_notes/20260906_plan_realign_lattice_ownership.md` §1, and for
+> users `docs/public/guide/materials-geometry.mdx` ("How conductors land on
+> the lattice").
+
 **Status:** PLAN (no simulation run, no code changed; this note only) · **Opened:** 2026-09-03 · **Author:** planning agent
 **PI decision (2026-09-03, verbatim):** "crossval 들에서 한 종류가 아니라 시뮬레이션 가능한 모든 class (ems/meep/palace)를 추가하는걸로 해줘" — every crossval case gets every external solver class that can simulate it (openEMS, Meep, Palace), not one.
 **Branch:** `agent/e4-all-solvers-plan` (worktree `~/Documents/rfx-worktrees/e4-plan`, base `origin/main` @ `6d13df7`).

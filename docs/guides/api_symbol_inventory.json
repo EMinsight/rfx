@@ -1720,7 +1720,8 @@
         "edge_masks",
         "axis",
         "ij",
-        "region"
+        "region",
+        "periodic"
       ]
     },
     "render_artifact_markdown": {

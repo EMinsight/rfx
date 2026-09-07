@@ -4,7 +4,180 @@ All notable changes to `rfx-fdtd` that affect user-visible behaviour are
 recorded here. Dates follow local (KST) convention. Version bumps follow
 SemVer — **BREAKING** entries are flagged in upper-case.
 
-## [Unreleased]
+## [Unreleased — 2.0.0]
+
+### BREAKING — the lattice ownership contract: a conductor is a volume, a sheet or a wire, and the declaration says which (#931)
+
+`two_plane` is **removed**. Passing it raises `TypeError` — no deprecation
+period, no replacement keyword. Realized PEC geometry changes on every lane.
+Models with no conductor body are bit-identical to 1.x.
+
+**The contract.** An E component is PEC if and only if its own location lies
+inside the closed conductor region. That one sentence, evaluated for a 3-D, 2-D
+and 1-D region on the Yee lattice, gives the three rows:
+
+| kind | what it is | declared by | E edge is PEC iff |
+|---|---|---|---|
+| volume | a set of primal cells | `sim.add(shape, material=<pec>)` — Box, Sphere, Cylinder | the edge is incident to an occupied cell |
+| sheet | a footprint on ONE node plane, zero thickness | `sim.add_thin_conductor(shape, ...)`, or a zero-thickness `Box` through `sim.add()` | the edge lies in the plane and both of its end nodes are in the footprint |
+| wire | a 1-D path of edges | `PolylineWire` below half a local cell in radius | the edge lies on the path |
+
+Full normative statement, index conventions and worked contrasts:
+`docs/design_notes/20260906_plan_realign_lattice_ownership.md` and the public
+page [How conductors land on the
+lattice](docs/public/guide/materials-geometry.mdx).
+
+**What changed in realization.**
+
+- A PEC **volume** realizes tangential walls at **both** of its drawn faces and
+  shorts every normal edge between them, at every thickness, on every axis, with
+  no flag. Drawn extent equals realized extent. Before 2.0 the far (`hi`) face
+  was never a wall at any thickness, and `two_plane=True` put it back for one
+  cell only.
+- PEC volumes are sampled at **cell centres**, half-open at the tie
+  (`lo ≤ x_{i+½} < hi`), instead of at node coordinates. On node planes this
+  gives the same cells as before; off-lattice it rounds each face to the
+  **nearest** plane instead of always outward or always inward. A Sphere centred
+  on a node now realizes symmetric about that node (the old rule was one cell
+  short on every `+` side). **Dielectric sampling is untouched** — node
+  coordinates, half-open — so every dielectric-only fixture is unchanged.
+- A **sheet owns no cell**: it contributes nothing to the PEC cell mask, writes
+  no `eps_r`/`sigma`, and is realized on exactly one node plane — the plane
+  nearest the shape's mid-plane, an exact half-cell tie resolving to the LOWER
+  plane. The E component normal to a sheet stays live. Footprints on the same
+  plane are unioned before the edge rule, so abutting sheets realize seamlessly
+  instead of leaving a slit. For a Box shape the footprint is sampled **closed**
+  `[lo, hi]` on the two in-plane axes, so the drawn rectangle is realized
+  exactly, including its `hi` row.
+- A lossy (`surface_impedance_f0`) sheet uses the SAME footprint and the SAME
+  edge set as a PEC sheet, so the #677 G4 identity — `f0` toggles loss, never
+  geometry — holds by construction rather than by a test comparing two rules.
+- `PolylineWire` with radius below half a local cell is a filament on the
+  lattice path joining the nearest nodes of consecutive vertices; a diagonal
+  segment now raises instead of silently rasterizing to disconnected nodes.
+
+**New refusals at `add()` time** (nothing is inferred from raster thickness or
+drawing direction):
+
+- a PEC shape with `0 < extent < one local cell` on any axis of its drawn
+  bounding box raises — declare a sheet or resolve the thickness;
+- a PEC shape that rasterizes to ZERO cells raises, naming `PolylineWire` for a
+  filament and the minimum radius for a volume (the #369 silently-vaporized-metal
+  class);
+- a `Box` with exactly one zero-extent axis IS a sheet declaration and is
+  realized as `add_thin_conductor` would realize it; two or three zero-extent
+  axes raise;
+- `add_thin_conductor()` with a shape thicker than one local cell along its
+  normal raises.
+
+**One source, every consumer.** `rfx.boundaries.pec.realized_pec_edge_masks(
+cell_mask, sheets, wires, periodic)` is the only function that turns geometry
+into PEC edges, with two helpers on top: `realized_wall_planes(edge_masks, axis,
+...)` and `edge_is_pec(edge_masks, component, i, j, k)`. Consumers that
+re-derived metal from `pec_mask` read these instead. Classification lives in
+`rfx.geometry.rasterize_grid.classify_pec_entry` / `sheet_spec_from_shape`.
+`clear_edges(edge_masks, cells, component=)` replaces the old
+`pec_mask[cell] = False` port clearing, and a port releases **the one component
+it drives** — releasing all three opens the two edges tangential to the port at
+its foot, which where the foot stands on a conductor's node plane are that
+conductor's wall (measured: 2 of 40 wall edges on a PEC block's top face, 7/7 Ex
+and 7/7 Ey along an MSL feed width on the ground plane).
+
+**Removed surfaces.** `two_plane` on `sim.add()` and `_GeometryEntry`, the IR
+field, `_two_plane_cell_mask`, `_refuse_two_plane`, `two_plane_extension_masks`,
+`_place_at_next_plane` and the per-lane ctx fields; `resample_sheet_node_materials`,
+`sheet_normal_live_axis_masks`, `_subcell_box_axis_window`, `_statics_on_coords`,
+`collect_thin_conductor_sheet_inputs` (a sheet has no "own cell" to re-sample);
+`tests/locks/test_two_plane_pec_slab.py` and the resample tests. There are no
+per-entry realization knobs: a test greps `rfx/` for `two_plane` and for
+`realization=`-style keywords on geometry entries and fails on a hit.
+
+**What the contract does NOT cover.** Three paths put metal in a domain
+without a conductor declaration, and confusing one of them with the contract is
+the easiest way to misread a 2.0 result:
+
+- **domain-boundary PEC** (`boundary="pec"`, `BoundarySpec` faces) is a wall of
+  the box, not a body — tangential E is zeroed on the face plane itself.
+  Unchanged; the boundary-PEC crossval cases are the controls for this release
+  and must come back bit-identical.
+- **a σ fill through the low-level rasterizer** —
+  `rasterize(grid, [(shape, 1.0, 1e7)])`, and the shell and pin
+  `stamp_coaxial_line()` stamps. A lossy VOLUME model: it damps the field
+  inside conductive cells, zeroes no edge, reports no wall plane, and samples
+  its cells at NODES rather than at cell centres. Unchanged. Bringing this
+  family under the contract is a follow-up, not part of 2.0 — measured price on
+  the Mie sphere at ka = 0.5: 1082 σ-filled cells against 1123 for the same
+  sphere declared as a PEC volume, an a_eff shift of about 1.2 %.
+- **subpixel smoothing** (`subpixel_smoothing="kottke_pec"`, Dey–Mittra
+  conformal) keeps its own interior selection and its own weights. One
+  composition did change: on the waveguide lane the conformal path now applies
+  the realized PEC edges together with Dey–Mittra where it previously applied a
+  σ fold and Dey–Mittra. That is the σ fold this release replaces, but no test
+  covers a curved conformal body, so treat it as an untested edge.
+
+**IR.** The design-interop IR is at v2: the required `two_plane` boolean is gone
+and sheets are expressed directly. A document carrying `two_plane` is refused
+with a message rather than ignored.
+
+**Reporting.** `fidelity_report()` prints, per PEC entry, the drawn extent
+against the realized wall planes on each axis, in input units.
+
+**Migrating a 1.x model**, in priority order:
+
+1. foil drawn as a one-cell PEC Box (ground planes, patches, traces) →
+   `add_thin_conductor` with the SAME physical corners. The realized plane is
+   the one it lands on today for a face-registered one-cell Box;
+2. foil drawn one cell OUTSIDE its interface to park the wall on that interface
+   → draw it AT the interface as a sheet and delete the `two_plane` flag;
+3. walls, irises, posts and plates drawn as volumes → drawing unchanged; the
+   realization gains its far face. Every number derived from the old
+   realization — oracle inputs, fixture values, lock values, gate bounds — is
+   recomputed from the drawn geometry, and the compensation that produced it is
+   deleted, not re-tuned;
+4. anything that pinned the old mechanics is rewritten against the contract or
+   deleted with it.
+
+**Earlier entries this supersedes** (left in place as dated history; a reader
+grepping the CHANGELOG should not follow their recipes):
+
+- **#493** — the waveguide-obstacle drawing recipe: "the realized extent is one
+  cell short of the drawn extent, entirely at the hi face", the transverse
+  identity `(n_open + 1) * dx`, and the two-condition recipe (interior corners on
+  cell midpoints AND metal depth an exact number of cells). Under the volume rule
+  the realized aperture is the drawn one, transverse and longitudinal alike;
+  midpoint corners remain harmless but are no longer load-bearing. Its live
+  hand-copy in `docs/guides/sparameter_support_matrix.md` was rewritten in the
+  same change.
+- **#740** — cv15's `two_plane=True` ground fix and the +55.0 % electrical
+  thickness it corrected. The keyword no longer exists; the ground is declared as
+  a sheet at the substrate floor and cv15's numbers are re-measured for this release. #767 (the
+  checker that could not see a sheet's cavity) is closed by construction: the
+  cavity check reads `realized_wall_planes`.
+- **#802/#807** — "a `Box` face declared on a node multiple realizes per the
+  half-open `[lo, hi)` convention — the lo-face node kept, the hi-face node
+  dropped". This still describes **dielectric** sampling, which is unchanged. It
+  no longer describes conductors. The one-cell tie rule in that entry **survives**
+  as the sheet plane-selection rule, deliberately, so existing one-cell sheet
+  declarations land where they landed.
+- **#674** — "the shape must rasterize to exactly one cell layer along its normal
+  and at least one cell". The requirement is now plane-based: no thicker than one
+  local cell along the normal, realized on one plane.
+- **#702** — re-sampling a one-node sheet's own cell material at its live edge.
+  Deleted with the mechanism. The one physical case it served — a stack-up drawn
+  with a slot for the foil — becomes a preflight finding (`sheet_slot_vacuum`)
+  instead of a silent re-sample.
+- **#544/#556** — the wire-port dead-cell advisory against "the SAME assembled
+  `pec_mask`", and port-cell clearing "unaffected under the thin-sheet rule".
+  Live/dead is now `edge_is_pec` on the port's own component; clearing is
+  `clear_edges`. "The thin-sheet rule" names the deleted rule.
+
+**Recomputed artifacts.** No number in this repository was translated,
+re-tuned or hand-edited for this release: a crossval case, example, fixture or
+lock with a conductor body is re-solved from its migrated declaration or it
+does not ship. Each case's before/after values and its VESSL run id live in
+that case's results directory and its commit, not here. Dielectric-only cases
+(cv04, cv17, cv22, cv23 and every example without a conductor body) must come
+back bit-identical, and that identity is the change's own falsifier.
 
 ### Added — near-cutoff layout note, and the S21 phase residual on waveguide S-matrix results
 
