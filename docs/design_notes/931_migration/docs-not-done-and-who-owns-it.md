@@ -59,3 +59,44 @@ ever demand an edit to them:
 * `validation/crossval/_15_patch_results/*`, `_05_*` logs
 * `tests/data/example_fidelity_snapshot.json` — NOT frozen; the examples group
   regenerates it last.
+
+## OPEN, and it is visible to a reader: `first-patch.mdx` fails strict preflight
+
+Measured 2026-09-07 with `scripts/check_public_docs_blocks.py --only
+guide/materials-geometry api/geometry-materials guide/first-patch
+guide/quickstart` on `feat/931-docs` (merged with
+`feat/931-lattice-ownership`), 258.7 s, 23 blocks:
+
+| page | blocks | status |
+|---|---|---|
+| `api/geometry-materials.mdx` | 2 | PASS |
+| `guide/materials-geometry.mdx` | 14 | PASS |
+| `guide/quickstart.mdx` | 3 | PASS |
+| `guide/first-patch.mdx` | 4 | **FAIL at block 3 (doc line 87)** |
+
+```
+ValueError: preflight (strict) found 1 issue(s):
+ - _assemble_materials (non-uniform lane): PEC sheets/wires were classified
+   but the caller passed no pec_sheets/pec_wires collector, so they are
+   absent from the returned pec_mask (a sheet owns no cell, #931 §1.3).
+```
+
+**The page is right and the library is not yet.** `first-patch.mdx` declares
+its 35 µm ground and patch as sheets, which is exactly what the contract and
+the canonical page tell a reader to do, and calls `sim.preflight(strict=True)`
+at line 115 — which is also what the page is teaching. The failure comes from
+preflight's OWN `_assemble_materials(grid)` call on the non-uniform lane
+passing no `pec_sheets` / `pec_wires` collector, so
+`rfx/api/_compile.py::_warn_uncollected_pec` fires and strict mode turns that
+`UserWarning` into an error.
+
+This is the gap design note §6 already names — *"preflight's own
+`_assemble_materials(grid)` calls take the sheets-dropped warning above"* —
+under **"Not yet implemented — preflight (§3 findings, §1.9 consumers)"**.
+
+**Owner: the preflight group (P).** Nothing was changed in the page to hide
+it. Fixing it means preflight passing collectors on both lanes and realizing
+them through `realized_pec_edge_masks`, which is on P's list already. Re-run
+the command above after P lands; `first-patch.mdx` block 3 is the acceptance
+witness, and it is a better one than a unit test because it is the exact
+sequence a reader types.
