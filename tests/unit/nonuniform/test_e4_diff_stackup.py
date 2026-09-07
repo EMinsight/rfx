@@ -61,7 +61,10 @@ def _map_invariants():
         assert abs(eps[20] - (4.3 * dz[19] + 3.0 * dz[20]) / (dz[19] + dz[20])) <= 1e-6
         assert abs(eps[24] - (3.0 * dz[23] + 4.3 * dz[24]) / (dz[23] + dz[24])) <= 1e-6
         assert abs(eps[44] - (4.3 * dz[43] + 1.0 * dz[44]) / (dz[43] + dz[44])) <= 1e-6
-        assert np.all(eps[21:24] == 3.0) and np.all(eps[45:] == 1.0) and np.all(eps[:20] == 4.3)
+        # interior nodes: (e d + e d) / (d + d) is a computed quotient, not a
+        # literal — 1e-12, not bitwise (first-run test fix, no window involved)
+        assert np.allclose(eps[21:24], 3.0, rtol=0, atol=1e-12)
+        assert np.allclose(eps[45:], 1.0, rtol=0, atol=1e-12) and np.allclose(eps[:20], 4.3, rtol=0, atol=1e-12)
 
 
 def test_live_l1_gradient_small_box():
