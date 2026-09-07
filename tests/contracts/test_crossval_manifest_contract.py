@@ -95,8 +95,11 @@ def test_manifest_covers_every_crossval_script_exactly_once() -> None:
     assert (REPO_ROOT / manifest["evidence_rule"]).is_file()
     assert set(manifest["exit_codes"]) == {"0", "1", "2"}
 
+    # underscore-prefixed modules are shared helpers (e.g. _wr90_iris_realized.py,
+    # the cv18/cv19 realized-geometry reader, #931), not cases
     actual_scripts = {
         path.relative_to(REPO_ROOT).as_posix() for path in CROSSVAL_DIR.glob("*.py")
+        if not path.name.startswith("_")
     }
     registered_scripts = [case["script"] for case in manifest["cases"]]
     assert len(registered_scripts) == len(set(registered_scripts))

@@ -104,15 +104,27 @@ ALLOWED = {
     "scripts/diagnostics/patch_edgefed_s11_band_repin.py":
         "its `retired` arm refuses to run and names the deleted "
         "resample_sheet_node_materials in the refusal",
+    # -- crossval-C migration landed 2026-09-07 (#931 phase 2a merge)
+    "validation/crossval/15_patch_antenna_rt5880.py":
+        "cv15: ground/patch are sheets, the parameter is deleted; the "
+        "docstrings name two_plane only to record what #740 did and #931 undid",
+    "validation/crossval/manifest.json":
+        "cv15's claim_scope names the deleted `two_plane=True` ground as the "
+        "#740 repair the #931 sheet declaration replaced (dated history)",
+    # -- crossval groups A/C/D landed 2026-09-07; dated history only
+    "validation/crossval/05_patch_antenna.py":
+        "cv05 docstring cites the 2026-08-28 two_plane A/B verdict as history",
+    "validation/crossval/18_wr90_iris_modematch.py":
+        "cv18 docstring/print record that the flag put the far face back for "
+        "t = 1 only; the case's own irises are volumes",
+    "scripts/diagnostics/cv15_before_after_931.py":
+        "the BEFORE row of the cv15 decomposition names the #768 two_plane leg",
 }
 
 PENDING = {
-    "validation/crossval/15_patch_antenna_rt5880.py":
-        "cv15, owned by the crossval-C migration (ground/patch -> sheets, "
-        "two_plane parameter deleted, negative control becomes a wrong "
-        "declared ground_plane_z)",
-    "validation/crossval/manifest.json":
-        "cv15's manifest entry, owned by the crossval-C migration",
+    # (empty since 2026-09-07: the crossval-C migration landed; its two rows
+    # moved to ALLOWED because both files now name the keyword only as dated
+    # history. Keep the dict — it is the schedule for the next removal.)
 }
 
 
