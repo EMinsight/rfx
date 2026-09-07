@@ -116,9 +116,10 @@ def msl_modal_voltage(ez_plane, *, j_centre: int, k_lo: int, k_hi: int,
     Issue #511: before this helper existed the span was
     ``range(k_lo, k_hi + 1)`` with the rounding proxy — on aligned meshes
     that is ``n+1`` edges for an ``n``-cell substrate, and the extra edge
-    lies inside the one-cell PEC trace, where
-    :func:`rfx.boundaries.pec.apply_pec_mask` deliberately preserves the
-    NORMAL E component as surface charge (``rfx/boundaries/pec.py:90-93``)
+    lies inside the one-cell PEC trace, where the realization leaves the
+    NORMAL E component live (#931 §1.2: an E component is PEC iff its own
+    location is inside the closed conductor region, so the normal edge of
+    a SHEET stays live and the normal edge INSIDE a volume is shorted)
     — a correct boundary condition that is wrong to sum into a
     ground-to-trace potential difference.  It contributed roughly −12% at
     ``∠ ≈ 180°``, so every quantity derived from ``V`` (``Z0``, ``S11``,
@@ -3623,9 +3624,10 @@ class _SparamMixin:
         ``subpixel_smoothing`` / ``conformal_pec`` are ``run()``-only
         keywords, so that combination is unreachable on the ``eps_override``
         channel rather than refused there.
-        The TRACE must remain PEC: an f0 sheet never enters
-        ``pec_mask``, and the closed Ampere-loop current and the V span
-        anchor on PEC trace nodes. The Hammerstad-Jensen beta/Z0 anchors
+        The TRACE must remain PEC: an f0 sheet realizes no PEC edge, and
+        the closed Ampere-loop current and the V span anchor on the
+        realized PEC wall planes (#931 §1.9 — a PEC trace may be a volume
+        Box or a sheet; both are found). The Hammerstad-Jensen beta/Z0 anchors
         and the real-beta N-probe fit assume a lossless line, so a sheet
         lying INSIDE a probed span adds per-length loss the fit cannot
         represent — reported ``Z0``/``q`` shift (the Z0 honesty guard may
@@ -3923,15 +3925,30 @@ class _SparamMixin:
         # an f0 sheet carries no eps and never enters pec_mask. This lane
         # has NO vacuum reference run, so there is no strip_sheet_impedance
         # analogue.
+        _msl_pec_sheets: list = []
+        _msl_pec_wires: list = []
         _msl_assembled = (
-            self._assemble_materials_nu(grid) if is_nonuniform
-            else self._assemble_materials(grid)
+            self._assemble_materials_nu(
+                grid, pec_sheets=_msl_pec_sheets, pec_wires=_msl_pec_wires)
+            if is_nonuniform
+            else self._assemble_materials(
+                grid, pec_sheets=_msl_pec_sheets, pec_wires=_msl_pec_wires)
         )
         _msl_materials = _msl_assembled[0]
-        _msl_pec_mask = (
-            None if _msl_assembled[3] is None
-            else np.asarray(_msl_assembled[3])
+        # #931 §1.9: the trace is located by its REALIZED wall planes, not
+        # by a pec_mask cell scan — a sheet-declared trace owns no cell.
+        from rfx.boundaries.pec import (
+            realized_pec_edge_masks as _rpem_msl,
         )
+        from rfx.probes.msl_wave_decomp import (
+            realized_trace_planes_on_column as _trace_planes,
+        )
+        _msl_pec_edge_masks = None
+        if (_msl_assembled[3] is not None or _msl_pec_sheets
+                or _msl_pec_wires):
+            _msl_pec_edge_masks = _rpem_msl(
+                _msl_assembled[3], sheets=tuple(_msl_pec_sheets),
+                wires=tuple(_msl_pec_wires))
         beta0_per_port: list[np.ndarray] = []
         z0_hj_per_port: list[float] = []
         for p_idx, pe in enumerate(entries):
@@ -3962,32 +3979,27 @@ class _SparamMixin:
             # Walk UP the substrate-normal axis (always z) from the
             # substrate top, at the feed cell on the propagation axis and
             # the trace centre on the width axis (issue #661).
-            _sel = [0, 0, 0]
-            _sel[meta["prop_idx"]] = meta["i_feed"]
-            _sel[meta["width_idx"]] = meta["j_centre"]
-            _sel[meta["normal_idx"]] = slice(meta["k_top"], None)
-            col = (
-                None if _msl_pec_mask is None
-                else _msl_pec_mask[tuple(_sel)]
+            _ij = tuple(
+                meta["i_feed"] if c == meta["prop_idx"] else meta["j_centre"]
+                for c in range(3) if c != meta["normal_idx"]
             )
-            k_pec = np.array([], dtype=int) if col is None else np.where(col)[0]
-            if k_pec.size == 0:
+            _k_lo_tr, _k_hi_tr = _trace_planes(
+                _msl_pec_edge_masks, meta["normal_idx"], _ij, meta["k_top"])
+            if _k_lo_tr is None:
                 raise RuntimeError(
-                    "compute_msl_s_matrix: no PEC trace conductor found "
-                    "above the substrate top for MSL port "
+                    "compute_msl_s_matrix: no realized PEC trace conductor "
+                    "found above the substrate top for MSL port "
                     f"{entries[p_idx].name!r}; the closed Ampere-loop "
-                    "current (issue #80 stage S1) needs the trace PEC. "
-                    "Add the microstrip trace as a Box(material='pec'). "
-                    "A surface_impedance_f0 thin conductor is NOT a trace "
-                    "conductor here — it never enters pec_mask, and the "
-                    "Ampere-loop current and V span anchor on PEC trace "
-                    "nodes. Keep the trace PEC and use f0 sheets for "
-                    "auxiliary lossy metal only."
+                    "current (issue #80 stage S1) needs the trace. Declare "
+                    "the microstrip trace as a Box(material='pec') (a "
+                    "volume) or as a zero-thickness Box / add_thin_conductor "
+                    "(a sheet, #931). A surface_impedance_f0 thin conductor "
+                    "is NOT a trace conductor here — it realizes no PEC "
+                    "edge, and the Ampere-loop current and V span anchor on "
+                    "realized PEC wall planes. Keep the trace PEC and use f0 "
+                    "sheets for auxiliary lossy metal only."
                 )
-            trace_k_per_port.append((
-                int(meta["k_top"] + int(k_pec.min())),
-                int(meta["k_top"] + int(k_pec.max())),
-            ))
+            trace_k_per_port.append((_k_lo_tr, _k_hi_tr))
 
         # Stash existing add_dft_plane_probe registrations and restore on exit.
         saved_dft = list(self._dft_planes)
@@ -5162,9 +5174,23 @@ class _SparamMixin:
         # drive run (materials do not depend on excite flags).
         from rfx.materials.thin_conductor import refuse_f0_sheets as _refuse_f0_hj
         _refuse_f0_hj(self._thin_conductors, "MSL junction S-parameter")
+        _mx_pec_sheets: list = []
+        _mx_pec_wires: list = []
         materials, debye_spec, lorentz_spec, pec_mask, _, _, _ = \
-            self._assemble_materials(grid)
-        pec_mask_np = None if pec_mask is None else np.asarray(pec_mask)
+            self._assemble_materials(
+                grid, pec_sheets=_mx_pec_sheets, pec_wires=_mx_pec_wires)
+        # #931 §1.9: realized wall planes locate the trace, not cells.
+        from rfx.boundaries.pec import (
+            realized_pec_edge_masks as _rpem_mx,
+        )
+        from rfx.probes.msl_wave_decomp import (
+            realized_trace_planes_on_column as _trace_planes_mx,
+        )
+        _mx_pec_edge_masks = None
+        if pec_mask is not None or _mx_pec_sheets or _mx_pec_wires:
+            _mx_pec_edge_masks = _rpem_mx(
+                pec_mask, sheets=tuple(_mx_pec_sheets),
+                wires=tuple(_mx_pec_wires))
 
         # Analytic Hammerstad-Jensen anchor per MSL port (eps precedence
         # mirrors compute_msl_s_matrix: explicit eps_r_sub > rasterised
@@ -5198,23 +5224,20 @@ class _SparamMixin:
         for p_idx in range(n_msl):
             meta = port_idx_meta[p_idx]
             i_feed_p = _msl_yz_cells(grid, msl_ports[p_idx])[0][0]
-            col = (
-                None if pec_mask_np is None
-                else pec_mask_np[i_feed_p, meta["j_centre"], meta["k_top"]:]
-            )
-            k_pec = np.array([], dtype=int) if col is None else np.where(col)[0]
-            if k_pec.size == 0:
+            _k_lo_tr, _k_hi_tr = _trace_planes_mx(
+                _mx_pec_edge_masks, 2, (i_feed_p, meta["j_centre"]),
+                meta["k_top"])
+            if _k_lo_tr is None:
                 raise RuntimeError(
-                    "compute_mixed_s_matrix: no PEC trace conductor found "
-                    "above the substrate top for MSL port "
+                    "compute_mixed_s_matrix: no realized PEC trace "
+                    "conductor found above the substrate top for MSL port "
                     f"{entries[p_idx].name!r}; the closed Ampere-loop "
-                    "current needs the trace PEC. Add the microstrip trace "
-                    "as a Box(material='pec')."
+                    "current needs the trace. Declare the microstrip trace "
+                    "as a Box(material='pec') (a volume) or as a "
+                    "zero-thickness Box / add_thin_conductor (a sheet, "
+                    "#931)."
                 )
-            trace_k_per_port.append((
-                int(meta["k_top"] + int(k_pec.min())),
-                int(meta["k_top"] + int(k_pec.max())),
-            ))
+            trace_k_per_port.append((_k_lo_tr, _k_hi_tr))
 
         # Wire live-cell counts for the per-cell impedance normalization
         # (mirrors compute_lumped_wire_s_matrix_via_scan, issue #318).
@@ -5230,7 +5253,8 @@ class _SparamMixin:
                     component=pe.component, impedance=pe.impedance,
                     excitation=pe.waveform,
                 )
-                n_live_lw[idx] = _wire_port_live_cells(grid, wp, pec_mask)[2]
+                n_live_lw[idx] = _wire_port_live_cells(
+                    grid, wp, _mx_pec_edge_masks)[2]
 
         if not skip_preflight:
             # One preflight for the full registration (run() would fire it
@@ -5426,6 +5450,8 @@ class _SparamMixin:
                 raw = self._forward_from_materials(
                     grid, materials, debye_spec, lorentz_spec,
                     n_steps=n_steps, checkpoint=False, pec_mask=pec_mask,
+                    pec_sheets=tuple(_mx_pec_sheets),
+                    pec_wires=tuple(_mx_pec_wires),
                     port_s11_freqs=freqs_arr,
                     _return_raw_port_sparams=True,
                 )
@@ -7541,8 +7567,19 @@ class _SparamMixin:
                 "layer; check both registrations reference the SAME "
                 "physical ground plane."
             )
+        _cx_pec_sheets: list = []
+        _cx_pec_wires: list = []
         materials, debye_spec, lorentz_spec, pec_mask, _, _, _ = \
-            self._assemble_materials(grid)
+            self._assemble_materials(
+                grid, pec_sheets=_cx_pec_sheets, pec_wires=_cx_pec_wires)
+        from rfx.boundaries.pec import (
+            realized_pec_edge_masks as _rpem_cx,
+        )
+        _cx_pec_edge_masks = None
+        if pec_mask is not None or _cx_pec_sheets or _cx_pec_wires:
+            _cx_pec_edge_masks = _rpem_cx(
+                pec_mask, sheets=tuple(_cx_pec_sheets),
+                wires=tuple(_cx_pec_wires))
 
         if freqs is None:
             freqs_arr = np.asarray(
@@ -7778,7 +7815,6 @@ class _SparamMixin:
                 stacklevel=2,
             )
 
-        pec_mask_np = None if pec_mask is None else np.asarray(pec_mask)
         cells = _msl_yz_cells(grid, msl_port_base)
         j_set = sorted({c[1] for c in cells})
         k_set = sorted({c[2] for c in cells})
@@ -7786,22 +7822,20 @@ class _SparamMixin:
         k_lo_msl, k_hi_msl = k_set[0], k_set[-1]
         j_centre_msl = (j_lo_msl + j_hi_msl) // 2
         i_feed_msl = cells[0][0]
-        if pec_mask_np is None:
+        # #931 §1.9: realized wall planes locate the trace, not cells.
+        from rfx.probes.msl_wave_decomp import (
+            realized_trace_planes_on_column as _trace_planes_cx,
+        )
+        k_trace_lo, _ = _trace_planes_cx(
+            _cx_pec_edge_masks, 2, (i_feed_msl, j_centre_msl), k_hi_msl)
+        if k_trace_lo is None:
             raise RuntimeError(
-                "compute_coax_msl_transition(): no PEC geometry registered "
-                "— the MSL trace conductor must be a registered PEC Box "
-                "(pec_mask came back None)."
+                "compute_coax_msl_transition(): no realized PEC trace "
+                "conductor found above the substrate top at the registered "
+                "MSL port's own feed plane; declare the microstrip trace as "
+                "a Box(material='pec') (a volume) or as a zero-thickness "
+                "Box / add_thin_conductor (a sheet, #931)."
             )
-        col = pec_mask_np[i_feed_msl, j_centre_msl, k_hi_msl:]
-        k_pec = np.where(col)[0]
-        if k_pec.size == 0:
-            raise RuntimeError(
-                "compute_coax_msl_transition(): no PEC trace conductor "
-                "found above the substrate top at the registered MSL "
-                "port's own feed plane; add the microstrip trace as a "
-                "Box(material='pec')."
-            )
-        k_trace_lo = int(k_hi_msl + int(k_pec.min()))
         dz_arr = _msl_cell_profile(grid, "z", grid.nz)
         _complex_dtype = jnp.complex128 if jax.config.x64_enabled else jnp.complex64
 
@@ -7870,7 +7904,8 @@ class _SparamMixin:
             result = _run(
                 grid, materials, int(n_steps), boundary="cpml", cpml_axes="xyz",
                 sources=sources, mag_sources=mag_sources, probes=witness_probes,
-                dft_planes=planes, pec_mask=pec_mask, return_state=False,
+                dft_planes=planes, pec_edge_masks=_cx_pec_edge_masks,
+                return_state=False,
                 **_flux_run_kwargs,
             )
             if result.dft_planes is None:
