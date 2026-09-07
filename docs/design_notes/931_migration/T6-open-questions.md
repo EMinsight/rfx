@@ -103,3 +103,60 @@ sphere, and no realized edge on the sigma path) and measured the consequence for
 the chain battery (`T6-waveguide-chain-battery.md`). The design note's §1.8
 would be clearer for one sentence saying which door a conductivity came through
 decides which model it gets.
+
+## 8. A foil board with a RESERVED cell: extend the dielectric, or move the foil?
+
+Not open in the note's text, but forced by it. §3's `sheet_slot_vacuum` finding
+names the situation ("a stack-up drawn with a slot for the foil") and gives the
+remedy as "extend the dielectric boxes to the sheet plane". §6's stack-up
+amendment gives a different one: "a foil sheet goes on the dielectric INTERFACE
+it bounds". On the three patch boards the two disagree, and the disagreement is
+worth 20 % of the cavity:
+
+* **Extend the dielectric.** The laminate is drawn from the foil's plane, so it
+  reads 983.75 µm where the board says 787. The pinned numbers come back
+  because this reproduces the pre-#931 electrical board exactly — which is the
+  reason to distrust it. It restores a compensation in the drawing after
+  deleting it from the code, and the fixture then declares a laminate thickness
+  the datasheet does not have.
+* **Move the foil to the interface** (chosen). The laminate stays 787 µm, the
+  cavity is four cells of it, node-to-node equals face-to-face, and the pins are
+  re-derived from a fresh run.
+
+**Chosen: move the foil**, on three grounds that are checkable rather than
+aesthetic. (1) The board's own MSL port already declares this stack — its foot
+at the laminate bottom, its height `H_SUB` — so before the redraw the port's
+ground reference and the realized ground wall stood one cell apart. (2) Migration
+rule 3 says the compensation is deleted, not re-tuned, and a stretched dielectric
+is the same compensation wearing the drawing's clothes. (3) It is the only one of
+the two that makes preflight's own #703 cavity check go silent; the other leaves
+it printing +84.5 % on a board whose gate is green, which is how #702 stayed
+hidden for a year.
+
+The cost is on the record: three lock modules re-pin from VESSL 369367259225 /
+369367259226 / 369367259227, and their measured half-widths are inherited from a
+mesh/domain ladder that has NOT been re-run on the redrawn board. Those widths
+are therefore an upper bound carried forward, not a fresh measurement — a
+re-measured ladder is the follow-up, and it can only narrow them.
+
+Reverse this only with a board whose datasheet thickness really is the
+node-to-node distance. Then the drawing says so and the two remedies agree.
+
+## 9. The two sheet-cavity modules moved the wrong way — instrument, don't re-pin
+
+`test_sheet_resonance_position_ab` and `test_sheet_perturbation_q` declare
+zero-thickness sheets on exact node planes, and the contract's closed footprint
+gives their patch the 5.500 mm it draws instead of the 5.250 mm the old
+half-open sampling gave it (measured at build time at HEAD: Ex rows 13..34 on
+both patch planes). A cavity mode set by that length must FALL. Both modules'
+modes rose (30.2153 GHz against a length-scaled 26.85; 25.3992 against 23.63),
+and the A/B module reproduces its number at HEAD on this pod, so it is not
+staleness.
+
+**Chosen: add the instrument, leave the pin red.** The modules reported two
+headline frequencies with no trace, so a real move and a two-loudest PEAK PICKER
+swapping peaks between arms look identical from the outside — an R5 gap. The
+census (every peak, every arm, with amplitudes) is committed and the re-run is
+VESSL 369367259230 / 369367259231. A provenance pin re-centred on a number whose
+mode identity is unknown is worse than a red gate, so nothing is re-centred until
+that census says which mode is which.
