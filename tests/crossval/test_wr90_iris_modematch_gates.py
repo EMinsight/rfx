@@ -724,7 +724,15 @@ def test_one_cell_aperture_resolution_is_declared_and_pinned(fixture):
         # BOTH signs resolved at every configuration once the thickness
         # deficit is closed. The pre-#931 asymmetry was the deficit reading
         # out on the aperture axis, not an aperture property.
-        assert min(detected[+1]) == pytest.approx(1.62, abs=0.02), min(detected[+1])
+        # The margin is a RATIO against a gate that #931 shrank 2-3x, so this
+        # file's standing 2e-3 oracle-agreement budget buys a much wider band
+        # on the ratio than it did before; the exact margins are pinned where
+        # they are exact, against the artifact, in
+        # test_aperture_resolution_artifact_is_rederived_from_committed_traces.
+        # What is asserted here is the claim: detected everywhere, in both
+        # signs, above the repo's own 1.5x margin.
+        assert min(detected[+1]) == pytest.approx(1.62, abs=0.2), min(detected[+1])
+        assert min(detected[+1]) >= 1.5, detected[+1]
         assert len(detected[-1]) == 8, detected
         assert min(detected[-1]) >= 1.5, detected[-1]
     else:

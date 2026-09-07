@@ -321,6 +321,26 @@ tests between this commit and the fixture landing.
 - `test_non_gated_quantities_are_declared_non_gated` still passes: the posture keeps the
   literal phrase "band edges and bandwidth", now on the GATED side.
 
+### 3.5b The seven cv18 reds that must clear, and why they are red now
+
+`pytest tests/crossval/test_wr90_iris_modematch_gates.py -n 4 -q` at commit `b0cc5e84`,
+against a working tree still holding the **pass-1** record, gives **7 failed, 14 passed,
+1 skipped**. Every one is the source-ahead-of-record transition and all seven must be
+green after §3.2 lands — if any survives, it is a real defect, not the transition.
+
+| test | why it is red now |
+|---|---|
+| `test_script_live_gate_constants_match_fixture` | script `GATE_FINE_ABS` 0.02 vs the pass-1 record's 0.04 |
+| `test_gates_are_hard_pinned_and_equal_recomputed_envelopes` | same, through the hard pin |
+| `test_per_config_fine_gates_are_derived_bound_and_strictly_tighter` | script's eight gates vs gates re-derived from the pass-1 record's own rows |
+| `test_script_prose_literals_match_fixture` | the claim_scope was refreshed after pass 1 wrote its copy |
+| `test_prose_numbers_are_recomputed_from_rows` | the same, on the ripple / coarse / raw-vs-flux literals |
+| `test_one_cell_volume_witness_is_recorded_and_passing` | the pass-1 record has no `identification` block, so the legacy branch runs and fails on the retired vacuous criterion — the exact failure the redesign exists to answer |
+| `test_live_one_cell_defect_is_caught_by_the_per_config_gate_and_not_the_old_ones` | reads the script's new per-config gate against the pre-#931 live artifact; clears when §3.4 re-runs the probe |
+
+The cv19 gate file was not run to completion locally — its FDFD replay legs take longer
+than the shared-pod budget allows. Run it on the fixture-landing commit.
+
 ### 3.6 Not this group
 
 - `validation/crossval/manifest.json` cases 18/19 — §1 and §2 above.
