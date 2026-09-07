@@ -331,22 +331,70 @@ Classification, in the order that matters:
 
 **Not widened, and not xfailed on the strength of one printed number.**
 Widening a comparator's trust gate is the comparator marking its own
-homework. Marking it `xfail(strict=True)` — the idiom this module already
-uses for the O4a guide leg — requires the measured value to be regression-
-locked GREEN somewhere, and the module prints only the bin it trips on. So
-this pass added the instrument instead: `_print_model_fit_census` dumps all
-five bins (fit rel rms, `alpha_model`, both routes and their errors) before
-either test asserts. **Re-run `leontovich-alpha` 369367259292** and read the
-census:
+homework. So this pass added the instrument instead — `_print_model_fit_census`
+dumps all five bins before either test asserts — and pre-declared the two
+readings: only the 8 GHz bin over the gate would mean a strict-xfail plus a
+green regression lock on the profile; all five bins quadrupling would mean
+the attribution above is wrong and the fixture has a second effect to find.
 
-* if only the 8 GHz bin crossed 0.01 and the rest are near the 0.26-0.56 %
-  scout row, the honest state is a strict-xfail on the two O3 tests plus a
-  green regression lock on the five-bin residual profile — one commit, no
-  threshold moved;
-* if all five bins roughly quadrupled, the attribution above is wrong and the
-  fixture has a second effect to find before anything is pinned.
+### The census ran (369367259292) and it took the second branch
 
-Until that run is read the two tests stay RED, owned, and named here.
+```
+f (GHz)              8         9        10        11        12
+fit rel rms      0.01077   0.01125   0.01242   0.01283   0.01275
+  pre-#931       0.0056    0.0026    0.0033    0.0034    0.0038
+alpha_model      0.21850   0.44064   0.66558   0.85048   0.99253
+  pre-#931       0.21865   0.44116   0.66653   0.85158   0.99350
+alpha_Ez (err)   0.24582   0.49739   0.71565   0.86871   1.00285
+                 (12.50%)  (12.88%)  ( 7.52%)  ( 2.14%)  ( 1.04%)
+  pre-#931       0.23106   0.46383   0.69823   0.87370   1.01433
+                 ( 5.68%)  ( 5.14%)  ( 4.76%)  ( 2.60%)  ( 2.10%)
+alpha_Hy (err)   0.21631   0.42279   0.66187   0.87077   1.01482
+                 ( 1.00%)  ( 4.05%)  ( 0.56%)  ( 2.39%)  ( 2.25%)
+  pre-#931       0.23103   0.45586   0.67940   0.86829   1.00813
+                 ( 5.66%)  ( 3.33%)  ( 1.93%)  ( 1.96%)  ( 1.47%)
+```
+
+1. **Every bin is over the gate**, x1.9 to x4.3. "A marginal 8 GHz bin" was
+   an artefact of which assertion fires first. My round-4 attribution — one
+   bin's beat — is **FALSIFIED by the instrument I added to test it**.
+2. **The model did not move** (<= 0.1 % at every bin). It is analytic from
+   the declared stack and cannot see a realization change, so the
+   disagreement is between measurement and model, not inside the model.
+3. **The two extraction routes split.** Pre-#931 the Ez-midplane and
+   Hy-midplane fits agreed to four decimal places at 8 GHz (0.23106 vs
+   0.23103). They now read 0.24582 and 0.21631 — 13 % apart, moving in
+   OPPOSITE directions (Ez +6.4 %, Hy -6.4 %). The Hy route moved TOWARD the
+   model, to its best error ever recorded here (1.00 %); the Ez route moved
+   away, past the 9 % O3 gate it would have been scored against. Note also
+   that the Ez route's move is frequency-dependent (+6.4 % at 8 GHz, +7.2 %
+   at 9, +2.5 % at 10 — the last being exactly the envelope lock's re-pin),
+   so "the fixture moved" is not one scalar.
+
+Two extractors reading one run can only split like that if the field's
+spatial structure changed. That is a statement about this FIXTURE, and the
+comparator-first rule says find which route moved before touching anything.
+
+**R2 accounting: this is where the hypothesis stops.** One mechanism
+hypothesis (a stronger beat), one instrument, one run, falsified. The next
+action is not a third attempt at a pin — it is the named check:
+
+> Dump both fitted profiles at 8 GHz — the Ez midplane series and the Hy
+> midplane series the model is fitted on — against the pre-#931 record, and
+> say which one changed shape. The plates gained a node row in x (380 ->
+> 381) and in y (4 -> 5) under the closed footprint; the y guide is 2 mm
+> across, so a row there is a large fraction of the cross-section, and a
+> midplane extractor is exactly the thing a changed row count moves.
+
+Until that is done: both tests stay RED, `O3_FIELD_FIT_RMS_GATE` and
+`O3_MODEL_GATE` stay untouched, nothing in the module is re-pinned on the
+strength of this run, and the census table lives in the module beside the
+constant so the next reader starts from the measurement.
+
+The envelope re-pin from round 3 (`MEASURED_ALPHA_TWO_PLANE` 0.72494 ->
+0.87333, VESSL 369367259243) stands — it is a recorded measurement with its
+own green lock — but it should be read with point 3 above: it is the same
+fixture change seen through a two-sample extractor.
 
 ### Still open for other owners after this round
 
