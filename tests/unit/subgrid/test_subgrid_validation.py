@@ -479,11 +479,10 @@ def test_production_boundary_terminated_accepts_guarded_pec_at_interface():
 
     # Build-time (no solve): the realized top wall IS the interface plane,
     # which is the configuration this test says is guarded-acceptable.
-    from tests.unit._realized_geometry import realized, wall_positions
-    _, coords, edges, sheets, _ = realized(sim)
-    assert not sheets
-    zs = wall_positions(edges, coords, 2)
-    assert [round(z, 6) for z in zs] == [0.014, 0.016], zs
+    from tests._realized_geometry import assert_wall_planes, realized
+    assert not realized(sim).sheets, "this body is a volume"
+    assert_wall_planes(sim, 2, [0.014, 0.016],
+                       what="guarded PEC block at the subgrid interface")
 
     report = sim.validate_subgrid()
 

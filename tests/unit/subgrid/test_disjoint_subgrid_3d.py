@@ -150,7 +150,8 @@ def test_a_subgrid_interface_plane_is_in_no_realized_edge_set():
     the fields; this one asserts it on the geometry, before any step.
     """
     from rfx import Box, Simulation
-    from tests.unit._realized_geometry import realized, wall_positions
+    from tests._realized_geometry import (
+        assert_wall_planes, node_index, realized)
 
     dx = 2e-3
     sim = Simulation(freq_max=8e9, domain=(0.04, 0.04, 0.024),
@@ -160,12 +161,15 @@ def test_a_subgrid_interface_plane_is_in_no_realized_edge_set():
     sim.add_source((0.006, 0.006, 0.010), "ez")
     sim.add_probe((0.008, 0.006, 0.012), "ez")
 
-    _, coords, edges, sheets, _ = realized(sim)
-    assert not sheets
-    zs = [round(z, 6) for z in wall_positions(edges, coords, 2)]
-    assert zs == [0.004, 0.008], (
-        f"the body realizes walls at {zs}; the refinement z_range faces "
-        "(0.0 and 0.016) must not be among them")
+    assert not realized(sim).sheets
+    zs = assert_wall_planes(
+        sim, 2, [0.004, 0.006, 0.008],
+        what="PEC body inside a refined block")
+    interface_planes = {node_index(realized(sim).grid, 2, z)
+                        for z in (0.0, 0.016)}
+    assert not (set(zs) & interface_planes), (
+        f"realized wall planes {zs} include a refinement interface plane "
+        f"{sorted(interface_planes)}; an artificial interface is not a wall")
 
 
 def test_fine_interface_faces_are_not_clamped_as_pec_boundaries():

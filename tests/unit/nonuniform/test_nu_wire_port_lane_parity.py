@@ -204,13 +204,12 @@ def test_the_pec_plates_load_realizes_two_solid_plates(nu):
     Gamma = -1" described an object rfx did not build. This says what is
     built, without solving.
     """
-    from tests.unit._realized_geometry import realized, wall_positions
+    from tests.unit._nu_lane_shim import wall_planes_m
 
     extent = 5e-3
-    _, coords, edges, sheets, _ = realized(_build(nu, extent=extent,
-                                                  load="pec_plates"))
-    assert not sheets, "the plates are volumes"
-    zs = wall_positions(edges, coords, 2)
+    rz, zs = wall_planes_m(_build(nu, extent=extent, load="pec_plates"), 2,
+                           nonuniform=nu)
+    assert not rz.sheets, "the plates are volumes"
     lower = [PORT_Z - 2 * DX, PORT_Z - DX]
     upper = [PORT_Z + extent + DX, PORT_Z + extent + 2 * DX]
     want = lower + upper

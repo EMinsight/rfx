@@ -13,7 +13,9 @@ import numpy as np
 import pytest
 
 from rfx import Box, Simulation
-from tests.unit._realized_geometry import assert_volume_spans
+from tests.unit._nu_lane_shim import wall_planes_m
+
+
 
 
 def _profile_with_jump(n_total=40, d=250e-6):
@@ -70,9 +72,14 @@ def test_under_resolution_uses_the_local_cell_not_the_global_minimum():
     # position dependent on where the box fell between two cell centres.
     sim.add(Box((3.0e-3, 3.0e-3, 3.0e-3), (4.5e-3, 4.5e-3, 4.5e-3)),
             material="pec")
-    # Build-time (no solve): what preflight is about to score is what
-    # the lattice realizes — walls at BOTH drawn planes (#931 §1.2).
-    assert_volume_spans(sim, 3.0e-3, 4.5e-3)
+    # Build-time (no solve): what preflight is about to score is what the
+    # lattice realizes — walls at BOTH drawn planes on every axis (§1.2).
+    for axis in range(3):
+        rz, pos = wall_planes_m(sim, axis, nonuniform=True)
+        assert not rz.sheets, "this body is a VOLUME"
+        assert abs(min(pos) - 3.0e-3) < 1e-9 and abs(max(pos) - 4.5e-3) < 1e-9, (
+            f"axis {'xyz'[axis]}: realized walls span "
+            f"[{min(pos)*1e3:.4f}, {max(pos)*1e3:.4f}] mm, drawn [3.0, 4.5] mm")
     msgs = [str(a) for a in sim.preflight()]
     under = [m for m in msgs if "under-resolved" in m or "under-resolution" in m]
     assert under, (

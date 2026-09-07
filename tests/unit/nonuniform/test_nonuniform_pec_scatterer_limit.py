@@ -45,6 +45,9 @@ from rfx.api import Simulation
 from rfx.auto_config import smooth_grading
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
+from tests.unit._nu_lane_shim import wall_planes_m
+
+
 
 _A, _B, _FMAX = 0.02286, 0.01016, 12e9
 _FREQS = jnp.linspace(8.2e9, 12.4e9, 5)
@@ -116,16 +119,14 @@ def test_the_iris_realizes_the_fins_where_they_are_drawn(nonuniform):
     plane off; this is what says the two lanes rasterize the same obstacle
     before either of them is asked to reflect off it.
     """
-    from tests.unit._realized_geometry import realized, wall_positions
-
     dx = 1.5e-3
     nx = int(round(0.100 / dx))
     xc = 0.5 * nx * dx
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        _, coords, edges, sheets, _ = realized(_iris_sim(nonuniform=nonuniform))
-    assert not sheets, "the fins are volumes, not sheets"
-    xs = wall_positions(edges, coords, 0)
+        sim = _iris_sim(nonuniform=nonuniform)
+        rz, xs = wall_planes_m(sim, 0, nonuniform=nonuniform)
+    assert not rz.sheets, "the fins are volumes, not sheets"
     assert len(xs) == 2, f"expected two fin wall planes, got {xs}"
     assert abs(min(xs) - (xc - 0.5 * dx)) < 1e-9
     assert abs(max(xs) - (xc + 0.5 * dx)) < 1e-9

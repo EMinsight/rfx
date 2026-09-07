@@ -322,13 +322,11 @@ def test_simulation_adi_internal_pec_geometry_masks_ez():
     sim.add_probe((0.01, 0.01, 0.0), "ez")
 
     # Build-time (no solve): drawn extent == realized extent in x and y.
-    from tests.unit._realized_geometry import realized, wall_positions
-    _, coords, edges, sheets, _ = realized(sim)
-    assert not sheets
+    from tests._realized_geometry import assert_wall_planes, realized
+    assert not realized(sim).sheets
     for axis in (0, 1):
-        pos = wall_positions(edges, coords, axis)
-        assert abs(min(pos) - 0.008) < 1e-9 and abs(max(pos) - 0.012) < 1e-9, (
-            f"axis {'xy'[axis]}: realized walls {pos}, drawn [0.008, 0.012]")
+        assert_wall_planes(sim, axis, [0.008, 0.010, 0.012],
+                           what=f"2-D ADI interior PEC body, {'xy'[axis]}")
 
     result = sim.run(n_steps=20)
 
