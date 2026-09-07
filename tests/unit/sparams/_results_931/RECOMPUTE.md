@@ -137,6 +137,53 @@ is, so the branch must be committed before submitting.
   regenerate the anchor → re-derive SENS/TOL. Steps 1 and 2 are outside this
   group.
 
+## R8 — `test_lumped_twoport_vi_validation_battery.py` slow_physics gates
+
+* Consumers: `test_thru_s11_floor`, `test_thru_s21_band_locks_shipped_decomposer_envelope`,
+  `test_thru_s21_phase_band_is_sign_sensitive`, `test_thru_reciprocity`,
+  `test_thru_passivity_singular_values` — all `@pytest.mark.slow_physics`,
+  all fed by the module-scoped `thru_smatrix` fixture (one ~70 s solve).
+* Why: the air-microstrip trace was a one-cell PEC Box, i.e. 0.5 mm of solid
+  metal on a 1.0 mm ground-to-trace gap. It is a sheet now. The realized
+  footprint does NOT move (17.0 x 5.0 mm, drawn, both before and after, and
+  also under the pre-#931 rule). What moves is the port normalization: the
+  port declares `extent = 1.0 mm`, exactly the gap, and `_wire_port_cells`
+  rasterizes that endpoint-inclusive into THREE Ez edges, the third spanning
+  1.0 -> 1.5 mm, above the trace. The volume trace shorted that surplus edge
+  and the port counted 2 live cells; a foil does not, so `n_live` is 3 and
+  `Z0_cell = Z0/n_live` goes Z0/2 -> Z0/3.
+* **The gate BOUNDS are untouched.** What needs re-measuring is whether they
+  still hold; if one does not, that is a result to report, not a bound to widen
+  (the file's own tripwire protocol: "fail LOUDLY on the convention change,
+  re-measure in the same PR").
+* Command: `JAX_PLATFORMS=cpu python -m pytest
+  tests/unit/sparams/test_lumped_twoport_vi_validation_battery.py -q -s
+  -m slow_physics`
+* Cost: cpu-min (~70 s thru + the DC anchor), 2 solves.
+* **BLOCKED, deliberately.** The surplus live edge is a defect in the port's
+  endpoint-inclusive extent rasterization that the volume trace was hiding. It
+  belongs to the wire-port lane, and re-measuring the battery before it is
+  settled would pin numbers taken with a port that is one edge too long. Order:
+  settle `_wire_port_cells`' endpoint rule -> re-measure -> re-record the
+  measured provenance in the module docstring.
+
+## R9 — the openEMS referee's copy of the fixture's realized board
+
+* Consumer: `tests/unit/sparams/test_probe_fed_msl_referee_contract.py::test_referee_record_still_describes_the_fixture_it_names`
+  (build-time, `xfail(strict=True)`).
+* Producer: `scripts/diagnostics/probe_fed_msl_openems_referee.py` —
+  `RFX_REALIZED_RECORD` and `rfx_node_index`, both measured on the pre-#931
+  `test_mixed_port_sparam` board (dx = 80 um, h_sub realized 320 um, trace
+  480-560 um). That fixture is on-lattice now with a sheet foil: dx = h_sub/3,
+  h_sub realized 254 um exactly, trace 508-592.67 um.
+* **No solve.** Every number is a grid build, and no shipped test in the file
+  depends on a physics value (the contract tests are arithmetic and structure).
+  Replacement text with all of them:
+  `docs/design_notes/931_migration/T2-probe_fed_msl_openems_referee.md`.
+* Separately, and NOT a VESSL job: the referee's Stage-1 reproduce legs need
+  re-running against the new board before it is next used as a comparator.
+  openEMS is not installed on this pod; that is an openEMS run, not an rfx one.
+
 ---
 
 ## Note on `dx = h_sub/3` vs `h_sub/4`

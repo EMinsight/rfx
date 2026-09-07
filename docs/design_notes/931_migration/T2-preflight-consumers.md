@@ -78,3 +78,56 @@ because contact means a dead end cell" — no longer holds, and the control
 asserts that BOTH are silent on a correct galvanic feed. That is the #929
 finding in miniature: a feed that reaches its ground is correct geometry, and
 the remedy text must never tell a user to move it off.
+
+---
+
+## 3. Two findings a correctly-declared sheet provokes today
+
+Added 2026-09-07 from `tests/unit/sparams/test_lumped_twoport_vi_validation_battery.py`,
+whose air-microstrip THRU trace became a sheet on this branch. Its preflight
+report is now three findings where the contract says one
+(`pec_faces_finite_pec`, intended — the infinite ground plane IS the microstrip
+return). The extra two are preflight's, and the test that pins the
+one-finding set is `test_thru_preflight_code_set_is_the_contract_set`,
+`xfail(strict=True)` with both quoted.
+
+### 3a. `mesh_resolution` tells the user to un-declare their sheet
+
+Verbatim:
+
+> Zero-thickness geometry 'pec' along z-axis. On non-uniform mesh this may
+> produce empty rasterization. Consider giving it at least one cell of
+> thickness (500µm).
+
+Under §1.5 a zero-thickness PEC Box **is** the sheet declaration — "zero
+thickness is a statement of intent, not an inference" — and it does not
+rasterize to nothing: it realizes one wall plane. Following the remedy turns a
+foil into a one-cell metal slab, which for this fixture is 0.5 mm of solid
+metal on a 1.0 mm ground-to-trace gap. The advisory is exactly backwards now.
+
+Replacement: fire only for a zero-thickness NON-PEC (dielectric) shape, whose
+node-half-open sampling genuinely can produce an empty region. For a PEC shape
+the zero-extent axis is a declaration; if anything is worth saying it is the
+`sheet_plane_realized` NOTICE from §3 (declared plane, realized plane, offset),
+not a thickness remedy.
+
+### 3b. The uncoded sheets-dropped warning is preflight's own assemble call
+
+Verbatim:
+
+> `_assemble_materials` (uniform lane): PEC sheets/wires were classified but
+> the caller passed no pec_sheets/pec_wires collector, so they are absent from
+> the returned pec_mask (a sheet owns no cell, #931 §1.3). A caller that steps
+> fields must pass collectors and realize them with
+> `rfx.boundaries.pec.realized_pec_edge_masks`.
+
+This is the warning working as designed, aimed at preflight itself (design note
+§6, "preflight's own `_assemble_materials(grid)` calls take the sheets-dropped
+warning"). It reaches the user's report as an uncoded finding, so every
+sheet-declared board preflights with a warning about preflight's internals.
+
+Replacement: pass the collectors at the three call sites (`_preflight.py:566`,
+`1880`, `4883`) and realize the edges from them. Until then it should at least
+not be surfaced as a finding — it is not an input-fidelity statement about the
+user's geometry, which is what preflight is for
+(`feedback_preflight_input_fidelity_only`).
