@@ -628,6 +628,33 @@ def _model_fits(out):
     return _cache["model_fits"]
 
 
+def _print_model_fit_census(out):
+    """R5 census for the O3 pair — every bin, both routes, printed BEFORE
+    any assertion (2026-09-07, #931).
+
+    The two O3 tests both trip on the trust precondition at ONE bin and
+    say so with one number, which is not enough to tell "the model got
+    worse everywhere" from "one bin moved". This prints the whole table
+    so the next reader classifies by inspection instead of by argument.
+    Printed once per session; the fits themselves are cached."""
+    if _cache.get("census_printed"):
+        return
+    _cache["census_printed"] = True
+    fits = _model_fits(out)
+    print(f"\n[LEONTOVICH/O3-CENSUS] gate: fit trust <= "
+          f"{O3_FIELD_FIT_RMS_GATE}, model err <= {O3_MODEL_GATE}; "
+          f"settle {out['settle_db']:.1f} dB")
+    print("[LEONTOVICH/O3-CENSUS]  f(GHz)  fit_rel_rms  alpha_model  "
+          "alpha_Ez  err_Ez   alpha_Hy  err_Hy")
+    for fi, (f, ft) in enumerate(zip(O3_FREQS, fits)):
+        a_model = ft["alpha_model"]
+        a_ez = out["alpha"][fi]
+        a_hy = ft["alpha_meas"]
+        print(f"[LEONTOVICH/O3-CENSUS]  {f/1e9:5.1f}   {ft['rel_resid']:10.5f}  "
+              f"{a_model:10.5f}  {a_ez:8.5f}  {abs(a_ez/a_model-1):6.2%}  "
+              f"{a_hy:8.5f}  {abs(a_hy/a_model-1):6.2%}")
+
+
 @pytest.mark.slow_physics
 def test_o3_model_fits_measured_field():
     """FIELD-FIT self-check for the #700 model comparator (house rule,
@@ -639,6 +666,7 @@ def test_o3_model_fits_measured_field():
     supermode} IS the mechanism statement of #700: the fitted alpha is a
     two-mode transient, not an eigenvalue."""
     out = _base()
+    _print_model_fit_census(out)
     for f, ft in zip(O3_FREQS, _model_fits(out)):
         assert ft["rel_resid"] <= O3_FIELD_FIT_RMS_GATE, (
             f"model fit degraded at {f/1e9:.0f} GHz: rel rms "
@@ -664,6 +692,7 @@ def test_alpha_oracle_o3():
     Envelope provenance for O3_MODEL_GATE: see O3 MODEL RE-PAIR in the
     module docstring."""
     out = _base()
+    _print_model_fit_census(out)
     assert not any("PreflightError" in w for w in out["warnings"])
     assert out["settle_db"] < -40.0, out["settle_db"]
     for fi, (f, ft) in enumerate(zip(O3_FREQS, _model_fits(out))):
