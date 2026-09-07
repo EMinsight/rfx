@@ -301,6 +301,34 @@ envelope, not here.
       ~0.0005. The RUN RESULT table above was measured WITH the trim and is
       superseded by the post-#931 run.
 
+      MEASURED AFTER THE FACT (VESSL 369367259194, this branch, against
+      baseline 369367259004 on origin/main d990e18c with the trim). The
+      prediction in (a) — that the pec-short |S11| envelope would TIGHTEN —
+      is FALSIFIED. Reported verbatim, pass and fail together:
+
+                                          baseline (trim)   post (no trim)
+        pec-short |S11| max_diff              0.0146           0.0560
+        pec-short round-trip phase max        9.99 deg        17.20 deg
+        pec-short vs conj(MEEP) angle        27.12 deg        10.98 deg
+        slab S11 angle                       13.60 deg         8.79 deg
+        slab S11 vs conj(MEEP) angle         25.37 deg        18.58 deg
+        empty S11/S21, slab S21              identical        identical
+
+      Every PHASE leg improved, two of them by more than 2x including the
+      one against an EXTERNAL solver; the pec-short MAGNITUDE leg got worse
+      and crossed its 0.050 gate, taking the internal 15 deg round-trip
+      phase gate with it. Those two runs differ by two things — the trim and
+      the whole #931 core — so the magnitude step is NOT attributed here.
+      `scripts/diagnostics/cv11_aperture_trim_ab.py` (VESSL 369367259198)
+      runs both arms on one checkout with the trim as the only variable.
+      What does not depend on that A/B: the untrimmed port solves the guide
+      the walls actually make (23 cells, 6.512162 GHz) and the trimmed one a
+      22-cell guide (6.807677 GHz), so the trim cannot be defended as the
+      right aperture whatever the magnitude leg does. If the trim owns the
+      step, the finding is that the CORRECT aperture exposes an
+      aperture-weighting defect at the PEC walls that the wrong one masked —
+      #729's subject, not a reason to restore a compensation.
+
   (b) THE PEC SHORT STAYS A VOLUME, and its walls are now asserted. It is
       a 2 mm metal plug across the guide — the Meep and openEMS legs this
       case is byte-matched against terminate with metal — so under the

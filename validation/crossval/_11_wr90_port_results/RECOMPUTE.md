@@ -75,6 +75,30 @@ vessl run create -f scripts/vessl_931_xb/post-cv11.yaml        # from a non-git 
    deleting the trim restores `u_hi == u_grid_size`, which re-enables the
    PEC-ghost aperture-weight zeroing the 2026-04-27 DROP-weight fix depends
    on. An envelope that does NOT tighten falsifies that mechanism.
+
+   **MEASURED — (1) IS FALSIFIED.** Run 369367259194 against baseline
+   369367259004, both against the same committed reference tables:
+
+   | leg | baseline (trim) | post (no trim) |
+   |---|---|---|
+   | pec-short `|S11|` max_diff | 0.0146 | **0.0560** (gate 0.050) |
+   | pec-short round-trip phase | 9.99° max / 6.16° mean | **17.20° / 9.71°** (gate 15°) |
+   | pec-short vs conj(MEEP) `∠S` | 27.12° / 22.26° | **10.98° / 6.81°** |
+   | slab S11 `∠S` | 13.60° / 11.71° | **8.79° / 6.08°** |
+   | slab S11 vs conj(MEEP) `∠S` | 25.37° / 21.67° | **18.58° / 16.03°** |
+   | empty S11/S21, slab S21 | — | identical |
+
+   Every phase leg improved, two by more than 2× including the external one;
+   the pec-short magnitude leg got worse and crossed its gate, taking the
+   internal round-trip phase gate with it. The two runs differ by TWO things
+   (the trim, and the whole #931 core), so the step is NOT attributed:
+   `scripts/diagnostics/cv11_aperture_trim_ab.py` (run **369367259198**)
+   isolates the trim on one checkout. Independent of that A/B, the untrimmed
+   port solves the guide the walls make (23 cells, 6.512162 GHz) and the
+   trimmed one a 22-cell guide (6.807677 GHz), so the trim is not defensible
+   as the right aperture. A PI decision is wanted on whether cv11 ships with
+   the correct aperture and two failing legs, or the trim is restored while
+   #729 fixes the aperture weighting; the revert is one hunk in `_build_sim`.
 2. The round-trip phase leg stays near 3.26° max / 1.45° mean: its reference
    cutoff error is unchanged at −0.080 %, and the reflection plane did not
    move.
