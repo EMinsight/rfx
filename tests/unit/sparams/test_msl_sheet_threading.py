@@ -212,42 +212,53 @@ def _settled(tag):
 # --------------------------------------------------------------------------
 
 @pytest.mark.slow
-def test_o1_no_sheet_identity_vs_13de212_golden():
+def test_o1_no_sheet_identity_vs_931_golden():
     """With NO f0 sheet registered, the lane's S is byte-identical to the
     committed golden.
 
-    #931 RECAPTURE PENDING. The 13de212 golden is a record of a board
-    this tree no longer builds: the trace was a one-cell PEC Box on a
-    bisecting mesh (dx = 80 um, h_sub/dx = 3.175, single wall at node 4)
-    and it is now a sheet on an on-lattice board (dx = h_sub/3, wall at
-    node 3 = 254 um). Both the realization and the mesh moved, so byte
-    identity against the old file cannot hold and must not be relaxed
-    into a tolerance -- the file is re-captured from the same procedure on
-    the post-contract tree and the old one kept as pre-#931 history. The
-    capture command and the VESSL run are recorded in
-    ``tests/unit/sparams/_results_931/RECOMPUTE.md``; until that lands
-    this test fails against the stale golden, which is the correct
-    reading of "the geometry changed".
-
-    Provenance of the file being replaced: the golden pair
-    ``tests/fixtures/golden_msl_sheet_thread_{s,freqs}_13de212.npy`` was
-    produced on 2026-08-19 from a pristine detached worktree of commit
-    13de212 (the #677/#678 merge, the parent of the #679 change), running
-    THIS module's ``build_msl_thru(sheet=None)`` fixture with
+    The golden is ``golden_msl_sheet_thread_{s,freqs}_931.npy``, captured on
+    the post-#931 board: the trace is a zero-thickness sheet on the laminate
+    face and the mesh is on-lattice (dx = h_sub/3 = 84.667 um, h_sub/dx = 3,
+    one wall plane at node 3 = 254 um, the conductor owns no cell). The
+    procedure is this module's own ``build_msl_thru(sheet=None)`` followed by
     ``compute_msl_s_matrix(freqs=FREQS, num_periods=12.0)`` on CPU
-    (JAX_PLATFORMS=cpu, float32 default precision, jax 0.8.x, linux
-    x86-64). Two consecutive captures were np.array_equal (deterministic),
-    and the post-change worktree reproduced the capture byte-exactly
-    (max dev 0.0) before this file was committed. The removed fence ran
-    BEFORE any physics on the no-sheet path and was a no-op there, so any
-    drift here means the #679 edit touched the sheet-free lane — exactly
-    what this oracle forbids. Byte identity is the gate on the capture
-    platform (same BLAS/JAX build); cross-platform float drift would show
-    up here as a tiny nonzero max-dev — investigate before touching the
-    gate (no-silent-gate-loosening rule).
+    (JAX_PLATFORMS=cpu, float32 default precision), captured twice and written
+    only when the two captures were byte-equal. Producer:
+    ``tests/unit/sparams/_results_931/capture_msl_sheet_thread_golden.py``,
+    VESSL run 369367259234 (2026-09-07, preset gpu-rtx4090, JAX_PLATFORMS=cpu,
+    rc=0). Determinism as measured: max |cap0 - cap1| = 0.0,
+    settling_db = [-95.72, -103.10] on both captures.
+
+    PRE-#931 HISTORY, kept beside it and NOT loaded by any test:
+    ``golden_msl_sheet_thread_{s,freqs}_13de212.npy``, produced 2026-08-19
+    from a pristine detached worktree of commit 13de212 (the #677/#678 merge,
+    the parent of the #679 change) by the same procedure. It records a board
+    this tree no longer builds -- the trace was a one-cell PEC Box (a VOLUME
+    under #931 §1.2, i.e. 80 um of solid metal where the board carries 35 um
+    of foil) on a bisecting mesh (dx = 80 um, h_sub/dx = 3.175, single wall at
+    node 4, substrate realized 320 um instead of 254 um). Both the realization
+    and the mesh moved, so byte identity against that file cannot hold and was
+    NOT relaxed into a tolerance; the file was re-captured instead.
+
+    What the recapture measured, against the pre-#931 file (REPORTED, not
+    gated -- one solve): ``max |new - old| = 0.1128``, and the reflection fell
+    by about 5.6-6x across the band -- |S11| goes from 0.01007 ... 0.09705
+    (pre-#931) to 0.00178 ... 0.01624 (post). That is the direction and the
+    size the geometry implies: the old board mismatched its own 50 ohm port by
+    realizing 254 um of substrate as 320 um (+26 %) and 35 um of foil as an
+    85 um slab; the new board realizes 254 um exactly under a foil of no
+    thickness. The frequency grid is unchanged between the two files.
+
+    The oracle itself is unchanged: the removed #679 fence ran BEFORE any
+    physics on the no-sheet path and was a no-op there, so any drift here
+    means the sheet-threading edit touched the sheet-free lane -- exactly what
+    this test forbids. Byte identity is the gate on the capture platform (same
+    BLAS/JAX build); cross-platform float drift would show up as a tiny
+    nonzero max-dev -- investigate before touching the gate
+    (no-silent-gate-loosening rule).
     """
-    golden_s = np.load(_FIXTURES / "golden_msl_sheet_thread_s_13de212.npy")
-    golden_f = np.load(_FIXTURES / "golden_msl_sheet_thread_freqs_13de212.npy")
+    golden_s = np.load(_FIXTURES / "golden_msl_sheet_thread_s_931.npy")
+    golden_f = np.load(_FIXTURES / "golden_msl_sheet_thread_freqs_931.npy")
     result, _ = _settled("off")
     S = np.asarray(result.S)
     np.testing.assert_array_equal(np.asarray(result.freqs), golden_f)
@@ -258,7 +269,7 @@ def test_o1_no_sheet_identity_vs_13de212_golden():
     print(f"[O1] max |S - golden| = {max_dev:.3e}")
     assert S.dtype == golden_s.dtype, (S.dtype, golden_s.dtype)
     assert np.array_equal(S, golden_s), (
-        f"no-sheet MSL S drifted from the 13de212 golden (max dev "
+        f"no-sheet MSL S drifted from the #931 golden (max dev "
         f"{max_dev:.3e}) — the #679 change must be a no-op without sheets")
 
 

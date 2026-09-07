@@ -399,14 +399,22 @@ def test_reported_only_dx80_leg_is_labelled_and_not_the_comparator(ref):
 # (#931). Both checks below are build-time, no openEMS and no solve.
 # ---------------------------------------------------------------------------
 @pytest.mark.xfail(
-    reason="scripts/diagnostics/probe_fed_msl_openems_referee.py is not this "
-           "group's file. Its RFX_REALIZED_RECORD and rfx_node_index were "
+    reason="the referee's RFX_REALIZED_RECORD and rfx_node_index were "
            "measured on the pre-#931 fixture (dx = 80 um, h_sub realized "
            "320 um, trace 480-560 um); the fixture is now on-lattice at "
-           "dx = h_sub/3 with the foil declared as a sheet. Replacement "
-           "text: docs/design_notes/931_migration/"
+           "dx = h_sub/3 = 84.667 um with the foil declared as a sheet. "
+           "ATTEMPTED at the phase-2b ingest and BACKED OUT, with the "
+           "reason measured: refreshing the record's numbers alone is not "
+           "enough. Every plane of record (1.44, 1.76, 2.00, 2.24, 2.80, "
+           "3.60, 4.08, 4.40, 4.72 mm) is an exact multiple of 80 um and "
+           "NONE is a multiple of 84.667 um, so the referee's own "
+           "plane_on_grid self-check fails on all of them and the Stage-2 "
+           "mesh has to be re-planned, not re-typed -- a comparator design "
+           "decision plus an openEMS Stage-1/Stage-2 re-run, neither of "
+           "which is available on this pod. Replacement text and the "
+           "measured tables: docs/design_notes/931_migration/"
            "T2-probe_fed_msl_openems_referee.md. Pre-declared falsifier for "
-           "that edit: this goes green and the xfail comes off.",
+           "that work: this goes green and the xfail comes off.",
     strict=True,
 )
 def test_referee_record_still_describes_the_fixture_it_names(ref):

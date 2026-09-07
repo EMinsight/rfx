@@ -91,3 +91,33 @@ PREDECLARATION blocks get. `--dx-divisor 1` reproduces the battery fixture and
 its recorded `sv_max = 1.003227`; that value is measured on the pre-contract
 trace, so the note's gate G1 needs re-declaring against the new run rather than
 being carried across.
+
+---
+
+## APPLIED 2026-09-07 (phase 2b ingest) — with two corrections
+
+The declaration edit and the record keys went in as written above. Two
+statements in this note did not survive contact with the build, and the script
+carries the measured version instead:
+
+1. **`finite_pec_cells` does not go to 0, it goes to -1.** With the trace a
+   sheet there is no volume conductor left on this fixture at all, so the
+   assembler returns no cell mask and the key reads its long-standing
+   absent sentinel. The key is kept (a reader must be able to see that it went
+   away rather than find it missing) and the script's docstring says which
+   value means what.
+
+2. **The footprint node count does NOT scale dx⁻² exactly.** It is a NODE
+   count, `(Nx + 1)(Ny + 1)`, where the cell count was `Nx · Ny`. Measured,
+   build only, at the three rungs: `sheet_footprint_nodes` 385 / 1449 / 5617
+   (= 35·11 / 69·21 / 137·41) against the old `finite_pec_cells`
+   340 / 1360 / 5440 (= 34·10 / 68·20 / 136·40). Ratios 3.76 and 3.88, not 4.
+   G4 must be restated on that identity — dx⁻² asymptotically, with the rim
+   node the exact law does not have — not on a claimed exact quartering.
+
+Also measured, build only, and confirming the wire-port half of the note: at
+all three rungs `n_cells = 2 / 4 / 8`, `n_live = 2 / 4 / 8`, every flag True.
+The two `wire_port_dead_extent_cells` advisories are gone and
+`sheet_plane_realized` (offset +0.000 cell at every rung — the trace plane is a
+node line at 2 / 4 / 8 cells) takes their place, so `BATTERY_CODES` is now
+`["pec_faces_finite_pec", "sheet_plane_realized"]`.

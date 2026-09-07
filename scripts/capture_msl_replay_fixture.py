@@ -36,7 +36,13 @@ H_SUB = 254e-6
 W_TRACE = 600e-6
 L_LINE = 10e-3
 PORT_MARGIN = 2e-3
-DX = 80e-6
+# ON-LATTICE board (#931 §1.3): h_sub / dx = 3 exactly, so the laminate face IS
+# a node line and the foil sheet below lands on it with no snap. This mirrors
+# tests/unit/sparams/test_msl_port_integration.py, which the fixture is a
+# replay of; it ran at dx = 80 µm (h_sub/dx = 3.175) until the contract, where
+# a sheet declared at H_SUB would snap to node 3 (240 µm), buried inside a
+# dielectric the same mesh realizes 320 µm thick.
+DX = H_SUB / 3
 F_MAX = 5e9
 LX = L_LINE + 2 * PORT_MARGIN
 LY = W_TRACE + 2 * (2 * H_SUB + 8 * DX)
@@ -67,8 +73,13 @@ def _build_sim() -> Simulation:
     y_centre = LY / 2.0
     trace_y_lo = y_centre - W_TRACE / 2.0
     trace_y_hi = y_centre + W_TRACE / 2.0
+    # 35 µm copper foil: a SHEET (#931 §1.3), declared by a zero-thickness Box
+    # on the laminate face. Realized as ONE wall plane with the normal Ez left
+    # live. One cell thick it is a VOLUME — walls at both z faces and the Ez
+    # between them shorted, i.e. 85 µm of solid metal where the board carries
+    # 35 µm of foil.
     sim.add(
-        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + DX)),
+        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB)),
         material="pec",
     )
     sim.add_msl_port(
@@ -231,12 +242,28 @@ def _compute_numpy_f64_golden_s1(
         ))
 
     # Analytic Z0 per port (same logic as compute_msl_s_matrix).
-    _msl_assembled = sim_ref._assemble_materials(grid, pec_sheets=[], pec_wires=[])
-    _msl_materials = _msl_assembled[0]
-    _msl_pec_mask = (
-        None if _msl_assembled[3] is None
-        else np.asarray(_msl_assembled[3])
+    # #931 §1.9: the trace is located by its REALIZED wall planes, not by a
+    # pec_mask CELL scan — a sheet-declared trace owns no cell, so the old
+    # scan below found nothing and raised "No PEC trace for port 'msl_0'"
+    # (VESSL run 369367259282). The collectors are the assembler's, and the
+    # edge masks come from the single owner, exactly as
+    # rfx/api/_sparams.py::compute_msl_s_matrix builds them — this replica
+    # must not grow a second spelling of the trace search.
+    from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+    from rfx.probes.msl_wave_decomp import (
+        realized_trace_planes_on_column as _trace_planes,
     )
+    _msl_pec_sheets: list = []
+    _msl_pec_wires: list = []
+    _msl_assembled = sim_ref._assemble_materials(
+        grid, pec_sheets=_msl_pec_sheets, pec_wires=_msl_pec_wires)
+    _msl_materials = _msl_assembled[0]
+    _msl_periodic = sim_ref._periodic_flags()
+    _msl_pec_edge_masks = None
+    if (_msl_assembled[3] is not None or _msl_pec_sheets or _msl_pec_wires):
+        _msl_pec_edge_masks = _rpem(
+            _msl_assembled[3], sheets=tuple(_msl_pec_sheets),
+            wires=tuple(_msl_pec_wires), periodic=_msl_periodic)
     z0_hj_per_port: list[float] = []
     trace_k_per_port: list[tuple[int, int]] = []
     for p_idx, pe in enumerate(entries):
@@ -252,19 +279,19 @@ def _compute_numpy_f64_golden_s1(
         z0_hj, _ = hammerstad_jensen_z0_eps_eff(pe.width, pe.height, eps_r_ref)
         z0_hj_per_port.append(float(z0_hj))
 
-        # Trace k span (same as compute_msl_s_matrix).
+        # Trace planes (same owner as compute_msl_s_matrix). The MSL lane's
+        # substrate normal is always z, so normal_idx = 2 and the column is
+        # (i_feed, j_centre).
         i_feed_p = _msl_yz_cells(grid, msl_ports[p_idx])[0][0]
-        col = (
-            None if _msl_pec_mask is None
-            else _msl_pec_mask[i_feed_p, meta["j_centre"], meta["k_top"]:]
-        )
-        k_pec = np.array([], dtype=int) if col is None else np.where(col)[0]
-        if k_pec.size == 0:
-            raise RuntimeError(f"No PEC trace for port {entries[p_idx].name!r}")
-        trace_k_per_port.append((
-            int(meta["k_top"] + int(k_pec.min())),
-            int(meta["k_top"] + int(k_pec.max())),
-        ))
+        _k_lo_tr, _k_hi_tr = _trace_planes(
+            _msl_pec_edge_masks, 2, (int(i_feed_p), int(meta["j_centre"])),
+            meta["k_top"], periodic=_msl_periodic)
+        if _k_lo_tr is None:
+            raise RuntimeError(
+                f"No realized PEC trace above the substrate top for port "
+                f"{entries[p_idx].name!r} — the closed Ampere-loop current "
+                f"needs it (#931 §1.9)")
+        trace_k_per_port.append((int(_k_lo_tr), int(_k_hi_tr)))
 
     S = np.zeros((n_ports, n_ports, n_freqs), dtype=np.complex128)
     wave_a: list[list] = [[None] * n_ports for _ in range(n_ports)]
