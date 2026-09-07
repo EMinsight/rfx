@@ -153,6 +153,34 @@ is, so the branch must be committed before submitting.
   this branch is removing. The replacement text for the script is in
   `docs/design_notes/931_migration/T2-capture_msl_replay_fixture.md`; the
   capture is a ~10 min CPU job once that lands.
+* **UNBLOCKED at the phase-2b ingest.** The script edit is applied
+  (`b1c19a27`): the trace is a zero-thickness Box on the laminate face and the
+  board is on-lattice at `DX = H_SUB / 3`. Verified build-only after the edit:
+  `dx = 84.667 µm`, `h_sub/dx = 3.0`, grid `(183, 53, 30)`, sheet planes
+  `{2: [3]}`, wall planes z `[3]`.
+* **VESSL run 369367259282 FAILED** (rc=1). It wrote the accumulators and then
+  died computing the f64 golden:
+  `RuntimeError: No PEC trace for port 'msl_0'`.
+  Cause, verified: `_compute_numpy_f64_golden_s1` carried a HAND-COPY of the
+  old trace search — a scan up the port's centre column of the `pec_mask` CELL
+  array — while production had already moved to
+  `realized_trace_planes_on_column` on the realized edge masks (§1.9). A
+  sheet-declared trace owns no cell, so the copy found nothing. Fixed in
+  `d3f9…` (the replica now calls the same owner with the same collectors, so
+  there is one spelling of the trace search and not two). The accumulators that
+  run wrote are NOT ingested: the golden they pair with was never computed.
+* **VESSL run 369367259296** — resubmitted 2026-09-07 19:43 UTC after that fix.
+  Job `tests/unit/sparams/_results_931/rfx-931-post-msl-replay-fixture.yaml`,
+  preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`, expected ~10-15 min.
+  Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-msl-replay-fixture-<ts>/`
+  (`capture.log`, `realized.log`, `produced/tests/fixtures/msl_replay_*`).
+  **What to do with it:** copy both files
+  (`msl_replay_accumulators.npz`, `msl_replay_golden_f64.npy`) from
+  `produced/tests/fixtures/` onto the branch, keep the pre-#931 pair beside
+  them as history, and re-pin `tests/unit/autodiff/test_msl_sparam_ad.py`
+  (group T1's file) in the SAME commit — its numbers move with the board. The
+  capture prints the f32-vs-f64 max_abs_dev; quote it and the old/new pair in
+  the commit message.
 
 ## R5 — `tests/fixtures/thru_singular_value_dx_ladder/rung_dx_over_{1,2,4}.json`
      — BLOCKED on a script this group does not own
@@ -172,6 +200,40 @@ is, so the branch must be committed before submitting.
 * Replacement text for the script:
   `docs/design_notes/931_migration/T2-thru_singular_value_dx_ladder.md`.
 * Cost when unblocked: three runs, ~gpu-hour class at divisor 4.
+* **UNBLOCKED at the phase-2b ingest.** The script edit is applied
+  (`b1c19a27`): the trace is a zero-thickness Box on the trace plane, the rung
+  record gains `sheet_footprint_nodes` / `sheet_planes` / `n_sheets` read from
+  the sheet specs the assembler collects, and `BATTERY_CODES` becomes
+  `["pec_faces_finite_pec", "sheet_plane_realized"]`. Measured build-only at
+  all three rungs before submitting:
+
+  | rung | finite_pec_cells | sheet_footprint_nodes | sheet plane z | wire port n_cells / n_live |
+  |---|---|---|---|---|
+  | dx/1 | 340 → **-1** | (new) **385** = 35·11 | 2 (offset +0.000 cell) | 2 / 2, all live |
+  | dx/2 | 1360 → **-1** | (new) **1449** = 69·21 | 4 (offset +0.000 cell) | 4 / 4, all live |
+  | dx/4 | 5440 → **-1** | (new) **5617** = 137·41 | 8 (offset +0.000 cell) | 8 / 8, all live |
+
+  `finite_pec_cells` reads -1 (mask absent), not 0: with the trace a sheet
+  there is no volume conductor on this fixture at all. And the footprint node
+  count does NOT quarter exactly — it is `(Nx+1)(Ny+1)` against the old
+  `Nx·Ny`, so the ratios are 3.76 and 3.88, dx⁻² asymptotically with the rim
+  node the exact law does not have. **G4 must be restated on that identity**
+  when the rungs land, not on a claimed exact quartering (the replacement doc
+  said "exactly"; it is corrected there).
+* **VESSL runs 369367259285 (dx/1), 369367259286 (dx/2), 369367259287 (dx/4)**,
+  submitted 2026-09-07 19:18 UTC. GPU lane, same as the rungs' own history
+  (run 369367257803): `JAX_ENABLE_X64=0`, and each job REFUSES to start if
+  `jax.default_backend()` is not `gpu`, so a silent fall back to CPU cannot
+  produce a rung that is incomparable with its own record.
+  Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-thru-sv-ladder-dx{1,2,4}-<ts>/`
+  (`rung.log`, `produced/tests/fixtures/thru_singular_value_dx_ladder/rung_dx_over_{1,2,4}.json`).
+  **What to do with them:** commit the three JSONs from `produced/` as a NEW
+  record beside the frozen 369367257803 ones (a new record, never a value
+  edit), then re-pin
+  `tests/unit/sparams/test_thru_singular_value_dx_ladder_replay.py`'s G4 on
+  `sheet_footprint_nodes` with the `(Nx+1)(Ny+1)` law written down, and
+  re-declare G1 (`sv_max`, recorded 1.003227 on the pre-contract trace)
+  against the new dx/1 run rather than carrying the old value across.
 
 ## R6 — `tests/unit/sparams/test_coax_msl_transition.py` — a NEW attempt record
 
@@ -270,14 +332,20 @@ is, so the branch must be committed before submitting.
   settled would pin numbers taken with a port that is one edge too long. Order:
   settle `_wire_port_cells`' endpoint rule -> re-measure -> re-record the
   measured provenance in the module docstring.
-* **CLOSED 2026-09-07 with NO re-measure needed.** The endpoint rule is
-  settled: `_wire_port_cells` (and the non-uniform runner's own copy) make the
-  extent HALF-OPEN in edges, so 1.0 mm of extent on a 0.5 mm mesh is TWO Ez
-  edges and neither of them sits above the trace. Measured on this fixture,
+* **CLOSED 2026-09-07 with NO re-measure needed, and the core fix has landed.**
+  The endpoint rule is settled in `feat/931-lattice-ownership` commit
+  `6d66ac65` ("the wire-port extent is HALF-OPEN in edges — it drove one cell
+  past its declared end"), merged into this branch: `_wire_port_cells` (spelled
+  once in `wire_port_edge_span`) and the non-uniform and subgridded runners'
+  copies all make the extent half-open, so 1.0 mm of extent on a 0.5 mm mesh is
+  TWO Ez edges and neither sits above the trace. Measured on this fixture,
   build only: `cells = [(24, 28, 0), (24, 28, 1)]`, both live, `n_live = 2` —
-  the same normalization `Z0/2` the gates were measured at. The gates are not
-  crossing a convention change after all; they were only ever going to move
-  because the port was one edge too long.
+  the same normalization `Z0/2` the gates were measured at. Re-measured
+  independently on the dx ladder at all three rungs (R5's build check):
+  `n_cells = 2 / 4 / 8`, `n_live = 2 / 4 / 8`, every flag True, and the two
+  `wire_port_dead_extent_cells` advisories are gone. **There is no R8 xfail to
+  carry and no R8 gate to re-measure**; the `slow_physics` gates keep the
+  bounds and the normalization they were measured at.
 
 ## R9 — the openEMS referee's copy of the fixture's realized board
 
