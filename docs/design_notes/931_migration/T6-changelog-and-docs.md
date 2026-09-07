@@ -108,3 +108,51 @@ cells" while what it is really auditing is "is there metal where the shell
 should be". If that audit is ever re-pointed at `realized_wall_planes`, rename
 the check in the same change so the test's assertion keeps meaning what it says.
 No action is required for #931.
+
+## Added 2026-09-07 after the runs came back — three items for other owners
+
+The first post-contract runs falsified the "the boards realize identically, so
+the pins hold" claim. The cause was the #702 slot geometry, not the sheet
+declaration (details in `T6-RECOMPUTE.md`); the three boards are redrawn with
+each foil ON the laminate face it bounds. Three files T6 does not own follow
+from that.
+
+### A. `scripts/diagnostics/patch_edgefed_s11_band_repin.py` (scripts owner)
+
+It imports `_build_patch_sim()` from the gate module, so it follows the redraw
+for free — but its `retired` arm replaces
+`rfx.api._compile.resample_sheet_node_materials` with the identity, and this
+branch DELETES that function (design note §2). The script cannot run as
+written.
+
+The A/B it measured is also moot now, and that is the point worth recording
+rather than deleting: it asked "what does the #702 own-cell re-sample change on
+this board". With the board drawn so the laminate owns every cell of the
+cavity, there is no own cell to re-sample and both arms are the same build. The
+honest replacement is a DRAWING A/B — the board as drawn now against the board
+with a reserved vacuum cell — which is the same physics question asked in the
+declaration instead of in a monkeypatch. Its expected size is on the record:
+preflight's #703 check reads +84.5 % on `sum(d/eps)` for the reserved-cell
+board (Board H) and +45.9 % (Board S), and Leg A measured +10.365 % against a
+window centred on -6.17.
+
+Same for `patch_edgefed_s11_band_repin_replay.py` and
+`two_plane_patch_radiation_ab.py` (the latter also names a deleted kwarg).
+
+### B. `scripts/patch_edgefed_s11_validation.py` (scripts owner)
+
+The gate module's docstring says its geometry "mirrors" this script. After the
+redraw it no longer does: the script still reserves a cell for each foil and
+starts the stack at a bare 4 mm. Either re-point it at the test module's
+builder (preferred — the mirror is what drifted) or apply the same redraw:
+`Z_GND = round(4e-3 / DX) * DX`, foils as zero-thickness Boxes at `Z_GND` and
+`Z_GND + H_SUB`, laminate between them.
+
+### C. `docs/design_notes/issue782_retired_resonance_predeclaration.md` (docs owner)
+
+Section 4's two arms are `main` vs "#702 re-sample replaced by the identity".
+Under the ownership contract the second arm is unbuildable. The document should
+record that the pre-declaration was DISCHARGED and how — the re-sample is gone,
+the geometry it compensated for is drawn away, and the board's band is re-pinned
+from VESSL 369367259226 (Board S) / 369367259225 (Board H) — rather than be left
+naming a function that no longer exists.
