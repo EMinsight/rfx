@@ -565,14 +565,49 @@ def test_pec_short_s11_baseline_unchanged_with_binary_path():
     """Regression guard: ``Boundary(conformal=False)`` (default)
     PEC-short |S11| stays at the pre-Stage-1 baseline. Catches any
     accidental coupling between the conformal plumbing work and the
-    binary path."""
+    binary path.
+
+    ``num_periods`` is 80 here and 40 in the conformal sibling. That is a
+    SETTLING length, not a gate: measured on VESSL 369367259190 after #931
+    redrew the short from a sub-cell slab (one wall) to one full cell
+    (walls on both drawn faces, 0.084 and 0.087 m, verified below), the
+    binary lane at 40 periods reads
+
+        |S11| = [1.0057, 0.9936, 0.9996, 1.0029, 1.0012, 0.9892]
+
+    — three bins ABOVE 1 for a passive reflector, so the record's own
+    noise is +-0.6% and the 0.9892 minimum is 1.1% low. At 80 periods the
+    same geometry reads
+
+        |S11| = [0.9974, 0.9984, 1.0010, 1.0009, 0.9988, 1.0024]
+
+    — every bin within 0.26% of unity. The short moved one cell toward the
+    left port when it stopped being a zero-thickness wall, and the 40-period
+    window no longer contains the settled response of the new round trip.
+    The 0.99 gate is untouched.
+
+    (The conformal sibling is left at 40 periods on purpose: at 80 it
+    diverges, |S11| in [0.57, 2.77] on the same geometry. That is the
+    Dey-Mittra face-PEC lane, which #931 §1.8 fences out of the ownership
+    contract, and it is recorded here as an observation, not fixed.)
+    """
     sim = _pec_short_sim(conformal=False)
-    res = sim.compute_waveguide_s_matrix(num_periods=40, normalize=False)
+    # build-time: the short realizes walls on BOTH drawn faces (#931 §1.2)
+    from tests._realized_geometry import assert_wall_planes
+    assert_wall_planes(sim, 0, [0.084, 0.087], what="cv11-style PEC short")
+
+    res = sim.compute_waveguide_s_matrix(num_periods=80, normalize=False)
     s11 = np.abs(np.asarray(res.s_params)[0, 0, :])
     assert s11.min() >= 0.99, (
         f"PEC-short |S11| baseline regressed: min={s11.min():.4f} "
         f"(gate 0.99). Stage 1 must not affect the binary path."
     )
+    # the record must also not be contaminated the way 40 periods was: a
+    # passive short cannot reflect more than it receives.
+    assert s11.max() <= 1.01, (
+        f"|S11| max={s11.max():.4f} > 1 for a passive short — the DFT "
+        "window is contaminated; lengthen num_periods before reading the "
+        "minimum as physics")
 
 
 # -----------------------------------------------------------------------------
