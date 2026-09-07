@@ -36,6 +36,10 @@ the note: 0.1-4.5 % and 0.7-11.9 %); gate times 1e-9 relative; the
 results side, lane A's ``R_meas`` to 1e-6 relative (float32 fields,
 same tree family).
 
+Results-side: ``k_src_used`` / ``k_prb_used`` equal the setting's cells and
+``source_probe_in_coarse_lead`` is true on every arm (the first attempt's
+defect, a2cb6cf3).
+
 Runtime: 63 chain solves on <= 1100-cell profiles plus 9 c re-fits from
 stored sweeps — a fast-lane test (about 5 s).
 """
@@ -211,6 +215,8 @@ def test_results_rows_replay_verdicts(sweep_json, key):
     assert _rel_close(s["R_model"], r1)
     assert s["fired"] is (abs(s["R_meas"] - s["R_model"]) > half)
     assert s["dt_matches_b"] is True and s["gates_hold"] is True
+    assert (s["k_src_used"], s["k_prb_used"]) == (st["k_src"], st["k_prb"])
+    assert s["source_probe_in_coarse_lead"] is True
     assert [a["n_b"] for a in cell["arms"]] == [r["n_b"] for r in cell["model"]["rows"]]
     for arm, row in zip(cell["arms"], cell["model"]["rows"]):
         assert _rel_close(arm["R_model"], row["R_model"])
@@ -221,6 +227,11 @@ def test_results_rows_replay_verdicts(sweep_json, key):
         assert arm["bound_fired"] is (arm["R_meas"] > 2 * r1 * (1 + w6.E1_BOUND_SLACK))
         assert arm["dt_matches_b"] is True and arm["gates_hold"] is True
         assert arm["builder_matches_declared_vector"] is True
+        # the first attempt's defect (a2cb6cf3): source/probe at the lane-A
+        # cell indices instead of the setting's — pinned per arm
+        assert (arm["k_src_used"], arm["k_prb_used"]) == (st["k_src"], st["k_prb"])
+        assert arm["source_probe_in_coarse_lead"] is True
+        assert _rel_close(arm["source_probe_planes_mm"][0], st["k_src"] * st["coarse_cell_m"] * 1e3, 1e-9)
     # (iii) c_meas re-fit from the committed measurements
     c = w6.e1_fit_c([a["n_b"] for a in cell["arms"]], [a["R_meas"] for a in cell["arms"]],
                     st["fine_cell_m"], r1, cell["model"]["k_g_fine_per_m"],

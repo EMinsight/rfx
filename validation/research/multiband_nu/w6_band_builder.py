@@ -215,12 +215,18 @@ def b_profile() -> np.ndarray:
     return np.asarray([DC] * B_N_COARSE + [fx.DZ_FINE] * B_N_FINE_PIN, dtype=np.float64)
 
 
-def _run_probe(profile: np.ndarray, n_steps: int):
+def _run_probe(profile: np.ndarray, n_steps: int, k_src: int = K_SRC,
+               k_prb: int = K_PRB):
+    """TE10 soft source at cell ``k_src``, Ex probe at cell ``k_prb``
+    (defaults: the lane-A F8 planes). E1 passes the setting's own
+    cells — the first E1 attempt (a2cb6cf3) ran with the defaults and
+    put the source of the ratio-2.0 A runs inside the fine tail / band;
+    see the note's Results, first attempt."""
     grid, mats = build_pec_fixture(profile, (fx.A_X, fx.B_Y), fx.DXY)
     wf = gaussian_sine(n_steps, float(grid.dt), SIGMA_T, T0)
-    srcs = te10_sources(grid, K_SRC, wf)
+    srcs = te10_sources(grid, k_src, wf)
     out = run_nonuniform(grid, mats, n_steps, sources=srcs,
-                         probes=[(1, grid.ny // 2, K_PRB, "ex")])
+                         probes=[(1, grid.ny // 2, k_prb, "ex")])
     return grid, np.asarray(out["time_series"][:, 0], dtype=np.float64)
 
 
@@ -535,9 +541,14 @@ def e1_arm(st: dict, prof: np.ndarray, kind: str, n_b: int, trace_b: np.ndarray,
     ``gates_hold`` is their conjunction (nothing is asserted — a violated
     gate is a result)."""
     n_steps = len(trace_b)
-    grid_a, trace_a = _run_probe(prof, n_steps)
+    grid_a, trace_a = _run_probe(prof, n_steps, st["k_src"], st["k_prb"])
     dt = float(grid_a.dt)
     dt_match = abs(dt - float(grid_b.dt)) < 1e-20
+    # the source and probe cells must be coarse lead cells of THIS profile
+    # (identical in A and B) — the first attempt's defect, now checked
+    planes_ok = bool(st["k_prb"] < st["n_lead"]
+                     and abs(prof[st["k_src"]] - st["coarse_cell_m"]) <= 1e-12
+                     and abs(prof[st["k_prb"]] - st["coarse_cell_m"]) <= 1e-12)
     g = e1_gates(st, prof, kind, n_b, dt, n_steps)
     diff = trace_a - trace_b
     refl = dft_at(diff, dt, F0, 0, min(g["_n_gate"], n_steps))
@@ -552,7 +563,11 @@ def e1_arm(st: dict, prof: np.ndarray, kind: str, n_b: int, trace_b: np.ndarray,
         "window": [r_model - half, r_model + half],
         "fired": bool(dev > half),
         "gates_ns": g["gates_ns"], "gate_margins_ns": g["gate_margins_ns"],
-        "gates_hold": bool(g["gates_hold"] and dt_match),
+        "k_src_used": st["k_src"], "k_prb_used": st["k_prb"],
+        "source_probe_planes_mm": [st["k_src"] * st["coarse_cell_m"] * 1e3,
+                                   st["k_prb"] * st["coarse_cell_m"] * 1e3],
+        "source_probe_in_coarse_lead": planes_ok,
+        "gates_hold": bool(g["gates_hold"] and dt_match and planes_ok),
     }
     if kind == "band":
         out["bound_2R1"] = 2 * r_single * (1 + E1_BOUND_SLACK)
@@ -597,7 +612,7 @@ def run_e1_cell(st: dict, widths: list[int], model_only: bool) -> dict:
     if model_only:
         return cell
     t0 = time.time()
-    grid_b, trace_b = _run_probe(e1_b_profile(st), n_steps)
+    grid_b, trace_b = _run_probe(e1_b_profile(st), n_steps, st["k_src"], st["k_prb"])
     assert abs(float(grid_b.dt) - dt) < 1e-20
     single = e1_arm(st, e1_single_profile(st), "single", 0, trace_b, grid_b,
                     model["R_single_model"], model["R_single_model"])

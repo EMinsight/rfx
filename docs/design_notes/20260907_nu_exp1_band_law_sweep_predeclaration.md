@@ -391,3 +391,90 @@ One attempt per arm. No re-rolls. A fired window is reported as fired.
 | 1.4 | 60 / 30 | 0.2500 | 0.2521 | 1.988 | [0.75, 1.25] |
 | 2.0 | 15 / 30 | 4.0000 | 4.8516 | 2.278 | [0.75, 1.25] |
 | 2.0 | 60 / 30 | 0.2500 | 0.2441 | 2.035 | [0.75, 1.25] |
+
+## Results (appended after measurement; no window above changed)
+
+### First attempt (a2cb6cf3, resolution 30 only) — instrument defect found, not a physics result
+
+The declared N = 30 call was run once on `a2cb6cf3`. The 30 / 1.4 control
+cell returned lane A's five values digit for digit and its single ramp
+5.7302e-3 (model 5.7907e-3, 1.0 %); 30 / 1.2 returned rows 1.2-2.1 % off
+the model (24.8 % on the 1.0e-4 null row, inside its window); **30 / 2.0
+returned R_meas = 1.13 on the single ramp and 0.17-1.13 on the band rows
+— an amplitude ratio above 1, which no reflection can produce.**
+
+Diagnosis (scratch diagnostics, no arm re-run): the A and B traces of
+that cell differ before any reflection can reach the probe (A peaks at
+0.83 at 0.387 ns, B at 3.40 at 0.569 ns; t_r = 1.09 ns), and the
+difference tracks the number of fine cells in the profile, not the
+geometry. Cause, read in the instrument: `_run_probe`, the lane-A helper
+the E1 arm reused, injects the TE10 source at the module constant
+`K_SRC = 85` and probes at `K_PRB = 100` — lane A's cell indices — not at
+the setting's `k_src` / `k_prb`. Table S declares the source and probe
+planes at 166.6 / 196.0 mm re-cut in the setting's coarse cell; what ran
+was cell 85 / cell 100 in every profile. For 30 / 1.4 the two coincide
+(the control was valid). For 30 / 1.2 (coarse 1.44 mm) the planes sat at
+122.4 / 144.0 mm, still in the 275 mm coarse lead of both A and B, so
+those rows are reflection measurements at an undeclared geometry (the
+gate margins computed for 166.6 / 196.0 were conservative there: the
+actual reflection arrives 0.375 ns later than computed and still 0.4 ns
+inside the gate). For 30 / 2.0 (coarse 4.0 mm, 69-cell lead) cell 85 is
+inside the A profiles' fine tail (single ramp), coarse tail (n_b <= 8) or
+fine band (n_b = 16, 32) while B's cell 85 is a coarse lead cell: A and B
+were different excitations, and their difference is not a reflection.
+
+The first-attempt JSON is kept as
+`results/e1_band_law_sweep_first_attempt_a2cb6cf3.json`; every row of it
+is in the table below with its status. None of these numbers is quoted
+against a window as a law result.
+
+Provenance: git_sha `a2cb6cf3`, git_dirty False, started 2026-09-07T08:11:59Z, wallclock 11.2 s, argv `--sweep --fine-cells-per-lambda 30 --ratio 1.2,1.4,2.0 --widths 2,4,8,16,32 --out validation/research/multiband_nu/results/e1_band_law_sweep.json`.
+
+| cell | arm | actual source / probe (mm) | declared (mm) | R_meas | R_model | window (frozen) | recorded verdict | status of the number |
+|---|---|---|---|---|---|---|---|---|
+| N30_r1.2 | single | 122.4 / 144.0 | 167.0 / 195.8 | 2.1535e-03 | 2.1846e-03 | [1.7177e-03, 2.6515e-03] | inside | reflection at an undeclared geometry; reported, not gated |
+| N30_r1.2 | n_b = 2 | 122.4 / 144.0 | 167.0 / 195.8 | 2.5042e-03 | 2.5449e-03 | [2.0059e-03, 3.0839e-03] | inside | reflection at an undeclared geometry; reported, not gated |
+| N30_r1.2 | n_b = 4 | 122.4 / 144.0 | 167.0 / 195.8 | 3.5861e-03 | 3.6408e-03 | [2.8826e-03, 4.3989e-03] | inside | reflection at an undeclared geometry; reported, not gated |
+| N30_r1.2 | n_b = 8 | 122.4 / 144.0 | 167.0 / 195.8 | 4.2722e-03 | 4.3260e-03 | [3.4308e-03, 5.2212e-03] | inside | reflection at an undeclared geometry; reported, not gated |
+| N30_r1.2 | n_b = 16 | 122.4 / 144.0 | 167.0 / 195.8 | 7.5533e-05 | 1.0041e-04 | [5.0326e-05, 1.5049e-04] | inside | reflection at an undeclared geometry; reported, not gated |
+| N30_r1.2 | n_b = 32 | 122.4 / 144.0 | 167.0 / 195.8 | 9.0240e-04 | 9.2166e-04 | [7.0733e-04, 1.1360e-03] | inside | reflection at an undeclared geometry; reported, not gated |
+| N30_r1.2 | c fit | | | c_meas 1.397 mm | c_model 1.423 mm | +/- 0.120 mm | inside | reflection at an undeclared geometry; reported, not gated |
+| N30_r1.4 | single | 166.6 / 196.0 | 166.6 / 196.0 | 5.7302e-03 | 5.7907e-03 | [4.6026e-03, 6.9788e-03] | inside | valid (planes coincide with lane A) |
+| N30_r1.4 | n_b = 2 | 166.6 / 196.0 | 166.6 / 196.0 | 7.4364e-03 | 7.4916e-03 | [5.9633e-03, 9.0199e-03] | inside | valid (planes coincide with lane A) |
+| N30_r1.4 | n_b = 4 | 166.6 / 196.0 | 166.6 / 196.0 | 1.0063e-02 | 1.0141e-02 | [8.0826e-03, 1.2199e-02] | inside | valid (planes coincide with lane A) |
+| N30_r1.4 | n_b = 8 | 166.6 / 196.0 | 166.6 / 196.0 | 1.1164e-02 | 1.1296e-02 | [9.0066e-03, 1.3585e-02] | inside | valid (planes coincide with lane A) |
+| N30_r1.4 | n_b = 16 | 166.6 / 196.0 | 166.6 / 196.0 | 1.2559e-03 | 1.2101e-03 | [9.3810e-04, 1.4822e-03] | inside | valid (planes coincide with lane A) |
+| N30_r1.4 | n_b = 32 | 166.6 / 196.0 | 166.6 / 196.0 | 1.4248e-03 | 1.5111e-03 | [1.1789e-03, 1.8434e-03] | inside | valid (planes coincide with lane A) |
+| N30_r1.4 | c fit | | | c_meas 1.887 mm | c_model 1.873 mm | +/- 0.140 mm | inside | valid (planes coincide with lane A) |
+| N30_r2 | single | 340.0 / 400.0 | 168.0 / 196.0 | 1.1329e+00 | 3.1873e-02 | [2.5469e-02, 3.8278e-02] | fired | not a reflection measurement (source inside A's fine tail / band / coarse tail; in B's coarse lead) |
+| N30_r2 | n_b = 2 | 340.0 / 400.0 | 168.0 / 196.0 | 8.5823e-01 | 5.2225e-02 | [4.1750e-02, 6.2701e-02] | fired | not a reflection measurement (source inside A's fine tail / band / coarse tail; in B's coarse lead) |
+| N30_r2 | n_b = 4 | 340.0 / 400.0 | 168.0 / 196.0 | 6.1866e-01 | 6.1758e-02 | [4.9377e-02, 7.4140e-02] | fired | not a reflection measurement (source inside A's fine tail / band / coarse tail; in B's coarse lead) |
+| N30_r2 | n_b = 8 | 340.0 / 400.0 | 168.0 / 196.0 | 1.6610e-01 | 5.6522e-02 | [4.5187e-02, 6.7856e-02] | fired | not a reflection measurement (source inside A's fine tail / band / coarse tail; in B's coarse lead) |
+| N30_r2 | n_b = 16 | 340.0 / 400.0 | 168.0 / 196.0 | 8.6470e-01 | 2.2583e-02 | [1.8037e-02, 2.7130e-02] | fired | not a reflection measurement (source inside A's fine tail / band / coarse tail; in B's coarse lead) |
+| N30_r2 | n_b = 32 | 340.0 / 400.0 | 168.0 / 196.0 | 1.1270e+00 | 8.0389e-03 | [6.4011e-03, 9.6767e-03] | fired | not a reflection measurement (source inside A's fine tail / band / coarse tail; in B's coarse lead) |
+| N30_r2 | c fit | | | c_meas 6.000 mm | c_model 3.289 mm | +/- 0.200 mm | fired | not a reflection measurement (source inside A's fine tail / band / coarse tail; in B's coarse lead) |
+
+Instrument fix (committed with this section, before the second attempt):
+`_run_probe(profile, n_steps, k_src=K_SRC, k_prb=K_PRB)` — defaults keep
+the lane-A F8 path byte-identical (its replay test passes) and E1 passes
+the setting's cells for both the A arms and the B reference. Each arm now
+records `k_src_used`, `k_prb_used`, `source_probe_planes_mm` and
+`source_probe_in_coarse_lead` (the probe cell before the transition and
+both cells equal to the coarse cell of THIS profile to 1e-12 m), and
+`gates_hold` includes that check; the replay test pins all of it per
+arm. Had that check existed, the first attempt would have reported
+`gates_hold = False` on every 30 / 2.0 arm and on none of the others.
+
+### Second attempt declared (all nine cells)
+
+Why: the instrument did not realize the declared fixture on eight of the
+nine cells (the control cell being the exception), so the first attempt
+is not a measurement of the declared arms. This is a second execution of
+the declared commands on the corrected instrument, not a re-roll of a
+fired window: **no window, no law check, no expectation in sections 3
+and 5 changes.** The control cell 30 / 1.4 is re-run with the others (its
+source and probe cells are unchanged, so it must return its first-attempt
+values to float32 reproducibility, and lane A's to 1e-6 relative — that
+is a check on the fix, not a new measurement). Both attempts stay in the
+tree; the second writes `results/e1_band_law_sweep.json`. Same three
+calls as section 4, resolution 30 first.
