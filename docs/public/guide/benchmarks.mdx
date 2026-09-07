@@ -22,6 +22,22 @@ documentation update.
   discretizations, or an entire port or component family.
 </Aside>
 
+<Aside type="caution" title="Conductor cases were recomputed at 2.0">
+  Release 2.0 changed how a conductor lands on the lattice: a PEC volume
+  realizes walls at both of its drawn faces, and foil is declared as a sheet on
+  one node plane
+  ([How conductors land on the lattice](/rfx/guide/materials-geometry/#how-conductors-land-on-the-lattice)).
+  Every case below with a conductor body — `05`, `06b`, `07`, `11`, `15`, `16`,
+  `18`, `19`, `20` — was re-solved from the drawn geometry, and the
+  compensations that used to sit in their oracles were deleted rather than
+  re-tuned. `validation/crossval/manifest.json` and each case's committed
+  artifact are the live source for a gate value; a number quoted in this table
+  and not in the manifest is documentation, not the gate. The
+  boundary-PEC cases (`09`, `10`, `14`, `24`) and the dielectric-only cases
+  (`01`–`04`, `17`, `22`, `23`) are the controls: they are unchanged and were
+  re-run to confirm it.
+</Aside>
+
 ## Result codes
 
 Each script returns one of these exit codes:
@@ -105,21 +121,28 @@ The frequency band is a discretization-bias regression lock, not an accuracy
 claim. It is pinned against the design mode — the 32 mm feed-axis mode, not the
 40 mm cross mode at 2.2147 GHz (#693, 2026-08-27; #812).
 
-The +11.3% sign belongs to this fixture's one-plane sheet realization and mesh,
-not to a general "coarse grid reads low" rule. On the same geometry the
-corrected `two_plane` realization measures −4.7% at dx = 2 mm and −1.5% at
-dx = 1 mm.
-{/* mechanism and both two_plane numbers: the comment block above F_RES_REL_LO / F_RES_REL_HI in tests/crossval/test_patch_canonical_farfield_e4.py (cite the constant names; line numbers have gone stale before).
+The sign belongs to this fixture's conductor realization and mesh, not to a
+general "coarse grid reads low" rule. Before 2.0 the same geometry could be run
+under two different realizations of a one-cell PEC box, and the two disagreed by
+about one cell of substrate height; that choice no longer exists — a conductor
+is a sheet or a volume by declaration, and this fixture's ground and patch are
+foil, hence sheets.
+{/* mechanism: the comment block above F_RES_REL_LO / F_RES_REL_HI in tests/crossval/test_patch_canonical_farfield_e4.py (cite the constant names; line numbers have gone stale before).
      validation/crossval/manifest.json records the older cv05 agreement as
-     "a documented z-under-res/staircase error cancellation" */}
+     "a documented z-under-res/staircase error cancellation".
+     The pre-2.0 one-plane / two_plane comparison is dated history, kept in the
+     CHANGELOG's #740 and #931 entries; it is not re-measurable under the
+     ownership contract. */}
 
 ### `06b_msl_notch_filter_uniform`
 
 The script applies loose analytic tolerances to the uniform-mesh
 `add_msl_port` result. It runs at dx = 63.5 µm = h_sub/4, chosen so the
 254 µm substrate rasterizes exactly; the analytic quarter-wave reference is
-evaluated on the realized 635 µm trace width read from the run's own
-`fidelity_report()`, not on the declared 600 µm.
+evaluated on the realized trace width read from the run's own
+`fidelity_report()`, not on the declared 600 µm. (The realized width is a
+property of the mesh and the sampling rule, so it is read from the run rather
+than quoted here; it changed at 2.0 with the conductor realization.)
 
 The committed dx=50 µm rfx/OpenEMS comparison is checked separately by
 `tests/crossval/test_msl_notch_e4_comparison_gates.py`. It covers that geometry and

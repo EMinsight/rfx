@@ -78,9 +78,11 @@ cell size matches `dx`.
 
 ## 3. Register the stack, source, and probe
 
-The ground and patch are subcell sheets. A zero-thickness `Box` passed to
-`sim.add()` would rasterize no volume, so the sheets use
-`add_thin_conductor()` instead.
+The ground and patch are sheets: 35 µm of copper on a substrate meshed far
+coarser than that. A zero-thickness `Box` through `sim.add()` and
+`add_thin_conductor()` are the same sheet declaration — one node plane, no cell
+— and `add_thin_conductor()` is the explicit spelling, so this page uses it.
+See [How conductors land on the lattice](/rfx/guide/materials-geometry/#how-conductors-land-on-the-lattice).
 
 ```python
 sim.add_material("fr4_design", eps_r=eps_r, sigma=sigma_fr4)
@@ -124,9 +126,11 @@ resistive sheet of sheet resistance `Rs0 = sqrt(pi*f0*mu0/sigma_bulk)` — the
 thick-conductor surface resistance at band centre `f0`
 {/* rfx/api/__init__.py:1379-1420 */}. Its scope, from the
 "Surface-impedance sheets" row of `docs/guides/support_matrix.md`: patterned
-shapes that rasterize to exactly one cell layer and at least one cell, on the
-documented uniform and graded-mesh lanes; not a general dispersive or
-multi-runner conductor model. One frequency, one cell layer.
+shapes that are sheets — one node plane, no thicker than one local cell along
+their normal — on the documented uniform and graded-mesh lanes; not a general
+dispersive or multi-runner conductor model. One frequency, one node plane. The
+lossy sheet's footprint and edge set are the PEC sheet's, so `f0` changes the
+loss and never the geometry.
 
 The cruder route is a finite sheet resistance through `sigma_bulk` alone, which
 needs an explicitly justified value below 1e6 S/m. At or above 1e6 S/m the
