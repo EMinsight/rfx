@@ -7211,14 +7211,18 @@ class _PreflightMixin:
            user-facing". Those four percentages are the DECLARED-board
            column of the SAME frozen 2026-08-02 rows whose realized-board
            reading ("within 0.4%") was retired in the first pass of this
-           finding, and the same argument retires them: main's
-           exact-coordinate rasterizer (#802/#834) moves the realized
-           TRACE WIDTH at h_sub/3 (677.3→592.7µm), h_sub/5 (609.6→558.8µm)
-           and h_sub/6 (592.7→635.0µm), so those rows' measured Z0 is not
-           main's. The declared-board column is in fact MORE exposed to
-           that move than the realized-board one, because the declared
-           anchor does not follow W. Only h_sub/4 (W unmoved) survives as
-           an as-solved figure, and one point is not a sequence.
+           finding, and the same argument retires them: the lattice
+           ownership contract's centre-sampled PEC volume (#931 §1.1;
+           before it, the #802/#834 exact-coordinate node sampler) moves
+           the realized TRACE WIDTH against the as-solved rows at h_sub/3
+           (677.3→592.7µm), h_sub/4 (635.0→571.5µm) and dx=80µm
+           (560→640µm), so those rows' measured Z0 is not this tree's.
+           The declared-board column is in fact MORE exposed to that move
+           than the realized-board one, because the declared anchor does
+           not follow W. h_sub/5, h_sub/6 and 60µm happen to realize the
+           committed width again under the centre sampler (they did not
+           under the node sampler), and three unmoved points are not a
+           sequence.
 
            EVIDENCE THAT THE OLD FIGURES ARE STALE (spot check, NOT a
            replacement bound): re-solving aligned dx=h_sub/3 on this
@@ -7259,11 +7263,13 @@ class _PreflightMixin:
            realized-board Hammerstad-Jensen anchor closely at every point
            in the sweep, aligned or misaligned alike (that sibling
            artifact carries the per-point deviations). NOTE (audit
-           2026-09-02): the artifact's ALIGNED rows are the pre-#802 f32
-           as-solved record — main's exact-coordinate rasterizer
-           (#802/#834) moves three aligned points' realized trace width
-           (h_sub/3 677.3→592.7µm, h_sub/5 609.6→558.8µm, h_sub/6
-           592.7→635.0µm), so those rows' realized-board deviations are
+           2026-09-02, re-derived at #931 §1.1 on 2026-09-07): the
+           artifact's rows are the pre-#802 f32 as-solved record — the
+           centre-sampled PEC volume this tree solves realizes a
+           different trace width at h_sub/3 (677.3→592.7µm), h_sub/4
+           (635.0→571.5µm) and dx=80µm (560→640µm; the 2026-09-02
+           re-solve of that point ran on the 7-cell trace), so those
+           rows' realized-board deviations are
            RE-SOLVE-OWED before any specific "within X%" bound may be
            quoted as a LIVE extractor property; run
            ``scripts/diagnostics/msl_z0_bias_floor_sweep.py`` to refresh
