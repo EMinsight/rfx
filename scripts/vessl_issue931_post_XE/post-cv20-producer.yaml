@@ -1,5 +1,5 @@
 name: rfx-931-post-cv20-producer
-description: "cv20 rfx-side reference producer: the committed tests/fixtures/msl_phase_referee/msl_thru_rfx_dx50.json rebuilt by the invocation in the script's own Usage block. POST-change recompute for the #931 lattice ownership contract (group X-E): detached worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE at feat/931-crossval-E 2a65dfb7. Submit: vessl run create -f post-cv20-producer.yaml"
+description: "cv20 rfx-side reference producer: the committed tests/fixtures/msl_phase_referee/msl_thru_rfx_dx50.json rebuilt by the invocation in the script's own Usage block. POST-change recompute for the #931 lattice ownership contract (group X-E): detached worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE at feat/931-crossval-E (HEAD recorded at run time). Submit: vessl run create -f post-cv20-producer.yaml"
 tags: [rfx, issue-931, post, cv20, msl, phase-referee]
 resources:
   cluster: remilab-c0
@@ -16,7 +16,7 @@ mount:
   /root/workspace/: volume://remilab-fs/personal-workspaces/
 run: |-
   set -eu
-  echo "=== rfx #931 post-change recompute: cv20-producer (feat/931-crossval-E 2a65dfb7) ==="
+  echo "=== rfx #931 post-change recompute: cv20-producer (feat/931-crossval-E (HEAD recorded at run time)) ==="
   date
   PY=python
   command -v "$PY" >/dev/null 2>&1 || PY=/opt/conda/bin/python
@@ -28,7 +28,7 @@ run: |-
   echo "$OUT" > "$RUNS/issue931-post-cv20-producer.latest"
   trap 'chmod -R a+rX "$OUT" 2>/dev/null || true' EXIT
   echo "artifacts: $OUT"
-  echo "X-E worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE @ 2a65dfb7dd26a29d6d5835b2a7af6f3cb39b79bf" | tee "$OUT/commit.txt"
+  echo "X-E worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE @ $(git -C '/root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE' rev-parse HEAD 2>/dev/null || echo unknown)" | tee "$OUT/commit.txt"
   WORK=/root/work/rfx931post-cv20producer
   rm -rf "$WORK"
   mkdir -p "$WORK"

@@ -1,5 +1,5 @@
 name: rfx-931-post-thru-feedpost
-description: "thru feed-post two-segment apparatus regression, the only implemented arm of validation/research/thru_feedpost_singlepost_vessl.yaml (--verify; the fine-dx arms in that yaml are reserved names, not code). The script os.environ.setdefault's JAX_PLATFORMS=cpu, so it self-selects the CPU backend on this GPU box exactly as the source yaml left it. POST-change recompute for the #931 lattice ownership contract (group X-E): detached worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE at feat/931-crossval-E 2a65dfb7. Submit: vessl run create -f thru-feedpost.yaml"
+description: "thru feed-post two-segment apparatus regression, the only implemented arm of validation/research/thru_feedpost_singlepost_vessl.yaml (--verify; the fine-dx arms in that yaml are reserved names, not code). The script os.environ.setdefault's JAX_PLATFORMS=cpu, so it self-selects the CPU backend on this GPU box exactly as the source yaml left it. POST-change recompute for the #931 lattice ownership contract (group X-E): detached worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE at feat/931-crossval-E (HEAD recorded at run time). Submit: vessl run create -f thru-feedpost.yaml"
 tags: [rfx, issue-931, post, thru-feedpost, deembed, gpu]
 resources:
   cluster: remilab-c0
@@ -16,7 +16,7 @@ mount:
   /root/workspace/: volume://remilab-fs/personal-workspaces/
 run: |-
   set -eu
-  echo "=== rfx #931 post-change recompute: thru-feedpost (feat/931-crossval-E 2a65dfb7) ==="
+  echo "=== rfx #931 post-change recompute: thru-feedpost (feat/931-crossval-E (HEAD recorded at run time)) ==="
   date
   PY=python
   command -v "$PY" >/dev/null 2>&1 || PY=/opt/conda/bin/python
@@ -28,7 +28,7 @@ run: |-
   echo "$OUT" > "$RUNS/issue931-post-thru-feedpost.latest"
   trap 'chmod -R a+rX "$OUT" 2>/dev/null || true' EXIT
   echo "artifacts: $OUT"
-  echo "X-E worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE @ 2a65dfb7dd26a29d6d5835b2a7af6f3cb39b79bf" | tee "$OUT/commit.txt"
+  echo "X-E worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE @ $(git -C '/root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE' rev-parse HEAD 2>/dev/null || echo unknown)" | tee "$OUT/commit.txt"
   WORK=/root/work/rfx931post-thrufeedpost
   rm -rf "$WORK"
   mkdir -p "$WORK"

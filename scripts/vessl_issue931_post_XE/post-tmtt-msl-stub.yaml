@@ -1,5 +1,5 @@
 name: rfx-931-post-tmtt-msl-stub
-description: "T-MTT paper Example 1, MSL open-stub notch inverse design. Run exactly as validation/tmtt_paper/README.md documents it: no SMOKE switch (the script has none) and no env overrides, so the RFX_Y2B_* defaults in main() apply. POST-change recompute for the #931 lattice ownership contract (group X-E): detached worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE at feat/931-crossval-E 2a65dfb7. Submit: vessl run create -f tmtt-msl-stub.yaml"
+description: "T-MTT paper Example 1, MSL open-stub notch inverse design. Run exactly as validation/tmtt_paper/README.md documents it: no SMOKE switch (the script has none) and no env overrides, so the RFX_Y2B_* defaults in main() apply. POST-change recompute for the #931 lattice ownership contract (group X-E): detached worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE at feat/931-crossval-E (HEAD recorded at run time). Submit: vessl run create -f tmtt-msl-stub.yaml"
 tags: [rfx, issue-931, post, tmtt, inverse-design, msl, gpu]
 resources:
   cluster: remilab-c0
@@ -16,7 +16,7 @@ mount:
   /root/workspace/: volume://remilab-fs/personal-workspaces/
 run: |-
   set -eu
-  echo "=== rfx #931 post-change recompute: tmtt-msl-stub (feat/931-crossval-E 2a65dfb7) ==="
+  echo "=== rfx #931 post-change recompute: tmtt-msl-stub (feat/931-crossval-E (HEAD recorded at run time)) ==="
   date
   PY=python
   command -v "$PY" >/dev/null 2>&1 || PY=/opt/conda/bin/python
@@ -28,7 +28,7 @@ run: |-
   echo "$OUT" > "$RUNS/issue931-post-tmtt-msl-stub.latest"
   trap 'chmod -R a+rX "$OUT" 2>/dev/null || true' EXIT
   echo "artifacts: $OUT"
-  echo "X-E worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE @ 2a65dfb7dd26a29d6d5835b2a7af6f3cb39b79bf" | tee "$OUT/commit.txt"
+  echo "X-E worktree /root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE @ $(git -C '/root/workspace/byungkwan-workspace/research/rfx-931-XE-crossvalE' rev-parse HEAD 2>/dev/null || echo unknown)" | tee "$OUT/commit.txt"
   WORK=/root/work/rfx931post-tmttmslstub
   rm -rf "$WORK"
   mkdir -p "$WORK"
