@@ -39,9 +39,15 @@ is, so the branch must be committed before submitting.
 * Cost: ~3 min CPU per capture, captured twice to confirm determinism.
 * Outputs: `tests/fixtures/golden_msl_sheet_thread_s_931.npy` and
   `..._freqs_931.npy`, plus the two pre-#931 files kept beside them as history.
-* **VESSL run id: 369367287361** — `vessl run create -f rfx-931-post-msl-sheet-golden.yaml`,
-  name `rfx-931-post-msl-sheet-golden`, expected wall clock ~12 min
-  (env + two captures + a diff against the old golden).
+* **VESSL run id: 369367259166** (submitted 2026-09-07 10:26 UTC,
+  https://app.vessl.ai/remilab/runs/byungkwan/369367259166).
+  Command: `vessl run create -f rfx-931-post-msl-sheet-golden.yaml` (the yaml
+  sits beside this file; submit it from a non-git directory — the CLI cannot
+  read a worktree's `.git` file). Run name `rfx-931-post-msl-sheet-golden`,
+  preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`. Expected wall clock ~12 min
+  (env install + two captures + a diff against the old golden). It asserts
+  the trace really is declared as a sheet, and refuses to write a golden if
+  the two captures are not byte-equal.
   Artifacts: `/root/workspace/claude-workspace/rfx/runs/issue931-post-msl-sheet-golden-<ts>/`.
 * Ingest: copy the two `.npy` files onto the branch, point the test's
   `_FIXTURES` load at them, and quote the max deviation against the pre-#931

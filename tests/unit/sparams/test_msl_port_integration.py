@@ -69,6 +69,9 @@ from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
 
 from tests._gate_policy import gate_from_envelope
+from tests._realized_geometry import (
+    assert_sheet_planes, assert_wall_planes, node_index, realized,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -600,3 +603,86 @@ def test_msl_thru_line_z0_length_invariance_and_positive_sign():
         f"SHORT line, check N-probe fit conditioning first (issue #518) "
         f"before suspecting the extractor."
     )
+
+
+# ---------------------------------------------------------------------------
+# The ownership contract on this board — build time, no solve
+# ---------------------------------------------------------------------------
+
+def test_declared_conductor_is_the_realized_conductor():
+    """A correctly drawn conductor realizes what it declares (#931).
+
+    Three claims, all read from ``realized_pec_edge_masks`` through the
+    shared reader, all costing one grid build:
+
+    * the foil sits on the laminate face and nowhere else — ONE wall plane
+      at z = h_sub, because the board is on-lattice and a sheet lands on
+      the node nearest its declared plane;
+    * it owns NO cell and leaves the normal Ez through it live, which is
+      what makes the #511 V span stop below it;
+    * its footprint is the drawn rectangle sampled CLOSED — the realized
+      node rows are exactly the nodes the declaration covers, ``hi`` row
+      included. Nothing in this suite gated that before: the realized
+      width was only ever recorded (the anchor artifact,
+      ``fidelity_report``), and at dx = 80 µm it read 560 µm against a
+      declared 600 µm — a 7 % error nobody caught.
+
+    The width residual is a separate, smaller statement, and it is worth
+    keeping the two apart. Making the SUBSTRATE commensurate does not make
+    the TRACE commensurate: W = 600 µm against dx = h_sub/3 = 84.67 µm is
+    7.087 cells, so the closed sampling gives 7 cells = 592.667 µm and the
+    drawn-vs-realized residual is 7.333 µm — under one cell, and the same
+    number the realized-anchor artifact records for this mesh. Preflight's
+    off-lattice design-edge check reports it as a face residual. It is
+    pinned here so that a change in the sampling rule shows up as a
+    changed residual rather than as silence, but it is NOT an equality:
+    only a dimension commensurate with dx realizes exactly.
+    """
+    # The same board the gate above builds, stated once here; nothing is
+    # stepped, so this costs one grid build.
+    sim = Simulation(
+        freq_max=F_MAX, domain=(LX, LY, LZ), dx=DX, cpml_layers=8,
+        boundary=BoundarySpec(x="cpml", y="cpml",
+                              z=Boundary(lo="pec", hi="cpml")),
+    )
+    sim.add_material("ro4350b", eps_r=EPS_R)
+    sim.add(Box((0.0, 0.0, 0.0), (LX, LY, H_SUB)), material="ro4350b")
+    y_centre = LY / 2.0
+    sim.add(Box((0.0, y_centre - W_TRACE / 2.0, H_SUB),
+                (LX, y_centre + W_TRACE / 2.0, H_SUB)), material="pec")
+    rz = realized(sim)
+
+    assert_sheet_planes(sim, 2, [H_SUB], what="MSL trace foil")
+    assert_wall_planes(sim, 2, [H_SUB], what="MSL trace foil")
+
+    assert rz.pec_mask is None or not bool(np.asarray(rz.pec_mask).any()), (
+        "a sheet owns no cell (§1.3), so this board's pec_mask is empty")
+
+    plane = rz.sheet_planes[2][0]
+    fp = np.zeros(tuple(rz.grid.shape), dtype=bool)
+    for sp in rz.sheets:
+        fp |= np.asarray(sp.footprint, dtype=bool)
+    ez = np.asarray(rz.edge_masks[2], dtype=bool)
+    assert not (ez & fp).any(), (
+        "normal E through a sheet stays live (§1.3)")
+
+    y_c = LY / 2.0
+    j_lo = node_index(rz.grid, 1, y_c - W_TRACE / 2)
+    j_hi = node_index(rz.grid, 1, y_c + W_TRACE / 2)
+    rows = np.flatnonzero(fp[:, :, plane].any(axis=0))
+    # The drawn rectangle is realized CLOSED on the in-plane axes (§1.3),
+    # hi row included, so the first and last footprint rows are the nodes
+    # nearest the two drawn faces. Compared against node_index rather than
+    # against a ceil/floor of lo/dx: re-deriving the sampling here would be
+    # a second rule, and at a face that lands within a float ulp of a node
+    # the two disagree by a whole row.
+    assert (int(rows[0]), int(rows[-1])) == (j_lo, j_hi), (
+        f"the trace's realized node rows are {int(rows[0])}..{int(rows[-1])}, "
+        f"drawn {j_lo}..{j_hi}")
+    realized_w = (int(rows[-1]) - int(rows[0])) * rz.grid.dx
+    assert realized_w == pytest.approx(592.667e-6, abs=1e-9), (
+        f"realized trace width {realized_w * 1e6:.3f} um against a drawn "
+        f"{W_TRACE * 1e6:.1f} um; expected 592.667 um on this mesh "
+        f"(600/84.67 = 7.087 cells -> 7 cells closed)")
+    assert abs(realized_w - W_TRACE) < rz.grid.dx, (
+        "a drawn dimension must realize within one cell of itself")
