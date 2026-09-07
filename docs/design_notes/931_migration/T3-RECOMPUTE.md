@@ -62,6 +62,7 @@ cluster `remilab-c0`, `JAX_PLATFORMS=cpu` inside the job.
 | `rfx-931-post-t3-pytest` | 369367259208 | https://app.vessl.ai/remilab/runs/byungkwan/369367259208 |
 | `rfx-931-post-t3-measure` | 369367259209 | https://app.vessl.ai/remilab/runs/byungkwan/369367259209 |
 | `rfx-931-post-t3-pytest-r2` | 369367259214 | https://app.vessl.ai/remilab/runs/byungkwan/369367259214 |
+| `rfx-931-post-t3-pytest-r3` | 369367259223 | https://app.vessl.ai/remilab/runs/byungkwan/369367259223 |
 
 Run 369367259208 read commit 6b8f9fae and returned **865 passed, 4 failed,
 4 xfailed in 28 min**. All four reds are accounted for:
@@ -82,6 +83,17 @@ Run 369367259208 read commit 6b8f9fae and returned **865 passed, 4 failed,
 `test_runner_import_binding.py` slow-lane brittleness above, which does not
 touch #931. The predicted verdict held; the four directories are green under
 the contract.
+
+`rfx-931-post-t3-pytest-r3` (369367259223, submitted 2026-09-07 14:19 UTC
+from commit `4856b5c2`, same yaml with the name changed) is the verdict on
+the FINAL tree — the docstring re-measurements, the `_nu_lane_shim` ->
+`_wall_planes_m` rename and the merge of `feat/931-lattice-ownership`.
+Expected: the same one unrelated red plus the two strict-xfail seam tests,
+~35 min. Locally verified before submitting: the four gates that import the
+renamed helper (WR-90 iris fins, NU progress-chunking block, in-plane
+grading guards, wire-port PEC plates on both lanes) 8 passed in 58 s, and
+`test_msl_thru_realizes_the_trace_where_it_is_drawn` 1 passed in 26 s.
+Read `commit.txt` in the output directory before reading its verdict.
 
 ## Results — measure run 369367259209
 
