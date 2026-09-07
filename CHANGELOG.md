@@ -83,6 +83,25 @@ its foot, which where the foot stands on a conductor's node plane are that
 conductor's wall (measured: 2 of 40 wall edges on a PEC block's top face, 7/7 Ex
 and 7/7 Ey along an MSL feed width on the ground plane).
 
+**Sheets and wires leave the assembler through collectors, and no lane drops
+one.** Because a sheet owns no cell it cannot be returned in the PEC cell mask;
+it comes back through the `pec_sheets=` / `pec_wires=` out-parameters. Omitting
+them on a model that has one is now an error naming the caller, so a path that
+would step or report a conductor-free model cannot be written by accident.
+Every lane either realizes what it collected or refuses by name: the three
+coaxial S-parameter helpers (`compute_coaxial_s_matrix`,
+`compute_coaxial_line_reflection`, `compute_coaxial_two_port`) step from
+material arrays only and raise `NotImplementedError` on a declared sheet or
+wire, and `validate_subgrid()` reports
+`subgrid_pec_sheet_or_wire_unsupported` for the model
+`run(solver="subgridded")` refuses. Reads follow the same source:
+`conductor_mask()` now includes a filament's path nodes (new helper
+`rfx.boundaries.pec.wire_node_footprint`), `fidelity_report()` cross-checks its
+own sheet resolution against the assembly's and reports a drift finding, and
+`plot_geometry_2d_slice()` overlays the realized conductor footprint and picks
+the slice carrying the metal — a sheet writes no `eps_r`, so the permittivity
+cross-section of a clad board used to come back as bare laminate.
+
 **Removed surfaces.** `two_plane` on `sim.add()` and `_GeometryEntry`, the IR
 field, `_two_plane_cell_mask`, `_refuse_two_plane`, `two_plane_extension_masks`,
 `_place_at_next_plane` and the per-lane ctx fields; `resample_sheet_node_materials`,

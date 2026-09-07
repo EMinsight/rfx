@@ -344,9 +344,16 @@ def _build_batched_materials(
         # restores the invariant ``_extend_batched_cpml_pad`` documents
         # (its result depends only on interior values, which must all be
         # batch-correct) instead of special-casing the node here.
+        # #931: eps/sigma/mu only — this arm rebuilds the batched CPML pad
+        # from the pre-conductor arrays. Geometry sheets (a zero-thickness
+        # PEC Box) are still classified even with the thin-conductor loop
+        # off, so the collectors are required; the sweep's OWN assembly
+        # below (``_sweep_pec_sheets`` / ``_sweep_pec_wires``) is what
+        # threads them into the scan the sweep actually runs.
         pre_materials, _pre_debye, _pre_lorentz, *_ = sim._assemble_materials(
             grid, include_thin_conductors=False,
-            include_cpml_pad_extension=False)
+            include_cpml_pad_extension=False,
+            pec_sheets=[], pec_wires=[])
         eps_r = pre_materials.eps_r
         sigma = pre_materials.sigma
         mu_r = pre_materials.mu_r

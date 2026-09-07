@@ -304,10 +304,10 @@ def assemble_materials_nu(
         warn_sheet_planes_inside_dielectric,
     )
     warn_sheet_planes_inside_dielectric(_pec_sheets, materials.eps_r)
-    from rfx.api._compile import _warn_uncollected_pec
-    _warn_uncollected_pec(_pec_sheets if pec_sheets is None else (),
-                          _pec_wires if pec_wires is None else (),
-                          lane="non-uniform")
+    from rfx.api._compile import _refuse_uncollected_pec
+    _refuse_uncollected_pec(_pec_sheets if pec_sheets is None else (),
+                            _pec_wires if pec_wires is None else (),
+                            lane="non-uniform")
     return materials, debye_spec, lorentz_spec, pec_mask
 
 

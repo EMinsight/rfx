@@ -185,7 +185,7 @@ def rasterization(sim, h_sub=H_SUB, dx=DX):
     """
     rz = realized(sim)
     grid = rz.grid
-    eps = np.asarray(sim._assemble_materials(grid)[0].eps_r, dtype=float)
+    eps = np.asarray(sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])[0].eps_r, dtype=float)
     c = coords_from_uniform_grid(grid)
     z = np.asarray(c.z, dtype=float)
     xc, yc = np.asarray(c.x, dtype=float), np.asarray(c.y, dtype=float)

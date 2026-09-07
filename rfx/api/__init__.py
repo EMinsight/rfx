@@ -848,21 +848,34 @@ class Simulation(
         material/PEC discontinuity at artificial coarse/fine interfaces, and
         no unsupported RF post-processing features.
         """
+        # #931 §1.9: sheets and wires own no cell, so a validator handed
+        # only pec_mask cannot see them — and this lane cannot realize
+        # them (run(solver='subgridded') refuses). Collect and pass them
+        # so the report refuses the same models the runner does.
         if self._refinement is None:
             from rfx.subgridding.validation import validate_subgrid_setup
             grid = self._build_grid()
-            mats, _, _, pec_mask, *_ = self._assemble_materials(grid)
+            _vs_sheets: list = []
+            _vs_wires: list = []
+            mats, _, _, pec_mask, *_ = self._assemble_materials(
+                grid, pec_sheets=_vs_sheets, pec_wires=_vs_wires)
             return validate_subgrid_setup(
-                self, grid, mats, pec_mask, mode=mode or "production",
+                self, grid, mats, pec_mask, sheets=_vs_sheets,
+                wires=_vs_wires, mode=mode or "production",
             )
         grid = self._build_grid()
-        mats, _, _, pec_mask, *_ = self._assemble_materials(grid)
+        _vs_sheets = []
+        _vs_wires = []
+        mats, _, _, pec_mask, *_ = self._assemble_materials(
+            grid, pec_sheets=_vs_sheets, pec_wires=_vs_wires)
         from rfx.subgridding.validation import validate_subgrid_setup
         return validate_subgrid_setup(
             self,
             grid,
             mats,
             pec_mask,
+            sheets=_vs_sheets,
+            wires=_vs_wires,
             mode=mode or self._refinement.get("validation", "production"),
         )
 

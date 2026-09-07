@@ -119,7 +119,25 @@ def plot_geometry_2d_slice(
     _require_mpl()
 
     grid = sim._build_grid()
-    eps = np.asarray(sim._assemble_materials(grid)[0].eps_r)
+    # #931 §1.9: a PEC sheet and a sub-cell wire own no cell and write no
+    # eps, so an eps-only cross-section shows a fully copper-clad board as
+    # bare laminate. Collect them, draw the realized conductor footprint on
+    # top, and let it choose the slice (see the index rule below). The
+    # permittivity IMAGE is untouched; on a model with metal the plane it
+    # is taken at can move.
+    _geo_sheets: list = []
+    _geo_wires: list = []
+    _geo_mats, _, _, _geo_pec, *_ = sim._assemble_materials(
+        grid, pec_sheets=_geo_sheets, pec_wires=_geo_wires)
+    eps = np.asarray(_geo_mats.eps_r)
+    from rfx.boundaries.pec import wire_node_footprint as _wire_nodes
+    from rfx.materials.thin_conductor import conductor_footprint as _cond_fp
+    _wn = _wire_nodes(_geo_wires)
+    cond = np.asarray(_cond_fp(
+        pec_mask=_geo_pec, sigma=_geo_mats.sigma,
+        sheet_masks=[sp.footprint for sp in _geo_sheets]
+                    + ([] if _wn is None else [_wn]),
+        shape=grid.shape), dtype=bool)
 
     if axis not in (0, 1, 2):
         raise ValueError(f"axis must be 0, 1, or 2, got {axis!r}")
@@ -127,23 +145,34 @@ def plot_geometry_2d_slice(
         # Pick the slice that actually contains the structure rather than the
         # geometric centre: for thin "1D-equivalent" domains (a layered stack
         # only a cell or two thick along y/z) the centre cell can land on a
-        # padding plane that is pure vacuum. Choose the plane along *axis* with
-        # the most permittivity variation; fall back to the centre if uniform.
+        # padding plane that is pure vacuum.
+        #
+        # Metal counts as structure, and it is looked at FIRST. A board whose
+        # traces are #931 sheets writes no eps at all, so the permittivity
+        # spread is the same on every y plane of a uniform laminate and the
+        # argmax lands on the first one — a plane the patch does not reach.
+        # Where there is a conductor, the plane carrying the most of it is
+        # the cross-section a reader asked for; permittivity variation
+        # decides only when the model has no metal.
+        moved_cond = np.moveaxis(cond, axis, 0)
+        per_plane_cond = moved_cond.reshape(moved_cond.shape[0], -1).sum(axis=1)
         moved = np.moveaxis(eps, axis, 0)
         per_plane_spread = np.ptp(moved.reshape(moved.shape[0], -1), axis=1)
-        if float(per_plane_spread.max()) > 0:
+        if int(per_plane_cond.max()) > 0:
+            index = int(np.argmax(per_plane_cond))
+        elif float(per_plane_spread.max()) > 0:
             index = int(np.argmax(per_plane_spread))
         else:
             index = eps.shape[axis] // 2
 
     if axis == 0:
-        slc = eps[index, :, :]
+        slc, cond2 = eps[index, :, :], cond[index, :, :]
         xlabel, ylabel = "y (mm)", "z (mm)"
     elif axis == 1:
-        slc = eps[:, index, :]
+        slc, cond2 = eps[:, index, :], cond[:, index, :]
         xlabel, ylabel = "x (mm)", "z (mm)"
     else:
-        slc = eps[:, :, index]
+        slc, cond2 = eps[:, :, index], cond[:, :, index]
         xlabel, ylabel = "x (mm)", "y (mm)"
 
     dx_mm = float(grid.dx) * 1e3
@@ -160,6 +189,13 @@ def plot_geometry_2d_slice(
         vmax=float(slc.max()),
     )
     fig.colorbar(im, ax=ax, label="relative permittivity εᵣ")
+    if bool(cond2.any()):
+        ax.imshow(np.ma.masked_where(~cond2.T, cond2.T.astype(float)),
+                  origin="lower", cmap=_conductor_cmap(), aspect="auto",
+                  extent=extent, vmin=0.0, vmax=1.0, alpha=0.55)
+        from matplotlib.patches import Patch
+        ax.legend(handles=[Patch(facecolor="#b03000", alpha=0.55,
+                                 label="conductor")], loc="best", fontsize=7)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title or "Geometry (εᵣ cross-section)")
@@ -460,10 +496,18 @@ def plot_rasterized_slice(
     grid = sim._build_nonuniform_grid() if is_nu else sim._build_grid()
     cond = np.asarray(sim.conductor_mask(grid, sigma_threshold=sigma_threshold),
                       dtype=bool)
+    # Permittivity only — this viewer already reads its conductors from
+    # sim.conductor_mask() above and its realized walls from
+    # _realized_edge_wall_mask() below, both of which collect sheets and
+    # wires. The #931 collectors here are passed and dropped so that
+    # "cells only" is a decision at the call site (rfx/api/_compile.py
+    # refuses an assembly that would silently omit a sheet).
     if isinstance(grid, NonUniformGrid):
-        eps = np.asarray(sim._assemble_materials_nu(grid)[0].eps_r, dtype=float)
+        eps = np.asarray(sim._assemble_materials_nu(
+            grid, pec_sheets=[], pec_wires=[])[0].eps_r, dtype=float)
     else:
-        eps = np.asarray(sim._assemble_materials(grid)[0].eps_r, dtype=float)
+        eps = np.asarray(sim._assemble_materials(
+            grid, pec_sheets=[], pec_wires=[])[0].eps_r, dtype=float)
     coords = _slice_coords(sim, grid)
     wall_mask = _realized_edge_wall_mask(sim, grid, coords)
 
@@ -752,10 +796,18 @@ def plot_stack_profile(
     grid = sim._build_nonuniform_grid() if is_nu else sim._build_grid()
     cond = np.asarray(sim.conductor_mask(grid, sigma_threshold=sigma_threshold),
                       dtype=bool)
+    # Permittivity only — this viewer already reads its conductors from
+    # sim.conductor_mask() above and its realized walls from
+    # _realized_edge_wall_mask() below, both of which collect sheets and
+    # wires. The #931 collectors here are passed and dropped so that
+    # "cells only" is a decision at the call site (rfx/api/_compile.py
+    # refuses an assembly that would silently omit a sheet).
     if isinstance(grid, NonUniformGrid):
-        eps = np.asarray(sim._assemble_materials_nu(grid)[0].eps_r, dtype=float)
+        eps = np.asarray(sim._assemble_materials_nu(
+            grid, pec_sheets=[], pec_wires=[])[0].eps_r, dtype=float)
     else:
-        eps = np.asarray(sim._assemble_materials(grid)[0].eps_r, dtype=float)
+        eps = np.asarray(sim._assemble_materials(
+            grid, pec_sheets=[], pec_wires=[])[0].eps_r, dtype=float)
     coords = _slice_coords(sim, grid)
     wall_mask = _realized_edge_wall_mask(sim, grid, coords)
     keep = [a for a in (0, 1, 2) if a != axis]

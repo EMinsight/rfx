@@ -360,8 +360,12 @@ preflight is a separate stage.
 return `sheets` in the positional tuple; sheets and wires come back through the
 existing `sheet_specs`-style collector keywords, so the positional tuple
 (pec_mask at index 3) stays unpacked by three validation scripts and many
-tests. A caller that passes no collector does not receive them and gets a
-`UserWarning`; a caller that steps fields must pass collectors or refuse.
+tests. Omitting the collectors on a model that HAS a sheet or a wire is a
+`ValueError` naming the caller (`_refuse_uncollected_pec`) — it was a
+`UserWarning` only while the consumers were being migrated. A caller that
+steps fields realizes what it collected or refuses the lane by name; a caller
+that reads cells only still passes `pec_sheets=[], pec_wires=[]` and drops the
+result, so "cells only" is a decision at the call site.
 
 **§4 rule 2 for stack-ups.** `Stackup.to_shapes` puts a foil sheet on the
 dielectric INTERFACE it bounds, not on the foil's mid-plane. On the mid-plane
@@ -376,6 +380,21 @@ before it applied a sigma fold and Dey–Mittra. Not a regression (the sigma fol
 was the thing §1.7 replaces), but no test pins a curved conformal body, so this
 stays an untested edge.
 
+**§1.9 consumers — the collectors at every assembler caller (done).** The
+nine collector-less callers outside preflight's files now collect:
+`optimize.py` (both lanes and the gradient check), `vmap_sweep.py`'s
+pre-conductor pad assembly, `fidelity.py`, three sites in `visualize.py`,
+`api/__init__.py`'s subgrid validator, `_execute.py`'s MSL static-eps read and
+`_compile.py`'s `_build_materials`. Lanes that cannot realize a sheet refuse
+it by name: `_build_materials` (the three coaxial S-parameter lanes) raises
+`NotImplementedError`, and `validate_subgrid` reports
+`subgrid_pec_sheet_or_wire_unsupported` in the same words the SBP-SAT runner
+uses. `conductor_mask()` also collects wires and unions a filament's path
+nodes (`rfx.boundaries.pec.wire_node_footprint`). Pinned by the entry-point
+battery in `tests/contracts/test_lattice_ownership_contract.py`: tangential E
+on a declared sheet plane is exactly zero through `run()`, `forward()`,
+`vmap_material_sweep` and `optimize`'s step, with an off-sheet control probe.
+
 **Not yet implemented — preflight (§3 findings, §1.9 consumers).** Owned by the
 preflight stage that follows this branch: `pec_box_one_cell`,
 `sheet_plane_realized`, `sheet_slot_vacuum`, `pec_zero_cells` as findings; and
@@ -384,5 +403,6 @@ the consumers that still measure metal from the primal CELL mask —
 `_check_coaxial_port_junction_aperture` via `_port_pec_mask`,
 `_msl_realized_substrate`, the wire-port advisory, and
 `_validate_cfg_sheet_live_edge_materials`. Until those switch, a sheet-declared
-conductor is invisible to preflight and preflight's own
-`_assemble_materials(grid)` calls take the sheets-dropped warning above.
+conductor is invisible to those particular findings; preflight's own
+`_assemble_materials` calls already pass collectors, so they satisfy the
+refusal above.

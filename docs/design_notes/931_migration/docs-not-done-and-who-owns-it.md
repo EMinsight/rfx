@@ -94,6 +94,14 @@ This is the gap design note §6 already names — *"preflight's own
 `_assemble_materials(grid)` calls take the sheets-dropped warning above"* —
 under **"Not yet implemented — preflight (§3 findings, §1.9 consumers)"**.
 
+> **Superseded 2026-09-07.** Both of preflight's own `_assemble_materials` /
+> `_assemble_materials_nu` calls now pass `sheet_specs`, `pec_sheets` and
+> `pec_wires`, so this particular strict-mode failure is gone. The helper is
+> also no longer a warning: it is `_refuse_uncollected_pec`, a `ValueError`
+> naming the caller. What remains of the preflight gap is the findings and the
+> consumers that still measure metal from the primal CELL mask — see design
+> note §6.
+
 **Owner: the preflight group (P).** Nothing was changed in the page to hide
 it. Fixing it means preflight passing collectors on both lanes and realizing
 them through `realized_pec_edge_masks`, which is on P's list already. Re-run

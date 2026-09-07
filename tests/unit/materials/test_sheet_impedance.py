@@ -131,8 +131,14 @@ def _fixture_sim(kind: str, **tc_kwargs):
 
 def _digests(sim):
     specs = []
+    # #931: a PEC sheet owns no cell, so it is in NEITHER the material
+    # arrays nor pec_mask — digesting only those would compare two models
+    # while ignoring the one object under test. Collect the sheets and
+    # digest their realization too.
+    pec_sheets: list = []
     mats, _, _, pec_mask, *_ = sim._assemble_materials(
-        sim._build_grid(), sheet_specs=specs)
+        sim._build_grid(), sheet_specs=specs, pec_sheets=pec_sheets,
+        pec_wires=[])
     if pec_mask is None:
         pec_mask = np.zeros((0,), dtype=np.bool_)
     return {
@@ -140,6 +146,8 @@ def _digests(sim):
         "sigma": _sha(mats.sigma),
         "mu_r": _sha(mats.mu_r),
         "pec_mask": _sha(pec_mask),
+        "pec_sheets": tuple((int(sp.normal_axis), int(sp.plane),
+                             _sha(sp.footprint)) for sp in pec_sheets),
     }, mats, pec_mask, specs
 
 

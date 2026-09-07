@@ -1761,7 +1761,13 @@ class _ExecuteMixin:
             _static_eps_483 = None
             if any(pe.eps_r_sub is None and getattr(pe, "mode", "uniform") == "laplace"
                    for pe in self._msl_ports):
-                _static_eps_483 = self._assemble_materials(grid)[0].eps_r
+                # Dielectric read: the launch fixture samples eps_r at ONE
+                # substrate cell to learn eps_r_sub. Conductors play no
+                # part, so the #931 collectors are passed and dropped —
+                # the sheets this run realizes are collected and applied
+                # by the assembly that drives the scan, not here.
+                _static_eps_483 = self._assemble_materials(
+                    grid, pec_sheets=[], pec_wires=[])[0].eps_r
             for pe in self._msl_ports:
                 x_feed, y_centre, z_lo = pe.position
                 mp = MSLPort(
