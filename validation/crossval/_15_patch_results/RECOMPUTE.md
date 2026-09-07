@@ -103,3 +103,92 @@ expected direction. The gates that must still pass: f0 vs openEMS <= 8 %,
 settling <= -40 dB, passivity max|S11| <= 1.05 on both legs, broadside D within
 3 dB, and the stack gate. If the stack gate fails, the leg is not evidence and
 nothing may be quoted from it.
+
+---
+
+# RESULT (2026-09-07) — run, decomposition, and the pre-declaration scored
+
+## The migrated leg (VESSL 369367259156)
+
+| | BEFORE (#768) | AFTER (#931) | openEMS (unchanged) |
+|---|---|---|---|
+| f_primary | 2.313947 GHz | 2.436612 GHz | 2.330000 GHz |
+| vs openEMS | 0.69 % LOW | 4.58 % HIGH | — |
+| vs analytic | -4.21 % | +0.87 % | -3.54 % |
+| ring-down Q | 18.90 | 10.21 | — |
+| S11 dip depth | -4.4 dB | -19.7 dB | -20.1 dB |
+| settling | -54.0 dB | -68.1 dB | — |
+| max abs S11 | 0.787 | 0.856 | 0.992 |
+| broadside D | 7.24 dBi | 7.20 dBi | 7.34 dBi |
+| stack check | `two_plane` / (absent) | `sheet` / `sheet`, `n_distinct_eps` 2 | — |
+
+All six gates PASS. The run was submitted twice by accident (see below) and the
+second container reproduced `f_primary = 2.436612 GHz` exactly — an unplanned
+bit-reproducibility witness across two independent runs.
+
+## The pre-declaration, scored verbatim
+
+Written above, before the run: *"a small DOWNWARD shift in the resonance and a
+deeper `s11_dip_db` are the expected direction."*
+
+* dip depth — **RIGHT**, and by more than expected: -4.4 → -19.7 dB, which is
+  openEMS's own -20.1 dB. A feed that reaches the conductor.
+* frequency — **WRONG**. f0 went UP, and by 5.30 %, not a little.
+
+## The decomposition (VESSL 369367259164) — and its pre-declaration, scored
+
+Two things changed in one step (the conductor declarations and the feed), so
+the shift had two candidate causes. The third point is the production sheets
+with the pre-#931 feed, `rfx_decomposition_feed_pre931.json`:
+
+| leg | f_primary | Δf | vs analytic | Q |
+|---|---|---|---|---|
+| #768: `two_plane` ground, old feed | 2.313947 GHz | — | -4.21 % | 18.90 |
+| sheets, OLD feed | 2.371307 GHz | **+57.4 MHz (+2.48 %)** | -1.83 % | 18.09 |
+| sheets, full-span feed (production) | 2.436612 GHz | **+65.3 MHz (+2.75 %)** | +0.87 % | 10.21 |
+
+Pre-declared in the decomposition commit: *"the plausible mechanism — removing
+the ground's vacuum own cell shortens an electrically +55.0 % inflated cavity,
+which RAISES f0 — predicts most of the shift lands in the first leg."*
+**WRONG.** The split is 47 % / 53 %; the feed term is slightly the larger of
+the two, and it carries essentially the whole Q collapse (18.1 → 10.2) while
+the ownership term barely touches Q (18.9 → 18.1).
+
+## What may and may not be claimed from this
+
+* The ownership change alone moved rfx from -4.21 % to -1.83 % against the
+  closed form for the DECLARED stack. That is the direction removing the
+  +55.0 % electrical-thickness inflation predicts, and it is the part #931
+  owns.
+* The feed change is NOT part of the ownership contract. It was authorized
+  separately (#929 / #920, the X-C brief), it accounts for the larger half of
+  the frequency shift and for all of the Q change, and it must be attributed to
+  itself. "The contract fixed the cavity" is an overclaim; roughly half of the
+  shift is a feed decision made in the same commit.
+* rfx and openEMS now DISAGREE more (0.69 % → 4.58 %) while rfx agrees with the
+  analytic anchor more (-4.21 % → +0.87 %). Do not present the second without
+  the first. The old 0.69 % was two errors partially cancelling — a cavity
+  electrically 55 % too thick, read through a feed that never touched the
+  patch — which is what this case's own #740 history already says about the
+  earlier +6.09 %.
+* One number does not settle whether rfx or openEMS is closer to the truth
+  here, and cv15 does not claim patch accuracy at all — that stays delegated to
+  case 05. What cv15 can say is that it is now solving the board it declares.
+
+## Open for the PI
+
+Whether the full-span feed stays. For it: it is byte-for-byte the openEMS
+lumped-port span, #929 says a port on a conductor's node plane is galvanic, and
+the dip depth now matches the comparator. Against it: it moved cv15 away from
+its comparator in f0, and it was changed in the same step as the ownership
+migration, which is what made this decomposition necessary. Both spellings stay
+reachable through `build_rfx_sim(feed=)` either way.
+
+## Duplicate submissions (disclosed, not deleted)
+
+The first submission loop was run in the foreground and was killed by a
+two-minute tool timeout after it had already created runs. Each of cv14, cv15,
+cv16 and cv17 therefore has TWO post-change runs a few minutes apart. Per the
+machine rules no VESSL run was deleted. The duplicates are harmless for
+cv14/16/17 (they write nothing) and for cv15 the two runs agree exactly; the
+`.latest` pointers name the second of each pair.

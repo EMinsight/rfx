@@ -43,3 +43,24 @@ applied to an all-ones state, planes read back through `realized_wall_planes`),
 with `WALL_REG_TOL_M` unchanged at 1e-9 m — a strict tightening. The run is the
 physics leg; the falsifier (flip one face to PMC and the assertion raises) is
 build-time and already exercised.
+
+
+---
+
+## RESULTS (2026-09-07)
+
+| case | verdict | evidence |
+|---|---|---|
+| cv14 | CONTROL HOLDS | mode table byte-identical to the pre-change baseline run; Gate 0 `max abs(eff - target) = 0.000e+00 m`, `eff = (50.000000, 30.000000, 40.000000) mm` — now MEASURED from `realized_wall_planes`, not computed from the grid shape. Gates 1-3 pass, worst mode error 0.0529 % (TE102) |
+| cv16 | CONTROL HOLDS | all five gated rows byte-identical to the baseline apart from wall-clock seconds; `rfx_monostatic_dbsm` at ka=0.5 is -40.92, the committed fixture's value to 4 dp. The new `[CONDUCTOR MODEL]` line prints at every point |
+| cv17 | CONTROL HOLDS | all four gated rows byte-identical to the baseline; `rfx -54.57 dBsm` at ka=0.5 matches the committed fixture. Dielectric sampling did not move |
+| cv15 | MIGRATED, all six gates pass, and the shift is LARGE | f_primary 2.313947 → 2.436612 GHz (+5.30 %). Split by a decomposition run: conductor declarations +2.48 %, feed change +2.75 %. Both pre-declarations scored in `validation/crossval/_15_patch_results/RECOMPUTE.md` — the dip-depth prediction was right, the frequency-direction prediction was wrong, and the "most of it is the ownership term" prediction was wrong |
+
+A fifth run, `369367259164`, is the cv15 feed decomposition
+(`scripts/vessl_931_post_cv15_feed_decomposition.yaml`), writing
+`_15_patch_results/rfx_decomposition_feed_pre931.json`.
+
+Each case was accidentally submitted twice (a foreground submit loop was killed
+by a tool timeout after it had already created runs). No VESSL run was deleted;
+the `.latest` pointers name the second of each pair, and the two cv15 runs
+agree to the last digit.

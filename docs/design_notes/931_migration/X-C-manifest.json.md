@@ -68,9 +68,12 @@ Append one sentence (no cv17 number changes; this case is the #931 control):
 > mesh as case 16). If this count ever picks up centre sampling, every number
 > in this case is a different sphere.
 
-## 4. `id: 15_patch_antenna_rt5880` — `claim_scope` (numbers pending the re-solve)
+## 4. `id: 15_patch_antenna_rt5880` — `claim_scope` (numbers MEASURED, apply as written)
 
-### 4a. The mechanism clause — apply as written
+The re-solve is done (VESSL 369367259156) and the decomposition run that
+attributes it is done (VESSL 369367259164), so nothing here is a placeholder.
+
+### 4a. The mechanism clause
 
 Find, inside `claim_scope`:
 
@@ -81,7 +84,7 @@ Find, inside `claim_scope`:
 > closed form by a similar margin; that direction is discretisation, reported
 > not hidden.
 
-replace with (`<...>` are filled per §4b — do not translate the old digits):
+replace with:
 
 > Post-#931 (lattice ownership contract) BOTH conductors are declared SHEETS —
 > zero-thickness PEC `Box`es on the two substrate faces — which is the same
@@ -96,65 +99,32 @@ replace with (`<...>` are filled per §4b — do not translate the old digits):
 > the one-cell patch `Box` whose far wall at 11.9062 mm was suppressed only by
 > a realization default, and a feed held one cell short of the patch so
 > coupling was capacitive only (#556). `assert_realized_stack()` now reads the
-> contract's one edge set (`realized_pec_edge_masks` /`realized_wall_planes`)
+> contract's one edge set (`realized_pec_edge_masks` / `realized_wall_planes`)
 > and refuses to quote f0 unless the realized wall planes over the patch
 > footprint are EXACTLY {z_sub_lo, z_sub_hi} — no wall at k_patch+1 — and the
 > assembled eps_r still holds exactly the two declared values, a sheet owning
-> no cell and writing no material. The #768 leg is preserved verbatim as
-> `validation/crossval/_15_patch_results/rfx_pre931_two_plane_ground_1f005d0d.json`
-> as the before side. Measured on the regenerated leg: rfx reads <D_OE> vs
-> openEMS (<F_RFX> vs 2.330 GHz) and <D_AN> vs the analytic anchor, openEMS
-> -3.54%; <SAME_SIDE_CLAUSE>. That direction is discretisation, reported not
-> hidden.
+> no cell and writing no material. MEASURED on the regenerated leg: rfx reads
+> 4.58 % HIGH vs openEMS (2.4366 vs 2.330 GHz) and +0.87 % vs the analytic
+> anchor, openEMS -3.54 %. The two solvers no longer sit on the same side of
+> the closed form — rfx reads high, openEMS low — and the rfx-vs-openEMS
+> distance grew from 0.69 % to 4.58 % while the rfx-vs-analytic distance shrank
+> from -4.21 % to +0.87 %; the openEMS leg did not move. The S11 dip deepened
+> from -4.4 dB to -19.7 dB against openEMS's -20.1 dB, and the ring-down Q fell
+> from 18.9 to 10.2: the feed now reaches the conductor instead of coupling
+> capacitively. A decomposition run (production sheets with the PRE-#931 feed,
+> `_15_patch_results/rfx_decomposition_feed_pre931.json`) splits the +5.30 %
+> almost evenly — the conductor declarations account for +2.48 % (2.3139 →
+> 2.3713 GHz, Q 18.9 → 18.1) and the feed change for a further +2.75 %
+> (2.3713 → 2.4366 GHz, Q 18.1 → 10.2, and essentially all of the Q collapse).
+> The old 0.69 % agreement with openEMS was therefore not a better model: it
+> was a cavity electrically 55 % too thick, read through a feed that never
+> touched the patch. The #768 leg is preserved verbatim as
+> `validation/crossval/_15_patch_results/rfx_pre931_two_plane_ground_1f005d0d.json`.
+> All six gates pass on the new leg, including the stack gate.
 
-### 4b. Filling `<D_OE>`, `<F_RFX>`, `<D_AN>`, `<SAME_SIDE_CLAUSE>`
-
-Read them from the REGENERATED `_15_patch_results/rfx.json` and
-`_15_patch_results/openems.json` (unchanged), computed the way `compare()`
-computes them — do not carry any digit over from the old text:
-
-* `<F_RFX>` = `rfx.json::f_primary_hz` in GHz to 4 significant figures;
-* `<D_OE>` = `|f_rfx - f_oe| / f_oe` as a percentage to 2 dp, with the word
-  `LOW` or `HIGH` per the sign (`f_rfx < f_oe` → LOW);
-* `<D_AN>` = `(f_rfx - f_analytic) / f_analytic` as a signed percentage to 2 dp
-  (`rfx.json::f_analytic_hz`);
-* `<SAME_SIDE_CLAUSE>` = "both solvers sit on the same side of the closed form
-  by a similar margin" ONLY if `<D_AN>` and openEMS's -3.54 % have the same
-  sign and differ by less than 2 percentage points. If they do not, say what
-  was measured instead; do not keep the sentence.
-
-### 4c. The #812 STOP paragraph — keep, with one added sentence
-
-The whole "ISSUE #812 (2026-09-01, round 2)" paragraph stays as written: the
-f0 gate's blindness to the #740 realization, the mode-pair ratio band that was
-tried and rejected, and the honest STOP. Its evidence (the frozen
-`cv15_ringdown_spectra.json` A/B and `cv15_mode_pair_ratio_band.json`) is NOT
-regenerated — regenerating it would destroy the A/B it exists to preserve, and
-the #740 realization it records is unreachable once `two_plane` is a
-`TypeError`. Append:
-
-> ISSUE #931 (2026-09-07): the blindness the paragraph above states is a
-> property of the f0 GATE and is unchanged. What changed is that the
-> realization it was blind to is no longer reachable — `two_plane` is deleted,
-> a conductor's plane is a declaration, and `assert_realized_stack` gates the
-> realized planes against it (including the absence of a wall at k_patch+1).
-> The frozen #740 A/B stays committed as historical evidence and now rests on
-> the preserved pre-#931 leg rather than on the live one.
-
-### 4d. `artifact_paths`
-
-Add the preserved before-side leg, so the before/after pair is discoverable
-from the manifest rather than only from a commit message:
-
-```
-"validation/crossval/_15_patch_results/rfx.json",
-"validation/crossval/_15_patch_results/openems.json",
-"validation/crossval/_15_patch_results/rfx_pre931_two_plane_ground_1f005d0d.json"
-```
-
-(`rfx_one_plane_ground_b29f9de7.json` is deliberately still not listed — it is
-cited from `claim_scope` and from `validation/README.md`, which is where it is
-looked up.)
+The sentence "both solvers sit on the same side of the closed form by a
+similar margin" is DELETED, not reworded: rfx is +0.87 % (high) and openEMS
+-3.54 % (low), which is opposite sides.
 
 ## 5. What must NOT change
 
