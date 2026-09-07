@@ -22,20 +22,24 @@ documentation update.
   discretizations, or an entire port or component family.
 </Aside>
 
-<Aside type="caution" title="Conductor cases were recomputed at 2.0">
+<Aside type="caution" title="Conductor cases are recomputed at 2.0">
   Release 2.0 changed how a conductor lands on the lattice: a PEC volume
   realizes walls at both of its drawn faces, and foil is declared as a sheet on
   one node plane
   ([How conductors land on the lattice](/rfx/guide/materials-geometry/#how-conductors-land-on-the-lattice)).
-  Every case below with a conductor body — `05`, `06b`, `07`, `11`, `15`, `16`,
-  `18`, `19`, `20` — was re-solved from the drawn geometry, and the
-  compensations that used to sit in their oracles were deleted rather than
-  re-tuned. `validation/crossval/manifest.json` and each case's committed
-  artifact are the live source for a gate value; a number quoted in this table
-  and not in the manifest is documentation, not the gate. The
-  boundary-PEC cases (`09`, `10`, `14`, `24`) and the dielectric-only cases
-  (`01`–`04`, `17`, `22`, `23`) are the controls: they are unchanged and were
-  re-run to confirm it.
+  Every case below with a declared conductor body — `05`, `06b`, `07`, `11`,
+  `15`, `18`, `19`, `20` — is re-solved from the drawn geometry, with the
+  compensations that used to sit in its oracle deleted rather than re-tuned;
+  a case that has not been re-solved does not ship in 2.0.
+  `validation/crossval/manifest.json` and each case's committed artifact are
+  the live source for a gate value; a number quoted in this table and not in
+  the manifest is documentation, not the gate.
+
+  Three groups of cases are controls and must come back unchanged: the
+  boundary-PEC cases (`09`, `10`, `14`, `24`), the dielectric-only cases
+  (`01`–`04`, `17`, `22`, `23`), and the σ-fill cases (`16`, `21`), whose metal
+  is a conductivity written into cells rather than a declared conductor and is
+  fenced out of the contract.
 </Aside>
 
 ## Result codes

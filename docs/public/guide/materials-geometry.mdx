@@ -346,6 +346,35 @@ matters.
 * `add_thin_conductor()` with a shape thicker than one local cell along its
   normal raises: that is a volume, use `add()`.
 
+### What this rule does not cover
+
+Three paths put metal in a domain without going through a conductor
+declaration. They are not part of the contract above, and mixing them up with
+it is the easiest way to misread a result.
+
+* **Domain-boundary PEC** — `boundary="pec"`, or a `BoundarySpec` face. That is
+  a wall of the box, not a body: tangential E is zeroed on the face plane
+  itself. A ground plane realized this way has no footprint, no cell and no
+  sheet; it is the domain.
+* **A σ fill through the low-level rasterizer** —
+  `rasterize(grid, [(shape, 1.0, 1e7)])`, and the shell and pin that
+  `stamp_coaxial_line()` stamps. This writes a conductivity into cells and
+  lets the ordinary update equation damp the field inside them. It is a lossy
+  volume model, not PEC realization: no edge is zeroed, `realized_wall_planes`
+  reports nothing for it, and its occupied cells are sampled at NODES, not at
+  cell centres. The RCS pages use it deliberately, because TFSF illumination
+  takes `MaterialArrays` rather than a `Simulation`.
+* **Subpixel smoothing** — `subpixel_smoothing="kottke_pec"` (stage 2) and the
+  Dey–Mittra conformal path (stage 1) select their own interior and carry their
+  own weights. One composition did change at 2.0: on the waveguide lane the
+  conformal path now applies the realized PEC edges together with Dey–Mittra,
+  where before it applied a σ fold and Dey–Mittra. No test covers a curved
+  conformal body, so treat that combination as an untested edge.
+
+If you want the contract's three kinds, declare them with `add()`,
+`add_thin_conductor()` or `PolylineWire`. Everything else is a different model
+with a different answer, and it is on you to say which one a number came from.
+
 ### Two worked contrasts
 
 **Foil is a sheet.** A 35 µm ground on a 0.787 mm RO4003C substrate, meshed at

@@ -92,6 +92,29 @@ field, `_two_plane_cell_mask`, `_refuse_two_plane`, `two_plane_extension_masks`,
 per-entry realization knobs: a test greps `rfx/` for `two_plane` and for
 `realization=`-style keywords on geometry entries and fails on a hit.
 
+**What the contract does NOT cover.** Three paths put metal in a domain
+without a conductor declaration, and confusing one of them with the contract is
+the easiest way to misread a 2.0 result:
+
+- **domain-boundary PEC** (`boundary="pec"`, `BoundarySpec` faces) is a wall of
+  the box, not a body — tangential E is zeroed on the face plane itself.
+  Unchanged; the boundary-PEC crossval cases are the controls for this release
+  and must come back bit-identical.
+- **a σ fill through the low-level rasterizer** —
+  `rasterize(grid, [(shape, 1.0, 1e7)])`, and the shell and pin
+  `stamp_coaxial_line()` stamps. A lossy VOLUME model: it damps the field
+  inside conductive cells, zeroes no edge, reports no wall plane, and samples
+  its cells at NODES rather than at cell centres. Unchanged. Bringing this
+  family under the contract is a follow-up, not part of 2.0 — measured price on
+  the Mie sphere at ka = 0.5: 1082 σ-filled cells against 1123 for the same
+  sphere declared as a PEC volume, an a_eff shift of about 1.2 %.
+- **subpixel smoothing** (`subpixel_smoothing="kottke_pec"`, Dey–Mittra
+  conformal) keeps its own interior selection and its own weights. One
+  composition did change: on the waveguide lane the conformal path now applies
+  the realized PEC edges together with Dey–Mittra where it previously applied a
+  σ fold and Dey–Mittra. That is the σ fold this release replaces, but no test
+  covers a curved conformal body, so treat it as an untested edge.
+
 **IR.** The design-interop IR is at v2: the required `two_plane` boolean is gone
 and sheets are expressed directly. A document carrying `two_plane` is refused
 with a message rather than ignored.
@@ -127,7 +150,7 @@ grepping the CHANGELOG should not follow their recipes):
   same change.
 - **#740** — cv15's `two_plane=True` ground fix and the +55.0 % electrical
   thickness it corrected. The keyword no longer exists; the ground is declared as
-  a sheet at the substrate floor and cv15's numbers were re-measured. #767 (the
+  a sheet at the substrate floor and cv15's numbers are re-measured for this release. #767 (the
   checker that could not see a sheet's cavity) is closed by construction: the
   cavity check reads `realized_wall_planes`.
 - **#802/#807** — "a `Box` face declared on a node multiple realizes per the
@@ -148,12 +171,13 @@ grepping the CHANGELOG should not follow their recipes):
   Live/dead is now `edge_is_pec` on the port's own component; clearing is
   `clear_edges`. "The thin-sheet rule" names the deleted rule.
 
-**Recomputed artifacts.** Every crossval case, example, fixture and lock with a
-conductor body was re-solved from its migrated declaration; the per-case
-before/after values and the VESSL run ids are in each case's results directory
-and its commit. Dielectric-only cases (cv04, cv17, cv22, cv23 and every example
-without a conductor body) are bit-identical, and that identity is the change's
-own falsifier.
+**Recomputed artifacts.** No number in this repository was translated,
+re-tuned or hand-edited for this release: a crossval case, example, fixture or
+lock with a conductor body is re-solved from its migrated declaration or it
+does not ship. Each case's before/after values and its VESSL run id live in
+that case's results directory and its commit, not here. Dielectric-only cases
+(cv04, cv17, cv22, cv23 and every example without a conductor body) must come
+back bit-identical, and that identity is the change's own falsifier.
 
 ### Added — near-cutoff layout note, and the S21 phase residual on waveguide S-matrix results
 
