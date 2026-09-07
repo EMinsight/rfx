@@ -53,8 +53,8 @@ is, so the branch must be committed before submitting.
   27 baseline yamls in `scratchpad/vessl_baseline/` uses a heredoc — VESSL's
   own run wrapper rewrites the block and the terminator stops terminating.
   Do not put a heredoc in a VESSL `run:` block; put the program in a file.
-* **VESSL run id: 369367264022** (resubmitted 2026-09-07 14:31 UTC,
-  https://app.vessl.ai/remilab/runs/byungkwan/369367264022).
+* **VESSL run id: 369367259224** (resubmitted 2026-09-07 14:24 UTC,
+  https://app.vessl.ai/remilab/runs/byungkwan/369367259224).
   Command: `vessl run create -f rfx-931-post-msl-sheet-golden.yaml` (the yaml
   sits beside this file; submit it from a non-git directory — the CLI cannot
   read a worktree's `.git` file). Run name `rfx-931-post-msl-sheet-golden`,
