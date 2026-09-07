@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import runpy
+import subprocess
 import sys
 import traceback
 import warnings
@@ -154,6 +155,15 @@ def run_case(case: str, repo: Path) -> dict:
     return {"case": case, "captured": captured, "error": err}
 
 
+def _describe(repo: Path, *args: str) -> str:
+    """git output for ``repo``, or ``"unknown"`` — never fatal to the witness."""
+    try:
+        return subprocess.check_output(["git", "-C", str(repo), *args],
+                                       text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
@@ -166,11 +176,18 @@ def main() -> int:
     import rfx
     payload = {
         "repo": str(repo),
+        # The comparison is only readable if each side says WHICH checkout it
+        # is. Without this the filename is the only claim about provenance,
+        # and a filename is not evidence.
+        "repo_commit": _describe(repo, "rev-parse", "HEAD"),
+        "repo_dirty": bool(_describe(repo, "status", "--porcelain")),
         "rfx_module": str(Path(rfx.__file__).resolve()),
         "rfx_version": getattr(rfx, "__version__", "?"),
         "cases": [run_case(c, repo) for c in args.cases],
     }
     Path(args.out).write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(f"checkout: {repo} @ {payload['repo_commit'][:8]}"
+          + ("  (DIRTY)" if payload["repo_dirty"] else ""))
     for c in payload["cases"]:
         n = len(c["captured"])
         print(f"{c['case']}: {n} assembled simulation(s)"
