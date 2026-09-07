@@ -322,6 +322,78 @@ above is withdrawn except the one arithmetic slip corrected below.
       ``tests/fixtures/cv06b_estimator_regate/cv06b_estimator_falsifiers.json
       ::case_C_shallow_notch_from_geometry``. No window moved in either round.
 
+#931 LATTICE OWNERSHIP — APPENDED 2026-09-07. Nothing above is withdrawn;
+the paragraphs it supersedes are marked below and stay as a pre-#931 record.
+
+  WHAT CHANGED IN THE DECLARATION. The main line and the stub used to be
+  ``Box((.., H_SUB), (.., H_SUB + DX))`` — a Box one cell thick, which the
+  lattice ownership contract realizes as a VOLUME: a 63.5µm filled metal
+  slab with electric walls at BOTH z=254 and z=317.5µm and Ez shorted
+  between them, a conductor a quarter of the substrate thick on a board
+  whose whole point is a zero-thickness microstrip. They are now declared
+  as SHEETS — a Box with EQUAL z corners at z=H_SUB, which is how the
+  contract spells "a conductor on this node plane, zero thickness" (§1.5).
+  The realization is the tangential Ex/Ey edges between neighbouring
+  footprint nodes on the z=254µm plane, with the normal Ez left live.
+  ``add_thin_conductor(...)`` would produce exactly the same sheet; the
+  zero-thickness Box keeps the declaration inside ``sim.add``.
+
+  WHAT CHANGED IN THE REALIZED BOARD, and it is not nothing. The pre-#931
+  rule zeroed a tangential edge at EVERY masked node with a masked
+  neighbour, which includes one edge REACHING PAST the hi rim of the
+  footprint. The contract's sheet rule zeroes the edge between two
+  footprint nodes and no other, so n footprint nodes carry n-1 edges:
+
+    main line  10 node rows -> 9 edges -> realized width 635.0 -> 571.5 µm
+    stub        10 node cols -> 9 edges -> realized width 635.0 -> 571.5 µm
+    stub length (open end minus the main line's far edge)  12.0015 mm,
+                UNCHANGED — both ends lost the same extra edge.
+
+  So this board's metal is one cell narrower on both lines, and its stub is
+  the same electrical length. r = Z0_line/Z_stub stays exactly 1 (both
+  lines realize the same width — now ASSERTED at build time rather than
+  argued from ``W_STUB == W_TRACE``), so G2's closed form is untouched.
+
+  SUPERSEDED BY THIS SECTION (kept above as the pre-#931 record):
+    * "Mesh convention"'s verbatim ``fidelity_report()`` quote "geometry[1]
+      'pec' ... realized [1016.0, 1651.0] um | extent 600.0 -> 635.0 um"
+      and its argument that ``round(W_TRACE/DX)*DX`` = 571.5µm is the WRONG
+      answer. Under the contract 571.5µm IS the realized width — the two
+      readings now agree, and the old 635.0µm was one extra edge, a CELL
+      count of a NODE mask (the #929 class).
+    * every number derived from 635.0µm: u = 2.500, ε_eff_HJ = 2.882,
+      analytic notch 3.6790 GHz, HJ(635,254) = 46.18Ω, and the G1 window's
+      shunt-T term 2.646%.
+    * the Z0 cross-check against ``msl_z0_bias_floor_sweep``'s committed
+      "aligned h_sub/4" row (46.098Ω): that artifact was produced under the
+      pre-#931 realization, i.e. on a 635µm-wide line, so it is NOT a
+      cross-check on this board until its producer is re-run. Quoted here
+      as history, not as agreement.
+
+  RE-DERIVED ON THE REALIZED BOARD (571.5µm):
+    u = 2.250, ε_eff_HJ = 2.858488, analytic notch 3.694215 GHz (+0.415%
+    against the pre-#931 3.678954 GHz), HJ(571.5, 254, 3.66) = 49.39Ω.
+    G1's three terms: open-end fringing (Hammerstad-Bekkadal) 0.873%,
+    shunt-T reference plane 0.5*W_realized 2.381%, half-cell stub
+    rasterisation 0.265% — worst-case sum 3.519% (was 3.796%).
+    NOTCH_FREQ_TOL_PCT STAYS 4.0: a realization change and a gate change
+    must not land in one step, or the gate stops being able to fail the
+    realization. The window is not widened; tightening it to the new sum is
+    a separate decision on a re-measured envelope.
+
+  PRE-DECLARED BEFORE THE POST-CONTRACT SOLVE (design note §5 discipline;
+  the measured values are reported against this list verbatim, pass or fail):
+    * the measured notch RISES by the same 0.415% as the analytic one,
+      because both move only through ε_eff of a line that lost one cell of
+      width: 3.6255 -> 3.640 GHz (refined vertex);
+    * therefore err_pct stays near its committed 1.4530% — predicted
+      1.45 ± 0.5 pp. A measured notch that does NOT move up by ~0.4%
+      falsifies the reading that the width is the only thing that changed;
+    * G2 bw_ratio stays 0.968 ± 0.05 (r = 1 is preserved by construction);
+    * G4 Z0 median RISES 46.48 -> 49.4 ± 1.5Ω, tracking HJ on the narrower
+      realized line (46.18 -> 49.39Ω); still inside the (40, 65)Ω window;
+    * the half-grid witness and the notch depth are not predicted to move.
+
 Scope:
   - Uniform mesh dx=63.5µm = H_SUB/4 (issue #723; was dx=80µm, h_sub/dx=
     3.175, an UNDER-RESOLVED mixed-cell substrate per the "External
@@ -372,8 +444,14 @@ _SPEC.loader.exec_module(sf)
 # --- #812 P3 gate windows, pre-declared in the design note before any
 # --- measurement that judges them. See the "ESTIMATOR RESOLUTION" docstring
 # --- section and docs/design_notes/estimator_resolution_regate.md.
-NOTCH_FREQ_TOL_PCT = 4.0        # 0.886 (open end) + 2.646 (shunt-T plane)
-                                # + 0.265 (half-cell stub) = 3.796, rounded up
+NOTCH_FREQ_TOL_PCT = 4.0        # pre-#931: 0.886 (open end) + 2.646 (shunt-T
+                                # plane) + 0.265 (half-cell stub) = 3.796,
+                                # rounded up. On the post-#931 realized board
+                                # (571.5um, not 635.0um) the same three terms
+                                # are 0.873 + 2.381 + 0.265 = 3.519. The
+                                # window is NOT moved with the realization —
+                                # see the "#931 LATTICE OWNERSHIP" docstring
+                                # section; it is not widened either.
 STOPBAND_LEVEL_DB = -10.0
 STOPBAND_BW_FRAC_IDEAL = 0.210274   # (4/pi)*atan(r/6) at r = Z0_line/Z_stub = 1
 STOPBAND_BW_RATIO_WINDOW = (0.80, 1.20)   # fires at r <= 0.797 / r >= 1.205
@@ -424,18 +502,28 @@ def _build_sim() -> Simulation:
 
     # Main microstrip line (full LX so it goes through CPML — required for
     # MSL port termination, see commit 8882ef1 on msl_port_integration test).
+    #
+    # SHEET, not a one-cell volume (#931 §1.5). The z corners are EQUAL, which
+    # is how the lattice-ownership contract spells "a conductor on this node
+    # plane, zero thickness": the realization is the tangential Ex/Ey edges of
+    # the footprint on the z = H_SUB node plane, and Ez through the metal stays
+    # live. Drawn as `H_SUB -> H_SUB + DX` (what this script shipped before
+    # #931) the same Box is a VOLUME and realizes a 63.5 um filled slab with
+    # walls at BOTH 254 and 317.5 um — a conductor a quarter of the substrate
+    # thick on a board whose whole point is a zero-thickness MSL trace.
     sim.add(
-        Box((0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + DX)),
+        Box((0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB)),
         material="pec",
     )
 
-    # Open-circuit stub branching off the main line at x = LX/2
+    # Open-circuit stub branching off the main line at x = LX/2 (same sheet
+    # plane, so trace and stub are one connected conductor).
     stub_x_centre = LX / 2.0
     stub_x_lo = stub_x_centre - W_STUB / 2.0
     stub_x_hi = stub_x_centre + W_STUB / 2.0
     sim.add(
         Box((stub_x_lo, trace_y_hi, H_SUB),
-            (stub_x_hi, trace_y_hi + STUB_LEN, H_SUB + DX)),
+            (stub_x_hi, trace_y_hi + STUB_LEN, H_SUB)),
         material="pec",
     )
 
@@ -452,28 +540,177 @@ def _build_sim() -> Simulation:
     return sim
 
 
-def _realized_trace_width(sim: Simulation) -> float:
-    """Main-trace width as the RASTERIZER actually realizes it (metres).
+def realized_metal(sim: Simulation) -> dict:
+    """The metal this build actually realizes, read from the ONE realization
+    function (#931 §1.7). No solve, no re-derived rule.
 
-    Read live from ``sim.fidelity_report()`` rather than re-derived with a
-    ``round(W_TRACE / DX) * DX`` formula: the half-open ``[lo, hi)`` node
-    convention (``rfx.geometry.csg.Box``) counts the OVERLAPPED node span,
-    not the rounded declared extent, and the two disagree by a cell at this
-    mesh (571.5um / 9 cells from the round() formula vs the true 635.0um /
-    10 cells — see the "Mesh convention" docstring section, issue #723
-    BLOCKER 1). ``geometry[1]`` is the main trace (added first of the two
-    PEC bodies in ``_build_sim``); its y-axis is transverse to propagation.
+    ``rfx.boundaries.pec.realized_pec_edge_masks`` is the single owner that
+    turns declared geometry into PEC E edges, so every number this case
+    quotes about its own conductor is measured from ITS output and the
+    script cannot drift from the solver. Both metal entries here are SHEETS
+    (§1.3): a zero-thickness Box on the substrate-top node plane, realized
+    as the tangential Ex/Ey edges BETWEEN neighbouring footprint nodes, with
+    the normal Ez through the metal left live.
+
+    Returned (metres unless the name says otherwise):
+
+    ``plane_k`` / ``plane_z``   the node plane both sheets land on;
+    ``trace_w``                 main-line width = the span between the
+                                outermost footprint node rows, i.e.
+                                ``(n_rows - 1) * dx``;
+    ``stub_w``                  the same measure across the stub;
+    ``stub_len``                stub open end minus the main line's far edge.
+
+    The width measure is the one the contract fixes: a sheet IS its set of
+    edges, and n footprint nodes carry n-1 edges. The pre-#931 neighbour
+    rule zeroed one EXTRA edge past the hi rim of every footprint, which is
+    why this case used to read 635.0 um (10 * dx) for a 600 um trace — a
+    CELL count of a NODE mask, the #929 class, inside a crossval.
     """
-    report = sim.fidelity_report(print_report=False)
-    for item in report:
-        if item["entity"] == "geometry[1] 'pec'":
-            for ax in item["axes"]:
-                if ax["axis"] == "y":
-                    return float(ax["realized_extent_um"]) * 1e-6
-    raise RuntimeError(
-        "_realized_trace_width: could not find geometry[1] 'pec' y-axis in "
-        "sim.fidelity_report() — did _build_sim()'s geometry order change?"
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+
+    grid = sim._build_grid()
+    sheets: list = []
+    wires: list = []
+    assembled = sim._assemble_materials(grid, pec_sheets=sheets, pec_wires=wires)
+    pec_mask = assembled[3]
+    if pec_mask is None and not sheets and not wires:
+        raise RuntimeError("realized_metal: this build has no conductor at all")
+    edges = realized_pec_edge_masks(pec_mask, sheets=tuple(sheets),
+                                    wires=tuple(wires),
+                                    periodic=sim._periodic_flags())
+    mx, my, mz = (np.asarray(e) for e in edges)
+    from rfx.geometry.rasterize_grid import coords_from_uniform_grid
+    gc = coords_from_uniform_grid(grid)
+    nodes = (np.asarray(gc.x), np.asarray(gc.y), np.asarray(gc.z))
+
+    planes = realized_wall_planes(edges, 2)
+    if len(planes) != 1:
+        raise RuntimeError(
+            "realized_metal: this board declares two zero-thickness sheets on "
+            f"ONE node plane, but the realization has tangential walls at z "
+            f"planes {planes} — a sheet is one plane (#931 §1.3); two planes "
+            "is what a one-cell VOLUME trace would realize")
+    k = planes[0]
+    # Main line: the rows whose Ex edges span the propagation axis. The
+    # stub's rows carry only its own W_STUB-wide handful of Ex edges, so the
+    # longest rows are the main line's, and they must all be equally long
+    # (the line is a rectangle) — a row count that is not a plateau means
+    # the footprint is not the rectangle this case declares.
+    ex_per_row = mx[:, :, k].sum(axis=0)
+    if not ex_per_row.any():
+        raise RuntimeError(
+            "realized_metal: no Ex edge on the sheet plane — no metal runs "
+            "along the propagation axis")
+    trace_rows = np.flatnonzero(ex_per_row == ex_per_row.max())
+    if trace_rows.size < 2 or trace_rows.max() - trace_rows.min() + 1 != trace_rows.size:
+        raise RuntimeError(
+            f"realized_metal: the longest Ex rows are {trace_rows.tolist()} — "
+            "the main line does not realize as one contiguous block of rows")
+    # ``Ex[i, j, k]`` sits ON node row j (it is the edge from node i to i+1),
+    # so the rows carrying Ex are the conductor's NODE rows and the metal
+    # spans from the first to the last of them.
+    j0, j1 = int(trace_rows.min()), int(trace_rows.max())
+    trace_w = float(nodes[1][j1] - nodes[1][j0])
+    # Stub: the transverse (Ey) edges at or beyond the main line's far row.
+    # ``Ey[i, j, k]`` sits on node column i and spans node j -> j+1, so the
+    # columns are node indices and the edge indices are the y intervals.
+    stub_cols = np.flatnonzero(my[:, j1:, k].any(axis=1))
+    if stub_cols.size == 0:
+        raise RuntimeError(
+            "realized_metal: no Ey edge above the main line — the stub is not "
+            "connected to the trace (a slit at the junction)")
+    i0, i1 = int(stub_cols.min()), int(stub_cols.max())
+    stub_w = float(nodes[0][i1] - nodes[0][i0])
+    stub_edges = np.flatnonzero(my[i0:i1 + 1, :, k].any(axis=0))
+    stub_open = int(stub_edges.max()) + 1
+    stub_len = float(nodes[1][stub_open] - nodes[1][j1])
+    return dict(
+        plane_k=int(k), plane_z=float(nodes[2][k]),
+        n_sheets=len(sheets),
+        n_volume_cells=0 if pec_mask is None else int(np.asarray(pec_mask).sum()),
+        trace_j=(j0, j1), trace_w=trace_w,
+        trace_y=(float(nodes[1][j0]), float(nodes[1][j1])),
+        stub_i=(i0, i1), stub_w=stub_w,
+        stub_len=stub_len, stub_open_j=stub_open,
+        n_ex=int(mx.sum()), n_ey=int(my.sum()), n_ez=int(mz.sum()),
     )
+
+
+def assert_realized_metal(sim: Simulation) -> dict:
+    """MANDATORY build-time geometry check (#931): refuse to solve unless the
+    realized metal IS the declared metal. No FDTD step runs here.
+
+    cv15's ``assert_realized_stack`` is the model — a case that quotes a
+    physical number must first show the lattice built the object its
+    docstring describes. What this asserts, and what each item catches:
+
+    1. both metal entries are SHEETS on ONE node plane, and that plane is
+       the substrate top ``z = H_SUB``. Catches a foil re-declared as a
+       volume (which realizes a 63.5 um filled slab with walls at 254 AND
+       317.5 um and Ez shorted between them), a sheet snapped to the wrong
+       node, and a mesh on which ``H_SUB`` stops landing on a node line;
+    2. no PEC VOLUME cell exists at all — the same defect from the other
+       side, and the cheapest possible statement of "this board's metal has
+       no thickness";
+    3. trace and stub realize the SAME width. G2's closed form
+       ``(4/pi)*atan(r/6)`` is evaluated at ``r = Z0_line/Z_stub = 1``
+       "exactly by construction", and the construction is this equality of
+       REALIZED widths, not the declaration ``W_STUB == W_TRACE``;
+    4. realized width and realized stub length are each within one cell of
+       their declared values — catches a footprint that lost or gained a row.
+
+    Returns the measured dict for the caller to print and record.
+    """
+    m = realized_metal(sim)
+    problems = []
+    if m["n_sheets"] != 2:
+        problems.append(f"expected 2 PEC sheets, classified {m['n_sheets']}")
+    if m["n_volume_cells"]:
+        problems.append(
+            f"{m['n_volume_cells']} PEC VOLUME cell(s) realized; both metal "
+            "entries must be zero-thickness sheets")
+    if abs(m["plane_z"] - H_SUB) > 1e-12:
+        problems.append(
+            f"sheet plane at z={m['plane_z']*1e6:.3f} um, declared substrate "
+            f"top z={H_SUB*1e6:.3f} um (k={m['plane_k']})")
+    if abs(m["trace_w"] - m["stub_w"]) > 1e-12:
+        problems.append(
+            f"realized trace width {m['trace_w']*1e6:.1f} um != realized stub "
+            f"width {m['stub_w']*1e6:.1f} um, so G2's r = 1 is not by "
+            "construction")
+    if abs(m["trace_w"] - W_TRACE) > DX:
+        problems.append(
+            f"realized trace width {m['trace_w']*1e6:.1f} um is more than one "
+            f"cell ({DX*1e6:.1f} um) from the declared {W_TRACE*1e6:.1f} um")
+    if abs(m["stub_len"] - STUB_LEN) > DX:
+        problems.append(
+            f"realized stub length {m['stub_len']*1e6:.1f} um is more than one "
+            f"cell from the declared {STUB_LEN*1e6:.1f} um")
+    if problems:
+        raise RuntimeError(
+            "assert_realized_metal: the realized conductor is not the declared "
+            "one — refusing to quote a notch frequency. "
+            + "; ".join(problems) + f" [measured: {m}]")
+    return m
+
+
+def _realized_trace_width(sim: Simulation) -> float:
+    """Main-trace width as the lattice actually realizes it (metres).
+
+    Measured from the realized PEC EDGE set (:func:`realized_metal`) — what
+    the solver zeroes — not from a cell-mask-derived report.
+
+    PRE-#931 this read ``fidelity_report()``'s ``realized_extent_um`` for
+    ``geometry[1] 'pec'`` and got 635.0 um = 10 node rows * dx, and its
+    docstring argued that ``round(W_TRACE/DX)*DX`` (571.5 um) was the WRONG
+    answer. Under the lattice ownership contract a sheet's conductor is the
+    9 edges between its 10 footprint nodes, i.e. 571.5 um: the two now
+    agree, and the old 635.0 um was the extra hi-rim edge the pre-#931
+    neighbour rule zeroed. Every number derived from the width moves with
+    it — see the "#931 LATTICE OWNERSHIP" docstring section.
+    """
+    return float(realized_metal(sim)["trace_w"])
 
 
 def worst_sampled_notch_db(bin_hz, f0, r=1.0):
@@ -626,6 +863,25 @@ def main() -> int:
     print(f"mesh: dx={DX*1e6:.1f}µm, n_z_sub={int(round(H_SUB/DX))}")
 
     sim = _build_sim()
+
+    # Build-time geometry check (#931), BEFORE the solve and before any
+    # number is quoted: the realized metal must be the declared metal.
+    rm = assert_realized_metal(sim)
+    print()
+    print("Realized metal (#931, from realized_pec_edge_masks — no solve):")
+    print(f"  PEC sheets                 = {rm['n_sheets']} "
+          f"(volume cells: {rm['n_volume_cells']})")
+    print(f"  sheet plane                = k={rm['plane_k']}, "
+          f"z={rm['plane_z']*1e6:.1f} um (declared substrate top "
+          f"{H_SUB*1e6:.1f} um)")
+    print(f"  trace width  declared/real = {W_TRACE*1e6:.1f} / "
+          f"{rm['trace_w']*1e6:.1f} um")
+    print(f"  stub  width  declared/real = {W_STUB*1e6:.1f} / "
+          f"{rm['stub_w']*1e6:.1f} um  (r = 1 needs these two equal)")
+    print(f"  stub length  declared/real = {STUB_LEN*1e6:.1f} / "
+          f"{rm['stub_len']*1e6:.1f} um")
+    print(f"  PEC edges (Ex, Ey, Ez)     = "
+          f"({rm['n_ex']}, {rm['n_ey']}, {rm['n_ez']})")
 
     # Hammerstad-Jensen ε_eff for the analytic notch — from the REALIZED
     # trace width, not the declared one (issue #723; see "Mesh convention").
