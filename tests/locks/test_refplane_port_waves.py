@@ -87,6 +87,9 @@ _Y_MID = _DOMAIN[1] / 2
 _L = _X2 - _X1
 _FREQS = np.linspace(3e9, 7e9, 9)
 _N_STEPS = 4000
+# Kept as the name of the advisory this fixture USED to pin, so a reader
+# grepping for it lands on the re-derivation note in the module fixture
+# below rather than on nothing (#931 phase 2b).
 _PEC_FACES_ADVISORY_SNIPPET = "INFINITE PEC boundary"
 
 
@@ -831,22 +834,50 @@ def refplane_thru():
     issues = [str(i) for i in report]
     for msg in issues:
         print(f"\n[refplane thru] preflight (verbatim): {msg}")
-    # Exact known advisory set (re-pinned 2026-07-11 for issue #319):
-    # pec_faces (the infinite ground plane IS the microstrip return)
-    # PLUS one wire_port_dead_extent_cells advisory per port — the
-    # canonical thru's top extent cell GENUINELY sits inside the PEC
-    # trace. Post-#318 the dead cell is excluded from the sigma/drive/Z0
-    # fold, so each port terminates at 50 ohm across its 2 live cells
-    # (the pre-#318 33.3-ohm Z0*(n_live/n) reading is the historical
-    # issue #313 finding). Every gate in this module was measured on this
-    # exact fixture, dead cell included, so the gates stay valid as-is.
+    # Exact known advisory set. RE-DERIVED 2026-09-07 (#931 phase 2b),
+    # after the preflight group's migration landed on the base branch and
+    # not before it — pinning this list while preflight was half-migrated
+    # would have pinned a state that was about to move again.
+    #
+    # It was, from 2026-07-11 (#319) to #931:
+    #     pec_faces_finite_pec, wire_port_dead_extent_cells x2
+    # and it is now one INFO, `sheet_plane_realized`. Both losses are
+    # accounted for, because an advisory that stops firing is exactly how
+    # a fixture stops being watched:
+    #
+    #   * wire_port_dead_extent_cells (one per port) said the thru's top
+    #     extent cell sat INSIDE the trace. It does not any more, and the
+    #     realization says so with no solve: the trace is a SHEET on node
+    #     plane 2, realizing 374 Ex and 350 Ey tangential edges and ZERO
+    #     Ez edges (contract §1.3 — the normal E through a foil stays
+    #     live). Each port's 1 mm extent spans two Ez edges below that
+    #     plane and neither is metal, so there is no dead cell left to
+    #     report. Post-#318 the dead cell was already excluded from the
+    #     sigma/drive/Z0 fold, so the 50-ohm termination the gates below
+    #     were measured through is unchanged; what changed is that there
+    #     is nothing to exclude.
+    #
+    #   * pec_faces_finite_pec said "you have an INFINITE PEC boundary
+    #     face AND finite PEC objects". Both are still true here — z_lo is
+    #     `pec` and the trace is a finite conductor — but the check reads
+    #     `material_name == "pec"` over `_geometry` entries only, and a
+    #     foil declared with add_thin_conductor is a SheetSpec, not a
+    #     geometry entry. So the advisory is silent for a reason that has
+    #     nothing to do with this fixture: under the contract a finite PEC
+    #     conductor can be declared in a place that check does not look.
+    #     Handed to the preflight owner (T6-RECOMPUTE.md, "the advisory
+    #     the contract made blind"); NOT worked around here, because this
+    #     fixture's job is to notice drift, not to hide it.
+    #
     # Anything else = fixture drift, stop.
     codes = sorted(getattr(i, "code", None) for i in report)
-    assert codes == ["pec_faces_finite_pec",
-                     "wire_port_dead_extent_cells",
-                     "wire_port_dead_extent_cells"], (
+    assert codes == ["sheet_plane_realized"], (
         f"refplane thru preflight drifted from the baseline: {issues}")
-    assert any(_PEC_FACES_ADVISORY_SNIPPET in m for m in issues)
+    # The one advisory that does fire is the load-bearing one for this
+    # module: every constant below is measured THROUGH this strip, so the
+    # strip has to be on the plane it was drawn on.
+    assert any("realized node plane 2" in m and "offset +0.000 cell" in m
+               for m in issues), issues
     S, freqs, diag = compute_lumped_wire_s_matrix_via_scan(
         sim, _FREQS, n_steps=_N_STEPS, return_refplane_diagnostics=True)
     S = np.asarray(S).astype(np.complex128)
