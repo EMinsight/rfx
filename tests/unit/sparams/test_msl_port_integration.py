@@ -45,6 +45,18 @@ Gate calibration (dx=80 µm, laplace mode, measured 2026-05-04)
   mean |S11| ≈ 0.118  → gate < 0.15
   mean |S21| ≈ 0.972  → gate (0.90, 1.05)
   mean Re(Z0) ≈ 54 Ω  → gate (40, 65) Ω
+
+#931 — the recorded MEASURED values above (and the 0.1160 / 0.9930 /
+57.58 Ω refresh below) are pre-contract: they were taken on the
+bisecting mesh, where the strip sat at 320 µm over a 254 µm dielectric
+plus a 66 µm air gap. The fixture is now on the lattice with the trace
+declared as a sheet, so it simulates the intended board and the numbers
+are RE-MEASURED, not translated (VESSL run recorded in
+``tests/unit/sparams/_results_931/RECOMPUTE.md``). The three BOUNDS are
+untouched — the aligned-mesh sibling this file already documents read
+44.11 Ω, inside (40, 65), which is why the windows are expected to hold
+without being moved. If a bound turns out not to hold, that is a result
+to report, not a bound to widen.
 """
 
 from __future__ import annotations
@@ -69,8 +81,17 @@ W_TRACE = 600e-6      # trace width, metres
 L_LINE = 10e-3        # thru-line length
 PORT_MARGIN = 2e-3    # feed → domain edge clearance
 
-# Uniform cell size: 80 µm gives 254/80 ≈ 3.2 cells in substrate.
-DX = 80e-6
+# ON-LATTICE board (#931 §1.3): dx = h_sub/3, so the laminate face IS a
+# node line and the foil sheet lands on it. The fixture ran at dx = 80 µm
+# (254/80 = 3.175): there the substrate realizes FOUR cells and the strip
+# sat at z = 320 µm over a 254 µm dielectric plus a 66 µm air gap — the
+# structure the docstrings below call "not the intended board". Its own
+# text already names dx = 84.67 µm as the aligned sibling that rasterizes
+# the intended structure and reads 44.11 Ω against 57.58 Ω. That is the
+# board this fixture now simulates, so the three gate windows are
+# RE-MEASURED on it (see the results dir's RECOMPUTE.md) rather than
+# carried across; nothing here is widened.
+DX = H_SUB / 3
 F_MAX = 5e9
 
 LX = L_LINE + 2 * PORT_MARGIN
@@ -171,18 +192,20 @@ def test_msl_thru_line_passive_gate():
         material="ro4350b",
     )
 
-    # --- PEC trace strip (one cell thick at z = H_SUB) ---
-    # A microstrip quasi-TEM mode requires a metal trace above the substrate.
-    # Without the trace, the Ez source excites a TM substrate mode (Z0>>50Ω).
-    # Canonical pattern (as in validation/crossval/06b_msl_notch_filter_uniform.py):
-    #   sim.add(Box(..., substrate_thickness, substrate_thickness+dz), material="pec")
-    # Use one-cell thickness (H_SUB to H_SUB + DX) so rfx Box captures the
-    # cells whose z-centres fall within the box z-range.
+    # --- PEC trace strip: a SHEET on the laminate face (#931 §1.3) ---
+    # A microstrip quasi-TEM mode requires a metal trace above the
+    # substrate. Without the trace, the Ez source excites a TM substrate
+    # mode (Z0 >> 50 Ω). 35 µm copper is foil, so it is declared as a
+    # zero-thickness Box at z = H_SUB and realized as ONE wall plane with
+    # the normal Ez left live. The one-cell-thick spelling this fixture
+    # used to carry is a VOLUME under the contract: walls at H_SUB and
+    # H_SUB + dx with the Ez between them shorted, i.e. 85 µm of solid
+    # metal.
     y_centre = LY / 2.0
     trace_y_lo = y_centre - W_TRACE / 2.0
     trace_y_hi = y_centre + W_TRACE / 2.0
     sim.add(
-        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + DX)),
+        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB)),
         material="pec",
     )
 
@@ -303,7 +326,7 @@ def test_msl_thru_line_eigenmode_gate():
     trace_y_lo = y_centre - W_TRACE / 2.0
     trace_y_hi = y_centre + W_TRACE / 2.0
     sim.add(
-        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + DX)),
+        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB)),
         material="pec",
     )
 
@@ -385,7 +408,7 @@ def _run_msl_thru(l_line: float):
     trace_y_lo = y_centre - W_TRACE / 2.0
     trace_y_hi = y_centre + W_TRACE / 2.0
     sim.add(
-        Box((0.0, trace_y_lo, H_SUB), (lx, trace_y_hi, H_SUB + DX)),
+        Box((0.0, trace_y_lo, H_SUB), (lx, trace_y_hi, H_SUB)),
         material="pec",
     )
     sim.add_msl_port(

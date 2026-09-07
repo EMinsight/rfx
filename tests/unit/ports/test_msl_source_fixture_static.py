@@ -34,7 +34,14 @@ from rfx.sources.sources import GaussianPulse
 _EPS_R = 3.66
 _H_SUB = 254e-6
 _W_TRACE = 600e-6
-_DX = 80e-6
+# ON-LATTICE board (#931 §1.3): h_sub / dx = 3 exactly, so the foil sheet
+# below lands on the laminate face. The fixture ran at dx = 80 um
+# (h_sub/dx = 3.175), where the substrate realizes four cells (320 um)
+# and a sheet declared at 254 um snaps down to 240 um, inside the
+# dielectric. The @highmem AD/FD referee gate in this file is measured on
+# the board the fixture describes, so it is re-measured on the new mesh
+# (see RECOMPUTE.md) rather than carried across.
+_DX = 254e-6 / 3
 _L_LINE = 6e-3
 _MARGIN = 2e-3
 
@@ -53,7 +60,7 @@ def _msl_sim_auto_eps():
     sim.add(Box((0.0, 0.0, 0.0), (lx, ly, _H_SUB)), material="sub")
     y_c = ly / 2.0
     sim.add(Box((0.0, y_c - _W_TRACE / 2, _H_SUB),
-                (lx, y_c + _W_TRACE / 2, _H_SUB + _DX)), material="pec")
+                (lx, y_c + _W_TRACE / 2, _H_SUB)), material="pec")
     # NOTE: no eps_r_sub kwarg — exercises the auto branch.
     sim.add_msl_port(position=(_MARGIN, y_c, 0.0), width=_W_TRACE,
                      height=_H_SUB, direction="+x", impedance=50.0,

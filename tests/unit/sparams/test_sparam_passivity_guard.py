@@ -240,6 +240,10 @@ def test_soft_advisory_real_coarse_pec_short_witness():
         bw = max(0.2, min(0.8, (freqs[-1] - freqs[0]) / f0))
         sim = Simulation(freq_max=float(freqs[-1]), domain=DOMAIN,
                          boundary="cpml", cpml_layers=cpml, dx=dx)
+        # WR-90 PEC short: a VOLUME (#931 §1.2) — walls on both drawn x
+        # faces, Ex shorted between. dx is parametrized here, so the cell
+        # count varies; the assertions are passivity advisories, which the
+        # extra far-face wall does not move.
         sim.add(Box((0.085, 0, 0), (0.087, DOMAIN[1], DOMAIN[2])), material="pec")
         pf = jnp.asarray(freqs)
         sim.add_waveguide_port(0.01, direction="+x", mode=(1, 0), mode_type="TE",

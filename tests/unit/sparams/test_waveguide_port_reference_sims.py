@@ -33,6 +33,7 @@ import pytest
 
 from rfx.api import Simulation
 from rfx.geometry.csg import Box
+from tests._realized_geometry import assert_wall_planes, realized
 
 
 # --------------------------------------------------------------------------
@@ -107,6 +108,19 @@ def test_port_reference_sims_eps_override_combo_raises():
 # test_api.py::test_waveguide_branch_junction_mixed_normals_reciprocal_through_api).
 # The main guide runs horizontally (y in [0.04, 0.08]); the top arm opens at
 # x in [0.04, 0.08], y in [0.08, 0.12].
+#
+# The walls are PEC VOLUMES (#931 §1.2). Under the ownership contract each
+# block realizes tangential walls on BOTH of its drawn faces, so the guide
+# between the y = 0.04 and y = 0.08 faces is 40.0 mm — the number the
+# declaration states. Before the contract a body's far face was never a
+# wall, the metal ended one node short on each side and the same geometry
+# realized a 42.0 mm guide; the ports' declared ``y_range=(0.04, 0.08)``
+# lands ON the walls for the first time. Anything this file's prose quotes
+# that was measured on the 42 mm guide (aperture areas, cutoffs, the
+# |S11| blow-up figures) is a pre-#931 measurement and is re-read with the
+# fixtures, not translated.
+# ``test_tj_walls_are_realized_where_they_are_drawn`` below is the
+# build-time witness, and it costs no solve.
 # --------------------------------------------------------------------------
 
 def _tj_common(freqs, f0):
@@ -220,3 +234,25 @@ def test_port_reference_sims_compact_junction_necessary_not_sufficient():
     # Direction 2 — the overall matrix is still non-physical (compact geometry).
     assert max_ref > 1.05               # non-passive residual remains
     assert max_ref < max_vac            # but the blow-up is reduced
+
+
+def test_tj_walls_are_realized_where_they_are_drawn():
+    """Build-time witness (no solve) for the T-junction's guide width.
+
+    The two horizontal wall blocks are drawn to y = 0.04 m and from
+    y = 0.08 m at dx = 2 mm, both on node lines. A volume owns the cells
+    its centres fall in and walls both drawn faces, so the realized guide
+    runs from node 0.04 m to node 0.08 m — 20 cells, 40.0 mm, the drawn
+    gap exactly. This is the same geometry
+    ``tests/unit/ports/test_port_aperture_rasterization.py`` measures
+    through preflight, asserted here at the source.
+    """
+    freqs = jnp.linspace(4.5e9, 6.5e9, 3)
+    sim = _tj_ref_horizontal(freqs, 5.5e9)
+    rz = realized(sim)
+    pad = rz.grid.axis_pads[1]
+    expected = list(range(pad, pad + 21)) + list(range(pad + 40, pad + 61))
+    assert_wall_planes(sim, 1, expected_planes=expected,
+                       what="T-junction guide walls")
+    inner_lo, inner_hi = pad + 20, pad + 40
+    assert (inner_hi - inner_lo) * rz.grid.dx == pytest.approx(0.040, rel=1e-12)
