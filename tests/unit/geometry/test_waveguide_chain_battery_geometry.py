@@ -125,6 +125,27 @@ def test_dut_cell_counts_scale_exactly_with_inverse_dx(sims, dut, dx):
     )
     assert int(masks[mat].sum()) == math.prod(expected)
 
+    if dut == "pec_short":
+        # #931: a cell count says nothing about where the walls are, which
+        # is what a short IS. Under the volume rule the DUT realizes an
+        # electric wall on BOTH of its drawn x faces and shorts every
+        # normal edge between them, so the wall-plane list is exactly the
+        # nodes the drawn 5.08 mm span covers — 2*s cells, 2*s + 1 planes,
+        # starting on the declared lo face. Before the contract the hi face
+        # was never a wall at any thickness.
+        from rfx.boundaries.pec import (
+            realized_pec_edge_masks, realized_wall_planes,
+        )
+        edges = realized_pec_edge_masks(masks[mat])
+        planes = realized_wall_planes(edges, 0)
+        assert planes == list(range(planes[0], planes[0] + 2 * s + 1)), (
+            dx, planes)
+        grid = sim._build_grid()
+        x0 = (planes[0] - grid.pad_x_lo) * dx
+        x1 = (planes[-1] - grid.pad_x_lo) * dx
+        assert x0 == pytest.approx(F.PEC_SHORT_X_M[0], abs=1e-12), (dx, x0)
+        assert x1 == pytest.approx(F.PEC_SHORT_X_M[1], abs=1e-12), (dx, x1)
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         rep = fidelity_report(sim, print_report=False)

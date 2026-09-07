@@ -51,23 +51,46 @@ the tie is inclusive), so the ground foil this fixture means at node 25 is
 realized on cell 24, with walls on planes 24 AND 25. Measured:
 ``pec_mask[:, :, 25] & annulus`` = 2 of 36, was 36 of 36.
 
-Two things have to happen before these go green, and neither is this
+Red, and each one's owner (measured 2026-09-07, VESSL 369367259135):
+
+  test_fixture_copies_differ_only_by_the_junction_hole   2 of 36, want 36
+  test_rule_ii_fires_on_the_shorted_junction_copy        no advisory row
+  test_rule_ii_is_silent_on_a_correctly_built_hole...    pin footprint 10, want 11
+  test_rule_ii_ring_is_lattice_based_not_r_gt_pin_radius 0 of 16, want 16
+  test_rule_ii_message_names_the_first_registered_pec... no advisory row
+
+THREE things have to happen before they go green, and none of them is this
 file's own subject:
 
   1. the fixture is redrawn ON-LATTICE — the foils (ground boxes at
-     ``N_GND``, trace at ``N_TRACE``) become SHEET declarations
-     (zero-thickness Boxes at ``N_GND * DX`` / ``N_TRACE * DX``, the plane
-     they already mean), and the pin/clearance counts are re-measured under
-     centre sampling. It is a copy of the attempt-2 coax-MSL fixture, so it
-     is migrated with that family, not separately;
-  2. rule (ii) itself reads ``self._port_pec_mask`` in
+     ``N_GND``, trace at ``N_TRACE``) become SHEET declarations at the node
+     plane they already mean. It is a copy of the attempt-2 coax-MSL
+     fixture (tests/unit/sparams), so it migrates with that family, not
+     separately. Note the API gap that migration must close, measured
+     here: the ``open_annulus`` recipe's lattice-disk rows are ONE NODE
+     wide, and a zero-thickness Box that is also one node wide has TWO
+     zero-extent axes, which §1.5 refuses as a line. A patterned ground is
+     one sheet with a patterned footprint (a shape whose mid-plane
+     cross-section is the disk complement), not twenty Boxes;
+  2. rule (ii) reads ``self._port_pec_mask`` in
      ``rfx/api/_preflight.py::_check_coaxial_port_junction_aperture``. A
-     sheet owns no cell, so once the ground is declared as one that check
-     sees nothing; it has to read the REALIZED footprint (sheet footprints
-     union volume cells) instead. That file is the preflight owner's.
+     sheet owns no cell, so once the ground is a sheet that check sees
+     nothing; it has to read the REALIZED footprint (sheet footprints
+     union volume cells). That file is the preflight owner's;
+  3. rule (i) reads ``pec_before``, which ``rfx/fidelity.py`` fills only
+     from VOLUME cells — "a SHEET owns no cell (#931 §1.3), so it claims
+     none". True for eps ownership, but the #589 defect is that a later
+     dielectric cannot carve a hole in a conductor, and a sheet is no more
+     carvable than a slab. Under a sheet ground rule (i) goes silent on
+     the very case it was written for. That file is fidelity's owner's;
+     see docs/design_notes/931_migration/T1-fidelity-sheet-overlap.md.
 
-Rule (i) — the ordered ``dielectric-after-conductor-no-op`` finding — is
-unchanged by the contract and its two tests still pass.
+Rule (i)'s tests still pass TODAY only because the ground is still a
+volume. ``test_junction_plane_metal_under_a_sheet_ground`` below is the
+green half: it declares the same ground as a sheet and shows, through the
+one realization function, that the historic annulus and ring counts (36
+and 16) come back exactly — so when the migration lands, the numbers the
+oracle rests on are already known and are not re-blessed after the fact.
 """
 from __future__ import annotations
 
@@ -603,3 +626,64 @@ def test_rule_i_rasterizes_each_conductor_once(monkeypatch):
     assert f["conductor_entities"] == list(range(n_strips))
     assert len(calls) == n_strips + 1
     assert len(set(calls)) == n_strips + 1
+
+
+# ---------------------------------------------------------------------------
+# The green half of the #931 migration: the SAME ground declared as a sheet,
+# read through the one realization function. No solve, no report — just the
+# geometry the two rules above will have to see once their owners land.
+# ---------------------------------------------------------------------------
+
+def test_junction_plane_metal_under_a_sheet_ground():
+    """A full-plane ground declared as a sheet reproduces the oracle counts.
+
+    The fixture's two load-bearing numbers are the clearance annulus (36
+    nodes with ``PIN_R < r <= CLEAR_R``) and the first lattice ring (16
+    nodes with ``PIN_R + dz/2 < r <= PIN_R + 3dz/2``). Under the pre-#931
+    node sampler a ``_half_cell(25, 25)`` Box put metal on every node of
+    plane 25 and both counts read full. Under the contract the honest
+    declaration of that foil is a SHEET at ``z = N_GND * DX`` — a
+    zero-thickness Box, §1.5 — whose footprint is sampled CLOSED on the
+    two in-plane axes. Measured here: 36/36 and 16/16, the historic
+    numbers, on the node line the port axis actually sits on.
+
+    That symmetry is the reason the sheet is the right declaration and a
+    one-cell volume is not: a volume occupying cells ``[a..b]`` realizes
+    node planes ``[a..b+1]``, one node wider on the ``+`` side, so a hole
+    cut on the cell lattice is never centred on the port axis.
+    """
+    from rfx.boundaries.pec import realized_pec_edge_masks
+
+    sim = Simulation(
+        freq_max=FREQ_MAX_2, domain=(LX_2, LY, LZ_2), dx=DX, cpml_layers=8,
+        boundary=BoundarySpec(x="cpml", y="cpml", z="cpml"),
+    )
+    z = N_GND * DX
+    sim.add(Box((0.0, 0.0, z), (LX_2, LY, z)), material="pec")   # sheet (§1.5)
+
+    grid = sim._build_grid()
+    sheets: list = []
+    mats = sim._assemble_materials(grid, pec_sheets=sheets)
+    (sheet,) = sheets
+    assert mats[3] is None, "a sheet owns no cell (#931 §1.3)"
+    k = int(grid.position_to_index((JUNCTION_X, Y_C, z))[2])
+    assert sheet.plane == k and sheet.normal_axis == 2
+
+    fp = np.asarray(sheet.footprint, bool)[:, :, k]
+    x = (np.arange(grid.shape[0]) - grid.pad_x_lo) * DX - JUNCTION_X
+    y = (np.arange(grid.shape[1]) - grid.pad_y_lo) * DX - Y_C
+    r = np.hypot(x[:, None], y[None, :])
+
+    annulus = (r > PIN_R + 1e-9) & (r <= CLEAR_R + 1e-9)
+    assert int(annulus.sum()) == 36
+    assert int((fp & annulus).sum()) == 36
+
+    ring = (r > PIN_R + 0.5 * DX) & (r <= PIN_R + 1.5 * DX)
+    assert int(ring.sum()) == 16
+    assert int((fp & ring).sum()) == 16
+
+    # and the realization: in-plane E zeroed on plane k, normal E live.
+    edges = realized_pec_edge_masks(None, sheets=sheets)
+    assert bool(np.asarray(edges[0])[:, :, k].any())
+    assert bool(np.asarray(edges[1])[:, :, k].any())
+    assert not bool(np.asarray(edges[2]).any()), "normal Ez must stay live"

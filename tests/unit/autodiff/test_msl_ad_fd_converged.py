@@ -75,10 +75,24 @@ def _build_msl_sim() -> Simulation:
     y_centre = ly / 2.0
     trace_y_lo = y_centre - _MSL_W_TRACE / 2.0
     trace_y_hi = y_centre + _MSL_W_TRACE / 2.0
-    sim.add(
-        Box((0.0, trace_y_lo, _MSL_H_SUB), (lx, trace_y_hi, _MSL_H_SUB + _MSL_DX)),
-        material="pec",
-    )
+    # #931 migration rule 1: a foil drawn as a one-cell PEC Box is a SHEET,
+    # declared with the SAME physical corners. Under the volume rule the same
+    # Box would gain a second wall at the node BELOW the substrate top
+    # (measured on this board: walls on z-planes 3 and 4 instead of 4 alone),
+    # which moves the realized trace height and every de-embedded number with
+    # it. add_thin_conductor puts the sheet on the node plane nearest the
+    # drawn mid-plane — 320 um here, tie to the lower plane — which is the
+    # plane this board has always realized, so the committed goldens stay
+    # valid. The board itself is off-lattice (h_sub 254 um on an 80 um mesh,
+    # 3.175 cells); §1.3 says to redraw it ON-LATTICE, and its constants live
+    # in tests/unit/sparams/test_msl_port_integration.py, so that redraw
+    # belongs with the MSL fixture family, not here.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        sim.add_thin_conductor(
+            Box((0.0, trace_y_lo, _MSL_H_SUB), (lx, trace_y_hi, _MSL_H_SUB + _MSL_DX)),
+            sigma_bulk=5.8e7, thickness=35e-6,
+        )
 
     sim.add_msl_port(
         position=(_MSL_PORT_MARGIN, y_centre, 0.0),

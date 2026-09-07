@@ -304,7 +304,18 @@ def test_fallback_label_and_number_both_differ_from_the_built_grid():
 # ---------------------------------------------------------------------------
 
 def _fr4_board():
-    """A board that forces a non-uniform z: 0.508 mm substrate, 35 um trace."""
+    """A board that forces a non-uniform z: 0.508 mm substrate, 35 um trace.
+
+    The trace is a FOIL. ``auto_configure`` takes shapes, not a Simulation,
+    so it never reaches ``sim.add`` and never meets §1.5's sub-cell
+    refusal — but the same 35 um Box declared on a Simulation would raise,
+    and the declaration that survives the contract is a sheet on the
+    laminate face (``Stackup.to_shapes`` emits exactly that since #931).
+    The z profile the planner returns is what this test is about and it is
+    driven by the same cut, so the budget assertions below are unchanged;
+    the fixture is kept as a pair of Boxes because that is the planner's
+    own input format.
+    """
     h = 0.508e-3
     return [
         (Box((0, 0, 0), (0.040, 0.030, h)), "fr4"),

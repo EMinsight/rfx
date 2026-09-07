@@ -597,6 +597,45 @@ def test_one_cell_body_reads_its_cell_exactly_and_is_not_sub_cell(lane):
         assert not item["findings"], (tag, item["findings"])
 
 
+@pytest.mark.parametrize("lane", ["uniform", "nonuniform"])
+def test_one_cell_conductor_reports_walls_on_both_of_its_faces(lane):
+    """The CONDUCTOR twin of the readout above (#931 §1.2).
+
+    The dielectric fixture pins that a body one cell thick reads its own
+    two faces back exactly. For a conductor that readout is what the
+    lattice ownership contract makes TRUE of the solve, not just of the
+    report: the same Box declared PEC realizes electric walls on BOTH
+    bounding node planes — 5000 and 5500 um here — and shorts the normal E
+    between them. Under the pre-#931 sheet rule the hi face was never a
+    wall at any thickness, so the report and the solve disagreed by one
+    plane on every foil in the repo.
+
+    The realized planes come from the report's own
+    ``realized_wall_planes`` row, which is computed by the contract's
+    function, so this also pins that the report did not re-derive the rule.
+    """
+    D = _D_HALF_MM
+    from rfx.boundaries.spec import BoundarySpec
+    kw = dict(dz_profile=np.full(30, D)) if lane == "nonuniform" else {}
+    sim = Simulation(freq_max=6e9, domain=(20 * D, 20 * D, 30 * D), dx=D,
+                     cpml_layers=8,
+                     boundary=BoundarySpec(x="cpml", y="cpml", z="cpml"), **kw)
+    sim.add(Box((5 * D, 5 * D, 10 * D), (15 * D, 15 * D, 11 * D)),
+            material="pec")
+    item = _geo(sim.fidelity_report(print_report=False), 0)
+
+    assert item["n_cells"] == 100
+    assert "one-cell PEC volume" in item["realization"]
+    assert "BOTH" in item["realization"]
+    z_um = item["realized_wall_planes"]["z"]["planes_um"]
+    assert [round(v, 6) for v in z_um] == [5000.0, 5500.0], z_um
+    # in plane the drawn rectangle is realized closed: 5000 .. 7500 um
+    for ax in ("x", "y"):
+        p = item["realized_wall_planes"][ax]["planes_um"]
+        assert round(p[0], 6) == 2500.0 and round(p[-1], 6) == 7500.0, (ax, p)
+    assert item["axes"][2]["face_residual_um"] == (0.0, 0.0)
+
+
 def test_sub_cell_margin_does_not_swallow_a_real_sub_cell_body():
     """The margin (_SUB_CELL_TIE_REL, 1e-9 of the cell) absorbs round-off
     only: a body 0.999 of a cell thick is still sub-cell, as is a 1e-6 one."""
