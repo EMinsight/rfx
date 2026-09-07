@@ -234,6 +234,18 @@ is, so the branch must be committed before submitting.
 * Separately, and NOT a VESSL job: the referee's Stage-1 reproduce legs need
   re-running against the new board before it is next used as a comparator.
   openEMS is not installed on this pod; that is an openEMS run, not an rfx one.
+* **ATTEMPTED AND BACKED OUT at the phase-2b ingest (2026-09-07).** Every
+  number in the replacement text was re-measured on the branch and every one
+  checks out; the five edits were applied and then reverted, because they turn
+  1 red test into 13 and the cause is structural, not a typo: **the referee's
+  nine planes of record are exact multiples of 80 um and NONE is a multiple of
+  84.667 um**, so its own `plane_on_grid` self-check fails on all of them and
+  the Stage-2 mesh has to be re-planned (a comparator design decision) and its
+  openEMS legs re-run. The `xfail(strict=True)` stays, with that blocker named
+  in the marker. Full measurement in the replacement doc's "ATTEMPTED AND
+  BACKED OUT" section. Also found: the two width keys are named the wrong way
+  round (`w_trace_node_span_m` holds the EDGE span); the rename is part of the
+  edit, and the script's `realized_w_is_node_span` self-check renames with it.
 
 ---
 
@@ -247,3 +259,18 @@ silence it at ~2.4x the cell count and ~1.3x the step count on every solve in
 the group. The cheaper aligned mesh is used deliberately; a fixture whose gate
 turns out to need four cells should move to `h_sub/4` on its own evidence, not
 to quieten a warning.
+
+
+---
+
+## Strict xfails re-checked after the preflight merge (2026-09-07, phase 2b)
+
+The branch committed four `xfail(strict=True)` markers as pre-declared
+falsifiers for work owned by other groups. Re-run on the merged tree:
+
+| test | verdict |
+|---|---|
+| `tests/unit/ports/test_port_aperture_rasterization.py::test_sub_aperture_guide_is_measured_from_the_pec_walls` | **XPASS(strict) — marker removed.** `_port_transverse_spans` now reads realized wall planes; the guide measures the drawn 40.0000 mm, fc_TE20 7.495 GHz, threshold 6.745 GHz. Not one asserted number changed when the marker came off. |
+| `tests/unit/sparams/test_lumped_twoport_vi_validation_battery.py::test_thru_preflight_code_set_is_the_contract_set` | still XFAIL — preflight's own consumers still measure metal from the primal CELL mask and its `_assemble_materials` call still omits a sheet collector. Blocker unchanged (design note §6, "not yet implemented"). |
+| `tests/unit/sparams/test_mixed_port_sparam.py::test_wire_port_end_gap_advisory_fires_on_a_declared_one_cell_gap` | still XFAIL — the #556 end-gap advisory still finds metal by scanning `pec_mask` cells, so it cannot fire on a sheet at all. Same blocker. |
+| `tests/unit/sparams/test_probe_fed_msl_referee_contract.py::test_referee_record_still_describes_the_fixture_it_names` | still XFAIL — see R9 above: the edit was attempted, measured and backed out; the blocker is now the referee's off-lattice plane list, named in the marker. |

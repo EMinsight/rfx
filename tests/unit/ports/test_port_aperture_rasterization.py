@@ -204,15 +204,6 @@ def test_sub_aperture_walls_are_realized_where_they_are_drawn():
         "the drawn 40 mm gap must be the realized one")
 
 
-@pytest.mark.xfail(
-    reason="_port_transverse_spans still measures the guide from the "
-           "primal CELL mask, so it reads 42.0000 mm / 7.138 GHz / "
-           "6.424 GHz (#931 design note §6, 'not yet implemented'; owned "
-           "by the preflight migration). The numbers asserted below are "
-           "the contract's, unchanged; this marker is the pre-declared "
-           "falsifier for that migration and comes off when it lands.",
-    strict=True,
-)
 def test_sub_aperture_guide_is_measured_from_the_pec_walls():
     """The interior PEC Boxes leave a 40 mm guide inside a 120 mm domain.
     The cutoffs the finding quotes must come from those walls.
@@ -226,10 +217,14 @@ def test_sub_aperture_guide_is_measured_from_the_pec_walls():
     to 7.0 GHz so the advisory still has something to catch. The
     domain-extent version reported 120 mm -> fc_TE20 = 2.498 GHz.
 
-    Depends on preflight's ``_port_transverse_spans`` reading realized
-    wall planes instead of ``pec_mask`` cells (design note §6, "not yet
-    implemented"): this assertion is the pre-declared falsifier for that
-    migration and reads 42.0000/7.138/6.424 until it lands.
+    This assertion was committed as ``xfail(strict=True)`` while
+    preflight's ``_port_transverse_spans`` still measured the guide from
+    the primal CELL mask and read 42.0000 mm / 7.138 GHz / 6.424 GHz.  The
+    migration landed with the preflight group's merge and the marker fired
+    as an XPASS(strict) on 2026-09-07, so it is gone.  Not one number below
+    changed when it came off — the assertions are the contract's, exactly
+    as they were written before the consumer moved, which is the whole
+    point of pre-declaring the falsifier.
     """
     sim = _sub_aperture_sim(jnp.linspace(4.5e9, 7.0e9, 3), f0=6.0e9)
     ev = [i for i in _issues(sim)

@@ -89,3 +89,44 @@ this file's shipped tests depends on the values above — the contract tests are
 arithmetic and structure only. Nothing needs re-solving to make the edits; the
 Stage-1/Stage-2 legs need re-running before the referee is next used as a
 comparator, and that is an openEMS job, not a VESSL rfx job.
+
+---
+
+## ATTEMPTED AND BACKED OUT 2026-09-07 (phase 2b ingest) — the edit list above is not sufficient
+
+Every number in the tables above was re-measured on the branch and every one
+checks out (`dx = 84.667 µm`, shape `(112, 53, 18)`, one wall plane at `k = 3`,
+`h_sub` realized 254 µm exactly, trace Ey edge span y 23..28 = 6 cells =
+508.00 µm, Ex node span y 23..29 = 7 nodes = 592.67 µm, node indices
+0 → 8, 1.44 mm → 25, 2.00 mm → 32, 2.80 mm → 41, 3.60 mm → 51, 4.72 mm → 64,
+5.50 mm → 73, 8.00 mm − ε → 102, HJ Z0 53.106 / 48.271 Ω against the 47.895 Ω
+anchor). The five edits were applied and then reverted, because applying them
+turned 1 red test into 13 and the cause is not a typo:
+
+**The referee's planes of record go off-lattice at `h_sub/3`.** Its own
+`plane_on_grid` self-check asserts that every plane it places — 1.44, 1.76,
+2.00, 2.24, 2.80, 3.60, 4.08, 4.40, 4.72 mm — is an exact multiple of rfx's
+`dx`. All nine are exact multiples of 80 µm and NONE is a multiple of
+84.667 µm. The whole Stage-2 comparator is built on those coordinates: the
+lumped feed plane, the MSL port's start plane, and the `MeasPlaneShift`
+stencil that has to land on-grid at dx = 50 µm for the de-embedding to be a
+measured no-op.
+
+So the referee needs its Stage-2 mesh **re-planned**, not its record re-typed:
+either the plane list moves onto the new lattice (which changes what the
+comparator measures and needs the Stage-1/Stage-2 legs re-run against the new
+board), or the fixture's `dx` choice is revisited for this comparator. Both are
+the referee owner's call plus an openEMS run, and openEMS is not installed on
+this pod.
+
+Also found while doing it, and folded into the edit list above for whoever
+takes it: the two width keys were named the wrong way round.
+`w_trace_node_span_m` held `trace_y_hi − trace_y_lo` (the span between the
+extreme node coordinates = the Ey EDGE count × dx, 480 µm pre-#931), and
+`w_trace_cell_span_m` held the NODE count × dx (560 µm). The gate test
+`test_referee_record_still_describes_the_fixture_it_names` asks for
+`w_trace_edge_span_m`, so the rename is part of the edit, and the script's own
+`realized_w_is_node_span` self-check must be renamed with it.
+
+The gate test therefore keeps its `xfail(strict=True)`, with the blocker above
+named in the marker.
