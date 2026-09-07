@@ -60,8 +60,8 @@ is, so the branch must be committed before submitting.
   `rfx-openems` image does not carry it. The heredoc version would have hit the
   same wall had it started. Fixed by adding `pytest>=7.4` to the job's pip line;
   any future job that imports a test module needs the same.
-* **VESSL run id: 369367259285** (resubmitted 2026-09-07 14:41 UTC,
-  https://app.vessl.ai/remilab/runs/byungkwan/369367259285).
+* **VESSL run id: 369367259234** (resubmitted 2026-09-07 14:38 UTC,
+  https://app.vessl.ai/remilab/runs/byungkwan/369367259234).
   Command: `vessl run create -f rfx-931-post-msl-sheet-golden.yaml` (the yaml
   sits beside this file; submit it from a non-git directory — the CLI cannot
   read a worktree's `.git` file). Run name `rfx-931-post-msl-sheet-golden`,
