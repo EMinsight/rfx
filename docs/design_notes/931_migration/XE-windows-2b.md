@@ -213,6 +213,63 @@ conductor occupying that top cell). So this is a pre-existing comparator
 weakness that #931 exposed, not a defect #931 introduced — which is an argument
 for deciding it deliberately, not for deciding it inside an ingest.
 
+### 2.1 Resolved 2026-09-07 (branch `feat/931-core-last`): each leg is judged
+### against the board its own solver built; the openEMS inlay is still held
+
+The half of option (a) that needs no run is done. `_stage_b_layout` gains
+`h_dielectric_under_strip_realized_m`, read from the fixture's own
+`trace_wall_planes_realized_z_m[0]` when `trace_realization_kind` is
+`volume` and cross-checked against `h_sub_realized_m - t_metal_realized_m`;
+`_run_stage_b` feeds it to the rfx analytic-beta leg and keeps
+`h_sub_realized_m` for the openEMS leg, which is the board
+`_build_stage_b_thru` actually builds. Sharing one `eps_eff` was judging
+rfx's beta against openEMS's substrate height.
+
+Measured (2026-09-07), gate `B_BETA_ANALYTIC_TOL_FRAC` untouched at 2.000 %:
+
+| leg | h fed | max abs dev |
+|---|---|---|
+| rfx, current fixture | 250 um | 1.4122 % |
+| openEMS, run-2 artifact | 300 um | 0.3068 % |
+
+The pre-declared budget was re-derived at 250 um, as this section predicted
+before the change: Bahl-Garg 0.0121 -> 0.0130, Getsinger 0.0006 -> 0.0005,
+sum 0.0177 -> 0.0185, still under 0.0200. The budget got TIGHTER against
+the gate, not looser. `EXTERNAL_PHASE_REFERENCE_PREDECLARATION` records the
+new terms and names both boards.
+
+**The split does not hide the board mismatch, and the mismatch got worse.**
+The E4 raw cross-solver phase witness compares the two solvers' de-embedded
+angles directly and is untouched at 3.0 deg. On the re-solved fixture it
+reads 0.5308 deg against the pre-re-solve 0.3418 deg: the margin fell from
+8.8x to 5.7x. That is where the 300-vs-250 um disagreement shows, and it is
+gated.
+
+**Still held, and owed:** `_build_stage_b_thru` still puts openEMS's strip
+PROUD on 300 um, and the assertion this section asks for (dielectric height
+under the strip equal on both sides) is NOT added -- adding it would red the
+lane before anyone can run it, and changing the build would leave the
+committed `_20_msl_phase_referee_logs/*_result.json` describing a board the
+script no longer builds. Both wait on the cv20 owner submitting the Stage B
+re-run.
+
+Bookkeeping the split forced, all of it the same principle -- a beta array
+is judged against the board that produced it:
+
+* the committed run-1/run-2 artifacts carry the PRE-#931 fixture's
+  `beta_rfx_real` (one zero-thickness wall on the full 300 um substrate),
+  so their rfx leg stays at 300 um. Judging it at 250 um reads 0.23 %
+  instead of 0.94 % -- a better-looking number for a board that run never
+  had. `run1_declared_board` and `run2_realized_board` in
+  `regate_evidence.json` are unchanged by this commit, which is the check
+  that the split was applied in the right places.
+* the header test's replay harness fakes openEMS with run-2 data but feeds
+  the CURRENT fixture, so its three legs are neither block's. The artifact
+  gains `run2_openems_with_current_rfx_fixture` for it.
+* the #830 signed-envelope replay also reads run-2's `beta_rfx_real`; at
+  250 um that beta falls inside the envelope and the G1 finding disappears
+  by arithmetic. It stays at 300 um.
+
 ---
 
 ## 3. tmtt beam-steer — ingested as a record; nothing to commit

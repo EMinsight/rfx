@@ -698,8 +698,11 @@ the artifact rather than inferred from the case's registration:
       test reads a planted single-port referral drop at 15.88-22.21 deg
       against this same 3 deg gate. Relabelled, not weakened.
   E2  each solver's measured beta vs the Hammerstad-Jensen quasi-static
-      closed form of the REALIZED board, at 2.0% (_analytic_beta_witness).
-      Attributes: a failure names the side.
+      closed form of the board THAT solver built, at 2.0%
+      (_analytic_beta_witness). #931: those are two different boards under
+      the strip -- 250um of dielectric for rfx (a one-cell PEC volume
+      inlaid in the substrate's top cell), 300um for openEMS (the same
+      strip proud on top). Attributes: a failure names the side.
   E4  the RAW cross-solver angle(S21) difference, at 3.0 deg
       (_cross_solver_phase_witness). Does NOT attribute.
 
@@ -1302,9 +1305,12 @@ B_GD_TOL_PS = 200.0
 #
 # (1) ANALYTIC (E2) -- the Hammerstad-Jensen quasi-static eps_eff of the
 #     REALIZED board (h_sub/w_trace as rasterized, sourced from the rfx
-#     fixture's own meta, NOT the declared 254um -- issue #723). Closed
+#     fixture's own meta, NOT the declared 254um -- issue #723; and #931:
+#     h is the DIELECTRIC height under the strip, which for rfx's one-cell
+#     PEC volume trace is 250um, not the substrate's own 300um). Closed
 #     form of declared geometry only; contains no run quantity. Gated
-#     against BOTH solvers' measured beta, so a failure ATTRIBUTES.
+#     against BOTH solvers' measured beta -- each against its own board --
+#     so a failure ATTRIBUTES.
 #
 #     B_BETA_ANALYTIC_TOL_FRAC = 0.020 is a linear worst-case sum of the
 #     four terms by which the zero-thickness quasi-static form is known
@@ -1379,31 +1385,49 @@ EXTERNAL_PHASE_REFERENCE_PREDECLARATION: dict = {
     "predeclared_on": "2026-09-01",
     "design_note": "docs/design_notes/issue812_phase_identity_predeclaration.md",
     "analytic_reference": (
-        "Hammerstad-Jensen quasi-static eps_eff of the REALIZED board "
-        "(h_sub_realized_m, w_trace_realized_m from the rfx fixture meta; eps_r=B_EPS_R), "
+        "Hammerstad-Jensen quasi-static eps_eff of the board EACH solver "
+        "builds (w_trace_realized_m from the rfx fixture meta, eps_r=B_EPS_R; "
+        "h = h_dielectric_under_strip_realized_m for the rfx leg, 250um -- the "
+        "trace is a one-cell PEC volume inlaid in the substrate's top cell -- "
+        "and h_sub_realized_m for the openEMS leg, 300um, which is the board "
+        "_build_stage_b_thru puts its strip proud on), "
         "beta = 2*pi*f*sqrt(eps_eff)/c0"
     ),
     "analytic_tol_frac": B_BETA_ANALYTIC_TOL_FRAC,
+    # Re-derived at the rfx leg's own board (h = 250um), which is the LARGER
+    # of the two sums: at the openEMS leg's 300um the same three terms give
+    # 0.0050 + 0.0121 + 0.0006 = 0.0177. The declared tolerance covers both
+    # and is NOT moved.
     "analytic_tol_budget_frac": {
         "hammerstad_jensen_model": 0.0050,
-        "conductor_thickness_one_cell": 0.0121,
-        "quasi_static_dispersion_at_band_top": 0.0006,
-        "sum": 0.0177,
+        "conductor_thickness_one_cell": 0.0130,
+        "quasi_static_dispersion_at_band_top": 0.0005,
+        "sum": 0.0185,
     },
     # #931: the conductor_thickness_one_cell term's derivation was
     # re-declared on 2026-09-07, before the post-contract fixture was
-    # re-solved. Same value, repaired premise -- see the budget-derivation
-    # comment above B_BETA_ANALYTIC_TOL_FRAC. The cross_solver budget below
-    # is untouched: its three terms are h_sub, w_trace and reference-plane
-    # uncertainty, none of which the contract moves on this board (measured:
-    # h_sub_realized 300um, w_trace_realized 600um and n_z_sub_realized 6 are
-    # all unchanged).
+    # re-solved. Its VALUE then moved on 2026-09-07 with the comparator fix
+    # that feeds each leg its own board: t/h and w/h are both evaluated at
+    # h = 250um now, so the Bahl-Garg term goes 0.0121 -> 0.0130 and the
+    # Getsinger dispersion term 0.0006 -> 0.0005. Both moves, and the new
+    # sum 0.0185 < 0.0200, were pre-computed in
+    # docs/design_notes/931_migration/XE-windows-2b.md section 2 BEFORE the
+    # change; the tolerance itself is untouched. The cross_solver budget
+    # below is untouched: its three terms are h_sub, w_trace and
+    # reference-plane uncertainty, none of which the contract moves on this
+    # board (measured: h_sub_realized 300um, w_trace_realized 600um and
+    # n_z_sub_realized 6 are all unchanged).
     "lattice_ownership_contract": {
         "issue": 931,
         "rfx_trace_realization": "volume (1-cell PEC Box, walls at both faces)",
         "redeclared_on": "2026-09-07",
-        "terms_changed": [],
+        "terms_changed": [
+            "conductor_thickness_one_cell",
+            "quasi_static_dispersion_at_band_top",
+            "sum",
+        ],
         "derivations_repaired": ["conductor_thickness_one_cell"],
+        "analytic_reference_h_m": {"rfx": 250e-6, "openems": 300e-6},
     },
     "cross_solver_reference": "the committed rfx fixture's own de-embedded angle(S21)",
     "cross_solver_tol_deg": B_CROSS_SOLVER_PHASE_TOL_DEG,
@@ -1970,8 +1994,10 @@ def _analytic_beta_witness(freqs_hz: np.ndarray, beta: np.ndarray, *,
         beta_analytic(f) = 2*pi*f*sqrt(eps_eff_HJ(w, h, eps_r))/c0
 
     with ``w``/``h`` the REALIZED board (as rasterized -- issue #723 --
-    not the declared 254um) and ``eps_eff_HJ`` the same Hammerstad
-    quasi-static form Stage A's notch oracle uses.
+    not the declared 254um; ``h`` is the DIELECTRIC height under the strip,
+    which #931 separates from the substrate's own realized height) and
+    ``eps_eff_HJ`` the same Hammerstad quasi-static form Stage A's notch
+    oracle uses.
 
     Applied to BOTH solvers' beta, so a failure ATTRIBUTES to a side --
     which the cross-solver witness deliberately cannot do.
@@ -2315,6 +2341,39 @@ def _assert_matches_rfx_fixture(fixture: dict) -> None:
         )
 
 
+def _h_dielectric_under_strip(meta: dict) -> float:
+    """Height of DIELECTRIC under the microstrip, from the fixture's own
+    realized wall planes -- the ``h`` a microstrip closed form takes.
+
+    Before #931 rfx realized the trace as a single zero-thickness wall, so
+    the substrate's realized height and the height under the strip were the
+    same number and one key served both. Under the ownership contract the
+    one-cell PEC Box realizes walls at BOTH faces (contract section 1.2),
+    so the strip is 50um of metal INLAID in the top substrate cell and the
+    dielectric beneath it is 250um, not 300um. Feeding the 300um to
+    Hammerstad-Jensen judged the fixture's beta against a board rfx did not
+    build: 2.1306% deviation against a 2.000% gate, where the same beta
+    against its own board reads 1.4122% (design note
+    docs/design_notes/931_migration/XE-windows-2b.md section 2, pre-declared
+    before this change). Comparator input, not a gate -- the gate is
+    untouched.
+    """
+    kind = str(meta.get("trace_realization_kind", "volume"))
+    h_sub = float(meta["h_sub_realized_m"])
+    planes_z = list(meta.get("trace_wall_planes_realized_z_m", []))
+    if kind == "sheet" or not planes_z:
+        return h_sub
+    h_diel = float(min(planes_z))
+    t_metal = (len(meta["trace_wall_planes_realized"]) - 1) * float(meta["dx_m"])
+    assert abs(h_diel - (h_sub - t_metal)) < 1e-12, (
+        f"fixture meta is self-inconsistent: the trace's lower realized wall "
+        f"plane is at {h_diel} m, but h_sub_realized_m - t_metal_realized_m "
+        f"is {h_sub - t_metal} m. A volume strip inlaid in the substrate's "
+        f"top cell must satisfy both (#931 section 1.2)."
+    )
+    return h_diel
+
+
 def _stage_b_layout(fixture: dict) -> dict:
     """Pure arithmetic (openEMS-free, testable without the solver): every
     Stage B position/ref_plane_shift, in metres. An AssertionError here is
@@ -2408,6 +2467,13 @@ def _stage_b_layout(fixture: dict) -> dict:
             meta.get("trace_wall_planes_realized_z_m", [])),
         "t_metal_realized_m": (
             (len(meta["trace_wall_planes_realized"]) - 1) * float(meta["dx_m"])),
+        # #931: the height of DIELECTRIC under the strip, which is what a
+        # microstrip closed form takes as ``h`` -- NOT the substrate's own
+        # realized height once the strip is metal inlaid in its top cell.
+        # For a VOLUME trace the strip's lower wall plane IS the top of the
+        # dielectric beneath it; for a SHEET trace the strip has no
+        # thickness and the two coincide.
+        "h_dielectric_under_strip_realized_m": _h_dielectric_under_strip(meta),
     }
 
     # Config assertions (a regression here is a script bug, exit 3).
@@ -2980,15 +3046,32 @@ def _run_stage_b(*, sim_root: str, threads: int, nrts: int, end_criteria: float,
     # reference is built from the same solve they judge, so a coherent
     # phase-velocity error cancels and they read ~0.24 deg for a FACTOR-2
     # error. These two do not have that property.
-    eps_eff_hj = _hammerstad_jensen_eps_eff(
+    # #931: EACH solver's beta is judged against the closed form of the
+    # board THAT solver built. They are not the same board under the strip.
+    # rfx realizes the trace as a one-cell PEC VOLUME inlaid in the top
+    # substrate cell, so 250um of dielectric carries its strip;
+    # _build_stage_b_thru puts openEMS's 50um strip PROUD on the full 300um.
+    # Sharing one eps_eff judged rfx's beta against openEMS's board and read
+    # 2.1306% against a 2.000% gate; the split reads 1.4122% for rfx and
+    # leaves the openEMS leg on the number it has always been judged at.
+    # The boards' disagreement is NOT hidden by the split -- it is what the
+    # E4 cross-solver phase witness below gates directly, and closing it
+    # (inlay openEMS's strip, then assert the two dielectric heights are
+    # equal) is a HELD decision that needs a Stage B re-run:
+    # docs/design_notes/931_migration/XE-windows-2b.md section 2, option (a).
+    eps_eff_hj_rfx = _hammerstad_jensen_eps_eff(
+        layout["w_trace_realized_m"],
+        layout["h_dielectric_under_strip_realized_m"], B_EPS_R)
+    eps_eff_hj_openems = _hammerstad_jensen_eps_eff(
         layout["w_trace_realized_m"], layout["h_sub_realized_m"], B_EPS_R)
+    eps_eff_hj = eps_eff_hj_openems     # kept for the reported fields below
     try:
         analytic_beta_openems = _analytic_beta_witness(
-            freqs_hz, beta_openems, eps_eff=eps_eff_hj,
+            freqs_hz, beta_openems, eps_eff=eps_eff_hj_openems,
             tol_frac=B_BETA_ANALYTIC_TOL_FRAC, label="stage_b_analytic_beta",
             solver="openems")
         analytic_beta_rfx = _analytic_beta_witness(
-            freqs_hz, beta_rfx, eps_eff=eps_eff_hj,
+            freqs_hz, beta_rfx, eps_eff=eps_eff_hj_rfx,
             tol_frac=B_BETA_ANALYTIC_TOL_FRAC, label="stage_b_analytic_beta",
             solver="rfx")
         cross_solver_phase = _cross_solver_phase_witness(
@@ -3000,6 +3083,12 @@ def _run_stage_b(*, sim_root: str, threads: int, nrts: int, end_criteria: float,
         # to it.
         partial_data["cross_solver_partial"] = {
             "eps_eff_hammerstad_jensen": float(eps_eff_hj),
+            "eps_eff_hammerstad_jensen_rfx_board": float(eps_eff_hj_rfx),
+            "eps_eff_hammerstad_jensen_openems_board": float(eps_eff_hj_openems),
+            "h_dielectric_under_strip_rfx_m": float(
+                layout["h_dielectric_under_strip_realized_m"]),
+            "h_dielectric_under_strip_openems_m": float(
+                layout["h_sub_realized_m"]),
             "beta_rfx_real": np.real(beta_rfx).tolist(),
             "beta_openems_real": np.real(beta_openems).tolist(),
             "raw_phase_diff_deg": raw_phase_diff_deg.tolist(),
