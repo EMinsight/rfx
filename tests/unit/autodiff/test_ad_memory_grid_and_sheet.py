@@ -160,12 +160,30 @@ def test_f0_sheet_operator_is_counted():
 
 
 def test_pec_sheet_is_not_charged_for_the_f0_operator():
-    """Only f0 sheets build the operator; a PEC sheet is in pec_mask."""
+    """Only an f0 sheet builds the surface-impedance operator.
+
+    A PEC sheet costs nothing per cell: under the lattice ownership
+    contract (#931 §1.3) it owns no cell, writes no material and is not in
+    ``pec_mask`` — it is a :class:`SheetSpec` (one node plane, a closed
+    footprint) that the realized-edge function ORs into (Mx, My, Mz). The
+    accounting must therefore charge it zero sheet bytes, and the second
+    half of this test states the declaration it is charging zero FOR, so
+    "0 bytes" cannot pass by the sheet having quietly vanished.
+    """
+    from rfx.boundaries.pec import SheetSpec
+
     sim = Simulation(freq_max=20e9, domain=(0.02, 0.02, float(DZ.sum())),
                      dx=DX, boundary="cpml", cpml_layers=CPML, dz_profile=DZ)
     sim.add_thin_conductor(Box((0.002, 0.002, 0.002), (0.018, 0.018, 0.002)),
                            sigma_bulk=5.8e7, thickness=35e-6)
     assert sim._ad_memory_static_accounting()["sheet_bytes"] == 0
+
+    sheets: list = []
+    mats = sim._assemble_materials_nu(sim._build_nonuniform_grid(),
+                                      pec_sheets=sheets)
+    (sp,) = sheets
+    assert isinstance(sp, SheetSpec) and sp.normal_axis == 2
+    assert mats[3] is None, "a PEC sheet owns no cell (#931 §1.3)"
 
 
 def test_report_and_estimate_describe_the_same_grid():
