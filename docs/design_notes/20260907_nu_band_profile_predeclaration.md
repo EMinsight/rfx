@@ -462,4 +462,182 @@ does not drift: thin copper sheets register on a NODE PLANE, never as a
 
 ## Results (appended after measurement; no window above changed)
 
-(empty at pre-declaration)
+Measured 2026-09-07 (KST) on this tree, `rfx.__file__` =
+`/Users/byungkwankim/Documents/rfx-nu-band/rfx/__init__.py`. Commits:
+`a61d0a89` (builder, both rewires, tests, W6 instrument), `d79ad615`
+(engine exact-endpoint fix, before any FDTD ran), `d51879a7` (W6
+provenance-loader fix, before any FDTD ran), then this commit (results,
+docs, CHANGELOG). Raw W6 output:
+`validation/research/multiband_nu/results/w6_band_builder.json`.
+
+### Where the implementation deviates from section 2, and why
+
+- **R2 replaced by an exact-fit plateau solve.** "Plateau cells
+  `rem / ceil(rem / target)`, else uniform down-scale" has a corner: the
+  plateau cell can be arbitrarily small next to a ramp top (rem -> 0), and
+  a down-scale shrinks the seam-adjacent ramp cell, which breaks the seam
+  against a neighbour that did not scale. Implemented instead: geometric
+  ramps (per-step ratio spread evenly, <= cap) from each anchor to a
+  common plateau value u <= target, the ramp's LAST cell being u itself,
+  and u bisected so that ramps + an integer number of plateau cells sum to
+  the span exactly (`_band_realize_free`). The ramp/plateau junction is
+  then the ramp's own ratio for any plateau count; nothing is rescaled;
+  a pinned cell never moves. R2's "never above target" and "pinned cells
+  excluded" both hold.
+- **R1 reference count: 23 cells per core at cap 1.4, 25 at cap 1.3.** R1
+  derived 23 with 1.4, but F2 (frozen) and R6 pin the auto-z path at 1.3
+  (the #763 air-run lock, `test_make_dz_profile_applies_thirds_rule`).
+  At 1.3: d_core/3 <= 1.3 x 8.333 um -> d_core <= 32.5 um ->
+  ceil(0.8 / 0.0325) = **25 cells of 32.000 um**, seam 10.667 / 8.333 =
+  **1.280**, nz **115** (not 105). The public builder at 1.4 on the same
+  stack (no thirds) realizes exactly the reference 23 / 4 / 23 / 4 / 23
+  (34.783 um cores, seam 1.3913, nz 89) — the reference table's per-layer
+  counts are the cap-1.4 numbers.
+- **R4 fuzz feasibility rule.** "span >= 4 x boundary_cell" is not
+  sufficient: a pinned end segment whose neighbour is much finer must
+  DESCEND from the pin at ratio cap, which needs up to bc / (cap - 1) of
+  span (5 bc at cap 1.2), and 4 bc only covers that for cap >= 1.34. The
+  family uses `bc <= span x min(1/4, (cap - 1) / (1.1 cap))` with caps
+  drawn from {1.2, 1.3, 1.4}. Under the rule as written the first fuzz
+  pass raised `ValueError` on 610 of 2000 stacks (all pinned, and including
+  the engine defect (1) below); under the cap-aware rule and the fixed
+  engine, 0 of 3000.
+- **Three engine defects found by the fuzz / the F8 declaration and fixed
+  BEFORE any FDTD ran:** (1) at a piece endpoint the ramp switches between
+  "empty" and "one cell equal to u" (same cells, different accounting), so
+  G jumps by an integer there and evaluating G at the endpoint
+  misclassified the piece — a single segment with both ends pinned and
+  span 4 bc raised `ValueError` (fuzz trial 10); fixed by evaluating just
+  inside each piece and snapping a root that lands on an endpoint.
+  (2) that inset moves G by n x 1e-10, past a fixed 1e-8 tolerance when
+  n > 100: the F8 fixture's 139-cell plateau was rounded up to 140 (142
+  cells at 1.946 mm instead of 141) — caught by this note's own "builder
+  output equals the declared vector" assertion, fixed by an exact-fit check
+  at the target on its own accounting plus a tolerance proportional to G
+  (commit `d79ad615`). (3) two adjacent free runs flip each other's seam
+  cells by one ulp (1e-18 m) in a two-cycle, so exact-equality convergence
+  never settled (11 of 3000 stacks); convergence is judged at 1e-11
+  relative. Every pinned fixture number was unchanged by (2) and (3).
+- **W6 instrument:** the d990e18c source is loaded with `git show` into a
+  module that must be registered in `sys.modules` (its `@dataclass` looks
+  itself up); the first launch crashed there before F7's first number.
+- **Exports:** `rfx.make_band_profile` only; `make_z_profile` stays on
+  `rfx.nonuniform` (the guide imports it from there). `rfx.__all__`
+  211 -> 212 under the 213 curation ceiling
+  (`tests/contracts/test_forward_docstring_contract.py`). Exporting both
+  would have tripped that gate (213), and the design requires one name.
+- `_smooth_preserving_blocks` (#763) is removed; `_make_dz_profile` calls
+  the engine through `_band_smooth_post_thirds`. Its locks still hold
+  (below).
+
+### F1-F4 and (c) — profile level, no FDTD
+
+| Fixture | I1 max interface error | I2 | I3 column error | nz | notes |
+|---|---|---|---|---|---|
+| (a) PCB via builder, cap 1.4, min_cells 4 | 8.7e-19 m | max 1.397368 (air ramp), 0 pairs > 1.4; core\|prepreg seam 1.3913 | 0 | 89 | 23/4/23/4/23; OLD (auto-z) 8.000 |
+| (a) PCB via `_make_dz_profile`, cap 1.3 | 6.1e-18 m | max non-thirds 1.288500, 0 pairs > 1.3; every block seam 1.280000 on the 1/3 sub-cells; thirds pairs 2.0 / 1.5 by construction (20 pairs) | 0 | 115 (OLD 45) | dz_min 8.333 um unchanged; cores 25 x 32 um + splits; bottom air 10 cells 117.2 -> 13.56 um, top air 12 cells 13.74 -> 173.4 um |
+| (b) `make_z_profile` Defect-2 fixture | 1.7e-18 m | max 1.352395, 0 pairs > 1.4 (OLD 4.527) | 0 | 42 (OLD 32) | first and last cell 50 um exactly; max cell 167.3 um |
+| (c) #763 demo | 0 | air run 1.2718 (lock <= 1.301) | 0 | 18 | block `[63.5, 63.5, 63.5, 42.333, 21.167]` um bit-identical, dz_min 21.167 um; air run re-realized: 26.92, 34.24, 43.54, 55.37, 70.42, 89.56, 113.9, 144.9, 184.2 x5 um |
+| (c) generic two-layer | 2.2e-19 m | max outside thirds <= 1.3 | 4.3e-19 m | 39 | both blocks bit-identical, four interfaces on nodes |
+| (d) fuzz, rng 20260907, 3000 stacks (400 in the test) | all <= 1e-12 (0 failures) | 0 pairs over cap, worst excess 0 | all <= 1e-12 | max 1772, median 48 | 1481 pinned stacks, I4 bit-exact on all; protected blocks uniform with >= min_cells |
+
+### F5 — axis round trip
+
+`make_band_profile([0, 12, 15, 27] mm, [1, 0.5, 1] mm, max_ratio=1.3,
+boundary_cell=1 mm)`: 32 cells, max ratio 1.243140, both ends 1e-3 exactly.
+`Simulation(freq_max=10e9, domain=(27, 27, 10) mm, dx=1e-3, dx_profile=p,
+dy_profile=p, boundary="cpml", cpml_layers=8)`: **zero** "adjacent cell
+ratio" warnings; `preflight()` emits no
+`nu_grading_ratio_beyond_validated_cap`; interior extents from
+`make_nonuniform_grid` node sums 27 mm to <= 1e-12 m on x and y, interior
+end cells 1e-3 exactly. Same profile as `dz_profile`: clean as well.
+**Reported, not gated (R7):** `nu_grading_reaches_absorber` fires on all
+four in-plane faces — end run `[1.0, 0.9606 x 10, 0.7727, 0.6216, 0.5]` mm,
+ratio deviation 0.0394 (lo faces) / 0.041 (hi faces) inside the 8-cell
+runway. The pinned cell is one cell; a `boundary_cells` runway argument
+remains the lead's decision (R7), not added here.
+
+### F6 — batteries and moved values
+
+Batteries (final tree): `tests/unit/nonuniform tests/unit/grid/test_auto_config.py`
+(-m "not gpu and not slow") 266 passed before the engine fix, re-run after
+it — see the hand-off report; the four-file lock battery 67 passed;
+`tests -k "nonuniform or auto_config or mesh_planner or dz_profile or
+grading"` 381 passed / 2 skipped; `tests/unit/preflight -k "nu or
+nonuniform or graded or profile"` 11 passed; `tests/contracts` 1008 passed
+/ 1 failed before the export was trimmed to one name (the `__all__`
+ceiling), passing after; ruff clean. **Locked values moved: none.** The
+(c) locks, `apply_thirds_rule` and its three tests, the 1.4 z cap, the 1.3
+in-plane cap, every explicit-profile fixture (`_example_fidelity_lib.py`,
+`fixtures.py`, preflight NU tests) are untouched. Realized cells that
+changed without a lock: the demo air run (above), `make_z_profile` outputs
+with a descending edge, and auto-z stacks with adjacent dielectric blocks
+(cell count, dt unchanged where dz_min is a thirds sub-cell).
+
+### F7 — chain model, OLD vs NEW auto-z PCB profile (no FDTD)
+
+dt = 2.7471385804e-14 s for both (the 8.333 um cell); F0 10 GHz, dy 0.2 mm,
+b 30 mm, 140 / 150 runway cells of the profile's own end cells.
+
+| profile | nz | total \|R\| | total \|R\|² | Σ\|R_step\| | (Σ\|R_step\|)² | Σ\|R_step\|² | max non-thirds step | max thirds pair |
+|---|---|---|---|---|---|---|---|---|
+| OLD (d990e18c, from `git show`) | 45 | 9.7561e-6 | 9.518e-11 | 5.0653e-4 | 2.566e-7 | 1.481e-8 | 1.5558e-5 (136.0 -> 104.6 um, r 1.300) | 4.5788e-5 (133.3 -> 200 um, r 1.5) |
+| NEW (this tree, cap 1.3) | 115 | 5.6060e-5 | 3.1427e-9 | 1.0596e-4 | 1.1228e-8 | 1.1542e-9 | 2.4626e-5 (134.5 -> 173.4 um, r 1.288) | 1.1719e-6 |
+
+The OLD row reproduces the reference table to the digits quoted. The NEW
+row is the cap-1.3 realization (nz 115), not the cap-1.4 reference
+(nz 105), per the R1 deviation above.
+
+- **F7a: not fired.** 3.1427e-9 <= 1.5 x (1.0596e-4)² = **1.6841e-8**.
+  (The literal power-sum rule would again have fired on a compliant
+  profile: 1.5 x 1.1542e-9 = 1.7314e-9 < 3.1427e-9 — recorded as the
+  reference predicted.)
+- **F7b: not fired.** 2.4626e-5 <= |R_single(r 1.4, d 173.36 um)| =
+  **3.0330e-5**. The largest NEW step is an r = 1.288 step onto the coarsest
+  cell; the largest OLD step outside a thirds pair was 1.5558e-5, but its
+  thirds pairs reached 4.5788e-5 (r = 1.5, 133 -> 200 um).
+- Reported: OLD total 9.8e-6 vs NEW 5.6e-5 — OLD's ratio-8 seams sit at
+  8-67 um cells (lambda/450 and finer at 10 GHz) and reflect 9.0e-6 each,
+  so the OLD number is smaller for the reason section 3 gave, not because
+  the OLD mesh is better; NEW's total is set by its air ramps
+  (117 -> 173 um cells). Transmission |T| 1.0000104 (OLD) / 1.0000336 (NEW),
+  raw amplitude, not flux-normalized.
+
+### F8 — FDTD witness, narrow fine band (CPU, one attempt)
+
+`w6_band_builder.py` run once (commit `d51879a7` + fixed engine
+`d79ad615`), widths 2, 4, 8, 16 plus the extra law points 32, 64;
+wallclock 3.7 s. dt(A) = dt(B) = 2.402764937e-12 s; n_steps 1200; gates
+t_r 1.047 ns, t_s 2.347 ns, gate_end 2.091 ns (870 steps), incident gate
+0.947 ns; t_f 3.378 / 3.393 / 3.424 / 3.486 / 3.609 / 3.856 ns and last
+band-internal return 1.084 / 1.099 / 1.130 / 1.192 / 1.315 / 1.562 ns for
+the six widths — all inside the gate. **The builder produced the declared
+vector on every width** (max per-cell deviation 5.6e-17 m), so the
+chain-model predictions are the frozen ones.
+
+| n_b | nz | \|R\|_meas | \|R\|²_meas | dB | \|R\|_model | deviation | window half-width | inside |
+|---|---|---|---|---|---|---|---|---|
+| 2 | 294 | 7.4364e-3 | 5.530e-5 | -42.6 | 7.4916e-3 | 5.51e-5 | 1.528e-3 | yes |
+| **4 (gate)** | 296 | **1.0063e-2** | 1.013e-4 | -39.9 | 1.0141e-2 | 7.80e-5 | 2.058e-3 | **yes** |
+| 8 | 300 | 1.1164e-2 | 1.246e-4 | -39.0 | 1.1296e-2 | 1.32e-4 | 2.289e-3 | yes |
+| 16 | 308 | 1.2559e-3 | 1.577e-6 | -58.0 | 1.2101e-3 | 4.58e-5 | 2.720e-4 | yes |
+| 32 (extra) | 324 | 1.4248e-3 | 2.030e-6 | -56.9 | 1.5111e-3 | 8.63e-5 | 3.322e-4 | yes |
+| 64 (extra) | 356 | 6.4596e-3 | 4.173e-5 | -43.8 | 6.5575e-3 | 9.79e-5 | 1.342e-3 | yes |
+
+Every deviation is within 0.2 % to 1.2 % of the model in the peak rows and
+3.8 % / 5.7 % in the two null rows (16, 32 cells), all far inside the
+20 % + 3e-5 windows. The law read off the chain model before the run —
+narrow-band reflection bounded by about twice the single-ramp 5.79e-3 and
+oscillating with band width (near-maximum at 8 cells, null at 16) — is what
+the FDTD returns. Validity domain now witnessed: fine bands of 2 to 64 cells
+at fine 30 / coarse 15.3 cells per free-space wavelength, ratio 1.4, PEC
+closed, one frequency. Not witnessed: bands under 2 cells, other
+resolutions, in-plane grading, an absorber present.
+
+### Impact sweep and #931
+
+No locked value moved (F6). The #931 question stands as written in
+section 5, with the measured cost now on record: the prepreg's thirds
+sub-cell (8.333 um) sets dt for the whole PCB column and, under the ratio
+law, forces 25-cell cores — nz 45 -> 115 — for a dielectric | dielectric
+seam that has no conductor to justify the split.

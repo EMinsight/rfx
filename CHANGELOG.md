@@ -6,6 +6,56 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased]
 
+### Added — `make_band_profile`: interface-exact, ratio-law-exact band profiles on any axis
+
+`rfx.make_band_profile(edges, cell_sizes, *, max_ratio=1.4, protected=None,
+boundary_cell=None, min_cells=1)` (in `rfx.nonuniform`, exported on `rfx`)
+realizes a declared 1-D stack as a cell-size profile whose every interface
+lands on a node plane (to 1e-12 m), whose every adjacent-cell ratio is at
+most `max_ratio` — including the seam between two PROTECTED segments, where
+the coarser one is refined (more cells) because no ramp can sit between
+them — and whose sum equals the declared span exactly. Ramps are geometric,
+placed inside the coarser free segment on whichever side needs one, ascending
+and descending, and a free run's plateau is solved so the run fits its span
+without a rescale. `boundary_cell` pins both end cells bit-exactly, which is
+the `dx_profile` / `dy_profile` CPML contract, so the same function serves
+all three axes. Pre-declared falsifiers and measurements:
+`docs/design_notes/20260907_nu_band_profile_predeclaration.md`; pins in
+`tests/unit/nonuniform/test_band_profile_builder.py` (a 5-layer PCB stack,
+a seeded 400-stack fuzz, an in-plane round trip through `Simulation`).
+Measured on the PCB stack (core 0.8 | prepreg 0.1 | core | prepreg | core mm,
+dx 0.2 mm): the old auto-z smoothing left a core|prepreg seam at ratio
+8.000 (66.7 um beside 8.33 um, 25 ratios above 1.4); the builder realizes
+it at <= 1.4 everywhere (23-cell cores of 34.783 um beside 4-cell prepregs).
+
+### Changed — `make_z_profile` and the auto-configured z mesh now run on that engine
+
+- `make_z_profile` (same signature) is now what its docstring said:
+  fine -> coarse -> fine inside every segment, `dx_fine` at every feature
+  plane and at both domain ends. Measured on
+  `make_z_profile([1.0, 1.2, 2.5, 2.7] mm, 4 mm, 50 um, 200 um, 1.4)`: the
+  old loop emitted a 4.527 jump (226.4 -> 50 um) and ended on a 188 um cell;
+  now max ratio 1.352, both ends 50 um, all features on nodes. The public
+  guide no longer tells you to run `smooth_grading` on its output.
+- `auto_configure` z meshes (`_make_dz_profile`): the thirds rule is applied
+  exactly as before, then the band engine smooths at 1.3 with every
+  post-thirds block passed through verbatim, every air run ramped from the
+  block's actual edge cell and renormalized to its declared length, and —
+  new — a seam between two ADJACENT dielectric blocks refined to the cap.
+  The #763 locks hold unchanged (demo block bit-identical, dz_min 21.167 um,
+  column 1.754 mm). On the PCB stack: nz 45 -> 115, dz_min 8.333 um
+  unchanged (it is the prepreg's thirds sub-cell — an ownership question
+  handed to #931), every block seam 1.280. A float-ceil quirk that gave one
+  0.8 mm core 5 cells and its identical neighbours 4 is fixed (1e-9 relative
+  tolerance on the quotient).
+- Support matrix: the multi-band row now states the transition law (ratio,
+  local cells per wavelength, band width) instead of "up to 3 fine bands",
+  with a new witness (W6, `results/w6_band_builder.json`): fine bands of
+  2-64 cells between ratio-1.4 ramps, measured against the exact discrete
+  chain model, every row inside its pre-declared window (gate row, 4 cells:
+  1.0063e-2 vs 1.0141e-2). Bands narrower than 2 cells and in-plane grading
+  remain unwitnessed.
+
 ### Added — near-cutoff layout note, and the S21 phase residual on waveguide S-matrix results
 
 Two report-only additions from the same measurement campaign, one before the
