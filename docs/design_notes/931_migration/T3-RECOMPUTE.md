@@ -188,17 +188,65 @@ The iris and MSL rows do not move: neither fixture has a wire port. Every
 wire-port row still sits on `(1-n)/(1+n)` for its own count to seven digits
 and still does not move with the load, which is the module's actual claim.
 
-### Run 4 — `rfx-931-post-t3-measure-r3` (369367259294)
+### Run 4 — the re-measure on the fixed tree (369367259310)
 
-Same yaml, name changed, submitted 2026-09-07 19:32 UTC from commit
-`9ca7d595`. It re-runs the three docstring cases on the fixed tree AND a
-fourth case added to the producer for
-`test_nu_port_sigma_dual_spacing`'s oracle-2 table, whose extents changed.
-Read `commit.txt` before reading its numbers.
+`rfx-931-post-t3-measure-r3` (369367259294, submitted 19:32 UTC) never
+scheduled — no output directory after an hour on a congested cluster — and
+was resubmitted unchanged as `rfx-931-post-t3-measure-r4`, **369367259310**,
+which read commit `be40dddf`, rc 0, output
+`.../issue931-post-t3-measure-20260907T204252Z/t3_remeasure.json`. That file
+is committed as
+`docs/design_notes/931_migration/t3_remeasure_369367259310.json`.
 
-### Run 5 — `rfx-931-post-t3-pytest-r5` (369367259300)
+The three original cases are unchanged from 369367259274 to the digit; what
+the fixed helper changed is the JSON's own `n_live` column, which now reads
+5 / 3 — the count the solved `S11` had been sitting on all along.
 
-Same yaml, name changed, submitted 2026-09-07 20:00 UTC from commit
-`9ca7d595`. The four-directory verdict on the fixed tree. Expected: the
-nine oracle reds gone, the one `test_runner_import_binding.py` red left,
-4 xfailed, ~35 min.
+The fourth case is the new one, `test_nu_port_sigma_dual_spacing`'s oracle-2
+table on the re-declared extents:
+
+| row | extent was -> now | n_live | expected | worst rel was -> now |
+|---|---|---|---|---|
+| ez | 2D -> 5D | 2 | -1/3 | 2.5e-05 -> 2.3e-05 |
+| ez | 6D -> 9D | 3 | -1/2 | 6.9e-06 -> 6.1e-06 |
+| ex | 2D -> 3D | 2 | -1/3 | 7.8e-05 -> 8.4e-05 |
+| ey | 2D -> 4D | 2 | -1/3 | 1.9e-05 -> 1.9e-05 |
+
+`n_live`, the expected column and the deviations all land where they were.
+That is the check on the re-declaration: if the new extents had changed what
+the fixture measures rather than only how much extent it takes to realize
+the same port, these numbers would have moved.
+
+### Run 5 — the verdict (369367259300)
+
+`rfx-931-post-t3-pytest-r5`, read commit `be40dddf`:
+**1 failed, 876 passed, 4 xfailed in 25.9 min**
+(`.../issue931-post-t3-pytest-20260907T201554Z/`). The single red is
+`test_runner_import_binding.py::test_coax_then_refplane_order_does_not_leak_fake_run`,
+the pre-existing slow-lane brittleness of finding 2 — not #931, not this
+group's to fix. Every one of the nine R8 reds is gone and the xfail count
+is 4, i.e. the seam pair is not merely passing but deleted.
+
+The pre-declared expectation for this run was written before it ran (the
+paragraph this one replaces) and it held exactly.
+
+### Local fast lane, `-n 4`, on commit `be40dddf`
+
+Default marker expression (`not gpu and not slow and not slow_physics`),
+`JAX_PLATFORMS=cpu`, one directory at a time on the shared pod:
+
+| directory | result |
+|---|---|
+| `tests/unit/nonuniform` | **244 passed** (18.2 min) |
+| `tests/unit/runners` | **256 passed** (5.1 min) |
+| `tests/unit/grid` | **137 passed** (0.7 min) |
+| `tests/unit/subgrid` | **166 passed, 2 xfailed** (8.7 min) |
+
+803 passed, 2 xfailed, 0 failed. `runners`, `grid` and `subgrid` were run at
+`770c4e6c`; the ingest commits touch only two files in
+`tests/unit/nonuniform` plus docs, so those three counts stand. `nonuniform`
+went 229 passed / 9 failed at `770c4e6c` to 244 passed / 0 failed after the
+fix — the +6 is the new build-time gate (two lanes x three extents).
+
+The one red the VESSL lane reports does not appear here because it is
+`@pytest.mark.slow` and the fast lane deselects it.

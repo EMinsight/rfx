@@ -64,10 +64,19 @@ Measured on THIS fixture, Re S11 at 0.2 / 0.4 / 0.6 GHz, worst relative
 deviation over the three bins:
 
     component  extent  n_live   expected   measured             worst rel
-    ez            2D      2     -0.33333   -0.33334 ... -0.33333  2.5e-05
-    ez            6D      3     -0.50000   -0.50000 ... -0.50000  6.9e-06
-    ex            2D      2     -0.33333   -0.33336 ... -0.33334  7.8e-05
-    ey            2D      2     -0.33333   -0.33333 ... -0.33333  1.9e-05
+    ez            5D      2     -0.33333   -0.33334 ... -0.33333  2.3e-05
+    ez            9D      3     -0.50000   -0.50000 ... -0.50000  6.1e-06
+    ex            3D      2     -0.33333   -0.33336 ... -0.33334  8.4e-05
+    ey            4D      2     -0.33333   -0.33333 ... -0.33333  1.9e-05
+
+Re-measured under #931 R8 (VESSL run 369367259310, commit be40dddf,
+``JAX_PLATFORMS=cpu``; producer ``docs/design_notes/931_migration/
+t3_remeasure.py`` case 4, record
+``docs/design_notes/931_migration/t3_remeasure_369367259310.json``). The
+extents are the ones above because the half-open rule dropped a realized
+cell from each of the old ones (2D, 6D, 2D, 2D); ``n_live``, the expected
+column and the deviations are all where they were, which is the point of
+re-declaring the extents rather than re-pinning the oracle.
 
 For reference, the pre-fix code on the ORIGINAL isotropic fixture read
 -0.05882 against the same -0.33333 expectation: a 1.7778x-too-high cell
