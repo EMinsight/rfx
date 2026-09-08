@@ -532,30 +532,44 @@ def test_the_two_wr90_iris_cases_share_one_thickness_convention(fixture):
             fixture["config"]["t_m"] * 1e3 / r["dx_mm"]), r
 
 
-def test_the_one_cell_iris_is_witnessed(fixture):
+def test_the_one_cell_iris_evidence_lives_in_the_witness_block(fixture):
     """Design note §5: one independent witness that the two-wall rule is right
-    at ONE cell.
+    at ONE cell — and a statement of WHERE that witness is, so the duty cannot
+    be silently unmet.
 
-    Every gated row here is 2 or 4 cells thick, so nothing in the committed
-    record says what happens at ``t_c = 1`` — the thickness at which the old
-    rule and the new one differ most (one wall versus two, i.e. zero versus
-    one cell of electrical thickness). The mode-matching oracle is an
-    independent method and is defined at ``t = dx``, so a ``t_c = 1`` row must
-    sit on the same residual curve as the 2..8-cell rows rather than off it.
+    This test used to look for a ``t_c = 1`` row among the GATED rows and skip
+    when it found none, saying the cv18 regeneration would add one. The
+    regeneration has landed and did not, because it cannot: the gated
+    population is the three declared apertures at a/30 and a/60, whose iris is
+    2 or 4 cells thick by construction. The t = 1 evidence is a separate
+    coarse-rung sweep, recorded under ``one_cell_volume_witness``, and the
+    coarse rung is REPORTED and never gated in this case — so comparing that
+    row to ``gates.fine_gate_abs`` was a category error as well as unreachable.
+
+    Its original criterion ("the t = 1 residual sits on the same curve as the
+    t = 2..8 rows") is the monotone-range criterion, retired for vacuity by
+    VESSL 369367259159 and kept in the record as
+    ``one_cell_volume_witness.monotone_range_criterion``. The live criterion is
+    thickness identification, asserted in full by
+    ``test_one_cell_volume_witness_is_recorded_and_passing``. What is asserted
+    here, and nowhere else, is that the two facts stay joined: no gated row
+    carries the thickness in dispute, and the block that does carry it exists
+    and passed.
     """
-    rows = [r for r in _rows(fixture) if _thickness_cells(r) == 1]
-    if not rows:
-        pytest.skip(
-            "no t_c = 1 row in the committed fixture; the one-cell witness is "
-            f"added by the cv18 regeneration ({_MIGRATION_RUN})")
-    gate = float(fixture["gates"]["fine_gate_abs"])
-    for r in rows:
-        gap = float(r["max_gap_abs"])
-        assert gap <= gate, (
-            f"the t_c = 1 iris sits {gap:.4f} from the mode-matching oracle "
-            f"against a {gate} gate — the one-cell volume rule is not "
-            "confirmed by an independent method at the thickness where it "
-            "differs most from the rule it replaced")
+    gated_t1 = [r for r in _rows(fixture) if _thickness_cells(r) == 1]
+    assert gated_t1 == [], (
+        "a gated row now realizes a one-cell iris; the witness block is no "
+        "longer the only place the contested thickness is measured, and this "
+        "test must gate that row instead of deferring to the witness", gated_t1)
+    if "one_cell_volume_witness" not in fixture:
+        pytest.skip("the one-cell volume witness is written by the cv18 "
+                    f"regeneration; the committed fixture predates it ({_MIGRATION_RUN})")
+    w = fixture["one_cell_volume_witness"]
+    one = [r for r in w["rows"] if r["realized_thickness_cells"] == 1]
+    assert len(one) == 1, w["rows"]
+    assert w["one_cell_gap_abs"] == one[0]["max_gap_abs"]
+    assert w["passed"] is True, (
+        "design note §5 leaves the two-wall rule at one cell unwitnessed", w)
 
 
 # --------------------------------------------------------------------------- #
@@ -950,13 +964,33 @@ def test_claim_scope_cites_the_artifact_and_not_the_retracted_sentence(fixture):
 
 
 def test_live_one_cell_defect_is_caught_by_the_per_config_gate_and_not_the_old_ones():
-    """#812 round 2, VESSL 369367257708: the audit's defect (upper fin one
-    cell short at each rung at d = 7.620 mm, i.e. an aperture one cell too
-    WIDE) solved for real. It PASSES the pre-#812 pooled 0.04 gate and the
-    Richardson 0.01 gate -- the measured blindness -- and FAILS the new
-    per-configuration 0.015 gate. Pinned so the committed live artifact
-    cannot drift from what the manifest cites; the first-order model row it
-    sits beside is aperture_resolution.json::pairs[2].one_cell_defect.over."""
+    """#812 round 2, re-solved under the #931 contract: the audit's defect
+    (upper fin one cell short at each rung at d = 7.620 mm, i.e. an aperture
+    one cell too WIDE) measured for real. It PASSES the pre-#812 pooled gate
+    and the Richardson gate -- the measured blindness -- and FAILS the
+    per-configuration gate. Pinned so the committed live artifact cannot drift
+    from what the manifest cites; the first-order model row it sits beside is
+    aperture_resolution.json::pairs[2].one_cell_defect.over.
+
+    #931 re-pin. Both artifacts this reads were regenerated on the migrated
+    geometry and are the ones committed here: the probe run
+    ``issue931-post-cv18-followups-20260907T230853Z`` (rc 0, source aa66bed2,
+    "CRITERION (B) LIVE: CONFIRMED") wrote one_cell_defect_live.json, and the
+    same run rebuilt aperture_resolution.json from the pass-2 record
+    (``issue931-post-cv18-20260907T195222Z``, rc 0). Every digit below moved,
+    and none of it was hand-entered:
+
+      fine_gap_abs           0.02842 -> 0.01246   (measured, probe run)
+      richardson_dev_abs     0.00588 -> 7e-05     (measured, probe run)
+      pooled_fine_gate_abs   0.04    -> 0.02      = ceil(0.0106 x 1.5) @ 1/100
+      fine_gate_abs_per_cfg  0.015   -> 0.006     = ceil(0.0034 x 1.5) @ 1/1000
+      richardson_gate_abs    0.01    -> 0.01      = ceil(0.0046 x 1.5) @ 1/100
+      model over.fine_gap    0.0265  -> 0.0134    (rebuilt artifact)
+
+    No gate is loosened here: both fine gates moved DOWN, by the fixture's own
+    round-UP(envelope x 1.5) rule against the corrected-thickness envelopes,
+    and the defect is caught with more margin than before (1.895x -> 2.077x).
+    """
     import json
     from pathlib import Path
     root = Path(__file__).resolve().parents[2] / "validation/crossval/_18_wr90_iris_results"
@@ -965,15 +999,24 @@ def test_live_one_cell_defect_is_caught_by_the_per_config_gate_and_not_the_old_o
     assert live["config"]["config_key"] == model["config"] == "7.620|0.20|0.50"
     assert live["config"]["fin_cells_delta"] == -1
     m = live["measured"]
-    assert m["fine_gap_abs"] == pytest.approx(0.02842, abs=5e-6)
-    assert m["richardson_dev_abs"] == pytest.approx(0.00588, abs=5e-6)
-    assert m["fine_gap_abs"] <= live["config"]["pooled_fine_gate_abs"] == 0.04
-    assert m["fine_gap_abs"] > live["config"]["fine_gate_abs_per_config"] == 0.015
+    assert m["fine_gap_abs"] == pytest.approx(0.01246, abs=5e-6)
+    assert m["richardson_dev_abs"] == pytest.approx(7e-05, abs=5e-6)
+    assert m["fine_gap_abs"] <= live["config"]["pooled_fine_gate_abs"] == 0.02
+    assert m["fine_gap_abs"] > live["config"]["fine_gate_abs_per_config"] == 0.006
     assert m["richardson_dev_abs"] <= live["config"]["richardson_gate_abs"] == 0.01
     assert m["passes_pooled_fine_gate"] and m["fails_per_config_fine_gate"] and m["passes_richardson_gate"]
-    assert m["per_config_margin_x"] == pytest.approx(m["fine_gap_abs"] / 0.015, abs=1e-3)
-    # the first-order model predicted the same verdicts, 7 % low on the gated leg
-    assert model["one_cell_defect"]["over"]["fine_gap_abs"] == pytest.approx(0.0265, abs=1e-4)
+    assert m["per_config_margin_x"] == pytest.approx(m["fine_gap_abs"] / 0.006, abs=1e-3)
+    # the three gates the artifact carries are the committed ones, not a copy
+    # that drifted: the probe reads them from the fixture and the script source
+    gates = json.loads((Path(__file__).resolve().parents[1]
+                        / "fixtures/wr90_iris_modematch/fixture.json").read_text())["gates"]
+    assert live["config"]["pooled_fine_gate_abs"] == gates["fine_gate_abs"]
+    assert live["config"]["richardson_gate_abs"] == gates["richardson_gate_abs"]
+    assert (live["config"]["fine_gate_abs_per_config"]
+            == gates["fine_gate_abs_per_config"]["7.620|0.20|0.50"])
+    # the first-order model predicted the same verdicts, 7.5 % HIGH on the
+    # gated leg (pre-#931 it was 7 % low; the sign flipped, the size did not)
+    assert model["one_cell_defect"]["over"]["fine_gap_abs"] == pytest.approx(0.0134, abs=1e-4)
     assert model["one_cell_defect"]["over"]["detected_by_fine_gate"] is True
     assert model["one_cell_defect"]["over"]["detected_by_richardson_gate"] is False
     assert abs(model["one_cell_defect"]["over"]["fine_gap_abs"] / m["fine_gap_abs"] - 1.0) < 0.10
