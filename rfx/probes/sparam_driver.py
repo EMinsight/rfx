@@ -115,7 +115,8 @@ def compute_lumped_wire_s_matrix_via_scan(
     # #677: node-thin sheet ctx, applied by every per-drive forward run.
     from rfx.materials.thin_conductor import build_sheet_impedance_ctx
     _sheet_ctx = build_sheet_impedance_ctx(
-        _sheet_specs, pec_edge_masks=_pec_edge_masks)
+        _sheet_specs, pec_edge_masks=_pec_edge_masks,
+        periodic=sim._periodic_flags())
 
     if n_steps is None:
         n_steps = grid.num_timesteps(num_periods=30)

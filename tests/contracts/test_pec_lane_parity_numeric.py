@@ -273,3 +273,113 @@ def test_the_subgridded_lane_refuses_a_sheet_it_cannot_realize():
         with pytest.raises(NotImplementedError, match="PEC sheets"):
             sim.run(n_steps=4, skip_preflight=True)
 
+
+# ---------------------------------------------------------------------------
+# the lossy (f0) sheet ctx on the forward lane (§1.7 one spelling, §1.9)
+# ---------------------------------------------------------------------------
+
+F0_DX = 2e-3
+F0_DOM = (12e-3, 12e-3, 12e-3)
+
+
+def test_the_forward_lossy_sheet_ctx_knows_about_a_pec_wire():
+    """The lossy operator REPLACES the E update at its edges, so an edge a
+    PEC conductor owns has to be removed from its ctx first.
+
+    ``forward()`` asked "is there any PEC?" of ``pec_mask`` and the sheet list
+    only. A filament owns no cell and is not a sheet, so a model whose only
+    conductor is a wire reached the operator with ``pec_edge_masks=None`` and
+    the operator wrote field back onto the wire's own PEC edge: measured, an
+    Ex probe ON the filament read 0 through ``run()`` and 2.44e-6 through
+    ``forward()``.
+    """
+    from rfx import PolylineWire
+
+    def _build_wire():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sim = Simulation(freq_max=15e9, domain=F0_DOM, dx=F0_DX,
+                             boundary="pec")
+            sim.add(PolylineWire(((4e-3, 6e-3, 6e-3), (8e-3, 6e-3, 6e-3)),
+                                 radius=0.2e-3), material="pec")
+            sim.add_thin_conductor(
+                Box((2e-3, 2e-3, 6e-3), (10e-3, 10e-3, 6e-3)),
+                sigma_bulk=5.8e7, surface_impedance_f0=10e9)
+            sim.add_source(position=(4e-3, 4e-3, 2e-3), component="ez",
+                           amplitude_kind="field")
+            sim.add_probe(position=(5e-3, 6e-3, 6e-3), component="ex")
+        return sim
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        run_ts = np.asarray(
+            _build_wire().run(n_steps=60, skip_preflight=True).time_series)
+        fwd_ts = np.asarray(_build_wire().forward(n_steps=60).time_series)
+    run_peak = float(np.max(np.abs(run_ts[:, 0])))
+    fwd_peak = float(np.max(np.abs(fwd_ts[:, 0])))
+    assert run_peak == 0.0, run_peak
+    assert fwd_peak == 0.0, (
+        f"forward() left {fwd_peak:g} on a PEC filament's own edge: the lossy "
+        "sheet ctx was built without the wires")
+
+
+def test_the_forward_lossy_sheet_ctx_uses_the_runs_periodic_flags():
+    """#689 on the OUTER call: the builder realizes the f0 footprint's own
+    edges, and on a periodic axis the seam edge (node n-1 to node 0) is
+    inside the sheet. ``forward()`` passed the flags to its PEC realization
+    and not to the ctx, so the seam carried no loss — measured, 35 loaded Ex
+    edges through ``run()`` against 30 through ``forward()`` on the same
+    x-periodic board.
+    """
+    import rfx.materials.thin_conductor as _tc
+    from rfx.boundaries.spec import Boundary, BoundarySpec
+
+    def _build_periodic():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sim = Simulation(
+                freq_max=15e9, domain=F0_DOM, dx=F0_DX,
+                boundary=BoundarySpec(
+                    x=Boundary(lo="periodic", hi="periodic"),
+                    y=Boundary(lo="pec", hi="pec"),
+                    z=Boundary(lo="pec", hi="pec")))
+            sim.add_thin_conductor(
+                Box((0.0, 2e-3, 6e-3), (12e-3, 10e-3, 6e-3)),
+                sigma_bulk=5.8e7, surface_impedance_f0=10e9)
+            sim.add_source(position=(4e-3, 4e-3, 2e-3), component="ez",
+                           amplitude_kind="field")
+            sim.add_probe(position=(4e-3, 6e-3, 6e-3), component="ex")
+        return sim
+
+    seen: list = []
+    _orig = _tc.build_sheet_impedance_ctx
+
+    def _record(*args, **kwargs):
+        ctx = _orig(*args, **kwargs)
+        seen.append(ctx)
+        return ctx
+
+    _tc.build_sheet_impedance_ctx = _record
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            run_res = _build_periodic().run(n_steps=60, skip_preflight=True)
+            run_ctx = seen[-1]
+            fwd_res = _build_periodic().forward(n_steps=60)
+            fwd_ctx = seen[-1]
+    finally:
+        _tc.build_sheet_impedance_ctx = _orig
+
+    for comp in ("mask_ex", "mask_ey", "mask_ez"):
+        run_m = np.asarray(getattr(run_ctx, comp), dtype=bool)
+        fwd_m = np.asarray(getattr(fwd_ctx, comp), dtype=bool)
+        assert np.array_equal(run_m, fwd_m), (
+            f"{comp}: run() loads {int(run_m.sum())} f0 edges, forward() "
+            f"{int(fwd_m.sum())} — the ctx was built with different #689 flags")
+    # the seam edge really is in the sheet, so the comparison has teeth
+    seam = np.asarray(run_ctx.mask_ex, dtype=bool)[-1]
+    assert seam.any(), "no seam edge in the loaded set — the pin is vacuous"
+
+    run_peak = float(np.max(np.abs(np.asarray(run_res.time_series)[:, 0])))
+    fwd_peak = float(np.max(np.abs(np.asarray(fwd_res.time_series)[:, 0])))
+    assert fwd_peak == pytest.approx(run_peak, rel=1e-6), (run_peak, fwd_peak)

@@ -3360,16 +3360,32 @@ class _ExecuteMixin:
 
         # #677: node-thin sheet ctx against the realized PEC edges of this
         # forward run (PEC wins on overlapping edges).  #931: the PEC
-        # sheets belong in that realization too — they own no cell.
+        # sheets AND WIRES belong in that realization too — they own no
+        # cell, so the "is there any PEC?" question cannot be asked of
+        # ``pec_mask`` and the sheet list alone.  A model whose only
+        # conductor is a filament used to reach the lossy operator with
+        # ``pec_edge_masks=None``, and the operator then wrote field back
+        # onto the wire's own PEC edge.
+        #
+        # ``periodic=`` on the OUTER call is the same #689 requirement:
+        # the builder realizes the f0 footprint's own edges, and on a
+        # periodic axis the seam edge (node n-1 to node 0) is in the sheet.
+        # Without the flags it is zero-padded away, so the seam carries no
+        # loss — measured on an x-periodic f0 sheet at dx = 2 mm, 35 loaded
+        # Ex edges through run() against 30 through forward().
+        # ``self._periodic_flags()`` is the single spelling (#931 §1.7).
         from rfx.materials.thin_conductor import build_sheet_impedance_ctx
         from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+        _fwd_periodic = self._periodic_flags()
         _fwd_sheet_ctx = build_sheet_impedance_ctx(
             _fwd_sheet_specs,
             pec_edge_masks=(
-                None if (pec_mask is None and not _fwd_pec_sheets)
+                None if (pec_mask is None and not _fwd_pec_sheets
+                         and not _fwd_pec_wires)
                 else _rpem(pec_mask, sheets=tuple(_fwd_pec_sheets),
                            wires=tuple(_fwd_pec_wires),
-                           periodic=self._periodic_flags())))
+                           periodic=_fwd_periodic)),
+            periodic=_fwd_periodic)
         # #679: the same UPML refusal run_uniform carries. forward() reaches
         # the solver by its own route (it never enters run_uniform), so
         # WITHOUT this the eps_override / forward() channel silently ran the
