@@ -1032,6 +1032,129 @@ def test_a_sigma_fill_conductor_is_not_a_pec_body():
 
 
 # ---------------------------------------------------------------------------
+# the Kottke Stage-2 fence (§1.8)
+# ---------------------------------------------------------------------------
+
+def test_kottke_owns_its_own_volume_the_ownership_rule_does_not_overwrite_it():
+    """§1.8: ``subpixel_smoothing="kottke_pec"`` is fenced OUT of the contract.
+
+    Stage 2 gives a partially filled edge a FRACTIONAL inverse permittivity;
+    that fraction IS the model. The §1.2 ownership rule calls the same edge's
+    cell occupied and would hard-zero it, which throws the subpixel result
+    away and puts the staircase back. Measured on a PEC sphere of radius
+    2.1 mm at dx = 1 mm: 16 edges per component carry a positive Kottke
+    inverse permittivity and are claimed by the volume rule, among them
+    ``Ex[4,3,4]`` at ``inv = 0.0329``, which the unfenced step body reads as
+    exactly 0 after 60 steps.
+
+    The fence keeps the two terms the tensor cannot supply itself: the edges
+    the tensor DID freeze (the defense-in-depth re-zero) and the sheets and
+    wires, which own no cell and so never enter
+    ``compute_inv_eps_tensor_diag`` at all. Falsifier: drop the
+    ``kottke_fenced_edge_masks`` call in ``rfx/simulation.py`` and the probed
+    edge reads zero while its inverse permittivity stays 0.0329.
+    """
+    import rfx.simulation as _sm
+    from rfx import Simulation, Sphere
+    from rfx.boundaries.spec import Boundary, BoundarySpec
+    from rfx.geometry.smoothing import compute_inv_eps_tensor_diag
+
+    dx, cell = 1e-3, (4, 3, 4)
+
+    def _build():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sim = Simulation(
+                freq_max=30e9, domain=(10e-3, 10e-3, 10e-3), dx=dx,
+                boundary=BoundarySpec(
+                    x=Boundary(lo="pec", hi="pec"),
+                    y=Boundary(lo="pec", hi="pec"),
+                    z=Boundary(lo="pec", hi="pec")))
+            sim.add(Sphere((5e-3, 5e-3, 5e-3), 2.1e-3), material="pec")
+            sim.add_source((2e-3, 2e-3, 2e-3), "ex", amplitude_kind="field")
+        return sim
+
+    sim = _build()
+    grid = sim._build_grid()
+    inv = compute_inv_eps_tensor_diag(
+        grid,
+        dielectric_shapes=[(e.shape, sim._resolve_material(e.material_name).eps_r)
+                           for e in sim._geometry],
+        pec_shapes=[e.shape for e in sim._geometry], background_eps=1.0)
+
+    # the premise, measured: this edge is a FRACTIONAL Kottke edge, not a
+    # frozen one — so anything that zeroes it is overwriting the model.
+    inv_xx = float(np.asarray(inv[0])[cell])
+    assert 0.03 < inv_xx < 0.04, inv_xx
+
+    applied = {}
+    _orig = _sm.apply_pec_edges
+
+    def _record(state, edge_masks):
+        applied["masks"] = edge_masks
+        return _orig(state, edge_masks)
+
+    _sm.apply_pec_edges = _record
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = _build().run(n_steps=60, subpixel_smoothing="kottke_pec")
+    finally:
+        _sm.apply_pec_edges = _orig
+
+    masks = applied.get("masks")
+    assert masks is not None, "the kottke lane applied no edge masks at all"
+    for c in range(3):
+        m = np.asarray(masks[c], dtype=bool)
+        overwritten = m & (np.asarray(inv[c]) > 1e-9)
+        assert not overwritten.any(), (
+            f"component {c}: {int(overwritten.sum())} edges with a POSITIVE "
+            "Kottke inverse permittivity were hard-zeroed by the ownership "
+            "rule (§1.8 fences the kottke_pec path out of the contract)")
+
+    ex = float(np.asarray(result.state.ex)[cell])
+    assert abs(ex) > 1e-4, (
+        f"Ex{cell} = {ex:g} on the kottke_pec lane: a fractional Kottke edge "
+        f"(inv = {inv_xx:.6g}) was frozen by the volume rule")
+
+
+def test_the_kottke_fence_keeps_sheets_and_wires_the_tensor_cannot_see():
+    """§1.8 fence, other half: a sheet owns no cell, so it contributes
+    nothing to the inverse-permittivity tensor. Restricting the applied set
+    to ``inv < 1e-9`` alone would delete every declared sheet and wire on the
+    Kottke lane; the fence unions their edges back in.
+    """
+    from rfx.boundaries.pec import (
+        SheetSpec, kottke_fenced_edge_masks, realized_pec_edge_masks)
+
+    shape = (6, 6, 6)
+    cells = np.zeros(shape, dtype=bool)
+    cells[2:4, 2:4, 2:4] = True
+
+    footprint = np.zeros(shape, dtype=bool)
+    footprint[1:5, 1:5, 5] = True
+    sheet = SheetSpec(normal_axis=2, plane=5,
+                      footprint=jnp.asarray(footprint), name="foil")
+    sheets = (sheet,)
+
+    edges = realized_pec_edge_masks(jnp.asarray(cells), sheets=sheets)
+    # a tensor that froze NOTHING: the volume term must vanish entirely and
+    # the sheet term must survive in full.
+    open_tensor = tuple(jnp.ones(shape, dtype=jnp.float32) for _ in range(3))
+    fenced = kottke_fenced_edge_masks(edges, open_tensor, sheets=sheets)
+    sheet_only = realized_pec_edge_masks(None, sheets=sheets)
+    for c in range(3):
+        assert np.array_equal(np.asarray(fenced[c]), np.asarray(sheet_only[c])), c
+    assert np.asarray(fenced[0]).any(), "the sheet was fenced away with the volume"
+
+    # a tensor that froze EVERYTHING gives the realized set back unchanged.
+    closed = tuple(jnp.zeros(shape, dtype=jnp.float32) for _ in range(3))
+    kept = kottke_fenced_edge_masks(edges, closed, sheets=sheets)
+    for c in range(3):
+        assert np.array_equal(np.asarray(kept[c]), np.asarray(edges[c])), c
+
+
+# ---------------------------------------------------------------------------
 # §1.9 — one source, every consumer: the collectors at the assemblers
 #
 # A sheet owns no cell, so it cannot ride out of ``_assemble_materials`` in

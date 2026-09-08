@@ -26,6 +26,7 @@ from rfx.boundaries.pec import (
     apply_pec_edges,
     apply_pec_faces,
     apply_pec_occupancy,
+    kottke_fenced_edge_masks,
     realized_pec_edge_masks,
 )
 from rfx.progress import (
@@ -765,6 +766,21 @@ def _build_step_setup(
     # encodes both PEC behaviour and dielectric subpixel smoothing —
     # apply_conformal_pec is redundant and SKIPPED to avoid double-zeroing.
     use_aniso_inv = aniso_inv_eps is not None
+    # ---- #931 §1.8 fence: Kottke Stage-2 owns its own volume ----
+    # ``subpixel_smoothing="kottke_pec"`` builds the tensor from the SAME
+    # ``pec_shapes`` that produced ``pec_mask``, and a partially filled edge
+    # gets a FRACTIONAL inverse permittivity.  Applying the §1.2 ownership
+    # rule on top hard-zeroes those edges and throws the subpixel model away.
+    # Restrict the applied set to what the tensor froze, plus the sheets and
+    # wires the tensor cannot see (they own no cell).  ``aniso_inv_eps_smooth``
+    # marks the occupancy-derived tensor instead, where the static declaration
+    # and the traced override are two different geometries and the
+    # intersection would silently delete declared metal — that lane keeps the
+    # realized edges.
+    if use_pec_edges and use_aniso_inv and not aniso_inv_eps_smooth:
+        pec_edge_masks = kottke_fenced_edge_masks(
+            pec_edge_masks, aniso_inv_eps,
+            sheets=pec_sheets, wires=pec_wires, periodic=periodic)
     use_wire_sparams = len(wire_port_sparams) > 0
     use_lumped_sparams = len(lumped_port_sparams) > 0
     wire_refplane_sparams = wire_refplane_sparams or []

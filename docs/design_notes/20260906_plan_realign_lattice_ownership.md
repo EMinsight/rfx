@@ -205,6 +205,30 @@ carrying `two_plane` is rejected with a message, not ignored).
 * **Kottke Stage-2 (`subpixel_smoothing='kottke_pec'`) and Dey–Mittra Stage-1 conformal**
   paths are subpixel models with their own interior selection; unchanged. Their binary
   parts are a follow-up (they already realize both faces for node-aligned Boxes).
+  **The Kottke rule, stated (2026-09-08, review finding P1-2).** "Unchanged" is not
+  self-executing: the step body applies `(Mx, My, Mz)` and on the Kottke lane that
+  overwrote the tensor's fractional selection. On `kottke_pec` an E edge is zeroed iff
+  the inverse-permittivity tensor froze it (`inv < 1e-9`) **or** a SHEET or a WIRE owns
+  it — `rfx.boundaries.pec.kottke_fenced_edge_masks`, called once in
+  `_build_step_setup`. Two terms, two reasons: the tensor is the volume's only owner
+  there, and an edge it left with a positive fraction is the subpixel answer, not a
+  cell to freeze; sheets and wires own no cell, so they never reach
+  `compute_inv_eps_tensor_diag` and would vanish under an `inv`-only rule. Port clearing
+  survives — the fence only removes entries from a set that arrives already cleared.
+  Measured on a PEC `Sphere(r = 2.1 mm)` at `dx = 1 mm`: 16 edges per component carried a
+  positive Kottke inverse permittivity and were hard-zeroed; `Ex[4,3,4]`, at
+  `inv = 0.03291842`, read exactly 0 after 60 steps and reads 0.00444051 fenced. It does
+  NOT read the pre-#931 rule's 0.00926519 and must not: that rule zeroed its own wrong
+  subset of fractional edges. The fence applies only to the Stage-2 tensor built from
+  the run's own `pec_shapes`; the occupancy-derived tensor (`aniso_inv_eps_smooth`, the
+  `RFX_PEC_OCC_KOTTKE` lane) keeps the realized edges, because there the static
+  declaration and the traced override are two different geometries and the intersection
+  would silently delete declared metal. Pinned by
+  `test_kottke_owns_its_own_volume_the_ownership_rule_does_not_overwrite_it` and
+  `test_the_kottke_fence_keeps_sheets_and_wires_the_tensor_cannot_see`. The CONFORMAL
+  amendment in §6 is a different path and is untouched by this: Dey–Mittra is an
+  update-coefficient model that realizes no geometry of its own, so a conformal run
+  still applies the realized edges in full.
 * **Dielectric sampling** (node, half-open) and the `DesignRegion` / `eps_override` index
   mapping (`optimize.py`, `topology.py`, inverse-design examples) are unchanged. The design
   region's inclusive `+1` is a separate, documented debt (#729 class), not touched here.
