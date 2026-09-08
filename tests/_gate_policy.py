@@ -34,7 +34,8 @@ Consumers (as of this writing):
 envelope of every case whose realized geometry changed, and each of those
 gates must be RE-DERIVED through :func:`gate_from_envelope` and re-pinned in
 the SAME commit as the regenerated fixture, with a written root cause. The
-cases that need that:
+cases that needed that (the figures here are the pre-#931 baselines, not
+the regenerated gates):
 
   * cv18 (``fine_gate_abs`` 0.04, ``richardson_gate_abs`` 0.01) — the fin
     aperture loses its ``- 1``;

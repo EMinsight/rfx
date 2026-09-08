@@ -300,12 +300,14 @@ above is withdrawn except the one arithmetic slip corrected below.
   Derivations, falsifiers and evidence:
   ``docs/design_notes/estimator_resolution_regate.md``.
 
-  ROUND-2 APPEND (2026-09-01). Two things a reader must not infer.
+  ROUND-2 APPEND (2026-09-01; PRE-#931 HISTORY, superseded by the
+  committed sheet-board measurements below). Two things a reader must not infer.
   (1) CRITERION (A) -- ANSWERED 2026-09-02 (was "not yet demonstrated on
       this board"): ``scripts/vessl_cv06b_estimator_falsifiers.yaml`` ran
       (VESSL 369367257702, exit 0) and every gate passed on THIS mesh --
       ``validation/crossval/_06b_msl_notch_results/
-      cv06b_build_falsifiers_summary.json::criterion_A_baseline`` (err 1.453 %,
+      cv06b_build_falsifiers_summary.json`` BEFORE its #931 regeneration
+      (historical criterion_A_baseline: err 1.453 %,
       BW ratio 0.9684, witness 0.3175 bin, Z0 46.48 ohm). Same run, build-level
       (B): a 5-cell stub fires G2 (BW ratio 0.648) while the depth witness
       still passes; and ONE PRE-DECLARED FALSIFIER FIRED -- a one-cell
@@ -368,11 +370,14 @@ the paragraphs it supersedes are marked below and stay as a pre-#931 record.
   wants the ELECTRICAL width of the strip, and the strip's row count did
   not change: n_rows * DX = 635.0 µm, exactly the number this case has
   always used. The evidence that n*DX (not (n-1)*DX) is the electrical
-  width is this case's own committed measurement — median Re(Z0) 46.48 Ω
+  width was the PRE-#931 measurement — median Re(Z0) 46.48 Ω
   against HJ(635.0, 254) = 46.18 Ω (+0.65%) and HJ(571.5, 254) = 49.39 Ω
   (-5.9%) — and cv07 repeating it on a different board (12 rows at
   dx=200 µm, measured 50.30 Ω, HJ(2400, 800) = 51.19 Ω vs HJ(2200, 800) =
-  54.22 Ω). So u = 2.500, ε_eff = 2.882252, F_NOTCH_AN = 3.678954 GHz and
+  54.22 Ω). Those measurements are historical: the committed sheet-board
+  medians are now 48.19 Ω for cv06b and 51.91 Ω for cv07 (passband). The
+  cv06b width convention is not settled by the new result; see below. The
+  retained reference uses u = 2.500, ε_eff = 2.882252, F_NOTCH_AN = 3.678954 GHz and
   G1's three window terms (0.886 / 2.646 / 0.265 = 3.796%) all stand.
 
   SUPERSEDED BY THIS SECTION (kept above as the pre-#931 record):
@@ -407,6 +412,21 @@ the paragraphs it supersedes are marked below and stay as a pre-#931 record.
       a rise above 1.45% falsifies the reading above;
     * G2 bw_ratio stays 0.968 ± 0.05 (r = 1 preserved by construction);
     * the half-grid witness and the notch depth are not predicted to move.
+
+  COMMITTED POST-#931 RESULT (VESSL 369367259191, 2026-09-07):
+  ``validation/crossval/_06b_msl_notch_results/
+  cv06b_build_falsifiers_summary.json`` reports baseline notch error
+  2.1649 %, BW ratio 0.9991, witness 0.4469 bin, and median Re(Z0) 48.19 Ω.
+  The refined notch is 3.7586 GHz and the depth is -39.44 dB. All four
+  existing gates pass, but the width-convention pre-declaration above is
+  FALSIFIED: 48.19 Ω is outside 46.48 ± 1.0 Ω, and the notch error rose
+  instead of falling. The electrical-width attribution remains unresolved;
+  no reference or tolerance is changed on the strength of this result.
+  The one-cell stub arm now moves the refined estimate 0.8228 % against
+  the predicted 0.5320 % (bare argmin 1.6949 %), so the declared visibility
+  criterion passes, with a 1.55x over-response that is not attributed.
+  The narrow-stub arm has BW ratio 0.6553 and notch error 6.4388 %: G2 and
+  G1 both fire while the retained depth witness still passes.
 
 Scope:
   - Uniform mesh dx=63.5µm = H_SUB/4 (issue #723; was dx=80µm, h_sub/dx=
@@ -751,21 +771,17 @@ def _realized_trace_width(sim: Simulation) -> float:
       electrical (this function)
           n_rows * DX       = 635.0 um
 
-    WHICH ONE BELONGS IN HAMMERSTAD-JENSEN IS A MEASURED QUESTION, and the
-    measurement exists: this case's own committed run reads a median
-    Re(Z0) of 46.48 ohm on a board whose row count is the same before and
-    after #931 (the contract removed rim EDGES, not current-carrying rows).
-    HJ(635.0, 254) = 46.18 ohm, +0.65%; HJ(571.5, 254) = 49.39 ohm, -5.9%.
-    cv07 says the same thing on a different board: 12 rows at dx=200 um,
-    measured passband median 50.30 ohm, HJ(2400, 800) = 51.19 ohm against
-    HJ(2200, 800) = 54.22 ohm. So the electrical width of an n-row strip is
-    n*DX, and the analytic notch reference does NOT move under #931.
-
-    G4's Z0 median in the post-contract run is the falsifier: if it returns
-    ~46.5 ohm the convention above holds; if it returns ~49.4 ohm the
-    geometric span is the electrical width and this function, EPS_EFF,
-    F_NOTCH_AN and G1's window terms all re-derive on 571.5 um. Predicted
-    and recorded in the "#931 LATTICE OWNERSHIP" docstring section.
+    WHICH ONE BELONGS IN HAMMERSTAD-JENSEN IS A MEASURED QUESTION. The
+    PRE-#931 medians were 46.48 ohm here and 50.30 ohm in cv07's passband.
+    Those values motivated n_rows*DX: HJ(635.0, 254) = 46.18 ohm versus
+    HJ(571.5, 254) = 49.39 ohm; cv07's HJ values were 51.19 and 54.22 ohm.
+    The committed post-contract runs instead read 48.19 ohm here and
+    51.91 ohm in cv07's passband. The cv06b result is outside the declared
+    46.48 +/- 1.0 ohm falsifier window and between the two width predictions.
+    The width convention is therefore unresolved, not verified by the old
+    measurement. This function retains n_rows*DX and its analytic reference;
+    changing them requires a separate physics adjudication. See the module
+    docstring's COMMITTED POST-#931 RESULT and the run's RECOMPUTE.md.
 
     PRE-#931 this read ``fidelity_report()``'s ``realized_extent_um`` for
     ``geometry[1] 'pec'`` and got the same 635.0 um, but as a GEOMETRIC

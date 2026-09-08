@@ -33,26 +33,28 @@ Geometry discipline (grid-exact, comparator-first — the #325/#475 classes):
     t_c cells apart and that the aperture is ONE contiguous opening d_c cells
     wide, so neither bug class can recur.
 
-WHAT IS GATED vs WHAT IS REPORTED (measured 2026-07-28 on the corrected
-setup; every axis scanned BEFORE gating)
+WHAT IS GATED vs WHAT IS REPORTED (regenerated under #931 on 2026-09-07;
+committed fixture is the numerical source, every axis scanned BEFORE gating)
 ---------------------------------------------------------------------------
 GATED (exit-1 on failure), gates = round-UP(measured envelope x 1.5), and the
 --write-fixture self-check demands EXACT equality with that rule:
   * fine rung (dx = a/60), flux extraction, |S11| vs oracle over 8 configs
     (3 apertures x {centred, iris off-centre at 0.42} + 2 extra guide
-    lengths): every config within 0.023 -> envelope 0.0232 -> gate 0.04.
+    lengths): every config within 0.011 -> envelope 0.0106 -> pooled gate 0.02.
+    The binding fine gate is per configuration (0.006-0.016); the pooled
+    gate is retained as a ceiling.
     No single configuration sets the envelope any more.
   * Richardson witness at EVERY one of those 8 fine/coarse pairs (not just
     the canonical one): 2*S_fine - S_coarse lands on the oracle within
-    0.0051 -> gate 0.01. Cross-confirms the oracle AND the first-order
-    attribution (fine/coarse gap ratios 0.527-0.604 = textbook first order).
+    0.0046 -> gate 0.01. Cross-confirms the oracle AND the first-order
+    attribution (fine/coarse gap ratios 0.407-0.440 = textbook first order).
 REPORTED, NOT GATED:
-  * coarse rung (dx = a/30): 0.018-0.043 abs.
-  * raw (normalize=False) record: worse than flux (gaps 0.021-0.054) with a
-    pointwise |raw - flux| difference up to 0.033 at the wide aperture.
+  * coarse rung (dx = a/30): 0.008-0.025 abs.
+  * raw (normalize=False) record: worse than flux (gaps 0.009-0.025) with a
+    pointwise |raw - flux| difference up to 0.0068 at the wide aperture.
   * residual detrended ripple (quadratic detrend of |S11| MINUS the oracle,
     so the oracle's own curvature is not counted — PR #480 R1): fine <=
-    0.0077, coarse <= 0.0158, both at the wide aperture with the iris
+    0.0076, coarse <= 0.0152, both at the wide aperture with the iris
     off-centre, down from the 0.0706 the review measured on the same basis
     before the absorber fix.
   * phase: NOT claimed (magnitude-only lane posture).

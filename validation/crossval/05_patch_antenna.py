@@ -31,7 +31,7 @@ mesh; they landed at 12.0000 and 13.8161 mm, a 1.8161 mm node-to-node
 cavity (+21.1 %) whose top 455 µm was air, not FR4.
 
 PRE-DECLARED, and it is not a regression: making the cavity exact is
-expected to move this case AWAY from its committed 6.48 % rfx-vs-openEMS
+expected to move this case AWAY from its pre-#931 committed 6.48 % rfx-vs-openEMS
 agreement. Two independent records say so. (a) The 2026-08-28 two_plane
 A/B: the realization that gives the physically correct cavity is the one
 that agrees WORST with the external reference — exactness and agreement
@@ -1204,7 +1204,7 @@ print(f"   • realized footprints: ground "
 print("   • Before #931 the two conductors were 250 um PEC Boxes placed by a")
 print("     nearest-node argmin on a graded mesh: planes at 12.0000 and")
 print("     13.8161 mm, a 1.8161 mm cavity (+21.1 %) whose top 455 um was air.")
-print("     Comparing this run to the committed 6.48 % openEMS agreement is a")
+print("     Comparing this run to the historical pre-#931 6.48 % openEMS agreement is a")
 print("     comparison between two different cavities, not a regression test.")
 print()
 print("  Root-cause history (see research note 2026-04-11_crossval12):")

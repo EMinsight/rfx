@@ -308,7 +308,7 @@ Relevant checks include `validation/crossval/05_patch_antenna.py`,
   Issue #812 P1 (2026-09-01): the per-solver self-consistency figures above
   are an **E1** leg -- both sides come from one field solve, so a coherent
   phase-velocity error cancels and a factor-2 error reads
-  `validation/crossval/_issue812_phase_identity/regate_evidence.json::cv20.blindness.audit_construction_e1_max_phase_dev_deg = 0.241`
+  `validation/crossval/_issue812_phase_identity/regate_evidence.json::cv20.blindness.audit_construction_e1_max_phase_dev_deg = 0.0647`
   degrees against that same 3-degree gate. Two independent-reference gates now run
   alongside it and are wired into the script's own pass/fail: each solver's
   measured `beta` against the Hammerstad-Jensen closed form of the realized
@@ -321,6 +321,12 @@ Relevant checks include `validation/crossval/05_patch_antenna.py`,
   which was previously reported rather than gated. Do not cite the
   dispersion-corrected residual as the cross-solver number: it subtracts a
   term built from `beta_rfx` and is provably blind to this error class.
+  The committed replay with the current rfx fixture
+  (`regate_evidence.json::cv20.run2_openems_with_current_rfx_fixture`)
+  instead reads raw phase difference `0.5308 degrees`, analytic-beta errors
+  `1.4122%` rfx / `0.3068%` openEMS, all three gates passing. This combines
+  regenerated rfx data with historical run-2 openEMS fields; it does not
+  establish a fresh matched-board post-#931 openEMS result.
   See `validation/crossval/20_msl_phase_referee.py` (manifest entry
   `20_msl_phase_referee`), `tests/crossval/test_msl_phase_referee_header.py`, and
   `docs/design_notes/issue812_phase_identity_predeclaration.md`.

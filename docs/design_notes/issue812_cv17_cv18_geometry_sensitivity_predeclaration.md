@@ -1,5 +1,16 @@
 # issue #812 — cv17 / cv18 re-gate: gate windows derived from geometry sensitivity
 
+> **Historical cv18 snapshot; current-path correction (2026-09-08).**
+> The cv18 measurement tables and old under-aperture blind spot below record
+> the pre-#931 thickness-deficit geometry. The regenerated
+> `_18_wr90_iris_results/aperture_resolution.json` now detects a one-cell
+> aperture defect in both signs at all **8/8** configurations, with minimum
+> margins **1.623x over-aperture** and **2.608x under-aperture**. Its nearest
+> oracle offset is **0.0 fine cells** at every pair. The binding per-config
+> fine gates are now **0.012/0.016/0.006/0.016/0.016/0.006/0.015/0.015**,
+> pooled **0.02**; these were already re-derived on the branch. The frozen
+> pre-declaration and dated measurements below remain intact. cv17 is unchanged.
+
 Status: **PRE-DECLARATION.** Every numeric window below is fixed in this commit,
 which PRECEDES the measurements that judge it. Branch `agent/regate-mie-iris`.
 Date: 2026-09-01. Lane: `geometry-sensitivity` (issue #812, post-Phase-1).

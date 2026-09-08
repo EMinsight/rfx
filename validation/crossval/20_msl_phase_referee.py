@@ -178,6 +178,14 @@ boards, so its size carried no information about agreement. No gate is
 loosened here and none is moved -- run-2 is recorded alongside run-1,
 not in place of it.
 
+CURRENT FIXTURE REPLAY (#931; not a new matched-board openEMS solve):
+``validation/crossval/_issue812_phase_identity/regate_evidence.json::
+cv20.run2_openems_with_current_rfx_fixture`` combines the historical run-2
+openEMS fields with the regenerated rfx fixture. It reports raw cross-solver
+phase difference 0.5308 deg and analytic-beta errors 1.4122 % rfx / 0.3068 %
+openEMS; all three gates pass. These are replay measurements, not a completed
+post-#931 matched-board referee run: the openEMS fields still belong to run-2.
+
 ============================================================================
 DO-NOT-REPEAT (R1/R2 class -- read before choosing a mesh size)
 ============================================================================
@@ -667,9 +675,9 @@ wrong, in three parts:
       power; what it did not say is that its resolving power for a
       COHERENT phase-velocity error is ZERO, at any tolerance -- a
       factor-2 error, beta and angle(S21) moved together, was MEASURED
-      by the #812 audit to read 0.2414 deg (regate_evidence.json::
+      by the regenerated #812 audit to read 0.0647 deg (regate_evidence.json::
       cv20.blindness.audit_construction_e1_max_phase_dev_deg) against the 3.0 deg gate,
-      12x inside. The group-delay leg is blind for the same reason.
+      46x inside. The group-delay leg is blind for the same reason.
 
   (b) "Gating the RAW cross-solver phase difference would conflate that
       physical dispersion difference with the convention-resolution
@@ -1291,8 +1299,8 @@ B_GD_TOL_PS = 200.0
 # propagation error -- the line's phase velocity is wrong, so that
 # solver's measured beta AND its angle(S21) move together -- cancels.
 # The issue #812 audit measured a FACTOR-2 phase-velocity error reading
-# 0.2414 deg (regate_evidence.json::cv20.blindness.audit_construction_
-# e1_max_phase_dev_deg) against this file's own 3.0 deg gate: 12x INSIDE. The
+# 0.0647 deg on the regenerated fixture (regate_evidence.json::cv20.blindness.audit_construction_
+# e1_max_phase_dev_deg) against this file's own 3.0 deg gate: 46x INSIDE. The
 # group-delay leg is blind for the same reason (it differentiates the
 # same identity), and so is
 # ``residual_phase_diff_after_dispersion_deg``, for a THIRD instance of
@@ -2245,9 +2253,10 @@ def _self_consistency_witness(freqs_hz: np.ndarray, s21: np.ndarray, beta: np.nd
     are built from one field solve, so a COHERENT propagation error --
     the line's phase velocity is wrong, so that solver's measured beta
     AND its angle(S21) move together -- cancels. The issue #812 audit
-    measured a FACTOR-2 phase-velocity error reading 0.2414 deg
+    measured a FACTOR-2 phase-velocity error reading 0.0647 deg
+    on the regenerated fixture
     (regate_evidence.json::cv20.blindness.audit_construction_e1_max_phase_dev_deg) against
-    this file's own 3.0 deg gate: 12x INSIDE. The group-delay leg is
+    this file's own 3.0 deg gate: 46x INSIDE. The group-delay leg is
     blind for the same reason (it differentiates the same identity).
 
     The module docstring's own QUALIFIER already said this check "proves

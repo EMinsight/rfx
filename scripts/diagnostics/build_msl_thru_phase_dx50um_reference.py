@@ -28,7 +28,8 @@ openems_msl_phase_referee.py``) reads for its own Stage B comparison --
 keeping that script openEMS-only (no rfx import), matching the
 coax/floquet referee precedent.
 
-REALIZED GEOMETRY (issue #723, 2026-08-27): H_SUB=254um at DX=50um is
+HISTORICAL REALIZED GEOMETRY (issue #723, 2026-08-27; superseded
+by the #931 committed realization below): H_SUB=254um at DX=50um is
 254/50=5.08 substrate cells -- off-lattice, same defect class as cv06b's
 #723. ``sim.fidelity_report()`` on this exact build (verified in-session,
 not estimated): "geometry[0] 'ro4350b' ... z: declared [0.0, 254.0] um ->
@@ -63,6 +64,15 @@ reads them from ``sim.fidelity_report()`` (grid + material assembly
 only, no time stepping); the S11/S21/Z0/beta arrays are untouched by
 this change and, per #723 REQUIRED 11, a metadata-only patch of the
 committed fixture is the preferred re-pin path over a full re-run.
+
+CURRENT COMMITTED REALIZATION (#931, VESSL 369367259200): the trace is a
+50um PEC volume with walls at z=250/300um. Its realized y bounds are
+900/1500um (centre 1200um), and its width remains 600um. The reference-plane
+geometry records n_probe_spacing=11 for both ports (previously 20). The
+S11/S21/Z0/beta arrays were regenerated with that realization; the #723
+metadata-only procedure above is historical and cannot migrate old physics
+onto this board. ``_realized_board_geometry`` now reads the conductor's
+realized edge set, and the producer refuses that stale metadata patch.
 
 Usage::
 

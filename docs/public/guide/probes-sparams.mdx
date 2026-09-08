@@ -328,10 +328,11 @@ the result is accurate.
 
 The threshold is relative to each record's own band median, so a port sitting in
 a deep stopband is not flagged wholesale — but individual deep bins are. Live
-extractor runs on rfx's two filter geometries flagged 2 bins of 100 on the
+extractor runs on the historical pre-#931 filter geometries flagged 2 bins of 100 on the
 microstrip notch fixture and 12 of 120 on the Sheen low-pass leg — and the notch
 fixture's two are the notch centre itself, 3.6273 GHz, which its committed
-fixture records at −30.66 dB. The two counts are not recomputable from the
+fixture recorded at −30.66 dB. Those counts and notch figures describe the
+old runs, not the regenerated #931 legs. The two counts are not recomputable from the
 committed fixtures, which store S magnitudes only with no V/I dump; checking them
 means re-running the extractor and reading `reliable`. That is not a false alarm: at a
 −30 dB notch the passive port's wave split really is low-signal, so the extractor

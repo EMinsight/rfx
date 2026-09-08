@@ -10,6 +10,14 @@
 > `docs/design_notes/20260906_plan_realign_lattice_ownership.md` §1, and for
 > users `docs/public/guide/materials-geometry.mdx` ("How conductors land on
 > the lattice").
+> Live-path clarification (2026-09-08): the numeric citations below describe
+> the historical #812 fixtures. At the current `cv05_ringdown_spectra.json`
+> path, the 22.0 mm TM110 pole is **`modes[1].freq = 3.043213 GHz`**, not
+> the former `modes[0] = 2.993459 GHz`; the 38.0 mm pole is now
+> **`modes[1].freq = 2.702632 GHz`**, outside the TM100 identification window.
+> Thus the old cluster-only 38.0 mm false acceptance is historical, not a
+> current fixture verdict. See `931_migration/XA-manifest-2b.md` for the
+> regenerated run and the changed 22.5/22.0 mm realization census.
 
 **Status:** PRE-DECLARATION (this note and the gate code it describes are
 committed BEFORE the measurements that judge them).

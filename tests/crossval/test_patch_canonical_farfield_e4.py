@@ -30,7 +30,7 @@ from ``scripts/diagnostics/patch_tutorial_rfx.py`` and
   wrong-mode (40 mm cross-mode) numbers and the pre-#693 tolerance; PR #716 /
   commit 12d2f00 repinned the constant to 1.0 dB on 2026-08-27 but left this
   bullet and the gate's own docstring quoting the retired values;
-* E-/H-plane beam peaks: measured 0 deg / -3 deg (openEMS 0 / 0) — locked at
+* E-/H-plane beam peaks: measured -1 deg / -4 deg (openEMS 0 / 0) — locked at
   15 deg from broadside;
 * resonance (RE-DERIVED 2026-09-07 on the #931 sheet-declared board, VESSL
   369367259302): the design mode — the 32 mm feed-axis mode, rfx ring-down
@@ -157,7 +157,7 @@ _MIGRATION_RUN = ("VESSL 369367259302 — the canonical patch re-solved on the "
 D_ABS_TOL_DB = 1.0          # measured 0.0659 dB (rfx 6.7241 vs openEMS 6.7900)
                             # on the sheet board; ceil(0.0659 x 1.5, .1) = 0.1,
                             # HELD at 1.0 — a rerun may not narrow a gate.
-PEAK_ANGLE_TOL_DEG = 15.0   # measured 0 / -3 deg vs openEMS 0 / 0. Broadside
+PEAK_ANGLE_TOL_DEG = 15.0   # measured -1 / -4 deg vs openEMS 0 / 0. Broadside
                             # is a symmetry statement, not a realization one,
                             # so this one survives the change.
 F_RES_REL_LO = -0.02        # measured +3.51% on the sheet board (2.5070 GHz
@@ -497,7 +497,7 @@ def test_settling_witness_clears_the_bar(rfx_run):
 def test_radiating_mode_is_broadside(rfx_run):
     """Far-field mode ID: a broadside bin exists, the radiated-power peak is
     broadside, and both principal-plane beam peaks sit within 15 deg of
-    broadside (measured: rfx 0/-3 deg, openEMS reference 0/0 deg)."""
+    broadside (measured: rfx -1/-4 deg, openEMS reference 0/0 deg)."""
     assert rfx_run["broadside_any"], (
         f"no monitored bin shows a broadside beam; peak thetas = {rfx_run['peak_theta_deg']}"
     )

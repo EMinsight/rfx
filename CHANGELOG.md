@@ -6,6 +6,24 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased — 2.0.0]
 
+The #931 artifact-to-carrier sweep, complete field ledger, and named unresolved
+fixture findings are recorded in the [docs-truth audit](docs/design_notes/20260908_docs_truth_audit.md).
+
+### Fixed — public validation numbers follow the regenerated #931 artifacts
+
+- cv07 Sheen LPF now reports the shipped rfx passivity-correction footprint:
+  **3/120 bins above 0.05, worst 0.6571609**, all above **17 GHz** and none in
+  the **5–15 GHz** null band. The realized strip is coarser at unchanged
+  **dx = 200 µm**, so this high-band extraction change does not establish an
+  in-band physics regression. Passband median Re(Z0) is **51.91227 Ω**;
+  Palace structure distance is **2.8668 %** for rfx versus **0.6644 %** for
+  OpenEMS. The separate first-null argmin distance is **2.3756 %**.
+- Carrier assertions are tied to committed evidence, and the sweep covers
+  regenerated patch, notch, MSL phase, waveguide, iris, dispersive-slab and
+  nonuniform-cavity artifacts. Dated measurements retain their original
+  values with current-path qualifications where regenerated files replaced
+  the evidence at the same path.
+
 ### BREAKING — the lattice ownership contract: a conductor is a volume, a sheet or a wire, and the declaration says which (#931)
 
 `two_plane` is **removed**. Passing it raises `TypeError` — no deprecation
@@ -336,11 +354,13 @@ merged tree, and each artifact it names is re-solved or it does not ship.
   reported 635.0 µm for the same drawing. Which width a quasi-TEM formula
   should take is a measurement, not a translation, and two groups read it
   differently: crossval-B takes the ELECTRICAL width n_rows·dx = 635.0 µm
-  (Re(Z0) 46.48 Ω on the committed cv06b run matches Hammerstad-Jensen at 635
+  (historically, Re(Z0) 46.48 Ω on the pre-#931 cv06b run matched Hammerstad-Jensen at 635
   µm to 0.65 % and at 571.5 µm by 5.9 %), tests-crossval takes 571.5 µm
-  (HJ 49.39 Ω). The cv06b re-solve (VESSL 369367259191) and its Z0 median are
-  the pre-declared falsifier; every publicly quoted Z0 and notch frequency for
-  that board is re-solved, not translated.
+  (HJ 49.39 Ω). The cv06b re-solve (VESSL 369367259191) now measures
+  **48.19205 Ω** (`cv06b_build_falsifiers_summary.json::criterion_A_baseline.z0_median_ohm`),
+  so the old 46.48 Ω agreement is historical evidence, not the current leg.
+  The electrical-width attribution remains a separate physics question; this
+  docs correction does not settle it.
 - Added: `tests/locks/test_volume_sheet_cavity_ladder.py` — the eigenmode
   witness for the two declarations. One parallel-plate cavity, metal starting
   at the same coordinates, declared twice: volume 52.3341 GHz on the 16-cell

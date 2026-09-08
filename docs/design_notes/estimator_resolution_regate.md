@@ -1,5 +1,22 @@
 # Estimator resolution re-gate — cv06b and cv07 (issue #812, mechanism P3)
 
+> **Historical measurements; current-artifact scope correction (2026-09-08).**
+> Sections 1–6 record the #812 runs and frozen estimator windows. Their
+> "committed"/"reproducible" numeric claims refer to those original revisions,
+> not the regenerated #931 files at the same paths. In particular cv07's
+> `0/120`, worst `0.0145`, and 6.9440/7.9259 GHz refined rfx doublet are
+> historical: the current leg has **3/120 corrections > 0.05, worst 0.6571609**,
+> all above **17 GHz** (none in **5–15 GHz**), and refined doublet
+> **7.233338/8.244069 GHz**. The coarser realized strip at unchanged
+> **dx = 200 µm** changes the high-band correction footprint; it does not
+> establish an in-band physics regression. The old full-band excess bound
+> in T5's rationale is no longer a current full-band bound.
+> cv06b's current build-falsifier summary gives baseline width ratio
+> **0.999132**, narrow-stub ratio **0.655348**, and a now-visible one-cell
+> shift (**0.822770 % refined**, **1.694925 % bin argmin**); the original
+> measured numbers below are retained as the instrument's history.
+> No estimator window is revised here.
+
 Append-only. Sections 1-4 are the **PRE-DECLARATION**: every numeric window
 in them was frozen in commit `0b018c8`, before any measurement that judges it.
 Section 5 records what was then measured; it never edits a window. A

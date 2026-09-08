@@ -435,7 +435,7 @@ def test_cv15_declaring_the_sheets_changes_no_material(capsys):
 
 def test_cv15_feed_decomposition_arm_reproduces_the_pre931_port(capsys):
     """#931 changed the conductor DECLARATIONS and the FEED in one step, and
-    the measured f0 moved 5.3 % (2.3139 -> 2.4366 GHz). Two changes, one
+    the committed f0 moved 4.71 % (2.313947 -> 2.423039 GHz). Two changes, one
     number: the attribution needs a measurement, not an argument.
 
     ``build_rfx_sim(feed="pre931")`` is that measurement's other arm -- the
@@ -471,3 +471,21 @@ def test_cv15_builder_rejects_an_unknown_feed():
     cv15 = _load_cv15()
     with pytest.raises(ValueError, match="feed"):
         cv15.build_rfx_sim(feed="two_plane")
+
+
+def test_cv15_current_measurement_prose_follows_committed_legs():
+    """Regeneration must update the case banner and its decomposition rationale."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    results = root / "validation/crossval/_15_patch_results"
+    before = json.loads((results / "rfx_pre931_two_plane_ground_1f005d0d.json").read_text())
+    after = json.loads((results / "rfx.json").read_text())
+    script = (root / "validation/crossval/15_patch_antenna_rt5880.py").read_text()
+    shift = (after["f_primary_hz"] / before["f_primary_hz"] - 1) * 100
+    pair = f'{before["f_primary_hz"] / 1e9:.6f} -> {after["f_primary_hz"] / 1e9:.6f} GHz'
+    for carrier in (script, Path(__file__).read_text()):
+        assert f"{shift:.2f} % ({pair})" in carrier
+    assert f'{after["s11_dip_db"]:.2f} dB at {after["f_dip_hz"] / 1e9:.3f} GHz' in script
+    assert f'ring-down frequency is {after["f_primary_hz"] / 1e9:.6f} GHz' in script

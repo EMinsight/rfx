@@ -419,7 +419,7 @@ def _zeros_interpolated(curve, freqs, lo, hi):
     one or two bins apart, reading 10 or 20 MHz. Measured here: sampled diffs
     20.0/20.0/10.0 MHz against interpolated 15.9/16.8/11.2, so quantisation was
     contributing about 3 MHz of the discrepancy and the interpolated values sit
-    where the f0 residual (+12.08 MHz) says they should.
+    where the f0 residual (+12.12 MHz) says they should.
 
     Parabolic vertex through the three samples bracketing each interior minimum.
     This is the same correction already applied to the band edges, and it removes
@@ -450,7 +450,7 @@ def _all_traces(fixture):
     absoluteness comes entirely from an anchor outside the row. An earlier
     revision anchored only `gated_rfx`, which left the coarse rung and every
     witness leg circular. That matters here because the f0 envelope is
-    residual-dominated -- 0.06 MHz spread against a 12.08 MHz residual, measured
+    residual-dominated -- 0.02 MHz spread against a 12.12 MHz residual, measured
     on this case's population -- so a one-bin edit to any unanchored leg
     transfers 1:1 into the envelope and 1.5:1 into the gate. (The spread and
     residual are this case's numbers; the transfer argument is the independent
@@ -1898,9 +1898,9 @@ def test_the_unitarity_witness_fires_on_loss_and_on_the_historical_defect():
 def test_residual_is_reported_as_mesh_normalised_but_not_gated(fixture):
     """REPORTED: the residual expressed in cells, and why it is not a gate.
 
-    The f0 residual is +12.08 MHz at a/90 and +19.85 MHz at a/60. Converted to a
+    The f0 residual is +12.12 MHz at a/90 and +19.87 MHz at a/60. Converted to a
     cavity-length offset by asking the oracle what offset nulls each one -- a
-    measurement, not an application of a sensitivity coefficient -- those are
+    measurement, not an application of a sensitivity coefficient -- the pre-#931 diagnostic read
     -0.1169 and -0.1241 cell: the same fraction of a cell at two meshes, where
     Yee dispersion would have given 0.083 at the finer one.
 
@@ -2012,6 +2012,24 @@ def test_claim_scope_prose_matches_the_committed_numbers(fixture):
             assert at == -1 or at > hist, (
                 "the claim scope states the deleted compensation as current "
                 "rather than as history", phrase, at, hist)
+
+
+def test_public_carriers_quote_fixture_population_and_settling(fixture):
+    """Public prose reads the record, including newly populated settling data."""
+    population = [r["d_f0_mhz"] for r in fixture["gates"]["f0_envelope_population"]]
+    spread = max(population) - min(population)
+    for relative in ("validation/README.md", "docs/public/guide/benchmarks.mdx"):
+        row = next(line for line in (_REPO_ROOT / relative).read_text().splitlines()
+                   if "|" in line and "19_wr90_iris_filter_aghanim" in line)
+        assert f"{spread:.2f} MHz" in row, relative
+        assert "107.5 MHz" in row and ("Before #931" in row or "before #931" in row)
+    public = (_REPO_ROOT / "docs/public/guide/benchmarks.mdx").read_text()
+    row = next(line for line in public.splitlines()
+               if "|" in line and "19_wr90_iris_filter_aghanim" in line)
+    settling = fixture["gated_rfx"]["settling_db"]
+    assert len(settling) == 2 and settling[0] == settling[1]
+    assert f"{settling[0]:.2f} dB" in row.replace("−", "-"), row
+    assert "not populated" not in row
 
 
 def test_non_gated_quantities_are_declared_non_gated(fixture, script_src):

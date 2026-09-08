@@ -8,8 +8,9 @@ formulation class re-typed from the physics, sharing only numpy — a shared
 producer bug in the overlap/junction algebra would still be caught by the
 oracle's own unitarity/Marcuvitz witnesses, which this test re-runs).
 
-Posture after the PR #480 review rework (all #475/#476 lessons plus #480's):
-  * GATED: fine rung (dx=a/60, flux) |S11 - oracle| <= 0.04 abs over 8
+Posture after #931 regeneration (retaining the #475/#476/#480 gate rules):
+  * GATED: fine rung (dx=a/60, flux), per-configuration gates 0.006-0.016
+    with pooled |S11 - oracle| <= 0.02 abs over 8
     committed configs (3 apertures x {centred, off-centre iris} + 2 guide
     lengths); Richardson 2*fine - coarse on the oracle <= 0.01 abs at EVERY
     one of those 8 pairs (not just the canonical one — #480 B1).
@@ -329,6 +330,34 @@ def test_prose_numbers_are_recomputed_from_rows(fixture):
     assert f"{min(coarse_gaps):.3f}" == want_lo and f"{max(coarse_gaps):.3f}" == want_hi
     assert f"{want_lo}-{want_hi} abs" in scope
     assert len(freqs) == 29 and "29 frequency" in scope
+
+
+def test_case_docstring_quotes_fixture_derived_numbers(fixture):
+    """The script's visible summary must track the regenerated fixture too."""
+    doc = " ".join(ast.get_docstring(ast.parse(_SCRIPT.read_text())).split())
+    gates = fixture["gates"]
+    assert (f"envelope {gates['fine_measured_envelope_abs']:.4f} -> "
+            f"pooled gate {gates['fine_gate_abs']:.2f}") in doc
+    per_config = gates["fine_gate_abs_per_config"].values()
+    assert f"({min(per_config):.3f}-{max(per_config):.3f})" in doc
+    assert (f"{gates['richardson_measured_envelope_abs']:.4f} -> "
+            f"gate {gates['richardson_gate_abs']:.2f}") in doc
+    ratios = gates["first_order_ratios"]
+    assert f"gap ratios {min(ratios):.3f}-{max(ratios):.3f}" in doc
+    coarse = fixture["coarse_diagnostic"]
+    gaps = [r["max_gap_abs"] for r in coarse]
+    assert f"{min(gaps):.3f}-{max(gaps):.3f} abs" in doc
+    raw_gaps = [r["max_gap_abs"] for r in fixture["raw_extraction_record"]]
+    assert f"gaps {min(raw_gaps):.3f}-{max(raw_gaps):.3f}" in doc
+    ripple = [max(_residual_ripple_pp(r) for r in fixture[tier])
+              for tier in ("gated_fine", "coarse_diagnostic")]
+    assert f"fine <= {ripple[0]:.4f}, coarse <= {ripple[1]:.4f}" in doc
+    differences = []
+    for raw in fixture["raw_extraction_record"]:
+        flux = next(r for r in coarse if all(r[k] == raw[k] for k in
+                    ("d_mm", "glen_m", "iris_frac")))
+        differences.append(max(abs(a - b) for a, b in zip(raw["s11"], flux["s11"])))
+    assert f"up to {max(differences):.4f} at the wide aperture" in doc
 
 
 def test_modal_fence_is_retracted_with_data(fixture):

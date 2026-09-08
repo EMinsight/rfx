@@ -179,8 +179,9 @@ def test_realized_board_is_measured_not_assumed(cv06b):
     # The ELECTRICAL width the analytic reference takes is n_rows * dx, a
     # different quantity from the geometric extent above and one cell
     # bigger. It is unchanged by #931 because the strip's row count is
-    # unchanged; ``_realized_trace_width``'s docstring carries the measured
-    # evidence (Re(Z0) 46.48 ohm vs HJ(635) 46.18 / HJ(571.5) 49.39).
+    # unchanged. This tests the retained convention, not its physical
+    # adjudication: the docstring records the pre-#931 46.48 ohm measurement
+    # and the current 48.19 ohm result that falsified the width prediction.
     assert cv06b._realized_trace_width(sim) == pytest.approx(635.0e-6, rel=1e-12)
 
     # PRE-#931 this asserted the round() formula gives the WRONG answer for

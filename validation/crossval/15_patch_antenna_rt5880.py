@@ -90,11 +90,10 @@ constants (not a recorded label) before gating the f0 comparison.
 
 rfx f0 = ring-down Harminv (NOT the |S11| dip)
 ----------------------------------------------
-The rfx SINGLE-CELL lumped port has a known parasitic cell reactance that gives
-a shallow, poorly-defined |S11| dip (~-3 dB here; documented in
-validation/crossval/05_patch_antenna.py and examples/tutorials/patch_antenna_demo.py).
-So the PRIMARY rfx resonance is the ring-down Harminv frequency (clean,
-port-calibration independent); the |S11| dip is reported as a secondary /
+The earlier short feed gave a shallow |S11| dip. The committed #931 full-span
+feed now reads -19.05 dB at 2.420 GHz; the ring-down frequency is 2.423039 GHz
+(VESSL 369367259275). The PRIMARY rfx resonance remains the ring-down Harminv
+frequency (port-calibration independent); the |S11| dip is reported as a secondary /
 passivity check and its local minimum is located near the ring-down frequency.
 openEMS's lumped-port |S11| dip is deep (~-20 dB) and used directly.
 
@@ -481,7 +480,7 @@ def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
     floor and spanning 2*DX. #931 changed the conductor declarations AND the
     feed in one step, so the before/after f0 has two candidate causes; running
     ``feed="pre931"`` with the production sheets isolates them. Keep it: the
-    measured shift is 5.3 %, and an attribution that large may not rest on
+    committed shift is 4.71 % (2.313947 -> 2.423039 GHz), and that attribution may not rest on
     reasoning alone.
     """
     if feed not in ("full_span", "pre931"):

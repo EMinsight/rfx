@@ -316,7 +316,8 @@ def build_simulation():
     # plane, so that face sits 6 mm below the ground and preflight flags it (the
     # warning is quoted in the run output).  The ground plane sits between the
     # radiator and that face, and the placement is cross-checked against openEMS
-    # at the design-mode bin: +0.60 dB in directivity, inside the committed
+    # at the design-mode bin: |D_rfx - D_openEMS| = 0.0659 dB on the
+    # committed #931 sheet-board measurement, inside the committed
     # 1.0 dB envelope lock.
     pad = (N_CPML + 3) * DX
     box_lo = (pad, pad, max(pad, z_gnd - 3 * DX))
