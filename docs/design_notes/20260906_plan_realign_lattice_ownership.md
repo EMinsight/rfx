@@ -377,6 +377,23 @@ host-side under an outer JIT, while explicitly traced profiles retain the
 differentiable mesh path.
 The §1.5 refusal and its numerical tolerance are unchanged.
 
+**Declaration validation is a different question (2026-09-08 regression
+audit).** `_declared_mesh` snapshots the caller's dx/domain/profiles without
+planning a mesh; the existing mesh fields still answer what execution will
+use. Floquet registration validates an explicit profile, while preflight
+validates the completed model's resolved profile. The complete-line coaxial
+drivers validate declared profiles before rejecting registered geometry they
+do not consume; they must not auto-mesh that forbidden geometry just to reject
+it for an inferred profile. Numerical capability checks, grid builders and
+inspection keep the resolved view, including the uniform builder's refusal.
+Tests that need a uniform comparator construct a separate uniform model;
+tests of assembly follow the selected lane. The #655 coarse-mesh face-material
+fixture explicitly pins its vacuum-default dx, so adding geometry cannot move
+its physical sample or refine away the stress case. No dielectric sampling or
+CPML material-extension rule changes in this repair. The regression audit and
+blast-radius validation are recorded in
+`20260908_automesh_regressions.md`.
+
 Where the branch and this note disagreed, the branch is right and the wording
 below replaces the earlier text. Each item names what actually shipped.
 

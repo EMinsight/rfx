@@ -2633,8 +2633,9 @@ class Simulation(
                         f"but periodic_axes={self._periodic_axes!r}"
                     )
 
-        # P0.3: Floquet port requires uniform mesh
-        if self._dz_profile is not None:
+        # Reject an explicit incompatible declaration at registration. Auto
+        # mesh depends on the completed model and is checked by preflight.
+        if self._declared_mesh["_dz_profile"] is not None:
             raise ValueError(
                 "Floquet ports do not support non-uniform z mesh (dz_profile). "
                 "Set dx explicitly to prevent auto-mesh from creating NU grid."

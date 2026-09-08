@@ -1055,15 +1055,19 @@ def test_validation_errors():
         sim.set_periodic_axes("q")
 
 
-def test_floquet_auto_mesh_rejects_nonuniform_fallback():
+@pytest.mark.parametrize("preview", [False, True])
+@pytest.mark.parametrize("entry", ["run", "forward"])
+def test_floquet_auto_mesh_rejects_nonuniform_fallback(preview, entry):
     """Floquet workflows should fail instead of silently dropping auto NU mesh."""
     sim = Simulation(freq_max=5e9, domain=(0.03, 0.03, 0.005), boundary="cpml")
     sim.add_material("sub", eps_r=4.4, sigma=0.025)
     sim.add(Box((0.0, 0.0, 0.0), (0.03, 0.03, 0.0016)), material="sub")
+    if preview:
+        assert sim._uses_nonuniform_mesh
     sim.add_floquet_port(0.0025, axis="z", scan_theta=0.0)
 
     with pytest.raises(ValueError, match="Floquet ports do not support non-uniform z mesh"):
-        sim.run(n_steps=10, compute_s_params=False)
+        getattr(sim, entry)(n_steps=10)
 
 
 def test_fluent_api():

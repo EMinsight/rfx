@@ -1,8 +1,8 @@
 """Resolve mesh inputs before either lane selection or grid construction.
 
-The private mesh fields are resolved views; their dictionary slots retain the
-declaration. This also covers readers outside Simulation (exporters, viewers,
-optimizers), without an entry-point decorator or a list of callers to maintain.
+The private mesh fields are resolved views; ``_declared_mesh`` reads the caller's
+inputs without triggering resolution. Declaration validation uses that snapshot;
+grid selection, execution and inspection use the resolved fields.
 """
 from __future__ import annotations
 
@@ -37,6 +37,17 @@ class _MeshMixin:
     _dy_profile = _MeshField()
     _dz_profile = _MeshField()
 
+    @property
+    def _declared_mesh(self):
+        """Snapshot the caller's inputs without planning or changing a mesh.
+
+        Builders may validate declarations before the model is complete. In
+        particular, an inferred profile is not an explicitly supplied profile.
+        This view must never be used to choose an execution lane or grid.
+        """
+        return {name: self.__dict__.get(name) for name in (
+            "_dx", "_domain", "_dx_profile", "_dy_profile", "_dz_profile")}
+
     def _resolve_mesh(self):
         """Return one cached, host-side resolution of the current declaration.
 
@@ -48,7 +59,7 @@ class _MeshMixin:
         """
         state = self.__dict__
         names = ("_dx", "_domain", "_dx_profile", "_dy_profile", "_dz_profile")
-        declared = {name: state.get(name) for name in names}
+        declared = self._declared_mesh
         geometry = state.get("_geometry", ())
         sheets = state.get("_thin_conductors", ())
         if declared["_dx"] is not None or not (geometry or sheets):

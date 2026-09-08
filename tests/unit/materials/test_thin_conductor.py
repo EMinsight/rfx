@@ -100,14 +100,15 @@ def test_thin_conductor_preserves_outside():
         assert abs(float(materials.sigma[i, j, k]) - 0.025) < 1e-4
 
 
-def test_thin_conductor_api_integration():
+@pytest.mark.parametrize("dx", [None, 0.25e-3], ids=["auto", "uniform"])
+def test_thin_conductor_api_integration(dx):
     """ThinConductor works through the Simulation API.
 
-    Copper (5.8e7 S/m, 35um) exceeds PEC threshold → routed to pec_mask.
+    Copper (5.8e7 S/m, 35um) is a sheet on the selected grid.
     """
     from rfx.api import Simulation
 
-    sim = Simulation(freq_max=10e9, domain=(0.02, 0.02, 0.002), boundary="pec")
+    sim = Simulation(freq_max=10e9, domain=(0.02, 0.02, 0.002), boundary="pec", dx=dx)
     sim.add_material("substrate", eps_r=4.4, sigma=0.025)
     sim.add(Box((0, 0, 0), (0.02, 0.02, 0.001)), material="substrate")
     sim.add_thin_conductor(
@@ -117,10 +118,14 @@ def test_thin_conductor_api_integration():
     )
 
     # Should build without error
-    grid = sim._build_grid()
+    grid = sim._build_realized_grid()
     pec_sheets: list = []
-    materials, debye, lorentz, pec_mask, pec_shapes, *_ = sim._assemble_materials(
+    assemble = (sim._assemble_materials_nu if sim._uses_nonuniform_mesh
+                else sim._assemble_materials)
+    materials, debye, lorentz, pec_mask, *_ = assemble(
         grid, pec_sheets=pec_sheets, pec_wires=[])
+    index = (lambda pos: sim._pos_to_nu_index(grid, pos)) if sim._uses_nonuniform_mesh \
+        else grid.position_to_index
 
     # #931 §1.3: a copper thin conductor is a SHEET. It owns no cell, so it
     # is absent from pec_mask by construction and is realized on ONE node
@@ -130,9 +135,9 @@ def test_thin_conductor_api_integration():
     assert len(pec_sheets) == 1
     spec = pec_sheets[0]
     assert spec.normal_axis == 2
-    assert spec.plane == grid.position_to_index((0.005, 0.005, 0.001))[2]
+    assert spec.plane == index((0.005, 0.005, 0.001))[2]
     assert bool(np.asarray(spec.footprint, dtype=bool)[
-        grid.position_to_index((0.010, 0.010, 0.001))])
+        index((0.010, 0.010, 0.001))])
 
     print(f"\nThin conductor API integration: OK, grid={grid.shape}")
 
