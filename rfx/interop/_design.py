@@ -48,11 +48,9 @@ value-level (a uniform ``_dz_profile``, a one-port ``_msl_ports``) and are
 indistinguishable from a legitimate design.  Export from user-level code,
 before or after the driver call.
 
-A second time dependence: with ``dx=None`` the auto-mesh runs inside ``run()``
-and writes back ``_dx``, ``_dz_profile`` and ``_domain``.  Exporting before a
-run therefore yields ``"dx": null`` and no ``dz_profile``, and exporting after
-the same run yields the resolved mesh.  Both are faithful; they describe
-different design states of the same script.
+Mesh reads resolve auto-configuration from the current static declaration.
+Export therefore records the same resolved dx/profile/domain before or after
+run or preflight. The resolution cache is derived state, never serialized.
 
 Relationship to the other rfx setup serialisers
 -----------------------------------------------
@@ -814,6 +812,7 @@ EXPORTED_SIMULATION_ATTRS: tuple[str, ...] = (
 #: as empty run-time bookkeeping); they matter only inside a
 #: preflight/driver pass, which is exactly why they are not design state.
 EXCLUDED_SIMULATION_ATTRS: tuple[str, ...] = (
+    "_mesh_resolution",
     "_ntff_min_steps_hint",
     # crop rectangles for the internal MSL DFT planes; exists only while
     # compute_msl_s_matrix runs and is removed on exit (never a design input)
@@ -1378,8 +1377,8 @@ def design_to_dict(sim: Any) -> dict[str, Any]:
             "mode": check_text(sim._mode, what="_mode"),
         },
         "mesh": {
-            # dx is None on the auto-mesh path: "let rfx choose" is itself the
-            # design decision, and it round-trips as null.
+            # Record resolved inputs so export matches the solver before or
+            # after preflight/run. Empty geometry may still leave dx unset.
             "dx": None if sim._dx is None else check_number(sim._dx, what="_dx"),
             "dx_profile": (
                 None

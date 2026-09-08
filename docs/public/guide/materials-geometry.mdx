@@ -52,6 +52,15 @@ sim.add(Box((0.005, 0.005, 0.005), (0.045, 0.045, 0.0066)), material="fr4")
 sim.add(Box((0.005, 0.005, 0.004), (0.045, 0.045, 0.005)), material="pec")
 ```
 
+With `dx` omitted, grid-dependent inspection and execution use the same
+automatically resolved mesh, including any nonuniform profile. `preflight()`
+checks that mesh without changing the declared mesh inputs. It may emit the
+auto-mesh selection warning; that warning is separate from its validation
+findings. Adding geometry or replacing a material recomputes the resolved view.
+For differentiating geometry or mesh inputs themselves, provide an explicit
+`dx` and the intended profiles before tracing; auto-mesh selection uses static
+geometry and materials.
+
 ---
 
 ## Custom material registration

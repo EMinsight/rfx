@@ -989,14 +989,8 @@ class _ExecuteMixin:
 
         return [pe for pe in self._ports if pe.impedance > 0.0]
 
-    def _auto_configure_mesh(self) -> None:
-        """P1: Auto-detect features and set dx/dz_profile when dx=None.
-
-        Uses the existing auto_configure() infrastructure to derive cell size
-        from geometry dimensions and material properties.  Runs only once per
-        simulation — subsequent calls are no-ops.
-        """
-        import warnings as _w
+    def _auto_configure_mesh(self):
+        """Compute the host-side auto-mesh proposal; _resolve_mesh owns it."""
         from rfx.auto_config import auto_configure
 
         geometry_pairs = [
@@ -1040,23 +1034,7 @@ class _ExecuteMixin:
             thin_conductors=self._thin_conductors,
         )
 
-        self._dx = config.dx
-        if config.dz_profile is not None and self._dz_profile is None:
-            self._dz_profile = config.dz_profile
-            # Update domain z from dz_profile
-            dz_total = float(np.sum(config.dz_profile))
-            self._domain = (self._domain[0], self._domain[1], dz_total)
-
-        _w.warn(
-            f"Auto mesh: dx={config.dx*1e3:.3f}mm "
-            f"({config.cells_per_wavelength:.0f} cells/λ)"
-            + (f", non-uniform z ({len(config.dz_profile)} cells)"
-               if config.dz_profile is not None else "")
-            + ". Set dx= explicitly to suppress.",
-            stacklevel=3,
-        )
-        for w in config.warnings:
-            _w.warn(w, stacklevel=3)
+        return config
 
     def _reject_upml_on_nonuniform(self, lane: str) -> None:
         """Refuse ``boundary='upml'`` on a non-uniform lane (#680).
@@ -3610,10 +3588,6 @@ class _ExecuteMixin:
             decay_min_steps=decay_min_steps,
             decay_max_steps=decay_max_steps,
         )
-
-        # ---- P1: Auto mesh when dx not specified and geometry exists ----
-        if self._dx is None and (self._geometry or self._thin_conductors):
-            self._auto_configure_mesh()
 
         # ---- Stage 1 conformal PEC auto-routing ----
         # When the user passes ``conformal_pec=None`` (default), derive

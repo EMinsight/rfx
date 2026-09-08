@@ -85,6 +85,9 @@ class _CompileMixin:
         return "".join(axis for axis in "xyz" if axis in axes_in_use) or "x"
 
     def _build_grid(self, *, extra_waveguide_axes: str = "") -> Grid:
+        # Uniform-only consumers must never silently approximate an auto or
+        # explicit profiled mesh. General consumers use _build_realized_grid.
+        self._require_uniform_mesh("uniform grid construction")
         # Remove periodic axes from CPML allocation — CPML on a periodic
         # axis fights the wrap-around and corrupts the physics
         # (issue #68). Default is "xyz"; the waveguide-port path overrides

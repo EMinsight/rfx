@@ -183,14 +183,14 @@ def test_simulation_auto_mesh_sets_dx():
                     waveform=GaussianPulse(f0=3e9, bandwidth=0.5))
     sim.add_probe((0.025, 0.025, 0.01), "ez")
 
-    # dx should be None before run
-    assert sim._dx is None
+    # The declaration stays automatic; reads expose the resolved view.
+    assert sim.__dict__["_dx"] is None
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         sim.run(n_steps=10)
 
-    # dx should be auto-set after run
+    # The resolved dx is available after run
     assert sim._dx is not None
     assert sim._dx > 0
     # Auto mesh accounts for material eps_r: finer than simple lambda/20
@@ -421,8 +421,8 @@ def test_auto_mesh_thin_conductor_only_configures_dx():
     w = 2.0e-3
     sim.add_thin_conductor(Box((0.005, 0.005, 0.001), (0.015, 0.005 + w, 0.001)),
                            sigma_bulk=5.8e7, thickness=35e-6)
-    assert sim._dx is None and not sim._geometry and sim._thin_conductors
-    sim._auto_configure_mesh()
+    assert sim.__dict__["_dx"] is None and not sim._geometry and sim._thin_conductors
+    sim._resolve_mesh()
     assert sim._dx is not None, "thin-conductor-only sim must set dx (Bug 2a)"
     # Bug 2(b): feature-driven, not the empty-geometry lambda/10 fallback.
     assert sim._dx <= w, f"dx={sim._dx} not resolving the {w*1e3:.1f} mm feature"
@@ -449,7 +449,7 @@ def test_auto_mesh_trigger_fires_thin_only_end_to_end():
                            sigma_bulk=5.8e7, thickness=35e-6)
     sim.add_source(position=(0.007, 0.01, 0.001), component="ez",
                    waveform=GaussianPulse(f0=6e9, bandwidth=1.0))
-    assert sim._dx is None
+    assert sim.__dict__["_dx"] is None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         sim.run(n_steps=5, skip_preflight=True)

@@ -118,7 +118,9 @@ def plot_geometry_2d_slice(
     """
     _require_mpl()
 
-    grid = sim._build_grid()
+    from rfx.nonuniform import NonUniformGrid
+    grid = sim._build_realized_grid()
+    nonuniform = isinstance(grid, NonUniformGrid)
     # #931 §1.9: a PEC sheet and a sub-cell wire own no cell and write no
     # eps, so an eps-only cross-section shows a fully copper-clad board as
     # bare laminate. Collect them, draw the realized conductor footprint on
@@ -127,7 +129,8 @@ def plot_geometry_2d_slice(
     # is taken at can move.
     _geo_sheets: list = []
     _geo_wires: list = []
-    _geo_mats, _, _, _geo_pec, *_ = sim._assemble_materials(
+    assemble = sim._assemble_materials_nu if nonuniform else sim._assemble_materials
+    _geo_mats, _, _, _geo_pec, *_ = assemble(
         grid, pec_sheets=_geo_sheets, pec_wires=_geo_wires)
     eps = np.asarray(_geo_mats.eps_r)
     from rfx.boundaries.pec import wire_node_footprint as _wire_nodes
@@ -175,24 +178,32 @@ def plot_geometry_2d_slice(
         slc, cond2 = eps[:, :, index], cond[:, :, index]
         xlabel, ylabel = "x (mm)", "y (mm)"
 
-    dx_mm = float(grid.dx) * 1e3
-    extent = [0.0, slc.shape[0] * dx_mm, 0.0, slc.shape[1] * dx_mm]
-
     fig, ax = plt.subplots(figsize=figsize)
-    im = ax.imshow(
-        slc.T,
-        origin="lower",
-        cmap=cmap,
-        aspect="auto",
-        extent=extent,
-        vmin=float(slc.min()),
-        vmax=float(slc.max()),
-    )
+    if nonuniform:
+        # The solver's nodes bound the real cells; the final array slot
+        # supplies the bounding node rather than an extra physical cell.
+        coords = _slice_coords(sim, grid)
+        keep = [a for a in (0, 1, 2) if a != axis]
+        xe = _axis_edges(grid, keep[0], coords[keep[0]]) * 1e3
+        ye = _axis_edges(grid, keep[1], coords[keep[1]]) * 1e3
+        slc = slc[:xe.size - 1, :ye.size - 1]
+        cond2 = cond2[:xe.size - 1, :ye.size - 1]
+        im = ax.pcolormesh(xe, ye, slc.T, cmap=cmap, shading="flat",
+                           vmin=float(slc.min()), vmax=float(slc.max()))
+    else:
+        dx_mm = float(grid.dx) * 1e3
+        extent = [0.0, slc.shape[0] * dx_mm, 0.0, slc.shape[1] * dx_mm]
+        im = ax.imshow(slc.T, origin="lower", cmap=cmap, aspect="auto",
+                       extent=extent, vmin=float(slc.min()), vmax=float(slc.max()))
     fig.colorbar(im, ax=ax, label="relative permittivity εᵣ")
     if bool(cond2.any()):
-        ax.imshow(np.ma.masked_where(~cond2.T, cond2.T.astype(float)),
-                  origin="lower", cmap=_conductor_cmap(), aspect="auto",
-                  extent=extent, vmin=0.0, vmax=1.0, alpha=0.55)
+        overlay = np.ma.masked_where(~cond2.T, cond2.T.astype(float))
+        if nonuniform:
+            ax.pcolormesh(xe, ye, overlay, cmap=_conductor_cmap(),
+                          shading="flat", vmin=0.0, vmax=1.0, alpha=0.55)
+        else:
+            ax.imshow(overlay, origin="lower", cmap=_conductor_cmap(),
+                      aspect="auto", extent=extent, vmin=0.0, vmax=1.0, alpha=0.55)
         from matplotlib.patches import Patch
         ax.legend(handles=[Patch(facecolor="#b03000", alpha=0.55,
                                  label="conductor")], loc="best", fontsize=7)
@@ -491,9 +502,7 @@ def plot_rasterized_slice(
     _warn_if_refined(sim)
 
     from rfx.nonuniform import NonUniformGrid
-    is_nu = (sim._dx_profile is not None or sim._dy_profile is not None
-             or sim._dz_profile is not None)
-    grid = sim._build_nonuniform_grid() if is_nu else sim._build_grid()
+    grid = sim._build_realized_grid()
     cond = np.asarray(sim.conductor_mask(grid, sigma_threshold=sigma_threshold),
                       dtype=bool)
     # Permittivity only — this viewer already reads its conductors from
@@ -791,9 +800,7 @@ def plot_stack_profile(
     _warn_if_refined(sim)
     from rfx.nonuniform import NonUniformGrid
 
-    is_nu = (sim._dx_profile is not None or sim._dy_profile is not None
-             or sim._dz_profile is not None)
-    grid = sim._build_nonuniform_grid() if is_nu else sim._build_grid()
+    grid = sim._build_realized_grid()
     cond = np.asarray(sim.conductor_mask(grid, sigma_threshold=sigma_threshold),
                       dtype=bool)
     # Permittivity only — this viewer already reads its conductors from
@@ -1335,8 +1342,7 @@ def visualize_farfield_3d(result, sim=None, *, f_idx: int = 0,
         phi_grid = np.linspace(0, 2 * np.pi, 121)
 
     if sim is not None:
-        grid = (sim._build_nonuniform_grid()
-                if sim._dz_profile is not None else sim._build_grid())
+        grid = sim._build_realized_grid()
     else:
         grid = result.grid
 

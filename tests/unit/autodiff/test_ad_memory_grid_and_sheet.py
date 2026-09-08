@@ -69,7 +69,11 @@ def test_accounting_matches_the_nonuniform_grid_the_solve_builds():
                      dx=DX, boundary="cpml", cpml_layers=CPML, dz_profile=DZ)
     assert float(DZ.max() / DZ.min()) > 5.0, "fixture dz is not graded"
     nu = tuple(int(v) for v in sim._build_nonuniform_grid().shape)
-    uni = tuple(int(v) for v in sim._build_grid().shape)
+    # The production uniform builder now refuses a profiled simulation.
+    # Construct the historical surrogate explicitly for this counterexample.
+    from rfx.grid import Grid
+    uni = Grid(freq_max=20e9, domain=sim._domain, dx=DX,
+               cpml_layers=CPML).shape
     assert nu != uni, "fixture does not separate the two grids"
     assert _acc_shape(sim) == nu
     est = sim.estimate_ad_memory(1000)

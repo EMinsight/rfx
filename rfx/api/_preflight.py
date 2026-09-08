@@ -2898,6 +2898,10 @@ class _PreflightMixin:
     ) -> "PreflightReport":
         """Run all pre-simulation checks and return warnings.
 
+        Resolves and caches the mesh from the current static declaration,
+        without changing declared dx/domain/profiles. Auto-mesh selection is
+        emitted as a UserWarning, separately from validation findings.
+
         Parameters
         ----------
         strict : bool
@@ -2933,9 +2937,17 @@ class _PreflightMixin:
             Empty if no issues found.
         """
         import warnings
+        # Selection information belongs outside the captured legality findings.
+        # Resolve before any validator reads a profile or fallback spacing.
+        self._resolve_mesh()
         issues = PreflightReport()
 
-        with warnings.catch_warnings(record=True) as caught:
+        # Static geometry diagnostics must stay host-side under an outer
+        # jit, just like mesh selection. Otherwise even a concrete Box's
+        # mask becomes a tracer before validators convert it to numpy.
+        # Incoming mesh/design tracers remain tracers and retain the
+        # validators' existing not-evaluable guards.
+        with warnings.catch_warnings(record=True) as caught, jax.ensure_compile_time_eval():
             warnings.simplefilter("always")
             try:
                 if check_resolution:
@@ -5541,40 +5553,52 @@ class _PreflightMixin:
     def _wire_port_cell_centers(self, pe):
         """Per-cell physical sample centers of a wire port's rasterization.
 
-        Mirrors the production rasterization exactly (issues #314/#319):
-        ``_wire_port_cells`` on the same WirePort that
-        ``forward()``/``run()`` build from this entry. Returns
-        ``(centers, midpoint_index)`` where ``centers`` is one physical
-        sample center per rasterized cell and ``midpoint_index`` is the
-        index of the midpoint V/I probe cell, ``cells[len(cells) // 2]``
-        (rfx/api/_execute.py). Returns None when the geometry cannot be
-        resolved (defensive: preflight must never crash a run over a
-        diagnostics helper).
+        Uses the production endpoint snap and shared half-open edge span on
+        either grid lane. Returns ``(centers, midpoint_index)`` with one
+        physical E-edge center per driven cell and the midpoint V/I probe
+        at ``cells[len(cells) // 2]``. Returns None when the declaration
+        cannot be rasterized (diagnostics must not crash a run).
         """
         try:
-            from rfx.sources.sources import WirePort, _wire_port_cells
+            from rfx.sources.sources import (
+                WirePort, _wire_port_cells, wire_port_edge_span,
+            )
+            from rfx.nonuniform import NonUniformGrid, position_to_index
+            from rfx.geometry.rasterize_grid import (
+                coords_from_nonuniform_grid, coords_from_uniform_grid,
+            )
             axis = {"ex": 0, "ey": 1, "ez": 2}[pe.component]
             end = list(pe.position)
             end[axis] += pe.extent
-            wp = WirePort(start=tuple(pe.position), end=tuple(end),
-                          component=pe.component, impedance=pe.impedance)
-            grid = self._build_grid()
-            cells = _wire_port_cells(grid, wp)
+            grid = self._build_realized_grid()
+            if isinstance(grid, NonUniformGrid):
+                start_idx = position_to_index(grid, pe.position)
+                end_idx = position_to_index(grid, tuple(end))
+                lo, hi = sorted((start_idx[axis], end_idx[axis]))
+                first, last = wire_port_edge_span(
+                    grid, axis, lo, hi, float(pe.position[axis]),
+                    float(end[axis]))
+                cells = []
+                for k in range(first, last + 1):
+                    cell = list(start_idx)
+                    cell[axis] = k
+                    cells.append(tuple(cell))
+                coords = coords_from_nonuniform_grid(grid)
+            else:
+                wp = WirePort(start=tuple(pe.position), end=tuple(end),
+                              component=pe.component, impedance=pe.impedance)
+                cells = _wire_port_cells(grid, wp)
+                coords = coords_from_uniform_grid(grid)
             if not cells:
                 return None
-            d = (grid.dx, getattr(grid, "dy", grid.dx),
-                 getattr(grid, "dz", grid.dx))
-            pad = (getattr(grid, "pad_x_lo", 0),
-                   getattr(grid, "pad_y_lo", 0),
-                   getattr(grid, "pad_z_lo", 0))
+            nodes = [np.asarray(line, dtype=float)
+                     for line in (coords.x, coords.y, coords.z)]
             centers = []
             for cell in cells:
-                # Inverse of grid.position_to_index (index = round(pos/d)
-                # + pad_lo): node coordinate, plus the Yee half-cell
-                # offset of the E component along its own axis (where the
-                # V probe actually samples).
-                pos = [(cell[ax] - pad[ax]) * d[ax] for ax in range(3)]
-                pos[axis] += 0.5 * d[axis]
+                # An E edge is at its node on the transverse axes and at
+                # the midpoint of its bounding nodes on its own axis.
+                pos = [float(nodes[ax][cell[ax]]) for ax in range(3)]
+                pos[axis] = 0.5 * (pos[axis] + nodes[axis][cell[axis] + 1])
                 centers.append(tuple(pos))
             return centers, len(cells) // 2
         except Exception:
@@ -7430,7 +7454,7 @@ class _PreflightMixin:
             msl_probe_x_coords_n as _probe_x_coords_n,
         )
         try:
-            _msl_grid = self._build_grid()
+            _msl_grid = self._build_realized_grid()
         except Exception:
             _msl_grid = None
 
