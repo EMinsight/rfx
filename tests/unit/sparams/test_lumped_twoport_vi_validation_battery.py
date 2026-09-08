@@ -590,32 +590,28 @@ def test_thru_trace_is_one_realized_sheet_plane():
         f"got {cells}")
 
 
-@pytest.mark.xfail(
-    reason="preflight still measures metal from the primal CELL mask and "
-           "still calls _assemble_materials without a sheet collector "
-           "(#931 design note §6, 'not yet implemented'); owned by the "
-           "preflight migration, not by this file. Pre-declared falsifier: "
-           "when that lands, this test goes green and the xfail comes off.",
-    strict=True,
-)
 def test_thru_preflight_code_set_is_the_contract_set():
     """The exact advisory set this fixture must produce under the contract.
 
     One code, and only one: ``pec_faces_finite_pec`` — the infinite ground
-    plane IS the microstrip return, and that is intended.  Measured at this
-    commit the report also carries
+    plane IS the microstrip return, and that is intended.
 
-    * ``mesh_resolution`` "Zero-thickness geometry 'pec' along z-axis ...
-      Consider giving it at least one cell of thickness (500um)" — which
-      tells the user to UN-DECLARE the sheet they just declared.  Under
-      §1.5 a zero-thickness PEC Box IS the sheet declaration, so this
-      message is now wrong on its face;
-    * an uncoded ``_assemble_materials (uniform lane): PEC sheets/wires
+    This test was written as ``xfail(strict=True)`` on 2026-09-07 with a
+    pre-declared falsifier: "when the preflight migration lands, this test
+    goes green and the xfail comes off."  It fired, in the direction the
+    falsifier named.  The two extra messages the xfail reason listed are
+    gone, and each for a stated reason:
+
+    * the ``mesh_resolution`` "Zero-thickness geometry 'pec' along z-axis
+      ... consider giving it at least one cell of thickness" advice, which
+      told the user to UN-DECLARE the sheet they had just declared — a
+      zero-thickness PEC Box IS the sheet declaration under §1.5;
+    * the uncoded ``_assemble_materials (uniform lane): PEC sheets/wires
       were classified but the caller passed no pec_sheets/pec_wires
-      collector`` warning — preflight's own assemble call, named in §6.
+      collector`` warning — preflight now passes the collectors.
 
-    Both are preflight's; the replacement text is in
-    ``docs/design_notes/931_migration/T2-preflight-consumers.md``.
+    So the marker is off and the assertion below is a plain lock.  It is
+    the one that would catch preflight growing a message back.
     """
     report = _build_thru().preflight()
     codes = sorted(getattr(i, "code", None) for i in report)
