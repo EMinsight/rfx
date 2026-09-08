@@ -99,9 +99,9 @@ either direction. Replacement clause:
 
 > The witness is gated on THICKNESS IDENTIFICATION: for each swept rung the lattice-blind
 > oracle is evaluated at t−1, t and t+1 cells and the residual argmin must land on t. All
-> seven rungs identify their own thickness (margins 1.21–1.34× over the runner-up). At
+> seven rungs identify their own thickness (margins 1.20–1.34× over the runner-up). At
 > t = 1 the t−1 alternative IS the pre-#931 realization — one wall, a zero-thickness
-> screen — and it is 4.33× worse (0.1347 against 0.0311, with t+1 at 0.0400), so the
+> screen — and it is 4.32× worse (0.1347 against 0.0312, with t+1 at 0.0400), so the
 > contract's rule at one cell is decided by measurement rather than convention. The
 > first-stated criterion (t = 1 inside the t = 2..8 range) is RETIRED as vacuous and its
 > verdict is kept in the record under `one_cell_volume_witness.monotone_range_criterion`.
