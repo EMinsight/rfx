@@ -63,10 +63,15 @@ Expected runtime: ~2.9 h CPU per pass (8 fine rows at ~800 s, 8 coarse at
 ~66 s, 4 modal, 3 raw, 8 truncation, plus the new 7-row thickness sweep at
 ~8 min). Job timeout is set to 21600 s.
 
-| pass | VESSL run id | expected rc | what it is for |
+| pass | VESSL run id | rc | what it is for |
 |---|---|---|---|
 | 1 | 369367259159 | 1 (gate/envelope mismatch, by design) | measure the new envelopes |
-| 2 | not yet submitted | 0 | the committable record, after the constants are updated |
+| 2 | 369367259291 (`issue931-post-cv18-20260907T195222Z`) | 0 | the committable record — INGESTED, log ends `RESULT: ALL CHECKS PASSED` |
+
+The two downstream producers below ran as a third job,
+`issue931-post-cv18-followups-20260907T230853Z` (rc 0 and rc 0, source
+`aa66bed2`, probe log ends `CRITERION (B) LIVE: CONFIRMED`). All four produced
+files are committed and byte-identical to that run's `produced/` copies.
 
 Outputs land in `/root/workspace/claude-workspace/rfx/runs/issue931-post-cv18-<ts>/`
 (`cv18.log`, `cv18.rc`, `produced/` and `produced_files.txt`). The job runs IN
@@ -161,12 +166,23 @@ script's own rc is in `cv18.rc`. Modelled on the baseline
       --output validation/crossval/_18_wr90_iris_results/one_cell_defect_live.json
   ```
 
-  Two FDTD runs (a/60 ~800 s, a/30 ~66 s) plus the oracle: ~15 min. Submit it
-  on VESSL as a third run rather than on the shared pod. Its output feeds
+  Two FDTD runs (a/60 ~800 s, a/30 ~66 s) plus the oracle: ~15 min. Submitted
+  on VESSL as a third run rather than on the shared pod. DONE — its output feeds
   `test_live_one_cell_defect_is_caught_by_the_per_config_gate_and_not_the_old_ones`,
-  whose six pinned digits (0.02842, 0.00588, 0.015, 0.04, 0.01, and the model's
-  0.0265) ALL move and must be refreshed from the new artifact and the
-  rebuilt `aperture_resolution.json` in the same commit.
+  whose six pinned digits moved and were refreshed from the new artifact and the
+  rebuilt `aperture_resolution.json` in one commit:
+
+  | pin | pre-#931 | post-#931 | where it comes from |
+  |---|---|---|---|
+  | `measured.fine_gap_abs` | 0.02842 | 0.01246 | measured, probe run |
+  | `measured.richardson_dev_abs` | 0.00588 | 7e-05 | measured, probe run |
+  | `config.fine_gate_abs_per_config` | 0.015 | 0.006 | ceil(0.0034 x 1.5) at 1/1000 |
+  | `config.pooled_fine_gate_abs` | 0.04 | 0.02 | ceil(0.0106 x 1.5) at 1/100 |
+  | `config.richardson_gate_abs` | 0.01 | 0.01 | ceil(0.0046 x 1.5) at 1/100 |
+  | model `pairs[2].one_cell_defect.over.fine_gap_abs` | 0.0265 | 0.0134 | rebuilt artifact |
+
+  Both fine gates moved DOWN and the defect is caught with more margin than
+  before, 1.895x -> 2.077x.
 
 ## Not owned by this group (replacement text is in docs/design_notes/931_migration/)
 
