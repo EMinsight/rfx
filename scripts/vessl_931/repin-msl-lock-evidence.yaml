@@ -48,7 +48,7 @@ run: |-
   set +e
   # The lock is EXPECTED to fail; the recorded delta is the point.
   # scripts/capture_msl_e2e_golden.py is deliberately NOT run - it overwrites the golden.
-  "$PY" -m pytest -o addopts= -n 0 -v -s \
+  "$PY" -m pytest -o addopts= -v -s \
     tests/unit/autodiff/test_msl_sparam_ad.py::test_compute_msl_s_matrix_end_to_end_matches_historical_base \
     --junitxml="$OUT/msl.xml" > "$OUT/run.log" 2>&1
   rc=$?
