@@ -1183,6 +1183,10 @@ class _ExecuteMixin:
                 pec_mask, sheets=pec_sheets, wires=pec_wires,
                 periodic=_adi_periodic)
 
+        # Refuse after realization: a sheet/wire must reach this lane even
+        # though it owns no volume cell. This is independent of preflight.
+        self._validate_adi_interior_pec(pec_edge_masks)
+
         dt = float(grid.dt * self._adi_cfl_factor)
         times = jnp.arange(n_steps, dtype=jnp.float32) * dt
 
@@ -1365,6 +1369,10 @@ class _ExecuteMixin:
         if self._solver == "adi":
             from rfx.materials.thin_conductor import refuse_f0_sheets
             refuse_f0_sheets(self._thin_conductors, "ADI forward")
+            if pec_occupancy is not None:
+                raise ValueError(
+                    "solver='adi' does not support pec_occupancy_override; "
+                    "use solver='yee' to retain the declared conductor.")
             # #931 §1.9: a sheet and a wire own no cell, so ``pec_mask``
             # alone carries neither.  ``run()``'s ADI branch threads them;
             # this one did not, and a declared PEC sheet came out of

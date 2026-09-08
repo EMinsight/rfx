@@ -3758,6 +3758,7 @@ class _PreflightMixin:
         self._validate_cfg_subgrid_limitations(_w)
         self._validate_cfg_conformal_fine_dx(dx)
         self._validate_cfg_adi_3d_accuracy(_w)
+        self._validate_cfg_adi_interior_pec(_w)
         self._validate_cfg_lossless_resonator_in_absorber(_w)
         self._validate_cfg_dispersive_pole_at_absorber_face(
             _w, dx, cpml_thick_lo, cpml_thick_hi
@@ -4086,6 +4087,34 @@ class _PreflightMixin:
                 stacklevel=2,
             )
 
+    def _validate_adi_interior_pec(self, pec_edge_masks) -> None:
+        """Unskippable lane guard shared by run and forward after assembly."""
+        from rfx.adi import _validate_interior_pec
+        _validate_interior_pec(pec_edge_masks)
+
+    def _validate_cfg_adi_interior_pec(self, _w) -> None:
+        """Report the same refusal from the production conductor assembly."""
+        if self._solver != "adi" or self._mode not in ("3d", "2d_tmz"):
+            return
+        if not self._geometry and not self._thin_conductors:
+            return
+        from rfx.adi import ADI_INTERIOR_PEC_MESSAGE
+        ctx = self._campaign_ctx()
+        realized = None if ctx.error else ctx.realized()
+        if realized is not None and realized.empty:
+            return
+        detail = ""
+        if realized is None:
+            detail = (
+                f" Interior PEC compatibility could not be evaluated: "
+                f"{ctx.error or ctx.assembly_error}. Resolve assembly first.")
+        _w.warn(PreflightWarning(
+            ADI_INTERIOR_PEC_MESSAGE + detail,
+            code="adi_interior_pec_unsupported",
+            severity="error",
+            source="_validate_cfg_adi_interior_pec",
+        ), stacklevel=2)
+
     def _validate_cfg_adi_3d_accuracy(self, _w) -> None:
         """Advise on the 3D ADI large-timestep accuracy envelope (OPT-C1 fixed).
 
@@ -4101,11 +4130,12 @@ class _PreflightMixin:
         class implicit scheme: dispersion error grows ~dt^2, so at ~15
         cells per wavelength the <2% eigenfrequency envelope holds only for
         CFL factors up to ~2x (von Neumann: -1.4% at 2x, -2.8% at 3x, -6.7%
-        at 5x). Runs stay unconditionally STABLE at any factor — accuracy,
-        not stability, is what degrades. Advise (WARNING severity, envelope
-        advisory — not an error) when ``adi_cfl_factor > 2.0`` on a 3D grid.
-        The 2D TMz path (2% resonance gate at 5x CFL, and stable — verified
-        bounded — well beyond) is not flagged here.
+        at 5x). This envelope is for a cavity without interior PEC; it is
+        not a stability guarantee for projected conductors or arbitrary
+        material interfaces. Advise (WARNING severity) when
+        ``adi_cfl_factor > 2.0`` on a 3D grid.
+        The 2D TMz cavity accuracy check is separate. Interior PEC on
+        either lane is refused by the independent conductor guard.
         """
         if self._solver != "adi" or self._mode != "3d":
             return
@@ -4114,8 +4144,12 @@ class _PreflightMixin:
         _w.warn(
             PreflightWarning(
                 f"solver='adi' with a 3D grid at adi_cfl_factor="
-                f"{self._adi_cfl_factor:g}: the 3D ADI scheme is "
-                f"unconditionally stable, but its dispersion error grows "
+                f"{self._adi_cfl_factor:g}: the homogeneous, lossless ADI "
+                f"split with compatible domain boundaries removes the "
+                f"explicit CFL stability restriction. This does not "
+                f"guarantee stability with interior PEC projection "
+                f"(refused) or arbitrary material interfaces. For the "
+                f"cavity without interior PEC, dispersion error grows "
                 f"~dt^2 — at ~15 cells/wavelength the <2% eigenfrequency "
                 f"envelope holds only up to ~2x CFL (measured -1.4% at 2x; "
                 f"-2.8% at 3x, -6.7% at 5x by von Neumann analysis). Use "

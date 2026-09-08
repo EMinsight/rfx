@@ -311,8 +311,9 @@ def _enumerate_emission_sites():
 # _FROZEN_DYNAMIC_SITES_BY_FUNCTION is unchanged (no new bare except).
 # EMISSION_CLASSIFICATION is unchanged: the check hangs off the same
 # _validate_cfg_campaign_statics umbrella as the other §3 findings.
-_FROZEN_TOTAL_SITES = 106
-_FROZEN_LITERAL_CODE_COUNT = 72
+# #931 P1: one named error for unsupported interior PEC on both ADI lanes.
+_FROZEN_TOTAL_SITES = 107
+_FROZEN_LITERAL_CODE_COUNT = 73
 # Dynamic sites are frozen by ENCLOSING FUNCTION and count, not by line
 # number. What this test exists to catch is a new bare ``except`` path
 # emitting PreflightIssue(code=getattr(exc, "code", "uncoded")) — a site
