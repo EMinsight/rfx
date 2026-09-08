@@ -60,7 +60,6 @@ from rfx.api._preflight import (
     PreflightErrorWarning,
     PreflightIssue,
     PreflightReport,
-    PreflightWarning,
 )
 
 
@@ -104,10 +103,19 @@ def test_zero_thickness_pec_box_is_a_sheet_and_draws_no_thickness_advice():
                      cpml_layers=4)
     sim.add_source((0.005, 0.005, 0.002), "ez")
     sim.add(Box((0.003, 0.003, 0.005), (0.007, 0.007, 0.005)), material="pec")
+    from tests._realized_geometry import realized, node_index
+
     issues = _issues(sim)
-    assert not _has(issues, "Zero-thickness"), issues
-    assert not _has(issues, "at least one cell of thickness"), issues
-    assert any(getattr(i, "code", None) == "sheet_plane_realized" for i in issues)
+    assert not issues.by_code("mesh_resolution"), issues
+    # An exactly on-node sheet has no offset to report. Its realization
+    # must survive even though the conditional advisory stays silent.
+    assert not issues.by_code("sheet_plane_realized"), issues
+    rz = realized(sim)
+    assert rz.sheet_planes == {2: [node_index(rz.grid, 2, 0.005)]}
+    assert not np.any(rz.pec_mask)
+    mx, my, mz = rz.edge_masks
+    assert np.any(mx) and np.any(my)
+    assert not np.any(mz), "a sheet must leave normal E live"
 
 
 def test_sub_cell_pec_box_advisory_documents_the_refusal():

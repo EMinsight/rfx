@@ -56,11 +56,11 @@ E2E_GOLDEN_PATH = (
 )
 
 
-def _build_thru_line_sim() -> Simulation:
+def _build_thru_line_sim(*, dx=DX, ly=LY) -> Simulation:
     sim = Simulation(
         freq_max=F_MAX,
-        domain=(LX, LY, LZ),
-        dx=DX,
+        domain=(LX, ly, LZ),
+        dx=dx,
         cpml_layers=8,
         boundary=BoundarySpec(
             x="cpml",
@@ -69,27 +69,20 @@ def _build_thru_line_sim() -> Simulation:
         ),
     )
     sim.add_material("ro4350b", eps_r=EPS_R)
-    sim.add(Box((0.0, 0.0, 0.0), (LX, LY, H_SUB)), material="ro4350b")
+    sim.add(Box((0.0, 0.0, 0.0), (LX, ly, H_SUB)), material="ro4350b")
 
-    y_centre = LY / 2.0
+    y_centre = ly / 2.0
     trace_y_lo = y_centre - W_TRACE / 2.0
     trace_y_hi = y_centre + W_TRACE / 2.0
-    # #931 migration rule 1: a foil drawn as a one-cell PEC Box is a SHEET,
-    # declared with the SAME physical corners. Under the volume rule the same
-    # Box would gain a second wall at the node BELOW the substrate top
-    # (measured on this board: walls on z-planes 3 and 4 instead of 4 alone),
-    # which moves the realized trace height and every de-embedded number with
-    # it. add_thin_conductor puts the sheet on the node plane nearest the
-    # drawn mid-plane — 320 um here, tie to the lower plane — which is the
-    # plane this board has always realized, so the committed goldens stay
-    # valid. The board itself is off-lattice (h_sub 254 um on an 80 um mesh,
-    # 3.175 cells); §1.3 says to redraw it ON-LATTICE, and its constants live
-    # in tests/unit/sparams/test_msl_port_integration.py, so that redraw
-    # belongs with the MSL fixture family, not here.
+    # #931 §1.3: this one-cell foil declaration is a SHEET, not a volume.
+    # On the current dx = H_SUB/3 mesh its midpoint is at 3.5 cells:
+    # the exact half-cell tie resolves LOWER, onto the laminate face (3).
+    # The historical capture uses dx = 80 um: midpoint/dx = 3.675, so
+    # its nearest node is 4 (320 um). These are different replay geometries.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         sim.add_thin_conductor(
-            Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + DX)),
+            Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + dx)),
             sigma_bulk=5.8e7, thickness=35e-6,
         )
     sim.add_msl_port(
@@ -109,6 +102,22 @@ def _build_thru_line_sim() -> Simulation:
     return sim
 
 
+def _build_historical_capture_sim() -> Simulation:
+    """Interpret the unchanged PR #516 captures on their original mesh.
+
+    The replay binaries predate #931's on-lattice redraw.
+    DX and LY imported from the live integration fixture now describe a
+    different grid; using them to index old DFT planes moves both the V span
+    and Ampere contour. Freeze the capture's 80 um mesh and lateral extent
+    here until the fields, geometry and goldens are recaptured together.
+    The declared foil remains a realized sheet under the current contract.
+    """
+    dx = 80e-6
+    return _build_thru_line_sim(
+        dx=dx, ly=W_TRACE + 2 * (2 * H_SUB + 8 * dx),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Replay helpers
 # ---------------------------------------------------------------------------
@@ -124,10 +133,16 @@ def _make_replay_fake_run(acc_data: dict, run_idx: int):
     """
     def fake_run(self, *, n_steps=None, num_periods=1.0, compute_s_params=False):
         del n_steps, num_periods, compute_s_params
+        grid = self._build_grid()
         planes = {}
         for key, arr in acc_data.items():
             if not key.startswith(f"run{run_idx}__"):
                 continue
+            assert arr.shape[1:] == (grid.ny, grid.nz), (
+                f"Replay plane {key} has transverse shape {arr.shape[1:]}, "
+                f"but the simulation grid has {(grid.ny, grid.nz)}; "
+                "captured fields and geometry must be updated together"
+            )
             plane_name = key[len(f"run{run_idx}__"):]
             planes[plane_name] = SimpleNamespace(accumulator=arr)
         return SimpleNamespace(dft_planes=planes)
@@ -156,7 +171,7 @@ def _run_assembly_with_replay(acc_data: dict, freqs_replay: np.ndarray, *,
     except ImportError:  # older JAX (< ~0.4.31)
         from tests._x64_compat import enable_x64
 
-    sim = _build_thru_line_sim()
+    sim = _build_historical_capture_sim()
     freqs_jnp = jnp.asarray(freqs_replay, dtype=jnp.float32)
 
     run_counter = [0]
@@ -195,7 +210,8 @@ def test_replay_float64_equivalence():
 
     Gate: atol=1e-5.  Both jnp-x64 and numpy assemble from the SAME captured
     complex64 FDTD accumulators upcast to complex128 — structural equivalence
-    must hold to near-machine-epsilon (observed ~1e-13).
+    must hold within the unchanged 1e-5 gate. Measured after binding #931's
+    replay to its capture geometry: max_abs_dev = 2.24e-8 on this pod.
 
     This test NEVER invokes the real FDTD scanner under x64.  sim.run is
     monkeypatched to return replayed plane data directly.  Only the post-run
@@ -260,6 +276,37 @@ def test_float32_deployment_delta_bounded():
         f"Unexpected precision regression."
     )
     print("[test_float32_deployment_delta_bounded] PASS")
+
+
+def test_replay_geometry_matches_the_captured_lattice():
+    """Frozen fields need their captured indices, not the live board's DX.
+
+    Independent witnesses: the stored plane dimensions, the realized trace
+    wall, and the ground-to-trace voltage / Ampere-loop indexing metadata.
+    """
+    from rfx.probes.msl_wave_decomp import register_msl_plane_probes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, realized,
+    )
+
+    sim = _build_historical_capture_sim()
+    grid = sim._build_grid()
+    assert (grid.nx, grid.ny, grid.nz) == (192, 54, 31)
+    assert_sheet_planes(sim, 2, [320e-6], what="captured MSL trace")
+    assert_wall_planes(sim, 2, [320e-6], what="captured MSL trace")
+    rz = realized(sim)
+    assert rz.pec_mask is None
+    assert not np.any(rz.edge_masks[2]), "normal Ez through the sheet stays live"
+    acc_data, freqs = _load_replay_accumulators()
+    assert {arr.shape for arr in acc_data.values()} == {(len(freqs), 54, 31)}
+    probes = register_msl_plane_probes(sim, port_index=0, freqs=freqs)
+    assert (probes.j_centre, probes.k_lo, probes.k_hi) == (26, 0, 4)
+    assert (probes.j_lo, probes.j_hi, probes.k_trace_lo, probes.k_trace_hi) == (
+        22, 30, 4, 4,
+    )
+    # Fail at the replay boundary, before silently sampling a different mesh.
+    with pytest.raises(AssertionError, match="captured fields and geometry"):
+        _make_replay_fake_run(acc_data, 0)(_build_thru_line_sim())
 
 
 # ---------------------------------------------------------------------------
@@ -572,19 +619,27 @@ def test_compute_msl_s_matrix_end_to_end_matches_historical_base():
 
 def _assert_trace_sheet_realized(sim_sim):
     """Build-time check (no solve): the migrated trace realizes on the node
-    plane its declaration names — 320 um on this board, the plane the
-    pre-#931 rule realized — and it owns no cell (#931 §1.3).
+    nearest its midpoint — H_SUB on this board after the lower half-cell
+    tie — and it owns no cell (#931 §1.3).
 
     Every migrated conductor on this branch owes this assertion; the shared
     spelling is tests/_realized_geometry.py, so a fixture never re-derives
     the rule it is checking.
     """
-    from tests._realized_geometry import assert_sheet_planes, realized
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, realized,
+    )
     rz = realized(sim_sim)
     assert rz.pec_mask is None, "a sheet owns no cell"
     assert len(rz.sheets) == 1
-    return assert_sheet_planes(sim_sim, 2, [4.0 * DX], what="MSL trace")
+    assert not np.any(rz.edge_masks[2]), "normal Ez through the sheet stays live"
+    assert_wall_planes(sim_sim, 2, [H_SUB], what="MSL trace")
+    return assert_sheet_planes(sim_sim, 2, [H_SUB], what="MSL trace")
 
 
 def test_migrated_trace_is_a_sheet_on_the_declared_plane():
+    # Independent physical witness for the tie: H_SUB = 254 um, the mesh
+    # has three substrate cells, and the declared midpoint is at 3.5 cells.
+    assert H_SUB / DX == pytest.approx(3.0)
+    assert (H_SUB + 0.5 * DX) / DX == pytest.approx(3.5)
     _assert_trace_sheet_realized(_build_thru_line_sim())

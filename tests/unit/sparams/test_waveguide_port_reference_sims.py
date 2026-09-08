@@ -27,6 +27,9 @@ Coverage
   ``tests/crossval/test_waveguide_tjunction_e4e5_gates.py``.
 """
 
+import warnings
+from types import SimpleNamespace
+
 import numpy as np
 import jax.numpy as jnp
 import pytest
@@ -183,18 +186,111 @@ def _tj_refs(freqs, f0):
     ]
 
 
-def test_port_reference_sims_clearance_advisory_fires():
+def test_port_reference_sims_clearance_advisory_fires(monkeypatch):
     """Probe planes sitting on top of the junction must fire the clearance
     advisory. The band is kept below the TE20 cutoff (fc2 = C0/a = 7.5 GHz for
     a = 0.04 m) so the advisory is not skipped for an in-band higher mode."""
     freqs = jnp.linspace(4.5e9, 6.5e9, 3)
     f0 = 5.5e9
-    with pytest.warns(UserWarning) as record:
+
+    class ReachedExtractor(Exception):
+        pass
+
+    def stop_before_solve(*args, **kwargs):
+        raise ReachedExtractor
+
+    monkeypatch.setattr(
+        "rfx.api._sparams.extract_waveguide_s_matrix_flux", stop_before_solve,
+    )
+    with pytest.warns(UserWarning) as record, pytest.raises(ReachedExtractor):
         _tj_device(freqs, f0).compute_waveguide_s_matrix(
             num_periods=8, normalize="flux", port_reference_sims=_tj_refs(freqs, f0),
         )
-    messages = [str(w.message) for w in record]
-    assert any("clearance" in m for m in messages), messages
+    findings = [w.message for w in record
+                if getattr(w.message, "code", None) == "port_junction_probe_clearance"]
+    assert [finding.loc for finding in findings] == ["port:0", "port:1", "port:2"]
+    assert all(finding.severity == "warning" for finding in findings)
+
+
+@pytest.mark.parametrize("subpixel_smoothing", [None, "kottke_pec"])
+def test_identical_port_references_have_no_junction_clearance_advisory(
+    monkeypatch, subpixel_smoothing,
+):
+    """Kottke clearing solver edge masks must not erase advisory geometry."""
+    freqs = jnp.linspace(4.5e9, 6.5e9, 3)
+
+    class ReachedExtractor(Exception):
+        pass
+
+    def stop_before_solve(*args, **kwargs):
+        # Preserve the solver's dispatch: Kottke owns its inverse-eps
+        # tensor and must not acquire an additional staircase PEC mask.
+        assert (kwargs["pec_edge_masks"] is None) == (
+            subpixel_smoothing == "kottke_pec"
+        )
+        assert all(edges is not None
+                   for edges in kwargs["ref_pec_edge_masks_per_port"])
+        raise ReachedExtractor
+
+    monkeypatch.setattr(
+        "rfx.api._sparams.extract_waveguide_s_matrix_flux", stop_before_solve,
+    )
+    with warnings.catch_warnings(record=True) as record, pytest.raises(ReachedExtractor):
+        warnings.simplefilter("always")
+        _tj_ref_horizontal(freqs, 5.5e9).compute_waveguide_s_matrix(
+            num_periods=8, normalize="flux", subpixel_smoothing=subpixel_smoothing,
+            port_reference_sims=[_tj_ref_horizontal(freqs, 5.5e9) for _ in range(3)],
+        )
+    assert not any(getattr(w.message, "code", None) == "port_junction_probe_clearance"
+                   for w in record)
+
+
+@pytest.mark.parametrize("difference,expected", [
+    ("none", False), ("near_sheet", True), ("far_sheet", False),
+    ("edge_component", True), ("sigma", True),
+    ("device_only", True), ("reference_only", True),
+])
+def test_junction_clearance_reads_material_and_component_edges(difference, expected):
+    """PEC sheets carry no sigma; identical or distant guides stay silent.
+
+    Component changes must remain visible even if the union of PEC edge
+    locations is unchanged (different conductor orientations).
+    """
+    from rfx.api._sparams import _warn_junction_probe_clearance
+
+    shape = (8, 2, 2)
+    dev_sigma = np.zeros(shape)
+    ref_sigma = np.zeros(shape)
+    dev_edges = [np.zeros(shape, dtype=bool) for _ in range(3)]
+    ref_edges = [np.zeros(shape, dtype=bool) for _ in range(3)]
+    if difference in ("near_sheet", "far_sheet", "edge_component"):
+        plane = 7 if difference == "far_sheet" else 3
+        dev_edges[1][plane] = True
+    if difference == "edge_component":
+        ref_edges[2][3] = True
+        np.testing.assert_array_equal(
+            np.logical_or.reduce(dev_edges), np.logical_or.reduce(ref_edges),
+        )
+    if difference == "sigma":
+        dev_sigma[3] = 1.0
+    if difference == "device_only":
+        dev_edges[1][3] = True
+        ref_edges = None
+    if difference == "reference_only":
+        ref_edges[1][3] = True
+        dev_edges = None
+    cfg = SimpleNamespace(a=0.04, normal_axis="x", probe_x=3)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        _warn_junction_probe_clearance(
+            SimpleNamespace(dx=0.02), [cfg], dev_sigma, [ref_sigma],
+            np.array([4.5e9, 6.5e9]),
+            device_pec_edges=dev_edges, ref_pec_edges=[ref_edges],
+        )
+    findings = [w.message for w in record]
+    assert [finding.code for finding in findings] == (
+        ["port_junction_probe_clearance"] if expected else []
+    )
 
 
 def test_port_reference_sims_compact_junction_necessary_not_sufficient():
