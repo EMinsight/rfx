@@ -137,6 +137,28 @@ def test_geometry_added_after_preview_recomputes_the_mesh():
     assert new["_dx"] == fresh._dx
 
 
+def test_declared_mesh_remains_available_before_and_after_resolution(monkeypatch):
+    sim = _documented_model()
+    declared = sim._declared_mesh
+    assert declared["_dx"] is None
+    assert declared["_dz_profile"] is None
+    assert declared["_domain"] == (.05, .05, .02)
+
+    def unexpected_resolution():
+        pytest.fail("reading the declaration must not plan a mesh")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sim, "_auto_configure_mesh", unexpected_resolution)
+        assert sim._declared_mesh == declared
+    resolved = sim._resolve_mesh()
+    assert resolved["_dz_profile"] is not None
+    assert resolved["_dx"] is not None
+    assert sim._declared_mesh == declared
+    # The returned mapping is a snapshot, not writable Simulation state.
+    declared["_dx"] = .001
+    assert sim._declared_mesh["_dx"] is None
+
+
 @pytest.mark.parametrize("nonuniform", [False, True])
 @pytest.mark.parametrize("skip_preflight", [False, True])
 def test_first_forward_under_jit_grad_resolves_static_mesh_on_host(

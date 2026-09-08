@@ -6291,11 +6291,12 @@ class _SparamMixin:
                 "compute_coaxial_line_reflection() creates its own TEM TFSF "
                 "source and does not accept an existing TFSF source."
             )
-        if (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        ):
+        # This driver owns its geometry. Validate caller-supplied profiles
+        # before planning a mesh from registrations that it will reject below.
+        declared_mesh = self._declared_mesh
+        if any(declared_mesh[name] is not None for name in (
+            "_dx_profile", "_dy_profile", "_dz_profile"
+        )):
             raise ValueError(
                 "compute_coaxial_line_reflection() supports only a uniform Yee "
                 "grid; dx_profile, dy_profile, and dz_profile are not supported."
@@ -6774,11 +6775,12 @@ class _SparamMixin:
                 "compute_coaxial_two_port() creates its own TEM TFSF "
                 "sources and does not accept an existing TFSF source."
             )
-        if (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        ):
+        # This driver owns its geometry. Validate caller-supplied profiles
+        # before planning a mesh from registrations that it will reject below.
+        declared_mesh = self._declared_mesh
+        if any(declared_mesh[name] is not None for name in (
+            "_dx_profile", "_dy_profile", "_dz_profile"
+        )):
             raise ValueError(
                 "compute_coaxial_two_port() supports only a uniform Yee "
                 "grid; dx_profile, dy_profile, and dz_profile are not "

@@ -120,7 +120,9 @@ def test_accessor_uses_the_nonuniform_grid_on_a_graded_mesh():
     dz = _graded_dz()
     sim = _sheet_sim(dz_profile=dz)
     nu = sim._build_nonuniform_grid()
-    uni = sim._build_grid()
+    # Independent uniform comparator: the profiled simulation must refuse a
+    # surrogate uniform grid, and the accessor must retain the declared NU one.
+    uni = _sheet_sim()._build_grid()
     assert tuple(nu.shape) != tuple(uni.shape), (
         "fixture is not exercising the NU/uniform shape difference")
     # The profile really is graded (a uniform-valued profile would take
