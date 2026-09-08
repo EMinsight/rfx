@@ -460,3 +460,73 @@ holds as written.
 
 The measured consequences (which gates are red, with the numbers) are in the fixture and in
 the measurement PR; nothing here is absorbed into a tolerance.
+
+---
+
+## Measurement 4 — the device lane's operator changed, pre-declared 2026-09-08
+
+Written BEFORE the run it authorises. Nothing below is a result.
+
+### What changed and why a re-pin is owed
+
+`fixture_v18_close.json` was produced while the waveguide S-matrix lane folded a
+PEC mask back into a `sigma = 1e10` cell fill for the device run. Stage C of the
+lattice ownership work (`0184d64c`) replaced that fold with the realized PEC
+edges, which §1.7 requires: one function turns geometry into PEC edges, and a
+second realization through `sigma` is exactly what the contract removes.
+
+A hard electric wall and a 1e10 S/m lossy volume are different operators. Both
+reflect with magnitude ~1 and they do not reflect with the same phase. The
+fixture therefore records a device the current build no longer solves, and the
+three live-cell tests compare against it.
+
+### The measured ladder, including one row taken today
+
+| rung | `max｜S_live − S_fixture｜`, `pec_short` | where |
+|---|---|---|
+| coarse | 9.381e-01 | T6, CPU, `b884b83f` |
+| mid | 4.979e-01 | T6, CPU, `b884b83f` |
+| fine | 2.532e-01 | GPU lane 369367259367, `f112f7bb`, 2026-09-08 |
+
+`thru` reproduces at 1.2e-6 to 2.5e-6 on every rung, so the port, the absorber,
+the extraction and the plane machinery are untouched; the whole delta is the
+`pec_short` DUT. `LIVE_ABS_S_TOL = gate_from_envelope(5.000e-6, quantum=10000)
+= 1e-4` and is NOT widened.
+
+The fine row is new. It matters more than it looks: the deltas fall roughly by
+half per refinement, 0.938 → 0.498 → 0.253, which is what a phase difference
+from a sub-cell wall PLACEMENT looks like as the mesh converges, and not what a
+different reflection coefficient would look like. It is independent support for
+"the operator changed, not the geometry".
+
+### Pre-declared expectations for the re-pin run
+
+Run: `scripts/diagnostics/waveguide_chain_battery_measure.py` on the contract
+build, through `scripts/vessl_931/T/rfx-931-post-chain-battery.yaml`, writing a
+NEW fixture file. `fixture_v18_close.json` is not edited — its name and VESSL id
+are its provenance, and mixing operators inside one artifact is what the ladder
+rule forbids.
+
+1. **`thru` is unchanged.** Every `thru` row stays at or below 5e-6 against the
+   OLD fixture as well as the new one. If a `thru` row moves, the change is not
+   confined to the DUT and this diagnosis is wrong.
+2. **`pec_short` stays a total reflector.** `|S11| ≥ 0.99` at every rung, both
+   normalizations. The claim is that the phase moved, not the magnitude; a
+   magnitude drop would mean the realized edges leak, which would be a contract
+   defect and not a re-pin.
+3. **The live comparison closes.** Against the NEW fixture, every row on every
+   rung and both backends is `≤ LIVE_ABS_S_TOL = 1e-4`.
+4. **The falsifier.** If `pec_short` still exceeds 1e-4 against a fixture
+   generated on this same build, the residual is not operator staleness. It is a
+   live divergence between the fixture producer and the test lane, which under
+   this contract is a defect in the lane and must be reported as one rather than
+   re-pinned away.
+5. **Not authorised by this pre-declaration**: widening `LIVE_ABS_S_TOL`,
+   editing `fixture_v18_close.json` in place, or marking the three live tests
+   xfail. If the run cannot be completed, the honest outcome is to say the re-pin
+   is owed, with these numbers, and leave the tests red.
+
+Consumers to re-point on success:
+`tests/oracle/test_waveguide_chain_battery_v18_close.py` (three live tests),
+`tests/oracle/test_waveguide_chain_battery_guide_cell_aperture.py` and
+`tests/fixtures/waveguide_chain_battery/README.md`.
