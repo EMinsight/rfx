@@ -219,11 +219,6 @@ _THRU_Y_MID_M = _THRU_DOMAIN_M[1] / 2
 _THRU_N_STEPS = 4000
 _THRU_FREQS_HZ = np.linspace(3e9, 7e9, 9)   # in-band of f0=5 GHz, bw=0.8
 
-_PEC_FACES_ADVISORY_SNIPPET = (
-    "pec_faces={z_lo} creates an INFINITE PEC boundary AND the geometry "
-    "contains finite PEC objects."
-)
-
 # ===========================================================================
 # Gate constants (R5: every gate = measured value + honest margin)
 # ===========================================================================
@@ -435,26 +430,9 @@ def thru_smatrix():
     # (feedback_never_ignore_preflight).
     for msg in issues:
         print(f"\n[thru battery] preflight (verbatim): {msg}")
-    # The intended pec_faces advisory: the infinite ground plane IS the
-    # microstrip return. It must be here.
-    assert any(_PEC_FACES_ADVISORY_SNIPPET in m for m in issues)
-    # What the fixture's OWN geometry now claims (#931): the trace is a
-    # sheet, so it owns no cell and does not short the Ez edge above it.
-    # The two wire_port_dead_extent_cells advisories that the pre-#931
-    # baseline pinned (one per port, "the top extent cell is inside the PEC
-    # trace") were a property of the 0.5 mm metal SLAB the one-cell Box
-    # realized, not of a foil. They are gone, and their disappearance is
-    # the same fact as the n_live 2 -> 3 change recorded in
-    # ``test_thru_trace_is_one_realized_sheet_plane``.
-    codes = sorted(getattr(i, "code", None) for i in report)
-    assert "wire_port_dead_extent_cells" not in codes, (
-        "a sheet trace owns no cell and does not short the port's Ez edge "
-        f"(#931 §1.3); a dead-extent advisory here is fixture drift: {issues}")
-    # The exact-set drift detector moved to
-    # ``test_thru_preflight_code_set_is_the_contract_set`` below, which
-    # needs no solve. It is RED until the preflight group lands, and
-    # coupling a 70 s physics fixture to another group's unfinished
-    # migration would take the battery's numbers down with it.
+    errors = [str(i) for i in report if i.severity == "error"]
+    assert not errors, errors
+    _assert_thru_trace_realization(sim)
 
     result = sim.run(n_steps=_THRU_N_STEPS, compute_s_params=True,
                      s_param_freqs=_THRU_FREQS_HZ)
@@ -550,15 +528,20 @@ def test_thru_trace_is_one_realized_sheet_plane():
     below therefore stay on Z0/2, which is what they were measured at
     (RECOMPUTE R8 closed here).
     """
+    _assert_thru_trace_realization(_build_thru())
+
+
+def _assert_thru_trace_realization(sim):
+    """The geometry/live-edge oracle shared by broadband and DC runs."""
     import numpy as _np
     from rfx.sources.sources import WirePort, _wire_port_live_cells
     from tests._realized_geometry import (
         assert_sheet_planes, assert_wall_planes, realized)
 
-    sim = _build_thru()
     assert_sheet_planes(sim, 2, [_THRU_H_M], what="THRU trace foil")
     assert_wall_planes(sim, 2, [_THRU_H_M], what="THRU trace foil")
 
+    assert sim._pec_faces == {"z_lo"}, "the declared ground must be the z_lo PEC face"
     rz = realized(sim)
     assert rz.pec_mask is None or not bool(_np.asarray(rz.pec_mask).any()), \
         "a sheet owns no cell (#931 §1.3)"
@@ -576,18 +559,19 @@ def test_thru_trace_is_one_realized_sheet_plane():
                                    abs=1e-12), length
     assert width == pytest.approx(_THRU_W_M, abs=1e-12), width
 
-    wp = WirePort(start=(_THRU_X1_M, _THRU_Y_MID_M, 0.0),
-                  end=(_THRU_X1_M, _THRU_Y_MID_M, _THRU_H_M),
-                  component="ez", impedance=50.0)
-    cells, live, n_live = _wire_port_live_cells(rz.grid, wp, rz.edge_masks)
-    assert len(cells) == 2 and n_live == 2, (
-        f"1.0 mm of extent on a 0.5 mm mesh is TWO Ez edges, both live "
-        f"below the foil (half-open in edges, #931 R8); got {cells}, "
-        f"live={live}")
-    k_trace = int(round(_THRU_H_M / _THRU_DX_M))
-    assert max(c[2] for c in cells) == k_trace - 1, (
-        f"no driven edge may sit above the trace plane k={k_trace}; "
-        f"got {cells}")
+    for port_x in (_THRU_X1_M, _THRU_X2_M):
+        wp = WirePort(start=(port_x, _THRU_Y_MID_M, 0.0),
+                      end=(port_x, _THRU_Y_MID_M, _THRU_H_M),
+                      component="ez", impedance=50.0)
+        cells, live, n_live = _wire_port_live_cells(rz.grid, wp, rz.edge_masks)
+        assert len(cells) == 2 and n_live == 2, (
+            f"1.0 mm of extent on a 0.5 mm mesh is TWO Ez edges, both live "
+            f"below the foil (half-open in edges, #931 R8); got {cells}, "
+            f"live={live}")
+        k_trace = int(round(_THRU_H_M / _THRU_DX_M))
+        assert max(c[2] for c in cells) == k_trace - 1, (
+            f"no driven edge may sit above the trace plane k={k_trace}; "
+            f"got {cells}")
 
 
 def test_thru_preflight_code_set_is_the_contract_set():
@@ -960,18 +944,12 @@ def dc_anchor_smatrix():
     issues = [str(i) for i in report]
     for msg in issues:
         print(f"\n[dc anchor] preflight (verbatim): {msg}")
-    # Same exact set as the thru_smatrix fixture above (re-pinned
-    # 2026-07-11 for issue #319): pec_faces + one dead-extent-cell
-    # advisory per port (#318 — post-fix each port terminates at 50 ohm
-    # across its 2 live cells; the pre-fix 33.3-ohm reading is the
-    # historical #313 finding; gates measured on this geometry stay
-    # valid as-is).
-    codes = sorted(getattr(i, "code", None) for i in report)
-    assert codes == ["pec_faces_finite_pec",
-                     "wire_port_dead_extent_cells",
-                     "wire_port_dead_extent_cells"], (
-        f"dc-anchor fixture preflight drifted: {issues}")
-    assert any(_PEC_FACES_ADVISORY_SNIPPET in m for m in issues)
+    # Same foil and live driven edges as the broadband fixture. A former
+    # dead-extent notice is not a geometry oracle: inspect the realized
+    # sheet and both ports before evaluating the DC receive-sign gate.
+    errors = [str(i) for i in report if i.severity == "error"]
+    assert not errors, errors
+    _assert_thru_trace_realization(sim)
     result = sim.run(n_steps=_DCA_N_STEPS, compute_s_params=True,
                      s_param_freqs=_DCA_FREQS_HZ)
     return np.asarray(result.s_params).astype(np.complex128)

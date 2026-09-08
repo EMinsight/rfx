@@ -38,6 +38,7 @@ import pytest
 from rfx import Simulation
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
+from rfx.simulation import _suggest_checkpoint_segments
 
 # ---------------------------------------------------------------------------
 # Tiny MSL thru-line geometry (CPU-fast for AD diagnosis)
@@ -162,8 +163,8 @@ def _build_wg_sim() -> Simulation:
 # Tests
 # ---------------------------------------------------------------------------
 
-# MSL AD over ~3934 steps: the un-checkpointed reverse tape OOMs even a 48 GB A6000
-# (VESSL run 369367241162). checkpoint_segments=14 (below) caps the peak to a few GB,
+# MSL AD over thousands of steps: the un-checkpointed reverse tape OOMs even a 48 GB A6000
+# (VESSL run 369367241162). Segmented checkpointing caps the peak to a few GB,
 # so this runs on the CPU CI again (was @pytest.mark.gpu in #119 before checkpointing;
 # #123). ~4 min on the shard.
 def test_msl_s_matrix_ad_end_to_end():
@@ -178,7 +179,13 @@ def test_msl_s_matrix_ad_end_to_end():
     4. WI-1 replay golden is unaffected (tested separately).
     """
     sim = _build_msl_sim()
-    grid = sim._build_grid()
+    grid = sim._build_realized_grid()
+    # Derive the segmentation from the same realized-grid step budget as
+    # forward(). A mesh edit must not require changing a magic divisor or
+    # padding the DFT record to make checkpointing work.
+    num_periods = 3
+    n_steps = grid.num_timesteps(num_periods=num_periods)
+    checkpoint_segments = _suggest_checkpoint_segments(n_steps)
     eps_base = jnp.ones(grid.shape, dtype=jnp.float32)
 
     def objective(alpha: jnp.ndarray) -> jnp.ndarray:
@@ -186,9 +193,10 @@ def test_msl_s_matrix_ad_end_to_end():
             warnings.simplefilter("ignore")
             result = sim.compute_msl_s_matrix(
                 n_freqs=8,
-                num_periods=3,
+                n_steps=n_steps,
+                num_periods=num_periods,
                 eps_override=eps_base * alpha,
-                checkpoint_segments=14,  # cap the reverse-AD tape peak (else OOM, even on 48 GB); 14 | n_steps=3934 (= 2·7·281), ≈ √n_steps memory
+                checkpoint_segments=checkpoint_segments,
             )
         S = result.S
         k0 = S.shape[-1] // 2
@@ -201,7 +209,8 @@ def test_msl_s_matrix_ad_end_to_end():
         warnings.simplefilter("ignore")
         fwd_result = sim.compute_msl_s_matrix(
             n_freqs=8,
-            num_periods=3,
+            n_steps=n_steps,
+            num_periods=num_periods,
             eps_override=eps_base * alpha0,
         )
     S_fwd = np.asarray(fwd_result.S)

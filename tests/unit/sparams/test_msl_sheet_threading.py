@@ -84,6 +84,7 @@ import pytest
 
 from rfx import Box, Simulation
 from rfx.boundaries.spec import Boundary, BoundarySpec
+from rfx.simulation import _suggest_checkpoint_segments
 
 # --------------------------------------------------------------------------
 # Fixture geometry (mirrors test_msl_port_integration.py, L_LINE shortened)
@@ -492,7 +493,13 @@ def test_ad_smoke_eps_override_grad_finite_with_sheet():
     (PR #468 defect class — do not rely on the is_tracer default branch).
     """
     sim = build_msl_thru(sheet=_SHEETS["rs5"])
-    grid = sim._build_grid()
+    grid = sim._build_realized_grid()
+    # Checkpoint divisibility belongs to the realized timestep budget, not
+    # the board's old dx. Keep exactly the three-period DFT record: padding
+    # would change the observable and is deliberately refused by run().
+    num_periods = 3
+    n_steps = grid.num_timesteps(num_periods=num_periods)
+    checkpoint_segments = _suggest_checkpoint_segments(n_steps)
     eps_base = jnp.ones(grid.shape, dtype=jnp.float32)
     freqs_ad = np.linspace(2e9, 4.5e9, 4)
 
@@ -500,8 +507,9 @@ def test_ad_smoke_eps_override_grad_finite_with_sheet():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = sim.compute_msl_s_matrix(
-                freqs=freqs_ad, num_periods=3, eps_override=eps_base * alpha,
-                checkpoint_segments=14, enforce_passivity=False)
+                freqs=freqs_ad, n_steps=n_steps, num_periods=num_periods,
+                eps_override=eps_base * alpha,
+                checkpoint_segments=checkpoint_segments, enforce_passivity=False)
         return jnp.real(jnp.sum(jnp.abs(r.S) ** 2))
 
     grad = jax.grad(objective)(jnp.float32(1.0))

@@ -303,12 +303,18 @@ def test_magnetic_lossless_energy_conservation(mag_run):
 
 
 @pytest.mark.slow
-def test_mu_r_override_fenced_on_nonuniform():
+@pytest.mark.parametrize("axis,n_cells", [("x", 40), ("y", 12), ("z", 4)])
+@pytest.mark.parametrize("graded", [False, True], ids=["equal-cells", "graded"])
+def test_mu_r_override_fenced_on_nonuniform(axis, n_cells, graded):
     """mu_r_override must fail loud on a non-uniform mesh (it is wired only on the
     uniform lane) rather than being silently dropped to a zero-gradient no-op."""
+    profile = np.full(n_cells, 0.5e-3)
+    if graded:
+        profile[1], profile[-2] = 0.4e-3, 0.6e-3
     sim = Simulation(freq_max=16e9, domain=(0.02, 0.006, 0.002), dx=0.5e-3,
-                     dz_profile=np.full(4, 0.5e-3), boundary="cpml", cpml_layers=6, mode="3d")
+                     **{f"d{axis}_profile": profile},
+                     boundary="cpml", cpml_layers=6, mode="3d")
     sim.add_probe((0.01, 0.003, 0.0005), component="ez")
-    shape = sim._build_grid().shape
+    shape = sim._build_realized_grid().shape
     with pytest.raises(NotImplementedError, match="mu_r_override"):
         sim.forward(mu_r_override=jnp.ones(shape, jnp.float32), n_steps=10, skip_preflight=True)
