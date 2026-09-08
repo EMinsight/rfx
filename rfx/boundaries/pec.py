@@ -510,6 +510,55 @@ def clear_edges(edge_masks, cells, component=None):
     return tuple(out)
 
 
+#: E is frozen where the Kottke Stage-2 inverse-permittivity tensor is this
+#: small.  Same constant the step body's post-CPML re-enforcement and
+#: ``apply_pec_h_mask`` selection use; named once so the fence below and the
+#: step body cannot drift apart.
+PEC_INV_THRESHOLD = 1e-9
+
+
+def kottke_fenced_edge_masks(edge_masks, aniso_inv_eps, sheets=(), wires=(),
+                             periodic=(False, False, False),
+                             inv_threshold=PEC_INV_THRESHOLD):
+    """§1.8 fence: under ``subpixel_smoothing="kottke_pec"`` the VOLUME's
+    frozen set is the inverse-permittivity tensor's, not the ownership rule's.
+
+    Stage 2 gives a partially filled edge a FRACTIONAL inverse permittivity —
+    that fraction is the model.  Hard-zeroing such an edge because the §1.2
+    ownership rule calls its cell occupied throws the subpixel result away and
+    leaves a staircase.  §1.8 fences that path out of the contract, so on the
+    Kottke lane an edge is applied only when
+
+    * the tensor itself froze it (``inv < inv_threshold``) — the
+      defense-in-depth re-zero that keeps float noise from accumulating in a
+      fully-PEC cell — or
+    * a SHEET or a WIRE owns it.  Those own no cell, so they contribute
+      nothing to ``compute_inv_eps_tensor_diag`` and are invisible to the
+      tensor; without this term a declared sheet would vanish on the Kottke
+      lane.
+
+    Volume edges the tensor left positive are released back to Kottke.  Port
+    clearing survives: ``edge_masks`` arrives already cleared and the fence
+    only removes entries.
+
+    All-jnp and free of host-side decisions, so it also holds inside a trace.
+    """
+    sheets = tuple(sheets or ())
+    wires = tuple(wires or ())
+    shape = tuple(edge_masks[0].shape)
+    if sheets or wires:
+        owned = realized_pec_edge_masks(
+            None, sheets=sheets, wires=wires, periodic=periodic)
+    else:
+        zero = jnp.zeros(shape, dtype=bool)
+        owned = (zero, zero, zero)
+    out = []
+    for c in range(3):
+        frozen = jnp.asarray(aniso_inv_eps[c]) < inv_threshold
+        out.append(jnp.asarray(edge_masks[c], dtype=bool) & (frozen | owned[c]))
+    return tuple(out)
+
+
 def apply_pec_edges(state, edge_masks) -> object:
     """Zero E on the realized ``(Mx, My, Mz)`` edge masks."""
     mask_ex, mask_ey, mask_ez = edge_masks

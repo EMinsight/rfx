@@ -24,6 +24,8 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+
+from rfx.core.jax_utils import is_tracer
 from jax import lax
 
 from rfx.core.yee import (
@@ -1352,7 +1354,11 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
     # calls the DOMAIN-FACE PEC (``_apply_pec_local``); no geometry PEC —
     # volume, sheet or wire — reaches the field update here. #931 did not
     # introduce this and does not fix it; threading sheets in would only
-    # make the drop harder to see. Tracked separately.
+    # make the drop harder to see.
+    #
+    # The refusal below used to name "redraw it as a volume" as the remedy,
+    # which on this lane leaves the metal just as absent. Since the drop is
+    # the same for all three kinds, so is the refusal.
     grid = sim._build_grid()
     _d_pec_sheets: list = []
     _d_pec_wires: list = []
@@ -1360,14 +1366,28 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         sim._assemble_materials(grid, pec_sheets=_d_pec_sheets,
                                 pec_wires=_d_pec_wires)
     )
-    if _d_pec_sheets or _d_pec_wires:
+    _d_pec_volume = (pec_mask is not None
+                     and not is_tracer(pec_mask)
+                     and bool(jnp.any(pec_mask)))
+    if _d_pec_sheets or _d_pec_wires or _d_pec_volume:
+        _d_declared = []
+        if _d_pec_sheets:
+            _d_declared.append(f"{len(_d_pec_sheets)} PEC sheet(s)")
+        if _d_pec_wires:
+            _d_declared.append(f"{len(_d_pec_wires)} sub-cell wire(s)")
+        if _d_pec_volume:
+            _d_declared.append(
+                f"a PEC volume of {int(jnp.sum(pec_mask))} cell(s)")
         raise NotImplementedError(
-            "run_distributed() does not realize PEC sheets or sub-cell "
-            "wires (#931): a sheet owns no cell, this lane carries geometry "
-            "PEC only as a cell mask, and its step body applies domain-face "
-            "PEC alone — so a declared sheet would be absent from every "
-            "rank with no sign of it. Draw the conductor as a volume (a Box "
-            "at least one cell thick) or run the single-device lane.")
+            "run_distributed() does not realize declared PEC geometry of "
+            "ANY kind (#931): this lane carries geometry PEC only as a cell "
+            "mask, its step body applies domain-face PEC alone, and a sheet "
+            "or a wire owns no cell to begin with. Declared here: "
+            f"{', '.join(_d_declared)} — all of it would be absent from "
+            "every rank with no sign of it. Redrawing a sheet as a volume "
+            "does NOT help on this lane. Use sim.run() without devices=, "
+            "which realizes all three, or model the conductor as a sigma "
+            "fill, which rides in the material arrays this lane does shard.")
     materials = base_materials
 
     nx, ny, nz = grid.shape
