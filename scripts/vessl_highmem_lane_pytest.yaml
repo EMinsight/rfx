@@ -1,10 +1,10 @@
-name: rfx-931-slow-lane
-description: "SLOW pytest lane — the marks the default lane deselects (slow, slow_physics; not gpu) — for rfx, run on VESSL instead of the shared pod (#931). The job CLONES the NFS checkout to node-local disk at a pinned SHA, so an edit to the shared worktree while the job runs cannot change what it tested. Set RFX_CHECKOUT, RFX_SHA and RFX_LABEL in env before creating the run: vessl run create -f scripts/vessl_slow_lane_pytest.yaml"
-tags: [rfx, issue-931, pytest, slow-lane]
+name: rfx-931-highmem-lane
+description: "HIGHMEM lane for rfx (#931): ONE job per test, 48Gi each, because these carry 3-24 GB RSS and must not share a box. Clones a pinned SHA to node-local disk. Set RFX_CHECKOUT, RFX_SHA and RFX_TEST (a pytest node id) before creating the run."
+tags: [rfx, issue-931, pytest, highmem-lane]
 resources:
   cluster: remilab-c0
-  cpu: 32
-  memory: 128Gi
+  cpu: 8
+  memory: 48Gi
 image: ghcr.io/bk-squared/rfx-openems:5b423bdfe0c8
 env:
   DEBIAN_FRONTEND: noninteractive
@@ -14,7 +14,8 @@ env:
   LANG: "C.UTF-8"
   JAX_PLATFORMS: "cpu"
   RFX_CHECKOUT: "/root/workspace/byungkwan-workspace/research/rfx-lattice-ownership"
-  RFX_LABEL: "slow"
+  RFX_LABEL: "highmem"
+  RFX_TEST: "SET-ME"
   RFX_SHA: "HEAD"
 mount:
   /root/workspace/: volume://remilab-fs/personal-workspaces/
@@ -45,22 +46,21 @@ run: |-
   export PYTHONPATH="$WORK"
   export MPLBACKEND=Agg
   "$PY" -c "import jax, rfx; print('probe ok', jax.__version__, jax.devices(), rfx.__version__)"
-  OUT=/root/workspace/claude-workspace/rfx/runs/issue931-slowlane-$RFX_LABEL-$(date -u +%Y%m%dT%H%M%SZ)-$(echo "$SHA" | cut -c1-8)
+  OUT=/root/workspace/claude-workspace/rfx/runs/issue931-highmem-$RFX_LABEL-$(date -u +%Y%m%dT%H%M%SZ)-$(echo "$SHA" | cut -c1-8)
   mkdir -p "$OUT"
   echo "$SHA" > "$OUT/sha.txt"
-  echo "$OUT" > /root/workspace/claude-workspace/rfx/runs/issue931-slowlane-$RFX_LABEL.latest
+  echo "$OUT" > /root/workspace/claude-workspace/rfx/runs/issue931-highmem-$RFX_LABEL.latest
   set +e
-  # highmem is NOT run here. Its 7 tests carry 3-24 GB RSS each and go one
-  # job per test through scripts/vessl_highmem_lane_pytest.yaml, so each gets
-  # a whole 48Gi and the wall clock is the slowest single test, not their sum.
-  "$PY" -m pytest -q -n 8 -p no:cacheprovider --no-header -rfE \
-    -m "(slow or slow_physics) and not gpu and not highmem" \
-    --timeout=1800 --timeout-method=thread \
-    --junitxml="$OUT/junit.xml" > "$OUT/pytest.log" 2>&1
+  # ONE pytest node id per job: serial inside by construction, isolated
+  # across jobs, so a 24 GB high-water never shares a box with six siblings.
+  echo "$RFX_TEST" | tee "$OUT/test.txt"
+  "$PY" -m pytest -q -p no:cacheprovider --no-header -rfE \
+    --timeout=3600 --timeout-method=thread \
+    --junitxml="$OUT/junit.xml" "$RFX_TEST" > "$OUT/pytest.log" 2>&1
   rc=$?
   set -e
   echo "$rc" > "$OUT/pytest.rc"
-  echo "slow lane rc=$rc  sha=$SHA"
+  echo "highmem rc=$rc  sha=$SHA  test=$RFX_TEST"
   tail -n 60 "$OUT/pytest.log" || true
   grep -E "^(FAILED|ERROR) " "$OUT/pytest.log" > "$OUT/reds.txt" || true
   echo "reds: $(wc -l < "$OUT/reds.txt")"
