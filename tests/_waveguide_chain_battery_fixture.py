@@ -199,7 +199,9 @@ def design_region_x_m(dut: str) -> tuple[float, float]:
     """Absolute x-extent [lo, hi) of the θ window for ``dut``."""
     if dut == "slab":
         return SLAB_X_M
-    if dut == "pec_short":
+    if dut in ("pec_short", "thru"):
+        # Thru is the build-time vacuum control, using the short's window.
+        # It has no mandatory AD accuracy leg and no DUT geometry is added.
         return PEC_SHORT_WINDOW_X_M
     raise ValueError(f"no design region is declared for dut={dut!r}")
 
@@ -645,11 +647,9 @@ def assert_design_override_keeps_the_short(sim: Simulation, dut: str) -> None:
 # folds the short into a sigma = 1e10 volume, and that lossy block sat one
 # cell from the window and damped the growing mode.
 #
-# Nothing here changes θ0 or h to make the leg pass. That is a re-declaration
-# of a measurement covered by the battery's predeclaration (a central
-# difference at the shipped fixture), so it is the PI's to make; the options
-# are written up in docs/design_notes/931_migration/T-tests-crossval.md §3.
-# What this file owes the next reader is the number, checkable without a solve.
+# PI amendment 2026-09-08: all eps stencils are second-order forward at
+# unchanged theta0 and h. Every arm now gets the full-array certificate below.
+# See waveguide_chain_battery_predeclaration.md, dated amendment.
 
 def guide_interior_cells(sim: Simulation) -> tuple[int, int]:
     """Cell counts across the guide interior on (y, z) — ``A_M/dx`` and
@@ -661,68 +661,87 @@ def guide_interior_cells(sim: Simulation) -> tuple[int, int]:
     return int(round(A_M / dx)), int(round(B_M / dx))
 
 
-def eps_fd_step_courant_ratio(sim: Simulation, dut: str, *,
-                              theta0: float | None = None,
-                              h: float | None = None,
-                              interior_only: bool = True) -> float:
-    """``dt`` divided by the Courant limit at the FD MINUS step's ``eps_r``.
+def fd_stencil(kind: str, *, theta0: float | None = None,
+               h: float | None = None) -> dict:
+    """The PI-declared stencil; theta0 remains the shipped eps fixture."""
+    if kind not in ("eps", "sigma"):
+        raise ValueError(f"unknown theta kind: {kind}")
+    theta0 = (THETA0_EPS if kind == "eps" else THETA0_SIGMA_S_PER_M) if theta0 is None else float(theta0)
+    h = (FD_STEP_EPS if kind == "eps" else FD_STEP_SIGMA_S_PER_M) if h is None else float(h)
+    if not math.isfinite(theta0) or not math.isfinite(h) or h <= 0:
+        raise AssertionError(f"FD configuration defect: theta0={theta0}, h={h}")
+    offsets = (0, 1, 2) if kind == "eps" else (0, 1, -1)
+    return {"stencil": "forward2" if kind == "eps" else "central2",
+            "theta_kind": kind, "theta0": theta0, "h": h,
+            "thetas": [theta0 + k * h for k in offsets]}
 
-    ``> 1`` means the finite-difference reference solve is unconditionally
-    unstable — what it produces is not a worse gradient, it is not a
-    gradient. Build-time: reads ``grid.dt`` and the assembled material array,
-    runs nothing.
 
-    ``interior_only`` (default) takes the minimum over the guide INTERIOR of
-    the θ window. The window is a full-cross-section x-slab, so it also
-    covers the row of cells beyond each PEC wall, which carry eps_r = 1 for
-    every DUT and no field worth the name; counting them would report the
-    vacuum ratio for the eps_r = 4 slab as well, and the run says otherwise —
-    the slab's FD legs came back finite and the pec_short legs did not.
+def fd_arm_validity(sim: Simulation, dut: str, kind: str, theta: float) -> dict:
+    """Conservative GLOBAL certificate for this uniform, mu_r=1 fixture.
+
+    Inspect the actual full override, including CPML and wall rows. Inactive
+    entries can only make this certificate stricter; no outside vacuum or bad
+    region is hidden by restricting the minimum to the design window.
+    Material eps_r >= 1 is declared scope, not a deduction from passivity.
     """
-    theta0 = THETA0_EPS if theta0 is None else float(theta0)
-    h = FD_STEP_EPS if h is None else float(h)
     grid = sim._build_grid()
-    i_lo, i_hi = design_region_index_range(sim, dut)
-    eps = np.asarray(sim._assemble_materials(grid)[0].eps_r)
-    window = eps[i_lo:i_hi, :, :]
-    if interior_only:
-        ny, nz = guide_interior_cells(sim)
-        window = window[:, :ny, :nz]
-    eps_minus = float(np.min(window)) + (theta0 - h)
-    if eps_minus <= 0.0:
-        return float("inf")
-    dx = float(grid.dx)
-    limit = math.sqrt(eps_minus) * dx / (C0 * math.sqrt(3.0))
-    return float(grid.dt) / limit
+    mats = sim._assemble_materials(grid)[0]
+    if not np.all(np.asarray(mats.mu_r) == 1):
+        raise AssertionError("FD configuration defect: certificate requires mu_r=1")
+    if kind not in ("eps", "sigma"):
+        raise ValueError(f"unknown theta kind: {kind}")
+    eps = np.asarray(design_override(sim, dut, theta, kind=kind) if kind == "eps" else mats.eps_r)
+    sigma = np.asarray(design_override(sim, dut, theta, kind=kind) if kind == "sigma" else mats.sigma)
+    minimum = float(np.min(eps))
+    dx, dt = float(grid.dx), float(grid.dt)
+    ratio = dt * C0 * math.sqrt(3.0) / (dx * math.sqrt(minimum)) if minimum > 0 else float("inf")
+    return {"theta": float(theta), "min_eps_r": minimum,
+            "min_sigma_s_per_m": float(np.min(sigma)), "courant_ratio": ratio,
+            "materials_finite": bool(np.all(np.isfinite(eps)) and np.all(np.isfinite(sigma))),
+            "dx_m": dx, "dt_s": dt, "scope": "full_assembled_array"}
 
 
-def eps_fd_step_min_eps(sim: Simulation, dut: str, *,
-                        theta0: float | None = None,
-                        h: float | None = None) -> float:
-    """The smallest ``eps_r`` the FD minus step puts inside the guide."""
-    theta0 = THETA0_EPS if theta0 is None else float(theta0)
-    h = FD_STEP_EPS if h is None else float(h)
+def assert_fd_validity(record: dict) -> None:
+    """Invalid mandatory configurations BLOCK, including on artifact replay."""
+    spec = fd_stencil(record["theta_kind"], theta0=record["theta0"], h=record["h"])
+    assert record["stencil"] == spec["stencil"], "FD configuration defect: wrong stencil"
+    arms = record["arms"]
+    assert [a["theta"] for a in arms] == spec["thetas"], "FD configuration defect: missing/wrong arms"
+    for arm in arms:
+        minimum, sigma = arm["min_eps_r"], arm["min_sigma_s_per_m"]
+        ratio, dx, dt = arm["courant_ratio"], arm["dx_m"], arm["dt_s"]
+        values = (arm["theta"], minimum, sigma, ratio, dx, dt)
+        ok = (all(math.isfinite(v) for v in values) and minimum >= 1 and sigma >= 0
+              and 0 < ratio < 1 and dx > 0 and dt > 0
+              and arm["materials_finite"] is True and arm["scope"] == "full_assembled_array")
+        if ok:
+            expected = dt * C0 * math.sqrt(3.0) / (dx * math.sqrt(minimum))
+            ok = math.isclose(ratio, expected, rel_tol=1e-12)
+        if not ok:
+            raise AssertionError(
+                f"FD configuration defect BLOCKED: {record.get('dut', '?')} "
+                f"{record['theta_kind']} {record['stencil']} theta={arm['theta']:g}, "
+                f"min_eps_r={minimum:.9g}, min_sigma={sigma:.9g}, "
+                f"global Courant ratio={ratio:.9f}; require eps_r>=1, sigma>=0, "
+                "finite materials and 0<dt/dt_Courant<1 over full assembled array")
+
+
+def assert_fd_stencil_admissible(sim: Simulation, dut: str, kind: str) -> dict:
+    spec = fd_stencil(kind)
+    record = {**spec, "dut": dut,
+              "arms": [fd_arm_validity(sim, dut, kind, th) for th in spec["thetas"]]}
+    assert_fd_validity(record)
+    return record
+
+
+def eps_fd_minus_window_interior_courant_ratio(sim: Simulation, dut: str, *,
+                                               theta0: float = THETA0_EPS,
+                                               h: float = FD_STEP_EPS) -> float:
+    """Historical minus-WINDOW diagnostic, explicitly NOT a validity certificate."""
     grid = sim._build_grid()
-    i_lo, i_hi = design_region_index_range(sim, dut)
+    lo, hi = design_region_index_range(sim, dut)
     ny, nz = guide_interior_cells(sim)
     eps = np.asarray(sim._assemble_materials(grid)[0].eps_r)
-    return float(np.min(eps[i_lo:i_hi, :ny, :nz])) + (theta0 - h)
-
-
-def assert_eps_fd_step_is_courant_admissible(sim: Simulation, dut: str) -> float:
-    """Refuse to call an unstable solve a finite-difference reference.
-
-    RED TODAY for ``dut='pec_short'`` (ratio 1.0157 at every rung) and green
-    for ``slab`` (0.498), which is the split the run measured. Returns the
-    ratio when it passes.
-    """
-    ratio = eps_fd_step_courant_ratio(sim, dut)
-    if ratio > 1.0:
-        raise AssertionError(
-            f"{dut}: the eps FD minus step (θ0 = {THETA0_EPS}, h = "
-            f"{FD_STEP_EPS}) puts eps_r = "
-            f"{eps_fd_step_min_eps(sim, dut):g} inside the guide, where dt is "
-            f"{ratio:.4f} x the Courant limit. The reference solve is "
-            "unstable: it returned NaN at the mid and fine rungs on VESSL run "
-            "369367259196. Fix the STEP, not the gate.")
-    return ratio
+    minimum = float(np.min(eps[lo:hi, :ny, :nz])) + theta0 - h
+    return (float(grid.dt) * C0 * math.sqrt(3.0) / (float(grid.dx) * math.sqrt(minimum))
+            if minimum > 0 else float("inf"))

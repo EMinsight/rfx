@@ -249,7 +249,8 @@ witness `max_f |S11| > 0.20` on both DUTs (the form at `:266`). By the Airy orac
   see; loss leg θ0 = 0.05 S/m.
 - Objectives at the band-centre bin (10.0 GHz): |S11|² (slab, eps θ; PEC-short, sigma θ),
   |S21|² (slab, eps θ), Re S21 and Im S21 (slab, eps θ), Re S11 and Im S11 (PEC-short, eps θ).
-- FD: central, h = 0.05 on eps (`tests/unit/autodiff/test_waveguide_flux_ad.py:80`), h = 0.005 S/m on
+- FD (original design; superseded for eps by the 2026-09-08 amendment below): central,
+  h = 0.05 on eps (`tests/unit/autodiff/test_waveguide_flux_ad.py:80`), h = 0.005 S/m on
   sigma, under a per-test x64 context; **ULP-span assert before the accuracy gate**,
   `_MIN_FD_ULP_SPAN = 1.0e4` (`tests/unit/autodiff/test_msl_ad_fd_converged.py:136`; gate `:556`;
   bidirectional falsifier `:629-634`), the ULP taken in the loss's own dtype. A leg under the
@@ -258,12 +259,13 @@ witness `max_f |S11| > 0.20` on both DUTs (the form at `:266`). By the Airy orac
   (`tests/unit/autodiff/test_sparam_ad_end_to_end.py:298`, `tests/unit/autodiff/test_waveguide_flux_ad.py:84`).
 - Forward identity alongside (contract criterion 1): S under the θ = 0 traced override equals
   the untraced call to `rtol=1e-5, atol=1e-7` (`tests/unit/autodiff/test_waveguide_flux_ad.py:104`).
-- **Expected order**: rel ≈ 1e-3 (ledger 2.0e-4 at `:3110`). **Expected skip, declared now**:
+- **Expected order**: rel ≈ 1e-3 (ledger 2.0e-4 at `:3110`). **Corrected 2026-09-08**:
   PEC-short |S11|² under a lossless eps θ has a physically zero derivative (|S11| = 1 for any
-  lossless window), so that leg is expected to fall under the ULP floor and skip; the
+  lossless window). This does NOT predict an ULP-floor skip: a finite-record discrete
+  extractor can resolve a small nonzero residual accurately. Remove this objective
+  from the relative-accuracy family; the
   magnitude leg that carries weight on the PEC-short is the sigma leg, and the eps legs on the
-  PEC-short are the complex ones. A measured PEC-short |S11|² eps-gradient that *passes* the
-  floor is a finding to explain, not a bonus.
+  PEC-short are the complex ones. Historical artifacts retain their original adjudication.
 
 ### (b) Reference-plane invariance and rotation — contract 3(b)
 
@@ -530,3 +532,72 @@ Consumers to re-point on success:
 `tests/oracle/test_waveguide_chain_battery_v18_close.py` (three live tests),
 `tests/oracle/test_waveguide_chain_battery_guide_cell_aperture.py` and
 `tests/fixtures/waveguide_chain_battery/README.md`.
+
+
+## 2026-09-08 amendment: admissible eps stencil (prediction before re-measurement)
+
+PI-approved redesign on `feat/931-chain-adfd`, based on `0815260c`. This section
+supersedes the eps stencil and lossless magnitude expectation in §5(a), including
+later notes' treatment of that magnitude leg. No re-measurement is used to set it.
+
+**Old design and defect.** The central eps pair at theta0 = 0, h = 0.05 evaluated
+vacuum at eps_r = 0.95. With dt fixed at 0.99 of the eps_r = 1 Courant limit,
+the ratio is 0.99 / sqrt(0.95) > 1; that mandatory stencil cannot run admissibly.
+An uninterpretable comparison does not make this an acceptable configuration.
+
+**Declared scope, separately from stability.** This battery chooses the
+nondispersive material family eps_r >= 1 (and sigma >= 0), throughout the
+assembled array. This is a test scope decision, not a consequence of passivity:
+a passive dispersive plasma can have real permittivity below one. For the vacuum
+window the independent numerical restriction at the fixed dt is
+1 + theta > 0.99^2, or theta > -0.0199 (strictly inside the Courant limit).
+For historical minus probes, the analytic ratios at h = 0.05, 0.02, 0.0199,
+0.01 are respectively 1.015718569, 1.000051019, 1.000000000, 0.994987437.
+The last probe is numerically inside but outside this battery's material family;
+equality at h = 0.0199 is not strict numerical admissibility.
+
+**Replacement.** Every eps leg, including the slab, will use
+`g_FD = (-3 f0 + 4 f_h - f_2h) / (2 h)`, theta0 = 0, h = 0.05, in scoped x64.
+This is second order, O(h^2), so the relative gate stays 0.05 without re-derivation.
+There are two perturbed evaluations, as with the old central pair; f0 is the
+existing x64 unperturbed forward-identity reference and will be reused. The slab
+also uses this stencil for one consistent implementation and material-domain
+policy. Sigma keeps its admissible central pair at 0.05 +/- 0.005 S/m.
+No fixture geometry, theta0, h, Courant factor, dt, precision rule or gate changes.
+
+**Validity and reporting.** Before any AD/FD solve, every arm (including theta0)
+will be checked on the full assembled arrays, including vacuum outside the
+window, CPML and wall rows. This is a conservative uniform-grid, mu_r = 1
+Courant certificate; checking inactive rows cannot hide a faster live region.
+Both material bounds and the global ratio must pass. Each arm's theta, minimum
+eps_r, minimum sigma and global Courant ratio will be recorded. An invalid arm
+will raise a configuration error with these values and block measurement and
+assembly/replay; it will never become `not_interpretable`, report-only, or skip.
+Nonfinite solved S matrices/objectives also block. Missing/stale stencil records
+cannot be assembled as this amendment. Historical schema 1--3 artifacts keep
+their historical replay; this measurement uses schema 4.
+
+The ULP floor remains 1e4 and still skips with its span printed, never passes.
+For the forward stencil its span is the absolute weighted numerator divided by
+`3 ulp(f0) + 4 ulp(f_h) + ulp(f_2h)` in the loss dtype, using absolute spacings.
+This accounts for cancellation and coefficient amplification; the floor and
+relative gate are not widened. The central-pair calculation remains unchanged.
+
+**Coverage and prediction.** PEC-short eps will contain exactly Re S11 and Im S11
+on both lanes. Lossless |S11|^2 is removed, including the prospective plane-shift
+gradient family; no new null diagnostic is claimed. PEC-short sigma |S11|^2 and
+all four slab eps objectives remain. The thru is a build-time vacuum control
+using the PEC-short window coordinates; it gains no AD accuracy leg. All three DUTs' declared eps arms are
+predicted to have global min eps_r = 1 and ratio 0.99 at every rung (vacuum
+outside the window controls it). The retained eps comparisons are predicted to
+be finite and, when ULP-resolved, to meet the existing 0.05 gate. Their actual
+accuracy is for the PI's post-commit run to adjudicate, not a local smoke result.
+
+**Falsifiers.** Build-time tests must reject the old vacuum minus arm, a
+numerically stable eps_r < 1 arm, a boundary-ratio arm, and a bad material region
+outside the theta window; an injected invalid arm must prevent the first solve.
+A quadratic must differentiate exactly and a cubic's error must fall by four
+when h halves. Missing/invalid mandatory records must block assembly. Any
+nonfinite retained leg or resolved relative error > 0.05 in the re-measurement
+falsifies the predicted usable comparator/accuracy; stop and diagnose without
+widening a gate. No VESSL run is authorized by this amendment's implementation.
