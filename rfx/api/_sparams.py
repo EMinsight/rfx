@@ -1452,15 +1452,19 @@ def _waveguide_s21_phase_residual(s_params, freqs, reference_planes, cfgs,
     return rms, meta
 
 
-def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
+def _warn_junction_probe_clearance(
+    grid, cfgs, device_sigma, ref_sigmas, freqs, *,
+    device_pec_edges=None, ref_pec_edges=None,
+):
     """Advisory: probe-plane clearance from a junction (pure NumPy, no FDTD).
 
     For each driven port, the junction is where the device materials differ
-    from that port's straight-guide reference. We reduce the PEC-folded
-    ``sigma`` difference over the two transverse axes to a 1-D profile along
-    the port normal axis, find the nearest differing cell to the port's probe
-    plane, and compare that clearance to evanescent decay lengths of the next
-    higher mode (TE20, cutoff ``fc2 = C0 / a``). ``alpha = 2*pi*sqrt(fc2^2 -
+    from that port's straight-guide reference. We reduce the ``sigma`` and
+    componentwise realized PEC edge differences over the two transverse axes
+    to a 1-D profile along the port normal axis, find the nearest difference
+    to the port's probe plane, and compare that clearance to evanescent decay
+    lengths of the next higher mode (TE20, cutoff ``fc2 = C0 / a``).
+    ``alpha = 2*pi*sqrt(fc2^2 -
     f^2)/C0`` is evaluated at the band-CENTRE frequency — the validated
     far-port campaign sized its arms in mid-band decay lengths, and a band-max
     evaluation diverges (L -> inf) as the band edge approaches ``fc2``, which
@@ -1472,6 +1476,7 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
     ``warnings.warn`` per under-clearance port; does not raise.
     """
     import warnings
+    from rfx.api._preflight import PreflightWarning
 
     axis_idx = {"x": 0, "y": 1, "z": 2}
     dev = np.asarray(device_sigma)
@@ -1488,6 +1493,19 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
         ax = axis_idx[cfg.normal_axis]
         other_axes = tuple(j for j in range(3) if j != ax)
         diff_profile = np.any(np.asarray(ref_sigmas[i]) != dev, axis=other_axes)
+        # #931 moved PEC out of sigma into the solver's realized E edges.
+        # Reading sigma alone therefore sees identical vacuum in a PEC
+        # junction and its straight references. Compare each component:
+        # unioning the three masks first would hide differently oriented
+        # sheets that occupy the same node plane.
+        ref_edges = None if ref_pec_edges is None else ref_pec_edges[i]
+        if device_pec_edges is not None or ref_edges is not None:
+            for component in range(3):
+                dev_edge = (False if device_pec_edges is None else
+                            np.asarray(device_pec_edges[component], dtype=bool))
+                ref_edge = (False if ref_edges is None else
+                            np.asarray(ref_edges[component], dtype=bool))
+                diff_profile |= np.any(dev_edge != ref_edge, axis=other_axes)
         differing = np.nonzero(diff_profile)[0]
         if differing.size == 0:
             continue
@@ -1500,7 +1518,7 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
         minimum_m = 3.0 / alpha       # validated-envelope floor (fires below)
         recommended_m = 5.0 / alpha   # recommendation in the message
         if clearance_m < minimum_m:
-            warnings.warn(
+            warnings.warn(PreflightWarning(
                 f"port_reference_sims: port index {i} ({cfg.normal_axis}-normal) "
                 f"probe plane is only {clearance_m * 1e3:.1f} mm from the "
                 f"junction — below {minimum_m * 1e3:.1f} mm (3 mid-band "
@@ -1510,7 +1528,9 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
                 f"port-to-junction clearance left residual max|S|~3.9 in the "
                 f"2026-07-06 verification (necessary-but-not-sufficient) — move "
                 f"the probe plane farther from the junction.",
-                UserWarning,
+                code="port_junction_probe_clearance",
+                loc=f"port:{i}", source="_warn_junction_probe_clearance",
+            ),
                 stacklevel=2,
             )
 
@@ -2998,6 +3018,9 @@ class _SparamMixin:
             _wg_pec_edge_masks = _rpem(
                 pec_mask_wg, sheets=_wg_pec_sheets, wires=_wg_pec_wires,
                 periodic=self._periodic_flags())
+        # The junction geometry census also needs these edges when Kottke
+        # below encodes PEC in inverse permittivity and clears solver masks.
+        _wg_geometry_pec_edges = _wg_pec_edge_masks
         # #677: node-thin sheet ctx for the DEVICE runs of this lane; the
         # edge exclusion uses the same realized edges so sheet and PEC
         # never contend for one edge.  The vacuum REFERENCE runs never
@@ -3035,9 +3058,9 @@ class _SparamMixin:
 
         # Per-port straight-guide reference materials for interior-PEC
         # junctions. Each reference sim is a geometry carrier: assemble its
-        # materials on a grid that must match the device grid, then fold its
-        # interior PEC into sigma IDENTICALLY to the device path above (only
-        # the plain path — no subpixel/conformal handling for references).
+        # materials on a grid that must match the device grid, and realize
+        # its PEC edges identically to the device path above (only the
+        # plain path — no subpixel/conformal handling for references).
         ref_materials_per_port = None
         ref_pec_edge_masks_per_port = None
         if port_reference_sims is not None:
@@ -3360,6 +3383,8 @@ class _SparamMixin:
             _warn_junction_probe_clearance(
                 grid, cfgs, materials.sigma,
                 [m.sigma for m in ref_materials_per_port], freqs,
+                device_pec_edges=_wg_geometry_pec_edges,
+                ref_pec_edges=ref_pec_edge_masks_per_port,
             )
             _warn_junction_cpml_thickness(
                 grid, cfgs, freqs, self._cpml_layers,
