@@ -41,7 +41,7 @@ run: |-
   git -C "$WORK" status --short | head -5 || true
   cd "$WORK"
   "$PY" -m pip uninstall -y -q jax-cuda12-plugin jax-cuda12-pjrt 2>/dev/null || true
-  "$PY" -m pip install -q "jax[cpu]==0.6.2" "numpy<2" "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7" pytest pytest-xdist
+  "$PY" -m pip install -q "jax[cpu]==0.6.2" "numpy<2" "scipy>=1.11" "h5py>=3.8" "matplotlib>=3.7" pytest pytest-xdist pytest-timeout
   export PYTHONPATH="$WORK"
   export MPLBACKEND=Agg
   "$PY" -c "import jax, rfx; print('probe ok', jax.__version__, jax.devices(), rfx.__version__)"
@@ -50,9 +50,21 @@ run: |-
   echo "$SHA" > "$OUT/sha.txt"
   echo "$OUT" > /root/workspace/claude-workspace/rfx/runs/issue931-slowlane-$RFX_LABEL.latest
   set +e
+  # TWO steps, because 7 of the 205 are `highmem` at 3-24 GB RSS each and
+  # pyproject's own marker doc says they "run serially in the dedicated
+  # weekly slow-tests-highmem job". Running them 8-wide inside 128Gi is what
+  # made run 369367259366 restart three times in two hours.
   "$PY" -m pytest -q -n 8 -p no:cacheprovider --no-header -rfE \
-    -m "(slow or slow_physics) and not gpu" \
+    -m "(slow or slow_physics) and not gpu and not highmem" \
+    --timeout=1800 --timeout-method=thread \
     --junitxml="$OUT/junit.xml" > "$OUT/pytest.log" 2>&1
+  rc_par=$?
+  "$PY" -m pytest -q -p no:cacheprovider --no-header -rfE \
+    -m "(slow or slow_physics) and not gpu and highmem" \
+    --timeout=3600 --timeout-method=thread \
+    --junitxml="$OUT/junit_highmem.xml" >> "$OUT/pytest.log" 2>&1
+  rc_hi=$?
+  [ "$rc_par" -eq 0 ] && [ "$rc_hi" -eq 0 ]
   rc=$?
   set -e
   echo "$rc" > "$OUT/pytest.rc"
