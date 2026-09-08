@@ -134,7 +134,9 @@ def _build_sim(
         # "short". That slot, not the lane, was the 0.9670 this test read
         # after the redraw (adjudicated 2026-09-07 on cv11's identical
         # case: scripts/diagnostics/pec_short_lane_ab.py).
-        grid = sim._build_grid()
+        # Finalize before placing a body from node coordinates: an ordinary
+        # preview is invalidated by add(), and the new feature can refine it.
+        grid = sim.freeze_mesh()
         d = float(grid.dx)
         k_lo = int(round(pec_short_x / d))
         x_lo, x_hi = k_lo * d, (k_lo + SHORT_CELLS) * d

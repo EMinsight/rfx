@@ -126,6 +126,18 @@ at 3935 µm however exactly `h_sub` divides (measured 2026-09-07 on the public
 materials-geometry example, which stated the shorthand and demonstrated the failure it
 warns about). Say the plane in cells (`Z_GND = 20 * DX`) and the question does not arise.
 
+**Mesh lifetime during construction (2026-09-08).** A grid preview is provisional
+when automatic resolution is active: adding geometry can change its spacing and
+profiles. Before placing geometry from a resolved grid, explicitly finalize it
+with `grid = sim.freeze_mesh()`, after adding the geometry/materials that must
+drive resolution. Spacing, profiles and extent then stay fixed through subsequent
+additions. Those additions still face the same sub-cell and realization refusals;
+freezing is not a substitute for resolving a feature. Use a new Simulation to
+remesh. Explicit `dx=` and fixed profiles from the outset remain valid. Read
+physical node coordinates on NU grids, and register ports/boundaries before
+retaining array indices since they can change padding. Ordinary grid reads and
+preflight remain previews; they must not silently freeze automatic resolution.
+
 A lossy (`surface_impedance_f0`) sheet uses the SAME footprint and the SAME edge set; the
 #677 G4 identity ("f0 toggles loss, never geometry") is then true by construction, not by
 a test that compares two rules.

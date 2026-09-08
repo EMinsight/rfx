@@ -2749,11 +2749,13 @@ class _ExecuteMixin:
         step count comes from a throwaway grid) and ``None`` for lanes that
         build-and-reuse a grid (the caller resolves it there).
         """
-        is_nonuniform = (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        )
+        # Constructor checks cover explicit profiles only. Geometry can make
+        # auto mesh non-uniform later, so validate the declared solver against
+        # the completed mesh before ANY Yee lane (including distributed) wins
+        # dispatch. This is execution legality, independent of preflight.
+        if self._solver == "adi":
+            self._require_uniform_mesh("solver='adi'")
+        is_nonuniform = self._uses_nonuniform_mesh
 
         def _reject_lane_precision(lane: str) -> None:
             # Issue #630 follow-up: field_dtype is threaded ONLY on the

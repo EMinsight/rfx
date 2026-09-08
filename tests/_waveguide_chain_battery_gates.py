@@ -779,11 +779,15 @@ def recompute_verdicts(fx: dict) -> dict:
     """Every gate of the pre-declaration, recomputed from the stored numbers.
 
     Returns ``{gate_key: verdict}`` with verdict in
-    ``{"pass", "fail", "report_only", "skipped", "not_interpretable"}``. The
+    ``{"pass", "fail", "report_only", "skipped", "not_interpretable", "owed"}``. The
     driver stores this dict under ``verdicts``; the replay test recomputes it
     with this same function and compares.
     """
     v: dict[str, str] = {}
+    # Schema 4 retains the already-pinned battery program. An absent pin is
+    # unfinished adjudication, not permission to demote a discriminator to a
+    # report. Preserve the report-first semantics of historical artifacts.
+    missing_pin = "owed" if fx.get("schema_version", 1) >= 4 else "report_only"
     cells = {_cell_key(c): c for c in fx["cells"]}
 
     # settling (§2.5) per cell/drive, on the claims-bearing record
@@ -876,7 +880,7 @@ def recompute_verdicts(fx: dict) -> dict:
             if g.get("skipped_under_ulp_floor"):
                 v[gk] = "skipped"
             elif g.get("pinned_gate") is None:
-                v[gk] = "report_only"
+                v[gk] = missing_pin
             else:
                 v[gk] = "pass" if g["rel_change"] <= g["pinned_gate"] else "fail"
     refute = fx["plane_shift"].get("cheap_refute")
@@ -885,6 +889,8 @@ def recompute_verdicts(fx: dict) -> dict:
         v["cheap_refute_flip_shift_sign"] = (
             "pass" if refute["resid_yee_min_over_entries"] > WRONG_SIGN_MIN_DEG
             and not refute["rotation_gate_would_pass"] else "fail")
+    elif fx.get("schema_version", 1) >= 4:
+        v["cheap_refute_flip_shift_sign"] = "owed"
 
     # ladder (§5(c))
     for key, lad in fx["ladder"].items():
@@ -892,14 +898,14 @@ def recompute_verdicts(fx: dict) -> dict:
         pin = lad.get("pinned_richardson_gate")
         if "richardson" in lad:
             if pin is None:
-                v[f"ladder_richardson|{key}"] = "report_only"
+                v[f"ladder_richardson|{key}"] = missing_pin
             else:
                 pair = lad.get("pinned_richardson_pair", "mid-fine")
                 v[f"ladder_richardson|{key}"] = (
                     "pass" if lad["richardson"][pair]["max_abs_diff"] <= pin else "fail")
         pin_m = lad.get("pinned_monotone_fraction_min")
         if pin_m is None:
-            v[f"ladder_monotone|{key}"] = "report_only"
+            v[f"ladder_monotone|{key}"] = missing_pin
         else:
             v[f"ladder_monotone|{key}"] = (
                 "pass" if lad["monotone_fraction_of_bins"] >= pin_m else "fail")

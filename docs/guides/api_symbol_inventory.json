@@ -2672,6 +2672,7 @@
       "rlc_values_override",
       "_removed_kwargs"
     ],
+    "freeze_mesh": [],
     "mesh_intelligence_report": [
       "n_steps",
       "checkpoint_every",
