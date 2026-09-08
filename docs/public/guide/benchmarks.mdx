@@ -107,30 +107,46 @@ thirds-rule recipe (`scripts/diagnostics/patch_tutorial_openems.py`; f_res
 full provenance in the fixture `meta` block) is locked by
 `tests/crossval/test_patch_canonical_farfield_e4.py`. Those reference numbers are
 the 32 mm feed-axis mode, and the rfx side gated against them is that same design
-mode — the upper ring-down mode, 2.6954 GHz — not the 40 mm cross mode.
+mode — the upper ring-down mode, 2.5070 GHz on the #931 sheet-declared board —
+not the 40 mm cross mode.
 
-{/* constants: tests/crossval/test_patch_canonical_farfield_e4.py:134,140,141
-     (D_ABS_TOL_DB, F_RES_REL_LO, F_RES_REL_HI) — cite the names, the line
-     numbers have gone stale before; measured values from the same file's
-     docstring and constant comments */}
+{/* constants: tests/crossval/test_patch_canonical_farfield_e4.py, by NAME —
+     D_ABS_TOL_DB, PEAK_ANGLE_TOL_DEG, F_RES_REL_LO, F_RES_REL_HI,
+     SETTLING_BAR_DB; line numbers have gone stale before. Measured values
+     re-read 2026-09-07 from the #931 re-derivation record
+     tests/fixtures/patch_canonical_farfield_e4/canonical_farfield_e4_measured_369367259302.json
+     and from that test file's own constant comments. */}
 
 | Gate | Constant | Measured |
 |---|---|---|
-| broadside directivity | `D_ABS_TOL_DB = 1.0` | 0.60 dB at the design-mode bin (7.39 vs 6.79 dBi) |
-| E-/H-plane beam peaks | `PEAK_ANGLE_TOL_DEG = 15.0` from broadside | 0° / −3° (openEMS 0° / 0°) |
-| resonance at dx = 2 mm | `F_RES_REL_LO = +0.06`, `F_RES_REL_HI = +0.16` — a HIGH band, sign locked | +11.3% |
-| ring-down settling | `SETTLING_BAR_DB = -40.0`, asserted before any gated number | the `num_periods=90` demo of this fixture reads −36.5 dB, so the test runs 110 |
+| broadside directivity | `D_ABS_TOL_DB = 1.0` | 0.0659 dB at the design-mode bin (6.7241 vs 6.79 dBi) |
+| E-/H-plane beam peaks | `PEAK_ANGLE_TOL_DEG = 15.0` from broadside | −1° / −4° (openEMS 0° / 0°) |
+| resonance at dx = 2 mm | `F_RES_REL_LO = -0.02`, `F_RES_REL_HI = +0.09` — the band straddles zero and is **not** sign locked | +3.51% |
+| ring-down settling | `SETTLING_BAR_DB = -40.0`, asserted before any gated number | −42.9 dB at the `num_periods = 110` the test runs |
+
+Every measured value in that table comes from the sheet-declared board of VESSL
+369367259302. The pre-#931 board read 0.60 dB, 0° / −3°, and `[+0.06, +0.16]`
+around +11.3%. Its `num_periods = 90` demo settled to −36.5 dB, just under the
+bar, which is why the test runs 110 periods; that 90-period demo has not been
+re-run on the sheet board, so −36.5 dB stays a pre-#931 figure.
 
 The frequency band is a discretization-bias regression lock, not an accuracy
 claim. It is pinned against the design mode — the 32 mm feed-axis mode, not the
-40 mm cross mode at 2.2147 GHz (#693, 2026-08-27; #812).
+40 mm cross mode, which reads 2.0346 GHz on this board (#693, 2026-08-27; #812;
+#931).
 
-The sign belongs to this fixture's conductor realization and mesh, not to a
-general "coarse grid reads low" rule. Before 2.0 the same geometry could be run
-under two different realizations of a one-cell PEC box, and the two disagreed by
-about one cell of substrate height; that choice no longer exists — a conductor
-is a sheet or a volume by declaration, and this fixture's ground and patch are
-foil, hence sheets.
+The band no longer carries a sign, and that is a change of kind rather than a
+retune. `[+0.06, +0.16]` excluded zero, so it asserted "rfx reads high here" as
+part of the characterization; `[-0.02, +0.09]` contains zero and asserts only
+that the coarse-dx offset stays inside the measured +3.51% ± 5 percentage
+points, rounded outward to whole percent — the same rule that shaped the old
+band around +11.3%. What moved is the conductor realization, not the mesh.
+Before 2.0 the same geometry could be run under two different realizations of a
+one-cell PEC box, which disagreed by about one cell of substrate height, and
+this fixture's ground was the realization whose own cell sat inside the modelled
+cavity as vacuum. That choice no longer exists — a conductor is a sheet or a
+volume by declaration, this fixture's ground and patch are foil and hence
+sheets, and the offset fell from +11.3% to +3.51%.
 {/* mechanism: the comment block above F_RES_REL_LO / F_RES_REL_HI in tests/crossval/test_patch_canonical_farfield_e4.py (cite the constant names; line numbers have gone stale before).
      validation/crossval/manifest.json records the older cv05 agreement as
      "a documented z-under-res/staircase error cancellation".
