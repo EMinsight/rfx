@@ -1399,6 +1399,46 @@ def test_the_material_only_coaxial_lanes_refuse_a_sheet():
             sim._build_materials(grid)
 
 
+def test_a_lane_that_drops_volume_pec_does_not_recommend_drawing_a_volume():
+    """A refusal is a claim about what works, and this one was false.
+
+    ``_build_materials`` discards the cell mask by construction, so a declared
+    PEC VOLUME is as absent from the coaxial S-parameter lanes as a sheet is —
+    measured, a one-cell PEC Box through it returns eps_r == 1 and sigma == 0
+    everywhere. The #931 refusal nevertheless told the user to redraw the
+    sheet as a volume. The drop is the same for all three kinds, so the
+    refusal is now the same for all three, and the remedy names what this
+    path actually supports: a sigma fill, or a lane that realizes the
+    declaration.
+    """
+    from rfx import Box, Simulation
+
+    sim = Simulation(freq_max=15e9, domain=(12e-3, 12e-3, 12e-3), dx=1e-3,
+                     boundary="pec")
+    sim.add(Box((4e-3, 4e-3, 4e-3), (8e-3, 8e-3, 5e-3)), material="pec")
+    grid = sim._build_grid()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(NotImplementedError) as excinfo:
+            sim._build_materials(grid)
+    msg = str(excinfo.value)
+    assert "PEC volume" in msg, msg
+    assert "sigma fill" in msg or "sigma=" in msg, msg
+    assert "does NOT help" in msg, (
+        "the refusal must say that redrawing as a volume is not a remedy "
+        "on this path")
+
+    # a dielectric-only model still builds — the refusal is about CONDUCTORS
+    clean = Simulation(freq_max=15e9, domain=(12e-3, 12e-3, 12e-3), dx=1e-3,
+                       boundary="pec")
+    clean.add_material("sub", eps_r=4.0)
+    clean.add(Box((0, 0, 0), (12e-3, 12e-3, 4e-3)), material="sub")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        materials, _d, _l = clean._build_materials(clean._build_grid())
+    assert float(np.max(np.asarray(materials.eps_r))) == pytest.approx(4.0)
+
+
 def test_the_permittivity_viewer_draws_a_sheet_it_cannot_see_in_eps():
     """A sheet writes no eps, so an eps-only cross-section of a clad board
     is bare laminate. The viewer collects the sheets, picks the plane that

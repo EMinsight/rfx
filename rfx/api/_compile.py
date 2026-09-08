@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np  # noqa: F401  (used by moved method bodies)
 
+from rfx.core.jax_utils import is_tracer
 from rfx.grid import Grid, C0  # noqa: F401  (used by moved method bodies)
 from rfx.core.yee import MaterialArrays  # noqa: F401
 from rfx.geometry.csg import Box, _grid_coords
@@ -592,21 +593,48 @@ class _CompileMixin:
         declared PEC SHEET or WIRE has no material to fall back on: it
         would simply not exist in the run.  Refuse it here rather than
         let the lane report an S-matrix for geometry it did not solve.
+
+        A declared PEC VOLUME is dropped by the SAME construction — the
+        cell mask is the thing this helper discards — so it is refused in
+        the same breath.  The refusal used to name "redraw it as a
+        volume" as the remedy for a sheet, which on this path buys the
+        user nothing: measured, a one-cell PEC Box through here returns
+        eps_r == 1 and sigma == 0 everywhere, i.e. vacuum.  The remedies
+        that actually work are a sigma FILL (what the coax stamp does for
+        its own shell and pin) or a lane that realizes the declaration.
         """
         _bm_sheets: list = []
         _bm_wires: list = []
-        materials, debye_spec, lorentz_spec, _, _, _, _ = self._assemble_materials(
+        materials, debye_spec, lorentz_spec, _bm_pec, _, _, _ = self._assemble_materials(
             grid, pec_sheets=_bm_sheets, pec_wires=_bm_wires)
-        if _bm_sheets or _bm_wires:
+        _bm_volume = (_bm_pec is not None
+                      and not is_tracer(_bm_pec)
+                      and bool(jnp.any(_bm_pec)))
+        if _bm_sheets or _bm_wires or _bm_volume:
+            _declared = []
+            if _bm_sheets:
+                _declared.append(f"{len(_bm_sheets)} PEC sheet(s)")
+            if _bm_wires:
+                _declared.append(f"{len(_bm_wires)} sub-cell wire(s)")
+            if _bm_volume:
+                _declared.append(
+                    f"a PEC volume of {int(jnp.sum(_bm_pec))} cell(s)")
             raise NotImplementedError(
                 "the coaxial S-parameter lanes (compute_coaxial_s_matrix, "
                 "compute_coaxial_line_reflection, compute_coaxial_two_port) "
-                "do not realize PEC sheets or sub-cell wires (#931): they "
-                "step from material arrays only and a sheet owns no cell, "
-                f"so the {len(_bm_sheets)} declared sheet(s) and "
-                f"{len(_bm_wires)} wire(s) would be absent from the solve. "
-                "Draw the conductor as a volume (a Box at least one cell "
-                "thick) or use run() / forward().")
+                "do not realize declared PEC geometry of ANY kind (#931): "
+                "they step from material arrays only, so the cell mask is "
+                "discarded and a sheet or a wire owns no cell to begin "
+                f"with. Declared here: {', '.join(_declared)} — all of it "
+                "would be absent from the solve. Redrawing a sheet as a "
+                "volume does NOT help on this path (a one-cell PEC Box "
+                "comes back as eps_r = 1, sigma = 0). Either model the "
+                "conductor the way this lane models its own coax shell and "
+                "pin — a sigma fill, stamp_coaxial_line() or "
+                "rasterize(..., sigma=1e7), which §1.8 fences out of the "
+                "ownership contract precisely because it is a material and "
+                "not an edge rule — or solve the model with run() / "
+                "forward(), which realize the declaration.")
         _, debye, lorentz = self._init_dispersion(
             materials, grid.dt, debye_spec, lorentz_spec)
         return materials, debye, lorentz
