@@ -395,6 +395,56 @@ def test_soft_path_ors_sheet_masks_in_statically():
                                       np.asarray(getattr(soft, c)), err_msg=c)
 
 
+def test_a_binary_zero_occupancy_override_keeps_the_ports_edge_clearing():
+    """§1.6 through the override ENTRY POINT, not just the operator.
+
+    ``pec_occupancy_override=zeros`` has to be the hard path exactly. It was
+    not: the soft lane rebuilt its static sheet/wire masks from the original
+    declarations, while the masks it had been handed were already port-cleared
+    (§1.9 — a port releases the one component it drives, at its own cells). A
+    50 ohm Ex port standing on a PEC sheet therefore read a False Ex entry in
+    the masks passed in and a True one in the reconstruction, so the override
+    re-shorted the port. Measured on a 12 mm board at dx = 2 mm, 60 steps: an
+    off-sheet Ez probe moved 5.7245574 -> 12.5340872 when the all-zero
+    override was added.
+
+    Falsifier: drop the intersection in ``rfx/simulation.py`` and the two
+    ``forward()`` calls below stop agreeing while the port's own Ex probe
+    stays at zero either way — which is why the off-sheet probe is the one
+    that carries the claim.
+    """
+    import jax.numpy as _jnp
+    from rfx import Box, Simulation
+
+    dx = 2e-3
+    port = (6e-3, 6e-3, 6e-3)
+
+    def _build():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sim = Simulation(freq_max=15e9, domain=(12e-3, 12e-3, 12e-3),
+                             dx=dx, boundary="pec")
+            sim.add(Box((2e-3, 2e-3, 6e-3), (10e-3, 10e-3, 6e-3)),
+                    material="pec")
+            sim.add_port(port, "ex", impedance=50.0)
+            sim.add_probe(position=(6e-3, 6e-3, 8e-3), component="ez")
+        return sim
+
+    grid = _build()._build_grid()
+    zeros = _jnp.zeros(grid.shape, dtype=_jnp.float32)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        plain = _build().forward(n_steps=60)
+        over = _build().forward(n_steps=60, pec_occupancy_override=zeros)
+
+    a = np.asarray(plain.time_series)[:, 0]
+    b = np.asarray(over.time_series)[:, 0]
+    assert float(np.max(np.abs(a))) > 0, "the control read zero — nothing ran"
+    np.testing.assert_array_equal(
+        a, b, err_msg="a binary-zero pec_occupancy_override is not the hard "
+                      "path: the port's edge clearing was undone")
+
+
 def test_soft_occupancy_is_differentiable_and_noisy_or():
     import jax
     from rfx.boundaries.pec import apply_pec_occupancy

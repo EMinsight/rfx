@@ -1211,10 +1211,17 @@ def _build_nu_scan(
             pec_mask, sheets=pec_sheets, wires=pec_wires)
     use_pec_edges = pec_edge_masks is not None
     use_pec_occupancy = pec_occupancy is not None
+    # Same as the uniform lane (§1.6/§1.9): the static sheet/wire masks are
+    # intersected with the masks handed in, so a port that cleared its own
+    # edge before the run is not put back inside the conductor by a
+    # re-realization from the declarations.
     pec_static_edge_masks = None
     if use_pec_occupancy and (pec_sheets or pec_wires):
         pec_static_edge_masks = realized_pec_edge_masks(
             None, sheets=pec_sheets, wires=pec_wires)
+        if pec_edge_masks is not None:
+            pec_static_edge_masks = tuple(
+                s & m for s, m in zip(pec_static_edge_masks, pec_edge_masks))
 
     # #677 surface-impedance sheet: exponential-stepping A/B built once
     # from the FINAL scan materials; applied per step at tangential edges

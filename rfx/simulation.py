@@ -757,10 +757,25 @@ def _build_step_setup(
     use_pec_edges = pec_edge_masks is not None
     use_pec_occupancy = pec_occupancy is not None
     # The soft lane carries sheets/wires as STATIC edge masks (§1.6).
+    #
+    # Realized from the declarations, then INTERSECTED with the masks this
+    # call was handed.  Those arrived port-cleared (§1.9: a port releases
+    # the one component it drives, at its own cells), and re-realizing from
+    # the declaration alone puts the conductor back over the port — a
+    # 50 ohm Ex port standing on a PEC sheet reads a False Ex entry in the
+    # masks it was given and a True one in the reconstruction.  Measured
+    # through ``pec_occupancy_override=zeros``, which §1.6 requires to be
+    # the hard path exactly: an off-sheet Ez probe moved 5.7245574 ->
+    # 12.5340872 on a 12 mm board at dx = 2 mm.  The identity has to hold
+    # THROUGH the override entry point, so the clearing is carried here
+    # rather than recomputed.
     pec_static_edge_masks = None
     if use_pec_occupancy and (pec_sheets or pec_wires):
         pec_static_edge_masks = realized_pec_edge_masks(
             None, sheets=pec_sheets, wires=pec_wires, periodic=periodic)
+        if pec_edge_masks is not None:
+            pec_static_edge_masks = tuple(
+                s & m for s, m in zip(pec_static_edge_masks, pec_edge_masks))
     use_conformal = conformal_weights is not None
     # Stage 2: when aniso_inv_eps is set, the inverse-permittivity tensor
     # encodes both PEC behaviour and dielectric subpixel smoothing —
