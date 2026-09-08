@@ -206,11 +206,13 @@ One line section T needs present, for the carriers above:
    only removed the lossy `sigma = 1e10` block that used to damp it one cell
    from the window.
 
-   `tests/_waveguide_chain_battery_fixture.py` now carries
-   `eps_fd_step_courant_ratio` / `assert_eps_fd_step_is_courant_admissible`
-   (build-time, no solve; 1.015719 for pec_short, 0.498123 for slab). Nothing
-   calls the assert yet — the battery's tests live in `tests/oracle/`, which
-   section T does not own, and wiring it in makes a currently-green lane red.
+   Before the 2026-09-08 amendment, `tests/_waveguide_chain_battery_fixture.py`
+   carried `eps_fd_step_courant_ratio` / `assert_eps_fd_step_is_courant_admissible`
+   (build-time, no solve; WINDOW-interior ratios 1.015719 for pec_short,
+   0.498123 for slab). Nothing called that assert: section T did not own the
+   battery tests in `tests/oracle/`. These historical helpers have now been
+   replaced by the full-array per-arm certificate; the old window calculation
+   is explicitly named `eps_fd_minus_window_interior_courant_ratio`.
    Section T did NOT touch `THETA0_EPS` (0.0) or `FD_STEP_EPS` (0.05): moving
    either re-declares a measurement the battery's predeclaration fixes (a
    CENTRAL difference AT the shipped fixture). The three ways out, for whoever
@@ -220,11 +222,20 @@ One line section T needs present, for the carriers above:
       `eps_r = 1.0` exactly. Cheapest; costs the "AD is evaluated at the
       shipped fixture" property, which is the property the predeclaration
       names.
-   b. a one-sided (plus-arm) difference for that leg — keeps θ0, drops the
-      estimator from O(h²) to O(h), so the 0.05 relative gate must be
-      re-derived, not reused.
+   b. a second-order one-sided difference `(-3 f0 + 4 f_h - f_2h)/(2h)` —
+      keeps θ0 and O(h²), with two perturbed evaluations and the existing f0.
+      The 0.05 relative gate is retained without re-derivation. Calling all
+      one-sided differences first order was incorrect (corrected 2026-09-08).
    c. lower the fixture's Courant factor so `eps_r = 0.95` is admissible —
       correct and unaffordable: dt changes, and every recorded number in the
       battery changes with it.
 
-   Section T's reading is (a), stated as a preference and not applied.
+   PI decision 2026-09-08: (b), for all eps legs including the slab; see the
+   dated amendment in `waveguide_chain_battery_predeclaration.md`. Theta0 and
+   dt stay fixed. The old 0.498123 slab figure above was WINDOW-interior only,
+   not a global certificate: vacuum elsewhere sets the global ratio to 0.99
+   for the newly declared arms. The full-array certificate now gates every arm
+   and blocks invalid configurations before solving. Material eps_r >= 1 is
+   a declared test scope, not implied by passivity (dispersive plasma is a
+   counterexample); numerical stability separately requires theta > -0.0199
+   in the vacuum window at this dt.

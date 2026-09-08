@@ -137,13 +137,14 @@ OBJECTIVES = {
     "re_s11": ("complex", (0, 0)),
     "im_s11": ("complex", (0, 0)),
 }
-# Legs of §5(a): (dut, theta_kind) -> objectives. The PEC-short |S11|² under
-# a lossless eps θ is the pre-declared expected ULP-floor skip.
+# Current relative-accuracy family, amended 2026-09-08. The lossless
+# PEC-short eps magnitude is excluded: its continuum derivative is zero.
 AD_LEGS = {
     ("slab", "eps"): ("s11_mag2", "s21_mag2", "re_s21", "im_s21"),
     ("pec_short", "sigma"): ("s11_mag2",),
-    ("pec_short", "eps"): ("s11_mag2", "re_s11", "im_s11"),
+    ("pec_short", "eps"): ("re_s11", "im_s11"),
 }
+# Historical schema 1--3 replay ONLY; no prospective expected-skip/null leg.
 EXPECTED_ULP_SKIP = {("pec_short", "eps", "s11_mag2")}
 # v1.8 closing declaration (PI, 2026-09-05; docs/design_notes/20260905_v18_close_predeclaration.md):
 # contract criterion 1 (forward identity) and 3(a) (AD-vs-FD) are evaluated under x64 on the
@@ -505,6 +506,75 @@ def ad_fd_entry(*, g_ad: float, f_plus: float, f_minus: float, h: float, loss_dt
             "gate": AD_FD_REL_GATE, "verdict": verdict, "loss_dtype": str(np.dtype(loss_dtype))}
 
 
+def forward2_ad_fd_entry(*, g_ad: float, f0: float, f_plus: float,
+                         f_2h: float, h: float, loss_dtype) -> dict:
+    """Second-order forward FD; weighted ULP budget includes cancellation."""
+    values = np.asarray([f0, f_plus, f_2h], dtype=loss_dtype)
+    assert np.all(np.isfinite(values)) and np.isfinite(g_ad) and np.isfinite(h) and h > 0, (
+        f"FD configuration defect BLOCKED: nonfinite objective/gradient or invalid h: {values}, {g_ad}, {h}")
+    # Algebraically -3*f0 + 4*f_h - f_2h, evaluated as differences to avoid
+    # gratuitous cancellation of the common loss offset.
+    numerator = 4.0 * (float(values[1]) - float(values[0])) - (float(values[2]) - float(values[0]))
+    budget = float(np.dot([3.0, 4.0, 1.0], np.abs(np.spacing(values)).astype(float)))
+    span = abs(numerator) / max(budget, float(np.nextafter(0.0, 1.0)))
+    g_fd = numerator / (2.0 * h)
+    rel = abs(g_ad - g_fd) / max(abs(g_fd), 1e-12)
+    verdict = ("skipped_under_ulp_floor" if span < FD_ULP_FLOOR else
+               "pass" if rel <= AD_FD_REL_GATE else "fail")
+    return {"stencil": "forward2", "f0": float(f0), "f_plus": float(f_plus),
+            "f_2h": float(f_2h), "fd_ulp_span": span, "fd_ulp_budget": budget,
+            "ulp_floor": FD_ULP_FLOOR, "g_ad": float(g_ad), "g_fd": g_fd,
+            "rel": rel, "gate": AD_FD_REL_GATE, "verdict": verdict,
+            "loss_dtype": str(np.dtype(loss_dtype))}
+
+
+def ad_fd_from_leg(leg: dict) -> dict:
+    """Dispatch by declared stencil; no forward samples disguised as central arms."""
+    if leg.get("stencil", "central2") == "forward2":
+        return forward2_ad_fd_entry(g_ad=leg["g_ad"], f0=leg["f0"], f_plus=leg["f_plus"],
+                                    f_2h=leg["f_2h"], h=leg["h"], loss_dtype=np.dtype(leg["loss_dtype"]))
+    assert leg.get("stencil", "central2") == "central2", "FD configuration defect: unknown stencil"
+    return ad_fd_entry(g_ad=leg["g_ad"], f_plus=leg["f_plus"], f_minus=leg["f_minus"],
+                       h=leg["h"], loss_dtype=np.dtype(leg["loss_dtype"]))
+
+
+def ad_leg_key(leg: dict) -> tuple:
+    return tuple(leg[k] for k in ("dut", "lane", "theta_kind", "objective"))
+
+
+def required_ad_leg_keys() -> set:
+    return {(dut, LANE_LABELS[lane], kind, obj) for (dut, kind), objs in AD_LEGS.items()
+            for lane in F.LANES for obj in objs}
+
+
+def assert_ad_fd_records(legs: list[dict], *, expected_keys: set | None = None,
+                         rung: str | None = None) -> None:
+    """Schema 4 mandatory membership and configuration gate, before verdicts."""
+    expected = required_ad_leg_keys() if expected_keys is None else expected_keys
+    keys = [ad_leg_key(row) for row in legs]
+    assert len(keys) == len(set(keys)) and set(keys) == expected, (
+        f"FD configuration defect BLOCKED: mandatory legs missing={expected - set(keys)}, "
+        f"unexpected={set(keys) - expected}, duplicates={len(keys) - len(set(keys))}")
+    for leg in legs:
+        spec = F.fd_stencil(leg["theta_kind"])
+        assert all(leg[k] == spec[k] for k in ("stencil", "theta0", "h")), (
+            "FD configuration defect BLOCKED: stale stencil/theta0/h")
+        validity = leg["fd_validity"]
+        assert all(validity[k] == leg[k] for k in ("dut", "theta_kind", "stencil", "theta0", "h"))
+        F.assert_fd_validity(validity)
+        assert leg["dx_m"] == RUNG_DX[leg["rung"]]
+        assert all(a["dx_m"] == leg["dx_m"] for a in validity["arms"])
+        declared_dt = 0.99 * leg["dx_m"] / (F.C0 * math.sqrt(3.0))
+        assert all(math.isclose(a["dt_s"], declared_dt, rel_tol=1e-12) for a in validity["arms"]), (
+            "FD configuration defect BLOCKED: timestep differs from fixed 0.99 vacuum Courant dt")
+        if rung is not None:
+            assert leg["rung"] == rung, "FD configuration defect BLOCKED: stale rung"
+        assert leg["loss_dtype"] == "float64" and leg["x64_context"] is True
+        fields = ("g_ad", "f0", "f_plus", "f_2h") if leg["stencil"] == "forward2" else ("g_ad", "f_plus", "f_minus")
+        assert all(np.isfinite(leg[k]) for k in fields), "FD configuration defect BLOCKED: nonfinite result"
+        assert ad_fd_from_leg(leg)["verdict"] == leg["verdict"], "FD configuration defect BLOCKED: stale verdict"
+
+
 def zero_derivative_entry(*, g_ad_x64: float, g_fd: float, fd_ulp_span: float) -> dict:
     """Gate for a pre-declared zero-derivative leg whose FD still resolves (span >= floor).
 
@@ -758,10 +828,11 @@ def recompute_verdicts(fx: dict) -> dict:
                 ("pass" if referee_slab_phase_pass(r) else "fail") if gated else "report_only")
 
     # AD vs FD (§5(a)) and the forward identity (criterion 1)
+    if fx.get("schema_version", 1) >= 4:
+        assert_ad_fd_records(fx["ad_vs_fd"])
     for leg in fx["ad_vs_fd"]:
         key = f"{leg['dut']}|{leg['lane']}|{leg['theta_kind']}|{leg['objective']}"
-        e = ad_fd_entry(g_ad=leg["g_ad"], f_plus=leg["f_plus"], f_minus=leg["f_minus"],
-                        h=leg["h"], loss_dtype=np.dtype(leg["loss_dtype"]))
+        e = ad_fd_from_leg(leg)
         verdict = e["verdict"]
         # v1.8 closing declaration (schema_version 3): on a lane in X64_DECLARED_LANES the
         # stored ``g_ad`` / ``forward_identity`` are the x64 readings and ``primary_precision``
@@ -777,7 +848,7 @@ def recompute_verdicts(fx: dict) -> dict:
         declared = fx.get("schema_version", 1) >= 3 and leg["lane"] in X64_DECLARED_LANES
         if declared and primary != "x64":
             verdict = "not_interpretable"
-        elif (declared and primary == "x64"
+        elif (fx.get("schema_version", 1) <= 3 and declared and primary == "x64"
               and (leg["dut"], leg["theta_kind"], leg["objective"]) in EXPECTED_ULP_SKIP
               and verdict != "skipped_under_ulp_floor"):
             # report_only only inside the pre-declared branch; a sign flip or a gradient
