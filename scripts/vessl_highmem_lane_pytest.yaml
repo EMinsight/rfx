@@ -54,8 +54,20 @@ run: |-
   # ONE pytest node id per job: serial inside by construction, isolated
   # across jobs, so a 24 GB high-water never shares a box with six siblings.
   echo "$RFX_TEST" | tee "$OUT/test.txt"
+  # -m highmem is REQUIRED, not decoration. pyproject's addopts carry
+  # `-m "not gpu and not slow and not slow_physics"`, and a node id does NOT
+  # override a marker filter: run 369367259434 exited 5 with "1 deselected"
+  # because the id it was given was filtered out by the default expression.
+  # Collect first, so "selected nothing" is a named error and not an opaque 5.
+  "$PY" -m pytest -q -p no:cacheprovider --no-header --collect-only \
+    -m highmem "$RFX_TEST" > "$OUT/collect.log" 2>&1
+  if ! grep -qE "^1 test collected" "$OUT/collect.log"; then
+    echo "FATAL: $RFX_TEST did not collect exactly one test under -m highmem"
+    cat "$OUT/collect.log"
+    exit 4
+  fi
   "$PY" -m pytest -q -p no:cacheprovider --no-header -rfE \
-    --timeout=3600 --timeout-method=thread \
+    -m highmem --timeout=3600 --timeout-method=thread \
     --junitxml="$OUT/junit.xml" "$RFX_TEST" > "$OUT/pytest.log" 2>&1
   rc=$?
   set -e
