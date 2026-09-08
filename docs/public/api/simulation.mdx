@@ -58,6 +58,7 @@ Key constructor arguments:
 | `preflight(strict=False)` | validate setup before a long run | returns a coded `PreflightReport`; use `.errors`, `.warnings`, `.infos`, `.by_code(...)`, or `.raise_for_failure()` for automation gates (only `.errors` gates; `.infos` are records, not problems) |
 | `mesh_intelligence_report(...)` | summarize configured grid, preflight issues, and AD memory estimates | useful for non-uniform and memory-constrained planning |
 | `plan_mesh(...)` | return a serializable `MeshPlan` for this configured simulation | wraps `mesh_intelligence_report()`, `preflight()`, and optional S-parameter preflight checks |
+| `freeze_mesh()` | finalize spacing, profiles and extent; return the selected grid | call before placing geometry from grid coordinates; later additions must resolve on this mesh. Construct a new simulation to remesh |
 | `run(...)` | advance the simulation | returns a `Result` object |
 | `forward(...)` | run the differentiable minimal-observable path | use for `jax.grad` / outer-`jax.jit` objectives; returns a `ForwardResult`, not the full `Result` |
 

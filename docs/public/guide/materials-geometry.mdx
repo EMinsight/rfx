@@ -387,6 +387,34 @@ If you want the contract's three kinds, declare them with `add()`,
 `add_thin_conductor()` or `PolylineWire`. Everything else is a different model
 with a different answer, and it is on you to say which one a number came from.
 
+### Finalize the mesh before placing geometry from its nodes
+
+Automatic mesh previews depend on the geometry registered so far. Reading a
+grid or running preflight does **not** finalize it: adding the body you placed
+from that grid can refine the mesh and move its faces off the new node lines.
+After registering mesh-driving geometry and materials, call
+`grid = sim.freeze_mesh()` before using grid coordinates to place conductors.
+This explicitly fixes the resolved spacing, profiles and extent. Later
+additions still face the normal #931 checks: a sub-cell volume is refused;
+freezing does not resolve a feature that the fixed mesh cannot represent.
+
+For example, with an empty uniform model:
+
+```python
+sim = Simulation(freq_max=10e9, domain=(0.03, 0.03, 0.03), boundary="pec")
+grid = sim.freeze_mesh()
+d = float(grid.dx)
+sim.add(Box((5*d, 5*d, 5*d), (9*d, 9*d, 6*d)), material="pec")
+```
+
+Use the actual node coordinates for a non-uniform grid; its scalar `dx` is
+only the boundary spacing. Register ports and boundaries before retaining
+array indices, since they can change padding. Physical node coordinates
+inside the domain stay fixed. Repeated `freeze_mesh()` calls preserve the
+mesh; construct a new simulation if you need a different mesh. Supplying
+explicit `dx=` and fixed profiles from the outset remains another way to
+place geometry on a stable mesh.
+
 ### Two worked contrasts
 
 **Foil is a sheet.** A 35 µm ground on a 0.787 mm RO4003C laminate, meshed at

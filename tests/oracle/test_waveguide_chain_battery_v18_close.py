@@ -49,6 +49,7 @@ from __future__ import annotations
 import json
 import math
 import warnings
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -56,6 +57,7 @@ import pytest
 
 from tests import _waveguide_chain_battery_fixture as F
 from tests import _waveguide_chain_battery_gates as G
+from tests import _waveguide_chain_battery_enforcement as E
 from tests._gate_policy import gate_from_envelope
 from tests.oracle import test_waveguide_chain_battery as RUN1
 from tests.oracle.test_waveguide_chain_battery import (
@@ -303,7 +305,7 @@ def fx() -> dict:
 @pytest.fixture(scope="module")
 def live_fx() -> dict:
     # A missing live reference is an ingest defect, not a reason to skip.
-    return json.loads(LIVE_FIXTURE.read_text())
+    return E.load_enforced_fixture()
 
 
 @pytest.fixture(scope="module")
@@ -843,9 +845,106 @@ def test_live_fixture_preserves_the_declared_measurement(live_fx):
     assert len(live_fx["ad_vs_fd"]) == 14
     verdicts = G.recompute_verdicts(live_fx)
     assert verdicts == live_fx["verdicts"]
-    assert len(verdicts) == 178
-    assert sum(v == "pass" for v in verdicts.values()) == 102
-    assert sum(v == "report_only" for v in verdicts.values()) == 76
+    authorized_removals = {
+        f"{gate}|pec_short|{lane}|eps{separator}s11_mag2"
+        for gate, separator in (("ad_vs_fd", "|"), ("forward_identity", "|"),
+                                ("gradient_invariance", ":"))
+        for lane in ("false", "flux")
+    }
+    retained = {k: v for k, v in ADJUDICATED_VERDICTS.items() if k not in authorized_removals}
+    assert verdicts == retained
+    assert len(verdicts) == 179  # 185 minus exactly six authorized lossless legs
+    assert sum(v == "pass" for v in verdicts.values()) == 131
+    assert sum(v == "report_only" for v in verdicts.values()) == 48
+
+
+_ENFORCEMENT = json.loads(E.ENFORCEMENT.read_text())
+
+
+def _enforcement_row(fixture, check):
+    row = fixture
+    for part in check["path"]:
+        row = row[part]
+    return row
+
+
+def test_retained_pins_are_recovered_without_widening(fx, live_fx):
+    """Independent pin derivation is an audit, never the replay gate source."""
+    raw = json.loads(LIVE_FIXTURE.read_text())
+    derived = G.pin_fixture(deepcopy(raw))
+    checks = _ENFORCEMENT["checks"]
+    expected_keys = {key for key, verdict in ADJUDICATED_VERDICTS.items()
+                     if verdict == "pass" and key.startswith(
+                         ("gradient_invariance|", "ladder_richardson|", "ladder_monotone|"))}
+    assert len(checks) == len(expected_keys) == 28
+    assert {check["key"] for check in checks} == expected_keys
+    for check in checks:
+        field = check["pin_field"]
+        assert _enforcement_row(raw, check)[field] is None
+        assert check["disposition"] == "restored_from_artifact"
+        assert check["pin"] == _enforcement_row(derived, check)[field]
+        assert check["pin"] == _enforcement_row(fx, check)[field]
+        assert check["pin"] == _enforcement_row(live_fx, check)[field]
+        row = _enforcement_row(raw, check)
+        measured = (row["rel_change"] if field == "pinned_gate" else
+                    row["richardson"]["mid-fine"]["max_abs_diff"]
+                    if field == "pinned_richardson_gate" else
+                    row["monotone_fraction_of_bins"])
+        assert check["measurement"] == measured
+
+
+@pytest.mark.parametrize("check", _ENFORCEMENT["checks"], ids=lambda c: c["key"])
+def test_retained_check_rejects_a_bad_measurement(live_fx, check):
+    changed = deepcopy(live_fx)
+    row = _enforcement_row(changed, check)
+    if check["pin_field"] == "pinned_gate":
+        row["rel_change"] = 1.0
+    elif check["pin_field"] == "pinned_richardson_gate":
+        row["richardson"]["mid-fine"]["max_abs_diff"] = 2 * check["pin"]
+    else:
+        row["monotone_fraction_of_bins"] = 0.0
+    assert G.recompute_verdicts(changed)[check["key"]] == "fail"
+
+
+@pytest.mark.parametrize("check", _ENFORCEMENT["checks"], ids=lambda c: c["key"])
+def test_retained_check_with_missing_pin_is_owed(live_fx, check):
+    changed = deepcopy(live_fx)
+    _enforcement_row(changed, check)[check["pin_field"]] = None
+    assert G.recompute_verdicts(changed)[check["key"]] == "owed"
+
+
+def test_unpinned_ingest_reports_the_whole_enforcement_debt():
+    verdicts = G.recompute_verdicts(json.loads(LIVE_FIXTURE.read_text()))
+    assert {k for k, v in verdicts.items() if v == "owed"} == {
+        c["key"] for c in _ENFORCEMENT["checks"]
+    } | {"cheap_refute_flip_shift_sign"}
+
+
+def test_shift_sign_falsifier_uses_the_measured_operator_and_has_a_control(live_fx):
+    control = E.replay_shift_sign_refute(live_fx, flip_sign=False)
+    refute = E.replay_shift_sign_refute(live_fx)
+    for case in control["per_case"]:
+        assert case["max_abs_diff_from_stored_shift"] <= LIVE_ABS_S_TOL
+    assert control["abs_s_still_invariant"]
+    assert refute["abs_s_still_invariant"]
+    stored = live_fx["plane_shift"]["cheap_refute"]
+    for case, expected in zip(refute["per_case"], stored["per_case"], strict=True):
+        assert (case["dut"], case["lane"]) == (expected["dut"], expected["lane"])
+        assert case["entries_measurable"] == expected["entries_measurable"]
+        for entry, residual in case["resid_yee_per_entry"].items():
+            if residual is None:
+                assert expected["resid_yee_per_entry"][entry] is None
+            else:
+                assert residual == pytest.approx(expected["resid_yee_per_entry"][entry])
+                assert residual > G.WRONG_SIGN_MIN_DEG
+    changed = deepcopy(live_fx)
+    key = "cheap_refute_flip_shift_sign"
+    changed["plane_shift"]["cheap_refute"] = refute
+    assert G.recompute_verdicts(changed)[key] == "pass"
+    changed["plane_shift"]["cheap_refute"] = control
+    assert G.recompute_verdicts(changed)[key] == "fail"
+    del changed["plane_shift"]["cheap_refute"]
+    assert G.recompute_verdicts(changed)[key] == "owed"
 
 
 def test_the_live_pin_is_the_committed_one():

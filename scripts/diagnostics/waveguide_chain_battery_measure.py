@@ -948,11 +948,15 @@ def assemble(args, out_dir: Path, prov: dict) -> Path:
          f"{len([k for k in planes if k != 'cheap_refute'])} plane-shift cases)")
     fails = {k: v for k, v in fx["verdicts"].items() if v == "fail"}
     ni = {k: v for k, v in fx["verdicts"].items() if v == "not_interpretable"}
-    _log(f"verdicts: {len(fx['verdicts'])} total, {len(fails)} fail, {len(ni)} not_interpretable")
+    owed = {k: v for k, v in fx["verdicts"].items() if v == "owed"}
+    _log(f"verdicts: {len(fx['verdicts'])} total, {len(fails)} fail, "
+         f"{len(ni)} not_interpretable, {len(owed)} owed")
     for k in sorted(fails):
         _log(f"  FAIL {k}")
     for k in sorted(ni):
         _log(f"  NOT INTERPRETABLE {k}")
+    for k in sorted(owed):
+        _log(f"  OWED {k}")
     return out
 
 

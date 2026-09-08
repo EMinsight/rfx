@@ -2686,6 +2686,15 @@ class Simulation(
             self._probes.append(_ProbeEntry(position=position, component=comp))
         return self
 
+    def _validate_declared_plane_coordinate(self, axis: str, coordinate: float) -> None:
+        """Validate a builder coordinate without resolving unfinished geometry."""
+        axis_idx = {"x": 0, "y": 1, "z": 2}[axis]
+        extent = self._declared_mesh["_domain"][axis_idx]
+        if coordinate < 0 or coordinate > extent:
+            raise ValueError(
+                f"coordinate {coordinate} m is outside the {axis}-domain [0, {extent}]"
+            )
+
     def add_dft_plane_probe(
         self,
         *,
@@ -2718,11 +2727,7 @@ class Simulation(
         if component not in ("ex", "ey", "ez", "hx", "hy", "hz"):
             raise ValueError(f"component must be a field name, got {component!r}")
 
-        axis_idx = {"x": 0, "y": 1, "z": 2}[axis]
-        if coordinate < 0 or coordinate > self._domain[axis_idx]:
-            raise ValueError(
-                f"coordinate {coordinate} m is outside the {axis}-domain [0, {self._domain[axis_idx]}]"
-            )
+        self._validate_declared_plane_coordinate(axis, coordinate)
         if freqs is None:
             if n_freqs <= 0:
                 raise ValueError(f"n_freqs must be positive, got {n_freqs}")
@@ -2786,12 +2791,7 @@ class Simulation(
         """
         if axis not in ("x", "y", "z"):
             raise ValueError(f"axis must be 'x', 'y', or 'z', got {axis!r}")
-        axis_idx = {"x": 0, "y": 1, "z": 2}[axis]
-        if coordinate < 0 or coordinate > self._domain[axis_idx]:
-            raise ValueError(
-                f"coordinate {coordinate} m is outside the {axis}-domain "
-                f"[0, {self._domain[axis_idx]}]"
-            )
+        self._validate_declared_plane_coordinate(axis, coordinate)
         if freqs is not None:
             freqs_arr = jnp.asarray(freqs)
         else:
@@ -4048,6 +4048,21 @@ class Simulation(
             recommendations=tuple(recommendations),
             source_preflight=scope.source_preflight,
         )
+
+    def freeze_mesh(self):
+        """Finalize mesh spacing/profiles and extent, returning the selected grid.
+
+        Call after adding mesh-driving materials/geometry and before placing
+        lattice-aligned conductors. Later geometry cannot refine this mesh;
+        unresolved features still raise under the normal conductor contract.
+        Repeated calls preserve the same mesh. Build a new Simulation to remesh.
+
+        Grid previews (including preflight) alone do not finalize the mesh.
+        Register boundary conditions and ports before retaining grid indices:
+        port registration may change padding, though physical node positions
+        in the domain stay fixed. Caller declarations remain available unchanged.
+        """
+        return self._freeze_mesh()
 
     def mesh_intelligence_report(
         self,

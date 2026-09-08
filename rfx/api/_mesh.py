@@ -26,6 +26,8 @@ class _MeshField:
         return sim._resolve_mesh()[self.name]
 
     def __set__(self, sim, value):
+        if "_frozen_mesh" in sim.__dict__:
+            raise ValueError("Mesh is frozen; construct a new Simulation to change mesh inputs.")
         sim.__dict__[self.name] = value
         sim.__dict__.pop("_mesh_resolution", None)
 
@@ -58,6 +60,8 @@ class _MeshMixin:
         No resolved value is written back into the declared mesh slots.
         """
         state = self.__dict__
+        if "_frozen_mesh" in state:
+            return state["_frozen_mesh"]
         names = ("_dx", "_domain", "_dx_profile", "_dy_profile", "_dz_profile")
         declared = self._declared_mesh
         geometry = state.get("_geometry", ())
@@ -107,6 +111,26 @@ class _MeshMixin:
         for message in config.warnings:
             warnings.warn(message, AutoMeshWarning, stacklevel=3)
         return resolved
+
+    def _freeze_mesh(self):
+        """Own a resolved snapshot for the public construction boundary."""
+        if "_frozen_mesh" not in self.__dict__:
+            grid = self._build_realized_grid()
+            frozen = dict(self._resolve_mesh())
+            frozen["_domain"] = tuple(frozen["_domain"])
+            # An empty automatic model has no planner result yet. Capture the
+            # grid's actual default spacing so adding its first body is safe.
+            if frozen["_dx"] is None:
+                frozen["_dx"] = float(grid.dx)
+            for name in ("_dx_profile", "_dy_profile", "_dz_profile"):
+                if frozen[name] is not None:
+                    profile = np.array(frozen[name], copy=True)
+                    profile.setflags(write=False)
+                    frozen[name] = profile
+            self.__dict__["_frozen_mesh"] = frozen
+        # Build from the owned snapshot so even the returned grid's metadata
+        # cannot retain caller-owned mutable domain/profile containers.
+        return self._build_realized_grid()
 
     @property
     def _uses_nonuniform_mesh(self):
