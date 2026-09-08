@@ -1290,13 +1290,6 @@
           "message": "4 conductor-Box design edge(s) sit off-lattice by more than 0.5% of their extent (worst 4 listed): thin_conductor[1] 'thin_conductor[1]' (sheet) x: extent 32mm, worst face residual 1mm (3.13% of the extent, df/f ~ 3.13%); thin_conductor[1] 'thin_conductor[1]' (sheet) y: extent 40mm, worst face residual 1mm (2.50% of the extent, df/f ~ 2.50%); thin_conductor[0] 'thin_conductor[0]' (sheet) x: extent 60mm, worst face residual 1mm (1.67% of the extent, df/f ~ 1.67%); thin_conductor[0] 'thin_conductor[0]' (sheet) y: extent 60mm, worst face residual 1mm (1.67% of the extent, df/f ~ 1.67%). OBSERVED: distance from each declared face to its nearest E-node on this run's own node coordinates; a PEC volume's face realizes on the nearest node plane and a sheet footprint on the nodes it covers (lattice ownership contract #931 \u00a71.1/\u00a71.3), so the realized extent can differ from the design by up to the printed residual, and a resonant dimension realized dL off detunes df/f ~ dL/L. COST (measured, #703): a uniform-mesh sweep rounded ONE substrate thickness by 8-10% across three 'convergence' points \u2014 three different boards solved under one name; the same campaign's board survived at dx=50um only because every patterned dimension happened to be an exact multiple of 50um. REMEDY: choose dx commensurate with the patterned dimensions, slide the lattice origin onto the worst face, or (non-uniform lane) place mesh nodes on the design edges. COVERAGE: examined 4 axis extent(s) on 2 conductor Box declaration(s) on the nonuniform lane; 2 sheet normal axis/axes reported by sheet_plane_realized instead; 0 non-Box conductor entr(y/ies) skipped (no analytic face coordinates). STALE IF: |face - nearest node| on the run's node coordinates does not reproduce the printed residuals.",
           "severity": "warning",
           "source": "_validate_cfg_off_lattice_design_edges"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "2 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: thin_conductor[0] 'thin_conductor[0]' normal z: declared mid-plane 35.29mm, realized node plane 29 at 35.29mm (offset +0.000 cell = 1.388e-08nm); thin_conductor[1] 'thin_conductor[1]' normal z: declared mid-plane 36.81mm, realized node plane 33 at 36.81mm (offset +0.000 cell = 1.388e-08nm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the nonuniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -1823,15 +1816,7 @@
           "realization": "PEC sheet on node plane z = 1250.00 um (2625 nodes, closed footprint, zero thickness, no cell; in-plane E zeroed on that plane, normal E live)"
         }
       },
-      "preflight": [
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "2 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: thin_conductor[1] 'thin_conductor[1]' normal z: declared mid-plane 2.25mm, realized node plane 12 at 2.25mm (offset +0.000 cell = 4.337e-10nm); thin_conductor[0] 'thin_conductor[0]' normal z: declared mid-plane 1.25mm, realized node plane 8 at 1.25mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
-        }
-      ]
+      "preflight": []
     },
     "examples/tutorials/ports_and_sparams_101.py::build_waveguide_ports::default": {
       "fidelity": {
@@ -2835,13 +2820,6 @@
           "message": "pec_faces={z_lo} creates an INFINITE PEC boundary AND the geometry contains finite PEC objects. For antennas or finite-GP structures, the pec_faces boundary makes the ground plane cover the entire domain face, which changes the physics (cavity vs radiating antenna). If you need a finite ground plane, remove pec_faces and declare it: a foil is a SHEET (add_thin_conductor, or a zero-thickness PEC Box \u2014 one node plane, normal E through it live); a thick plate is a PEC Box VOLUME (walls on both faces, lattice ownership contract #931).",
           "severity": "warning",
           "source": "_validate_cfg_pec_faces_with_finite_pec"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "2 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[1] 'pec' normal z: declared mid-plane 254\u00b5m, realized node plane 4 at 254\u00b5m (offset +0.000 cell = 0mm); geometry[2] 'pec' normal z: declared mid-plane 254\u00b5m, realized node plane 4 at 254\u00b5m (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -4159,13 +4137,6 @@
           "message": "2 conductor-Box design edge(s) sit off-lattice by more than 0.5% of their extent (worst 2 listed): geometry[2] 'pec' (sheet) x: extent 40mm, worst face residual 356.2\u00b5m (0.89% of the extent, df/f ~ 0.89%); geometry[0] 'pec' (sheet) x: extent 56mm, worst face residual 293.7\u00b5m (0.52% of the extent, df/f ~ 0.52%). OBSERVED: distance from each declared face to its nearest E-node on this run's own node coordinates; a PEC volume's face realizes on the nearest node plane and a sheet footprint on the nodes it covers (lattice ownership contract #931 \u00a71.1/\u00a71.3), so the realized extent can differ from the design by up to the printed residual, and a resonant dimension realized dL off detunes df/f ~ dL/L. COST (measured, #703): a uniform-mesh sweep rounded ONE substrate thickness by 8-10% across three 'convergence' points \u2014 three different boards solved under one name; the same campaign's board survived at dx=50um only because every patterned dimension happened to be an exact multiple of 50um. REMEDY: choose dx commensurate with the patterned dimensions, slide the lattice origin onto the worst face, or (non-uniform lane) place mesh nodes on the design edges. COVERAGE: examined 4 axis extent(s) on 2 conductor Box declaration(s) on the uniform lane; 2 sheet normal axis/axes reported by sheet_plane_realized instead; 0 non-Box conductor entr(y/ies) skipped (no analytic face coordinates). STALE IF: |face - nearest node| on the run's node coordinates does not reproduce the printed residuals.",
           "severity": "warning",
           "source": "_validate_cfg_off_lattice_design_edges"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "2 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[0] 'pec' normal z: declared mid-plane 7.938mm, realized node plane 18 at 7.938mm (offset +0.000 cell = 0mm); geometry[2] 'pec' normal z: declared mid-plane 11.11mm, realized node plane 22 at 11.11mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -7177,13 +7148,6 @@
           "source": "_validate_cfg_pec_faces_with_finite_pec"
         },
         {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "1 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[0] 'pec' normal z: declared mid-plane 1mm, realized node plane 2 at 1mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the nonuniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
-        },
-        {
           "code": "wire_port_dead_cell_classification_unavailable",
           "loc": null,
           "message": "Wire port at (0.008, 0.01, 0.0) (extent 0.001): dead-cell classification unavailable (non-uniform mesh (dz_profile/dx_profile/dy_profile set) -- the shared wire-port primitive only covers the uniform-grid path (issue #544)). The #314/#319 PEC-overlap advisories and the #556 end-gap-to-conductor advisory are skipped for this port -- verify manually that its rasterized extent does not land on PEC and does not stop one cell short of a conductor it is meant to contact.",
@@ -7348,13 +7312,6 @@
           "message": "pec_faces={z_lo} creates an INFINITE PEC boundary AND the geometry contains finite PEC objects. For antennas or finite-GP structures, the pec_faces boundary makes the ground plane cover the entire domain face, which changes the physics (cavity vs radiating antenna). If you need a finite ground plane, remove pec_faces and declare it: a foil is a SHEET (add_thin_conductor, or a zero-thickness PEC Box \u2014 one node plane, normal E through it live); a thick plate is a PEC Box VOLUME (walls on both faces, lattice ownership contract #931).",
           "severity": "warning",
           "source": "_validate_cfg_pec_faces_with_finite_pec"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "1 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[0] 'pec' normal z: declared mid-plane 1mm, realized node plane 2 at 1mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -8223,13 +8180,6 @@
           "message": "pec_faces={z_lo} creates an INFINITE PEC boundary AND the geometry contains finite PEC objects. For antennas or finite-GP structures, the pec_faces boundary makes the ground plane cover the entire domain face, which changes the physics (cavity vs radiating antenna). If you need a finite ground plane, remove pec_faces and declare it: a foil is a SHEET (add_thin_conductor, or a zero-thickness PEC Box \u2014 one node plane, normal E through it live); a thick plate is a PEC Box VOLUME (walls on both faces, lattice ownership contract #931).",
           "severity": "warning",
           "source": "_validate_cfg_pec_faces_with_finite_pec"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "1 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[0] 'pec' normal z: declared mid-plane 1mm, realized node plane 2 at 1mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -8382,13 +8332,6 @@
           "message": "pec_faces={z_lo} creates an INFINITE PEC boundary AND the geometry contains finite PEC objects. For antennas or finite-GP structures, the pec_faces boundary makes the ground plane cover the entire domain face, which changes the physics (cavity vs radiating antenna). If you need a finite ground plane, remove pec_faces and declare it: a foil is a SHEET (add_thin_conductor, or a zero-thickness PEC Box \u2014 one node plane, normal E through it live); a thick plate is a PEC Box VOLUME (walls on both faces, lattice ownership contract #931).",
           "severity": "warning",
           "source": "_validate_cfg_pec_faces_with_finite_pec"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "1 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[0] 'pec' normal z: declared mid-plane 1mm, realized node plane 2 at 1mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -8548,13 +8491,6 @@
           "message": "1 of 2 impedance-carrying wire ports opt into reference_plane_cells \u2014 off-diagonal S entries involving a non-opted port SILENTLY stay on the legacy port-cell path (only pairs where BOTH ports opt in use the plane waves). Opt in every wire port of the S-matrix, or none.",
           "severity": "warning",
           "source": "_validate_cfg_refplane_placement"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "1 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[0] 'pec' normal z: declared mid-plane 1mm, realized node plane 2 at 1mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -8734,13 +8670,6 @@
           "message": "this simulation requests NTFF far-field output but registers no point probe. run() scores its ring-down settling witness from the probe time series, so its Result will carry settling_db=None and those DFT numbers will have no truncation guard (#885); add sim.add_probe(position, component) somewhere the field is live. forward() attaches no settling witness at all yet, so a forward()-driven simulation stays unguarded whatever it registers (tracked separately).",
           "severity": "warning",
           "source": "_validate_cfg_settling_witness_present"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "1 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[0] 'pec' normal z: declared mid-plane 149.9mm, realized node plane 28 at 149.9mm (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },
@@ -9111,13 +9040,6 @@
           "message": "this simulation requests field-DFT plane probe(s) but registers no point probe. run() scores its ring-down settling witness from the probe time series, so its Result will carry settling_db=None and those DFT numbers will have no truncation guard (#885); add sim.add_probe(position, component) somewhere the field is live. forward() attaches no settling witness at all yet, so a forward()-driven simulation stays unguarded whatever it registers (tracked separately).",
           "severity": "warning",
           "source": "_validate_cfg_settling_witness_present"
-        },
-        {
-          "code": "sheet_plane_realized",
-          "loc": null,
-          "message": "1 PEC sheet(s) realized (lattice ownership contract #931 \u00a71.3: one node plane each, closed footprint, normal E through the plane live), 0 of them off their declared mid-plane; worst first: geometry[1] 'pec' normal z: declared mid-plane 254\u00b5m, realized node plane 2 at 254\u00b5m (offset +0.000 cell = 0mm). A sheet snaps to the node plane nearest its declared mid-plane (an exact half-cell tie resolves LOWER); an offset means the declared plane \u2014 a laminate face, a ground level \u2014 is not on this mesh's node line, and the conductor sits that far from where it was drawn. REMEDY when the offset matters: put a mesh node on the declared plane (dx = h/N for an interface at height h, or a preserved region on the non-uniform lane). COVERAGE: every sheet declaration on the uniform lane (zero-thickness PEC Boxes via add() and PEC add_thin_conductor entries). STALE IF: the named sheet's SheetSpec.plane is not the printed node.",
-          "severity": "info",
-          "source": "_validate_cfg_pec_realization"
         }
       ]
     },

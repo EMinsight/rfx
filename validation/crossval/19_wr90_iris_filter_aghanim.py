@@ -1495,7 +1495,7 @@ def main(argv):
                            "had to be a/90. The a/60 rung's own numbers do not disqualify it "
                            "cleanly: its zero count matches its oracle (2 vs 2) and its f0 residual "
                            "(+19.87 MHz) is the same ~0.12-cell offset seen at a/90; against the "
-                           "committed 19 MHz constant it happens to fail by 0.85 MHz, but a "
+                           "committed 19 MHz constant it happens to fail by 0.87 MHz, but a "
                            "self-derived envelope-times-1.5 gate would pass it. The broken passband "
                            "is the disqualifier. SETUP IS GATED SEPARATELY FROM PHYSICS, because a "
                            "resonant band read off an unsettled or absorber-limited run is not a "

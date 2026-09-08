@@ -73,14 +73,16 @@ def test_ports_and_sparams_101_tutorial_runs():
     # waveguide.  The microstrip's general report is NOT empty since the
     # lattice ownership contract (#931) made its ground and trace SHEETS —
     # preflight now COLLECTS them and says where they landed, which is the
-    # line asserted below.  (Until the collectors were threaded it instead
-    # warned that it had been handed none; that warning no longer exists and
-    # asserting it here pinned a transient state, measured 2026-09-07.)
-    # Readiness is report.ok there, the same rule the waveguide leg used.
-    assert output.count("[PREFLIGHT] All checks passed") >= 3
+    # line asserted below.  This pin has now been wrong twice in one day, both
+    # times by asserting a preflight line that a later commit made conditional:
+    # first the collector warning (removed when the collectors were threaded),
+    # then the sheet-plane line (made conditional on an OFFSET, so a board whose
+    # sheets land exactly where they were declared prints nothing).  The stable
+    # statement is the second kind: this board is clean AND its realized planes
+    # are what it declared, which the tutorial prints itself and which the
+    # assertion further down pins.  Measured 2026-09-08: four clean reports.
+    assert output.count("[PREFLIGHT] All checks passed") >= 4
     assert "Microstrip port setup ready: True" in output
-    assert "2 PEC sheet(s) realized (lattice ownership contract #931" in output
-    assert "0 of them off their decl" in output
     # The declared foils must BE the realized wall planes, and the gap between
     # them the height the MSL ports were told.  build_microstrip_ports() raises
     # if not; this pins the measured line so a silent plane move is visible.

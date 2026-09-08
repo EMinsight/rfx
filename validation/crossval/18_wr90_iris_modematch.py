@@ -903,7 +903,7 @@ def main(argv):
                 "t -> 0. Each rung is asked to IDENTIFY its own thickness "
                 "-- the oracle at t-1, t and t+1 cells, argmin on t -- and "
                 "all seven do; at t = 1 the pre-#931 one-wall alternative "
-                "(a zero-thickness screen) is 4.33x worse than the two-wall "
+                "(a zero-thickness screen) is 4.32x worse than the two-wall "
                 "one, so the contract's rule at one cell is measured rather "
                 "than assumed. The witness's first-stated criterion (t = 1 "
                 "inside the t = 2..8 range) is RETIRED as vacuous and its "
