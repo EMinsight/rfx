@@ -550,7 +550,7 @@
         {
           "code": "adi_3d_accuracy",
           "loc": null,
-          "message": "solver='adi' with a 3D grid at adi_cfl_factor=5: the 3D ADI scheme is unconditionally stable, but its dispersion error grows ~dt^2 \u2014 at ~15 cells/wavelength the <2% eigenfrequency envelope holds only up to ~2x CFL (measured -1.4% at 2x; -2.8% at 3x, -6.7% at 5x by von Neumann analysis). Use adi_cfl_factor <= 2 for wavelength-scale accuracy, or reserve large factors for geometrically stiff meshes (features far below the wavelength).",
+          "message": "solver='adi' with a 3D grid at adi_cfl_factor=5: the homogeneous, lossless ADI split with compatible domain boundaries removes the explicit CFL stability restriction. This does not guarantee stability with interior PEC projection (refused) or arbitrary material interfaces. For the cavity without interior PEC, dispersion error grows ~dt^2 \u2014 at ~15 cells/wavelength the <2% eigenfrequency envelope holds only up to ~2x CFL (measured -1.4% at 2x; -2.8% at 3x, -6.7% at 5x by von Neumann analysis). Use adi_cfl_factor <= 2 for wavelength-scale accuracy, or reserve large factors for geometrically stiff meshes (features far below the wavelength).",
           "severity": "warning",
           "source": "_validate_cfg_adi_3d_accuracy"
         }

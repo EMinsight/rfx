@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,13 +18,31 @@ def _run_tutorial(name: str) -> str:
     path = TUTORIALS_DIR / name
     assert path.exists(), f"missing tutorial: {path}"
 
+    # PYTHONPATH is not optional here.  Running a script BY PATH puts the
+    # SCRIPT'S directory on sys.path, not ``cwd``, so ``import rfx`` in the
+    # child resolves to whatever ``rfx`` is INSTALLED -- on this pod a path
+    # install pointing at a different checkout.  Without this the test runs
+    # the tutorial source from THIS tree against SOMEONE ELSE'S rfx, and
+    # reports the result as if it were this checkout's.
+    #
+    # It stayed invisible until a tutorial used a symbol that exists only
+    # here: ports_and_sparams_101 imports ``realized_pec_edge_masks`` (#931)
+    # and the child raised ImportError against the installed copy.  Every
+    # earlier green in this file was measured against the installed rfx.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = (
+        str(REPO_ROOT) + os.pathsep + env["PYTHONPATH"]
+        if env.get("PYTHONPATH") else str(REPO_ROOT)
+    )
+
     completed = subprocess.run(
         [sys.executable, str(path)],
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=True,
-        timeout=60,
+        timeout=180,
     )
     return completed.stdout
 
