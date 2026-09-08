@@ -440,9 +440,16 @@ guide = Simulation(freq_max=12e9, domain=(0.30, 0.02286, 0.01016), dx=1e-3,
 guide.add(Box((0.145, 0.0, 0.0), (0.147, 0.02286, 0.01016)), material="pec")
 ```
 
-Realized: walls at `x = 145 mm` and `x = 147 mm`, every normal edge between
+Realized: faces at `x = 145 mm` and `x = 147 mm`, every normal edge between
 them shorted. Drawn extent equals realized extent, so an oracle is fed the
 drawn 2 mm — no `±1` cell correction anywhere.
+
+`fidelity_report()` prints **three** planes here, `145000, 146000, 147000 µm`,
+not two. That is not a contradiction: a 2 mm plate on a 1 mm mesh occupies one
+cell and has a tangential wall on both faces AND on the plane between them,
+because its interior is shorted as well. `realized_wall_planes` reports every
+plane the conductor owns, so `max − min` gives the body's outer span rather
+than a clear opening — bracket between wall groups when you want the aperture.
 
 !!! warning "Removed in 2.0"
     The `two_plane=True` keyword on `sim.add()` is gone. It existed to give a

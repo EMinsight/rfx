@@ -293,9 +293,15 @@ The full per-site list (every crossval, example, test, doc) is the inventory in 
 
 ## 4. Migration (filled from the exhaustive inventory)
 
-See `docs/design_notes/20260906_lattice_ownership_inventory.md` (generated from the
-18-reader inventory run; every PEC site in `rfx/`, `validation/`, `examples/`, `tests/`,
-`docs/`, `scripts/` with intent, thickness, downstream artifacts, action, recompute cost).
+The 18-reader inventory that this section was filled from — every PEC site in
+`rfx/`, `validation/`, `examples/`, `tests/`, `docs/`, `scripts/` with intent,
+thickness, downstream artifacts, action and recompute cost — was a session
+working artifact and was never committed. An earlier draft of this line pointed
+at `docs/design_notes/20260906_lattice_ownership_inventory.md`, which does not
+exist; the pointer is removed rather than left dangling in a normative document.
+What survived the inventory is below, plus the per-group migration manifests
+under `docs/design_notes/931_migration/`, which carry the same information for
+the sites that actually changed.
 
 Migration rules, in priority order:
 
@@ -557,3 +563,38 @@ clears the solver masks. After the fix, clearances 0 / 2 / 2 mm against an
 unchanged 28.11 mm minimum. Worth stating as a general lesson for §1.9: a
 consumer that reads `sigma` to find metal does not fail loudly under this
 contract, it goes quiet, and a quiet advisory looks exactly like a clean model.
+
+**§1.1 an off-lattice corner splits a PEC volume from a dielectric drawn on it
+(2026-09-08, fresh-eyes review).** §1.1 says PEC volumes are centre-sampled and
+dielectric sampling is untouched, and §1.3 works the off-lattice case for
+SHEETS. The volume case was never written down, and it is not free.
+
+`eps_r` is node-sampled: node `k` carries the material when `k·dx` is inside
+the drawn extent. A PEC volume is centre-sampled: cell `k` is occupied when
+`(k + ½)·dx` is. Measured on a 6-cell box whose lo corner sits `frac` of a cell
+above a node, `dx = 1 mm`:
+
+| `frac` | dielectric nodes | PEC cells | lo offset |
+|---|---|---|---|
+| 0.0 | 4..9 | 4..9 | 0 |
+| 0.2 | 5..10 | 4..9 | −1 |
+| 0.3 | 5..10 | 4..9 | −1 |
+| 0.5 | 5..10 | 4..9 | −1 |
+| 0.7 | 5..10 | 5..10 | 0 |
+| 0.9 | 5..10 | 5..10 | 0 |
+
+They agree on a node (`frac = 0`) and above the half cell, and differ by a full
+cell for `frac` in `(0, ½]` — node sampling takes the ceiling of the corner,
+centre sampling takes the nearest cell whose middle is inside. So a microstrip
+whose laminate face is drawn a fifth of a cell off the node line puts its trace
+one cell INSIDE its own substrate, and both realizations are individually
+correct for the rule they follow.
+
+This is not a defect to fix by making one sampler match the other: a volume owns
+cells and a dielectric fills them, and the two questions are genuinely different.
+It is a declaration hazard, and the remedy is §1.3's remedy for sheets — put a
+mesh node on the interface (`dx = h/N`, or a preserved region on the non-uniform
+lane). Preflight already reports it as `off_lattice_design_edges` with a
+quantified residual, so it is visible rather than silent; what was missing was
+this note saying that the residual has a one-cell CONSEQUENCE for a volume, not
+only a sub-cell placement error.

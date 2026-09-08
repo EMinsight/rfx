@@ -411,6 +411,16 @@ def realized_wall_planes(edge_masks, axis, *, ij=None, region=None,
     ``ij`` and ``region`` are exclusive.  Consumers: preflight cavity /
     guide-width checks, cv15 ``assert_realized_stack``, MSL trace
     detection, oracles.
+
+    EVERY plane, not just the two faces.  A body three cells thick has a
+    tangential wall on all four of its node planes, because the interior
+    is shorted too, so this returns four indices and not two.  ``max -
+    min`` is therefore the body's OUTER span and over-reads a guide or a
+    cavity bounded by thick walls: a 40-cell guide inside 3-cell walls
+    gives ``[0, 1, 2, 3]`` and ``[43, 44, 45]``, and ``45 - 0`` is 45, not
+    40.  A consumer that wants the clear opening brackets the aperture
+    between the hi plane of one wall group and the lo plane of the next
+    (``_port_transverse_spans`` does, and reads 40).
     """
     if ij is not None and region is not None:
         raise ValueError("pass either ij= or region=, not both")

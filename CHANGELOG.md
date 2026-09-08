@@ -74,8 +74,11 @@ lattice](docs/public/guide/materials-geometry.mdx).
   lattice path joining the nearest nodes of consecutive vertices; a diagonal
   segment now raises instead of silently rasterizing to disconnected nodes.
 
-**New refusals at `add()` time** (nothing is inferred from raster thickness or
-drawing direction):
+**New refusals, raised when the grid exists** (nothing is inferred from raster
+thickness or drawing direction). They fire at `run()` / `forward()` / `preflight()`,
+NOT at `add()`: whether a shape is thinner than one cell is a question about the
+LATTICE, and `add()` has no grid to ask. A `try` around `sim.add()` catches
+nothing; put it around the call that builds the grid.
 
 - a PEC shape with `0 < extent < one local cell` on any axis of its drawn
   bounding box raises — declare a sheet or resolve the thickness;

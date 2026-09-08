@@ -43,8 +43,10 @@ conductor region. See
   the edge rule, so abutting sheets realize seamlessly. A lossy
   (`surface_impedance_f0`) sheet uses the same footprint and the same edge set as
   the PEC sheet, so `f0` toggles loss and never geometry.
-- **New refusals at `add()` time.** A PEC shape with `0 < extent < one local
-  cell` along any axis raises — declare a sheet or resolve the thickness. A PEC
+- **New refusals, raised when the grid exists** — at `run()`, `forward()` or
+  `preflight()`, not at `add()`, because "thinner than one cell" is a question
+  about the lattice and `add()` has no grid to ask it of. A PEC shape with
+  `0 < extent < one local cell` along any axis raises — declare a sheet or resolve the thickness. A PEC
   shape that rasterizes to zero cells raises instead of vanishing silently. A
   `Box` with two or three zero-extent axes raises. `add_thin_conductor()` with a
   shape thicker than one local cell along its normal raises.
