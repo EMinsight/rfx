@@ -500,3 +500,60 @@ comparing declared numbers. The validation battery's `test_pec_short_s11_magnitu
 battery's `pec_short` DUT is on-lattice at every rung and its T6 red
 (max|ΔS| 0.938) is a different reading — S22's phase, the far face one cell
 further from the right port — not this one.
+
+**§1.8 gains a fence it did not have: the ADI lane cannot carry interior PEC
+(2026-09-08).** Not a scope decision like the other fences — a measured limit.
+Handing that lane its sheets and wires, which §1.9 requires, exposed an
+instability `run()` already had and `forward()` had been hiding. 104
+configurations on a 20 mm cube, before anything was decided:
+
+| lane | conductor | factor | steps | peak probe |
+|---|---|---|---|---|
+| 3-D | none | 5.0 | 200 | 0.0023 |
+| 3-D | sheet | 5.0 | 200 | 4.08e30, 19 non-finite |
+| 3-D | none | 1.0 | 4000 | 0.0083 |
+| 3-D | sheet | 1.0 | 4000 | 4.33e6 |
+| 3-D | one-cell volume | 1.0 | 4000 | 29.1 |
+| 3-D | sheet | 0.5 | 4000 | 0.0100 |
+
+With no interior conductor the lane is bounded at every factor tested, 0.5
+through 5.0, out to 4000 steps — the unconditional-stability property is real
+for the homogeneous lossless split with compatible domain boundaries. With any
+interior conductor it diverges, and the class changes the growth rate rather
+than the outcome. Factor 1 survives 800 steps and fails by 4000, so a short run
+hides it. Factor 0.5 stayed bounded, but that is below the Yee limit and
+therefore not an operating point — and it is an observation over one horizon,
+not a derived bound, so it does not license a clamp.
+
+The rule: **interior PEC on `solver="adi"` is REFUSED, at every factor, on 3-D
+and 2-D TMz** (`adi_interior_pec_unsupported`), enforced in `run()`, `forward()`
+and the low-level step functions so `skip_preflight=True` does not get past it.
+Domain-face PEC without interior conductors is unaffected.
+
+Why refuse rather than warn, clamp, or fix. A warning leaves a user holding
+4e30. A clamp implies a safe factor that the measurement does not supply. And an
+unconditionally stable scheme losing stability at a material discontinuity is a
+numerics question — the split's stability proof assumes a homogeneous lossless
+medium, and the PEC projection applied between the two half-steps is outside it.
+Answering that needs constrained-operator analysis, not a branch fix.
+
+This fence differs from the others in §1.8 in one way that matters: the
+conductor is not silently absent, it is loudly refused. A declared conductor
+vanishing is the defect this note exists to remove, and "make the number finite
+by dropping the metal" was explicitly rejected as a resolution. Measurements:
+`docs/design_notes/adi_pec_stability/`. Reasoning and the test that pins the
+shipped default: `docs/design_notes/20260908_adi_interior_pec_guard.md`.
+
+**§1.9 consumers — one that had gone silent (2026-09-08).**
+`_warn_junction_probe_clearance` compared a device against its straight-guide
+references through `sigma` alone. Once §1.7 moved PEC out of `sigma` into
+realized edges, a PEC junction and its references read as identical vacuum and
+the advisory stopped firing — on the lane whose purpose is catching a probe
+plane too close to a junction. It compares realized edges componentwise now,
+and deliberately does NOT union the three masks first: that would hide two
+differently oriented sheets occupying one node plane. The device edges are
+captured before the Kottke path, which encodes PEC into inverse permittivity and
+clears the solver masks. After the fix, clearances 0 / 2 / 2 mm against an
+unchanged 28.11 mm minimum. Worth stating as a general lesson for §1.9: a
+consumer that reads `sigma` to find metal does not fail loudly under this
+contract, it goes quiet, and a quiet advisory looks exactly like a clean model.
