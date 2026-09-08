@@ -111,6 +111,11 @@ def assemble_materials_nu(
         cell_sizes=cell_sizes,
         sheets=_pec_sheets,
         wires=_pec_wires,
+        # The NU stepper installs no periodic BC and NU grids are 3-D, so the
+        # non-periodic #689 convention is the one this lane's step function
+        # uses (see the realization comment further down); the guard must ask
+        # with the SAME flags or it judges a seam the solve never has.
+        periodic=(False, False, False),
     )
     materials, debye_spec, lorentz_spec, pec_mask, _pec_shapes, _kerr_chi3 = result
 

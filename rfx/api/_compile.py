@@ -457,7 +457,7 @@ class _CompileMixin:
                                 _pec_wires if pec_wires is None else (),
                                 lane="uniform")
         from rfx.geometry.rasterize_grid import refuse_vaporized_sheets as _rvs
-        _rvs(_pec_sheets, lane="uniform")
+        _rvs(_pec_sheets, lane="uniform", periodic=self._periodic_flags())
         return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, boundary_pec_shapes, kerr_chi3
 
     @staticmethod

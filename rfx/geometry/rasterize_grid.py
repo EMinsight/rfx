@@ -524,7 +524,8 @@ def sheet_spec_from_shape(shape, coords: GridCoords, cell_sizes=None, *,
 
 
 
-def refuse_vaporized_sheets(sheets, *, lane: str = ""):
+def refuse_vaporized_sheets(sheets, *, lane: str = "",
+                            periodic=(False, False, False)):
     """Refuse a sheet PLANE that realizes no PEC edge (#931 §1.5, #369 class).
 
     §1.3 unions every footprint on one ``(normal_axis, plane)`` BEFORE the
@@ -537,7 +538,12 @@ def refuse_vaporized_sheets(sheets, *, lane: str = ""):
     refused for on the volume side.
 
     Asked of the single owner (:func:`realized_pec_edge_masks`) rather than
-    re-derived, so it cannot disagree with the solve.
+    re-derived, so it cannot disagree with the solve — INCLUDING the run's
+    ``periodic`` flags: a footprint whose only two occupied nodes sit either
+    side of a periodic seam realizes one edge THROUGH the seam, and asking
+    with the default non-periodic padding refused a conductor the solve
+    realizes (measured on an x-periodic (7,7,7) grid with nodes (0,3,3) and
+    (6,3,3): 1 Ex edge with ``(True, False, False)``, 0 with the default).
     """
     sheets = list(sheets or ())
     if not sheets:
@@ -549,7 +555,8 @@ def refuse_vaporized_sheets(sheets, *, lane: str = ""):
     for (axis, plane), group in by_plane.items():
         if any(is_tracer(sp.footprint) for sp in group):
             continue
-        if any(bool(np.asarray(m).any()) for m in _rpem(None, sheets=tuple(group))):
+        if any(bool(np.asarray(m).any())
+               for m in _rpem(None, sheets=tuple(group), periodic=periodic)):
             continue
         names = ", ".join(repr(getattr(sp, "name", None)) for sp in group)
         raise ValueError(
@@ -725,6 +732,7 @@ def rasterize_geometry(
     cell_sizes=None,
     sheets: list | None = None,
     wires: list | None = None,
+    periodic=(False, False, False),
 ):
     """Rasterize geometry entries onto material arrays.
 
@@ -850,7 +858,7 @@ def rasterize_geometry(
 
     has_pec = bool(jnp.any(pec_mask))
     kerr_chi3 = chi3_arr if has_kerr else None
-    refuse_vaporized_sheets(sheets, lane="non-uniform")
+    refuse_vaporized_sheets(sheets, lane="non-uniform", periodic=periodic)
     return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, kerr_chi3
 
 
