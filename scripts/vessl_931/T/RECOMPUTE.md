@@ -7,7 +7,7 @@ Branch `feat/931-t5-crossval-tests`; worktree
 
 | case | VESSL run id | yaml | command inside the job | expected runtime |
 |---|---|---|---|---|
-| WR-90 chain battery, post-change re-measure | **369367259196** | `_results_T/rfx-931-post-chain-battery.yaml` (preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`) | `python scripts/diagnostics/waveguide_chain_battery_measure.py --out-dir $OUT --stages {cells,ad_fd,plane_shift} ... ` then `--stages assemble --fixture-out $OUT/fixture.json` | ~3-6 h wall (run 3 used 4 h + 4 h + 1 h timeouts; three rungs x three DUTs x two lanes, then the AD/FD and plane-shift legs) |
+| WR-90 chain battery, post-change re-measure | **369367259196** | `scripts/vessl_931/T/rfx-931-post-chain-battery.yaml` (preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`) | `python scripts/diagnostics/waveguide_chain_battery_measure.py --out-dir $OUT --stages {cells,ad_fd,plane_shift} ... ` then `--stages assemble --fixture-out $OUT/fixture.json` | ~3-6 h wall (run 3 used 4 h + 4 h + 1 h timeouts; three rungs x three DUTs x two lanes, then the AD/FD and plane-shift legs) |
 
 Outputs: `/root/workspace/claude-workspace/rfx/runs/issue931-post-chain-battery-<ts>/`,
 with `issue931-post-chain-battery.latest` naming the directory. The job reads

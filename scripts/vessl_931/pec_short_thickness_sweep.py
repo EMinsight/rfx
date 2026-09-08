@@ -20,7 +20,7 @@ A total reflector's |S11| should not depend on how thick it is: everything
 past the leading face is dark. So "tracks thickness" is itself a physical
 statement about which mechanism is in play, not just a curve fit.
 
-Run: JAX_PLATFORMS=cpu python _vessl931/pec_short_thickness_sweep.py
+Run: JAX_PLATFORMS=cpu python scripts/vessl_931/pec_short_thickness_sweep.py
 """
 from __future__ import annotations
 

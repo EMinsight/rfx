@@ -12,7 +12,7 @@ Submission note: `vessl run create -f` crashes when its cwd is inside a git
 WORKTREE (`.git` is a file, not a directory:
 `NotADirectoryError: .../.git/HEAD`). Submit from a plain directory with an
 absolute `-f` path — the yamls were copied to `/tmp/t6vessl/` and submitted from
-there. Source of truth for the yamls is `_vessl931/` in this worktree.
+there. Source of truth for the yamls is `scripts/vessl_931/` (moved there from a root-level `_vessl931/` before merge).
 
 All runs: cluster `remilab-c0`, preset `gpu-rtx4090`, `JAX_PLATFORMS=cpu`,
 image `ghcr.io/bk-squared/rfx-openems:5b423bdfe0c8`, artifacts under
@@ -135,7 +135,7 @@ worse than a red gate.
 | `sheet-resonance-ab` | **369367259230** | the peak census this commit added says whether the modes moved or the two-loudest picker swapped peaks. If the length-scaled 23.45 / 26.85 GHz pair appears in the census, the picker swapped | 30-60 min |
 | `sheet-perturbation-q` | **369367259231** | same instrument, same question, on the single-patch sibling (measured 25.3992 against a length-scaled 23.63) | 1-2 h |
 | `leontovich-alpha` | **369367259232** | re-measure at HEAD with the full log kept: the pod reproduces the 3 failures, so "alpha unchanged" is falsified and the size of the move has to be read off the run, not argued | 1-2 h |
-| `pec-short-sweep` | **369367259233** | the PRE-DECLARED separation: `_vessl931/pec_short_thickness_sweep.py` re-solves at SHORT_CELLS = 1, 2, 4. A total reflector's abs S11 cannot depend on its thickness, so a spread > 0.005 means the REDRAW owns the 0.9670 and the module re-pins from the thickness it declares; a flat sweep means stage C's realized-edge lane owns it and it belongs with the chain-battery re-measure | 20-40 min |
+| `pec-short-sweep` | **369367259233** | the PRE-DECLARED separation: `scripts/vessl_931/pec_short_thickness_sweep.py` re-solves at SHORT_CELLS = 1, 2, 4. A total reflector's abs S11 cannot depend on its thickness, so a spread > 0.005 means the REDRAW owns the 0.9670 and the module re-pins from the thickness it declares; a flat sweep means stage C's realized-edge lane owns it and it belongs with the chain-battery re-measure | 20-40 min |
 
 `vessl run create -f /tmp/t6vessl2/<case>.yaml`, submitted from a plain
 directory (the worktree crash above still applies). The band constants in
@@ -235,7 +235,7 @@ merge unblocked.
 ### The PEC-short red is closed, and the sweep's answer changed with it
 
 `pec-short-postfix` **369367259278** (the module whole, plus
-`_vessl931/pec_short_thickness_sweep.py`, one job):
+`scripts/vessl_931/pec_short_thickness_sweep.py`, one job):
 
 ```
 tests/oracle/test_waveguide_port_validation_battery.py   9 passed

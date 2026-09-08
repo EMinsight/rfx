@@ -573,7 +573,7 @@ def test_pec_short_s11_magnitude():
     # 9 passed): |S11| range [0.99822, 1.02670], mean 1.00376 — the gate is
     # green at its untouched 0.99 and the pre-#931 baseline is back. The
     # pre-declared thickness separation ran in the same job
-    # (`_vessl931/pec_short_thickness_sweep.py`, SHORT_CELLS = 1, 2, 4) and
+    # (`scripts/vessl_931/pec_short_thickness_sweep.py`, SHORT_CELLS = 1, 2, 4) and
     # is now FLAT to five decimals: min|S11| 0.99822 at every thickness,
     # spread 0.00000, the six per-bin values identical arm to arm. That is
     # the physics the sweep was written to test — everything past a total

@@ -181,7 +181,7 @@ One line section T needs present, for the carriers above:
 4. **`tests/fixtures/waveguide_chain_battery/` (tests-oracle group).** The run
    is DONE — VESSL 369367259196, artifact
    `/root/workspace/claude-workspace/rfx/runs/issue931-post-chain-battery-20260907T105351Z/fixture.json`,
-   full measured-vs-predeclared table in `_results_T/RECOMPUTE.md`. Three
+   full measured-vs-predeclared table in `scripts/vessl_931/T/RECOMPUTE.md`. Three
    things the ingest owner needs from it:
 
    * the `("pec_short", "sigma")` AD leg did NOT move (g_AD −6.4283 vs

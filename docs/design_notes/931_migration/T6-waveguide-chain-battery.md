@@ -80,7 +80,7 @@ author would read it. Worth one sentence in the design note's §1.8.
 
 ## The pre-declared thickness separation ran (2026-09-07, VESSL 369367259233)
 
-`_vessl931/pec_short_thickness_sweep.py` re-solved
+`scripts/vessl_931/pec_short_thickness_sweep.py` re-solved
 `test_pec_short_s11_magnitude`'s fixture at SHORT_CELLS = 1, 2 and 4. Leading
 face at 85.655 mm in all three arms; only the thickness changes.
 

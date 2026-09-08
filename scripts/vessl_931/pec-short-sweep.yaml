@@ -1,6 +1,6 @@
-name: rfx-931-post-pec-short-postfix
-description: "#931 phase 2b T6 — the PEC-short sweep re-run AFTER the cv11 adjudication (a8d59e86) drew the plug to the REALIZED guide walls. Pre-declared: min|S11| >= 0.99 at every thickness and the spread across 1/2/4 cells <= 0.005, because the vacuum slot that leaked is gone; a surviving thickness trend means the slot is not the whole story. The module gate runs in the same job. Submit: vessl run create -f pec-short-postfix.yaml"
-tags: [rfx, issue-931, post, t6, pec-short-postfix]
+name: rfx-931-post-pec-short-sweep
+description: "#931 phase 2 T6 — the PRE-DECLARED separation for the PEC-short |S11| gate: re-solve at SHORT_CELLS = 1, 2, 4. |S11| tracking thickness = the redraw; |S11| flat in thickness = stage C's realized-edge lane. Submit: vessl run create -f pec-short-sweep.yaml"
+tags: [rfx, issue-931, post, t6, pec-short-sweep]
 resources:
   cluster: remilab-c0
   preset: gpu-rtx4090
@@ -16,7 +16,7 @@ mount:
   /root/workspace/: volume://remilab-fs/personal-workspaces/
 run: |-
   set -eu
-  echo "=== rfx #931 T6 post-change re-measure: pec-short-postfix ==="
+  echo "=== rfx #931 T6 post-change re-measure: pec-short-sweep ==="
   date
   PY=python
   command -v "$PY" >/dev/null 2>&1 || PY=/opt/conda/bin/python
@@ -25,13 +25,13 @@ run: |-
   test -d "$SRC" || { echo "ERROR: T6 worktree missing at $SRC"; exit 3; }
   git config --global --add safe.directory "$SRC" || true
   RUNS=/root/workspace/claude-workspace/rfx/runs
-  OUT=$RUNS/issue931-post-pec-short-postfix-$(date -u +%Y%m%dT%H%M%SZ)
+  OUT=$RUNS/issue931-post-pec-short-sweep-$(date -u +%Y%m%dT%H%M%SZ)
   mkdir -p "$OUT"
-  echo "$OUT" > "$RUNS/issue931-post-pec-short-postfix.latest"
+  echo "$OUT" > "$RUNS/issue931-post-pec-short-sweep.latest"
   trap 'chmod -R a+rX "$OUT" 2>/dev/null || true' EXIT
   echo "artifacts: $OUT"
   ( cd "$SRC" && git rev-parse HEAD && git status --short | head -20 ) | tee "$OUT/commit.txt"
-  WORK=/root/work/rfx931-t6-pec-short-postfix
+  WORK=/root/work/rfx931-t6-pec-short-sweep
   rm -rf "$WORK"
   mkdir -p "$WORK"
   cp -a "$SRC/." "$WORK/"
@@ -44,19 +44,13 @@ run: |-
   "$PY" -c "import jax, rfx, os; print('probe ok | jax', jax.__version__, '| backend', jax.default_backend(), '| rfx', getattr(rfx, '__version__', '?'))"
   echo "=== pec-short thickness sweep (1, 2, 4 cells) ==="
   set +e
-  timeout 21600 "$PY" _vessl931/pec_short_thickness_sweep.py > "$OUT/sweep.log" 2>&1
-  rcs=$?
-  echo "$rcs" > "$OUT/sweep.rc"
-  tail -n 40 "$OUT/sweep.log" || true
-  echo "=== the module gate itself, at the declared SHORT_CELLS ==="
-  timeout 21600 "$PY" -m pytest -q -p no:cacheprovider -p no:randomly --no-header -rA -s \
-      -m "" --junitxml="$OUT/junit.xml" tests/oracle/test_waveguide_port_validation_battery.py > "$OUT/pytest.log" 2>&1
+  timeout 21600 "$PY" scripts/vessl_931/pec_short_thickness_sweep.py > "$OUT/pytest.log" 2>&1
   rc=$?
   set -e
   echo "$rc" > "$OUT/pytest.rc"
   tail -n 120 "$OUT/pytest.log" || true
-  cp -p "$OUT/pytest.log" "$OUT/pec-short-postfix.log" 2>/dev/null || true
+  cp -p "$OUT/pytest.log" "$OUT/pec-short-sweep.log" 2>/dev/null || true
   ls -la "$OUT"
   chmod -R a+rX "$OUT" 2>/dev/null || true
-  echo "T6_POST_CASE=pec-short-postfix RC=$rc"
+  echo "T6_POST_CASE=pec-short-sweep RC=$rc"
   exit 0

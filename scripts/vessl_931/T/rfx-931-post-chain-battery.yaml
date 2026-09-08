@@ -60,7 +60,7 @@ run: |-
     timeout 14400 "$PY" -u scripts/diagnostics/waveguide_chain_battery_measure.py \
       --out-dir "$OUT" --stages "$stage" --run-id "$RUN_ID" --run-lane vessl \
       --predeclaration-sha "$RFX_PREDECLARATION_SHA" \
-      --vessl-yaml _results_T/rfx-931-post-chain-battery.yaml \
+      --vessl-yaml scripts/vessl_931/T/rfx-931-post-chain-battery.yaml \
       > "$OUT/stage_$stage.log" 2>&1
     rc=$?
     set -e
@@ -74,7 +74,7 @@ run: |-
   timeout 1800 "$PY" -u scripts/diagnostics/waveguide_chain_battery_measure.py \
     --out-dir "$OUT" --stages assemble --run-id "$RUN_ID" --run-lane vessl \
     --predeclaration-sha "$RFX_PREDECLARATION_SHA" \
-    --vessl-yaml _results_T/rfx-931-post-chain-battery.yaml \
+    --vessl-yaml scripts/vessl_931/T/rfx-931-post-chain-battery.yaml \
     --fixture-out "$OUT/fixture.json" > "$OUT/stage_assemble.log" 2>&1
   rc=$?
   set -e
