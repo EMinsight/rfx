@@ -28,7 +28,9 @@ This module holds three things:
   value this run measured, one test per §3 row of the note pinning the number
   the row rests on, and the §4 falsifier replayed at zero cost from the stored
   float32 readings (must give exactly run 2's 9 red);
-* the **live layer** (§5.11 of the run-2 note), moved here from run 2's module.
+* the **live layer** (§5.11 of the run-2 note), now using the schema-4
+  realized-PEC / forward2 artifact from run 369367259427; the run-3 replay
+  above stays bound to its historical sigma=1e10 device operator.
 
 Three things found after the run are recorded in the note's §6 and pinned
 below rather than smoothed over: the gate module's ``recompute_verdicts``
@@ -64,6 +66,7 @@ from tests.oracle.test_waveguide_chain_battery import (
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = REPO / "tests" / "fixtures" / "waveguide_chain_battery" / "fixture_v18_close.json"
+LIVE_FIXTURE = FIXTURE.with_name("fixture_931_realized_pec_forward2_run369367259427.json")
 RUN2 = REPO / "tests" / "fixtures" / "waveguide_chain_battery" / "fixture_guide_cell_aperture.json"
 FROZEN = REPO / "tests" / "fixtures" / "waveguide_chain_battery" / "fixture.json"
 PREDECLARATION = "docs/design_notes/20260905_v18_close_predeclaration.md"
@@ -295,6 +298,12 @@ def fx() -> dict:
     if _FX is None:
         pytest.skip(f"{FIXTURE} missing")
     return _FX
+
+
+@pytest.fixture(scope="module")
+def live_fx() -> dict:
+    # A missing live reference is an ingest defect, not a reason to skip.
+    return json.loads(LIVE_FIXTURE.read_text())
 
 
 @pytest.fixture(scope="module")
@@ -759,7 +768,7 @@ def test_physics_gates_at_the_claims_rung(fx):
 
 
 # ===========================================================================
-# LIVE layer — §5.11 of the run-2 note, re-pointed at THIS artifact
+# LIVE layer — §5.11, re-pointed at the schema-4 contract-build artifact
 # ===========================================================================
 # Moved from tests/oracle/test_waveguide_chain_battery_guide_cell_aperture.py.
 # LIVE_ABS_S_ENVELOPE (5.000e-6) and the derived LIVE_ABS_S_TOL (1e-4) are
@@ -788,16 +797,16 @@ def _live_compare(fx_, rung: str):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("rung", ["coarse", "mid"])
-def test_live_cells_reproduce_the_fixture_cpu(fx, rung):
-    """§5.11 row 1 against this artifact (cells bit-identical to run 2's)."""
-    _live_compare(fx, rung)
+def test_live_cells_reproduce_the_fixture_cpu(live_fx, rung):
+    """§5.11 row 1 against the realized-PEC contract-build measurement."""
+    _live_compare(live_fx, rung)
 
 
 @pytest.mark.slow
 @pytest.mark.gpu
-def test_live_cells_reproduce_the_fixture_fine_rung(fx):
+def test_live_cells_reproduce_the_fixture_fine_rung(live_fx):
     """§5.11 row 2, on the GPU lane (the fine rung is 4x the steps)."""
-    _live_compare(fx, "fine")
+    _live_compare(live_fx, "fine")
 
 
 @pytest.mark.slow
@@ -821,6 +830,22 @@ def test_live_plane_shift_rotation_coarse_rung(lane):
     assert rot["resid_yee_max"] <= G.ROTATION_TOL_YEE_DEG
     assert rot["resid_cont_max"] <= G.ROTATION_TOL_CONTINUOUS_DEG
     assert rot["wrong_sign_resid_min"] > G.WRONG_SIGN_MIN_DEG
+
+
+def test_live_fixture_preserves_the_declared_measurement(live_fx):
+    """Keep the new reference distinct and replay its schema-4 validity gates."""
+    assert live_fx["schema_version"] == 4
+    assert live_fx["predeclaration"] == "docs/design_notes/waveguide_chain_battery_predeclaration.md"
+    assert live_fx["predeclaration_sha"] == "bcce73c9"
+    assert live_fx["provenance"]["commit"] == "6df7ccaf20d572e0c58c194c12bc63467d4ef360"
+    assert live_fx["supersedes"] == str(FIXTURE.relative_to(REPO))
+    assert len(live_fx["cells"]) == 18
+    assert len(live_fx["ad_vs_fd"]) == 14
+    verdicts = G.recompute_verdicts(live_fx)
+    assert verdicts == live_fx["verdicts"]
+    assert len(verdicts) == 178
+    assert sum(v == "pass" for v in verdicts.values()) == 102
+    assert sum(v == "report_only" for v in verdicts.values()) == 76
 
 
 def test_the_live_pin_is_the_committed_one():

@@ -65,6 +65,15 @@ Per the inventory's own instruction for this row: **do not widen
 discriminator is about the port's transverse eigenproblem, which the empty-guide
 agreement above shows is intact.
 
+## Ingest follow-through — 2026-09-08
+
+The PI-adjudicated run **369367259427** is now ingested byte-for-byte as
+`fixture_931_realized_pec_forward2_run369367259427.json`, and the live cell
+comparisons use it. The old sigma-fill artifact remains historical. See the
+[ingest record](T6-chain-fixture-ingest-20260908.md) for provenance, CPU validation,
+and the **unexplained slab coarse/flux drift (1.042e-5 against the old fixture)**.
+The fine GPU live test still requires its own run; this ingest claims no GPU pass.
+
 ## Why the sigma fold is worth a second look while this is open
 
 Design note §1.8 fences sigma fills out of the ownership contract, and
