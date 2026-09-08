@@ -427,17 +427,44 @@ battery in `tests/contracts/test_lattice_ownership_contract.py`: tangential E
 on a declared sheet plane is exactly zero through `run()`, `forward()`,
 `vmap_material_sweep` and `optimize`'s step, with an off-sheet control probe.
 
-**Not yet implemented — preflight (§3 findings, §1.9 consumers).** Owned by the
-preflight stage that follows this branch: `pec_box_one_cell`,
-`sheet_plane_realized`, `sheet_slot_vacuum`, `pec_zero_cells` as findings; and
-the consumers that still measure metal from the primal CELL mask —
-`_port_transverse_spans` (the #868 "40 mm guide reads 42 mm" case),
-`_check_coaxial_port_junction_aperture` via `_port_pec_mask`,
-`_msl_realized_substrate`, the wire-port advisory, and
-`_validate_cfg_sheet_live_edge_materials`. Until those switch, a sheet-declared
-conductor is invisible to those particular findings; preflight's own
-`_assemble_materials` calls already pass collectors, so they satisfy the
-refusal above.
+**Preflight (§3 findings, §1.9 consumers) — LANDED 2026-09-07/08.** This
+paragraph read "not yet implemented, owned by the preflight stage that follows
+this branch" until 2026-09-08. It shipped on this branch instead, and leaving
+the note saying otherwise had a cost worth recording: a `xfail(strict=True)`
+test whose reason cited this very paragraph kept its marker after its
+pre-declared falsifier fired, and under strict an XPASS is a red
+(`test_thru_preflight_code_set_is_the_contract_set`). A design note that
+describes a state the code has left is not merely out of date; it is load
+bearing for anything that quotes it.
+
+What is in place, verified by reading the shipped code rather than the plan:
+
+* the four findings named here — `pec_box_one_cell`, `sheet_plane_realized`,
+  `sheet_slot_vacuum`, `pec_zero_cells` — plus `pec_box_subcell`,
+  `pec_realization_refused` and `pec_face_short_of_domain_wall`;
+* `_port_transverse_spans` reads realized planes (the #868 "40 mm guide reads
+  42 mm" case), and `_check_coaxial_port_junction_aperture` inherits that
+  through `_port_pec_mask`;
+* `_msl_realized_substrate` takes the realized conductor from
+  `_msl_assemble_once`'s cache, starts its walk at the first cell ABOVE the
+  realized ground, and reports `ground_cells` so a port sitting under its own
+  ground can be named;
+* the wire-port end-gap advisory fires from realized wall planes. Its MESSAGE
+  wording is still the pre-contract spelling, which is why
+  `test_wire_port_end_gap_advisory_fires_on_a_declared_one_cell_gap` remains a
+  strict xfail with that stated as its reason. The premise it owns passes; the
+  wording is the open half.
+
+`_validate_cfg_sheet_live_edge_materials` is not migrated because it is GONE:
+`sheet_live_edge_material_mismatch` (#703 check 2) guarded the #702 resample and
+§2 deletes it. A sheet owns no cell, so there is no "own cell" material to
+compare against — the check had no subject under the contract.
+
+`sheet_plane_realized` is conditional: it reports only when a declared sheet
+lands OFF its declared mid-plane, or when a tie had to be broken. A board whose
+sheets land exactly where they were declared prints nothing, which is the
+correct silence and which invalidated two test expectations that pinned the
+LINE rather than the fact.
 
 **§1.1 nearest-plane rounding meets a ceil-realized domain (2026-09-07, the
 cv11 pec-short "core regression").** cv11's pec-short |S11| deficit went
