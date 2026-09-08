@@ -1365,6 +1365,13 @@ class _ExecuteMixin:
         if self._solver == "adi":
             from rfx.materials.thin_conductor import refuse_f0_sheets
             refuse_f0_sheets(self._thin_conductors, "ADI forward")
+            # #931 §1.9: a sheet and a wire own no cell, so ``pec_mask``
+            # alone carries neither.  ``run()``'s ADI branch threads them;
+            # this one did not, and a declared PEC sheet came out of
+            # ``forward()`` bit-identical to empty geometry.  The lane
+            # itself realizes them correctly — ``_run_adi_from_materials``
+            # calls ``realized_pec_edge_masks`` — so the whole defect was
+            # the two arguments missing here.
             return self._run_adi_from_materials(
                 grid,
                 materials,
@@ -1372,6 +1379,8 @@ class _ExecuteMixin:
                 lorentz_spec,
                 n_steps=n_steps,
                 pec_mask=pec_mask,
+                pec_sheets=tuple(pec_sheets or ()),
+                pec_wires=tuple(pec_wires or ()),
                 return_state=False,
             )
 
