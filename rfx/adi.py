@@ -1,8 +1,9 @@
 """ADI-FDTD: Alternating Direction Implicit FDTD solver.
 
-Unconditionally stable — dt is not limited by CFL condition.
-For thin substrates where standard Yee requires tiny dt, ADI allows
-10-100x larger timesteps.
+The homogeneous, lossless ADI split with compatible domain boundaries
+removes the explicit CFL stability restriction; accuracy still depends on dt.
+Interior PEC projection does not inherit that guarantee and is refused in
+both 2D and 3D. See docs/design_notes/20260908_adi_interior_pec_guard.md.
 
 Supports 2D TMz (Ez, Hx, Hy) and 3D (all 6 components).
 
@@ -20,6 +21,29 @@ import jax
 import jax.numpy as jnp
 
 from rfx.core.yee import EPS_0, MU_0
+
+
+ADI_INTERIOR_PEC_MESSAGE = (
+    "adi_interior_pec_unsupported: solver='adi' cannot safely carry interior "
+    "PEC sheets, wires, or volumes in 3D or 2D TMz. The current internal "
+    "PEC projection has measured growing solutions, including at "
+    "adi_cfl_factor=1 and the default 5; no general stable factor is "
+    "established. Use solver='yee' with the declared conductors retained. "
+    "Lowering or clamping adi_cfl_factor is not a supported remedy. "
+    "Domain-boundary PEC without interior PEC remains supported."
+)
+
+
+def _validate_interior_pec(mask):
+    """Refuse supplied PEC masks before a solve or JAX trace begins.
+
+    Structural on purpose: masks may be tracers, and a contents-based host
+    test would fail under jit/grad. Even an explicitly supplied all-false
+    mask is unsupported; use None for the no-interior-conductor control.
+    Numerical kernels below remain intact for controlled research.
+    """
+    if mask is not None:
+        raise ValueError(ADI_INTERIOR_PEC_MESSAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +191,7 @@ def adi_step_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
     -------
     ez_new, hx_new, hy_new : updated fields
     """
+    _validate_interior_pec(ez_pec_mask)
     Nx, Ny = ez.shape
     eps = eps_r * EPS_0
     half_dt = dt / 2.0
@@ -319,7 +344,7 @@ def make_adi_absorbing_sigma(nx, ny, n_layers, dx, order=3):
     """Create a graded conductivity array for implicit ADI absorbing boundary.
 
     Unlike operator-splitting CPML, this uses conductivity folded into
-    the ADI tridiagonal system — unconditionally stable at any dt.
+    the ADI tridiagonal system as implicit conductivity damping.
 
     Parameters
     ----------
@@ -520,7 +545,7 @@ def run_adi_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
     sources : list of (i, j, waveform_array) tuples.
     probes : list of probe tuples.
     ez_pec_mask : (Nx, Ny) bool array or None
-        The REALIZED Ez PEC edge mask (#931 §1.7), not a cell mask.
+        Reserved realized Ez mask (#931 §1.7); non-None is refused.
     cpml_params : ADICPMLParams2D or None
         CPML profile coefficients. When provided, CPML absorbing boundary
         is applied after each ADI step (operator-splitting).
@@ -532,6 +557,7 @@ def run_adi_2d(ez: jnp.ndarray, hx: jnp.ndarray, hy: jnp.ndarray,
     ez, hx, hy : final field arrays
     probe_data : (n_steps, n_probes) array or None
     """
+    _validate_interior_pec(ez_pec_mask)
     use_cpml = cpml_params is not None
     if use_cpml and cpml_state is None:
         raise ValueError("cpml_state is required when cpml_params is provided")
@@ -748,20 +774,24 @@ def adi_step_3d(ex, ey, ez, hx, hy, hz,
     differences (boundary rows included), so both split operators are
     skew-symmetric in the energy variables and the full-step map is
     similar to a product of two unitary Cayley transforms — the scheme is
-    unconditionally stable for every ``dt``, PEC domain boundary included.
+    stable without the explicit CFL restriction for the homogeneous, lossless
+    problem with compatible PEC domain boundaries. This argument does not
+    establish stability for the internal PEC projection below.
 
     Accuracy envelope (12^3 PEC cavity, TE101 at ~15 cells per
     wavelength): eigenfrequency error is -1.4% at 2x the 3D Yee CFL
     limit (test-measured, ``tests/unit/misc/test_review_tier1_validation_battery.py``),
     growing ~dt^2 (Crank–Nicolson-like temporal lag) to ~ -6.7% at 5x CFL
-    (von Neumann analysis — the 5x point is not test-measured). Runs
-    at 5-50x CFL remain stable but are quantitative only for features
+    (von Neumann analysis — the 5x point is not test-measured). For that
+    cavity without internal PEC, large factors are quantitative only for features
     much coarser than the timestep. Use large CFL factors for stiff
     meshes (thin substrates), not wavelength-scale resonances.
 
     Caveat: the *internal* ``pec_edge_masks`` are enforced by post-solve
-    projection (same approximation as the 2D path), not by exact
-    Dirichlet rows; the domain-boundary PEC is exact.
+    projection (as on the 2D path), not by exact Dirichlet rows. Both
+    lanes exhibit growing solutions with interior PEC, even at unit CFL.
+    A supplied internal mask is therefore refused at every timestep; the
+    code remains here for research, not as a supported conductor solver.
 
     Parameters
     ----------
@@ -773,6 +803,7 @@ def adi_step_3d(ex, ey, ez, hx, hy, hz,
     -------
     ex, ey, ez, hx, hy, hz : updated fields
     """
+    _validate_interior_pec(pec_edge_masks)
     eps = eps_r * EPS_0
     half_dt = dt / 2.0
 
@@ -911,13 +942,14 @@ def run_adi_3d(
     sources : list of (i, j, k, component, waveform_array) tuples
     probes : list of (i, j, k, component) tuples
     pec_edge_masks : (Mx, My, Mz) bool arrays or None
-        The REALIZED PEC edge masks (#931 §1.7), not a cell mask.
+        Reserved realized edge masks (#931 §1.7); non-None is refused.
 
     Returns
     -------
     ex, ey, ez, hx, hy, hz : final field arrays
     probe_data : (n_steps, n_probes) array or None
     """
+    _validate_interior_pec(pec_edge_masks)
     if sources is None:
         sources = []
     if probes is None:

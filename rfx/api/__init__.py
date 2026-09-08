@@ -353,9 +353,13 @@ class Simulation(
         ``"float32"`` (the default) for those.
     solver : str
         ``"yee"`` (default) for the standard explicit scheme or
-        ``"adi"`` for the ADI-FDTD path. ADI is unconditionally stable in
-        both 2D TMz (``mode="2d_tmz"``, 2% cavity-resonance gate at 5x
-        CFL, ``test_adi_cavity_resonance``; stable well beyond) and 3D
+        ``"adi"`` for the experimental ADI-FDTD path. The homogeneous,
+        lossless split with compatible domain boundaries removes the
+        explicit CFL stability restriction. Interior PEC (sheets, wires,
+        volumes) is refused at every factor on both lanes: its projection
+        does not inherit that guarantee. Cavity accuracy without interior
+        PEC is tested in 2D TMz (``mode="2d_tmz"``, 2% resonance gate at
+        5x CFL, ``test_adi_cavity_resonance``) and 3D
         (full Zheng–Chen–Zhang two-sub-step scheme since
         2026-07-13, issue #338: 2% PEC-cavity eigenfrequency gate at 2x
         CFL, ~15 cells/wavelength). 3D dispersion error grows ~dt^2, so
@@ -363,7 +367,7 @@ class Simulation(
         ``adi_cfl_factor > 2`` on a 3D grid — large factors trade
         wavelength-scale accuracy for stiff-mesh throughput.
     adi_cfl_factor : float
-        Timestep multiplier relative to the standard 2D CFL limit when
+        Timestep multiplier relative to the grid's Yee CFL timestep when
         ``solver="adi"``. Default 5.0; for quantitative wavelength-scale
         3D results prefer <= 2.0 (see ``solver``).
     stencil_order : int

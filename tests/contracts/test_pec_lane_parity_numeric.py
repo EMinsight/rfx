@@ -6,7 +6,9 @@ SHEET, and no solver lane applied it — a sheet owns no cell, and every
 solve entry took only ``pec_mask``. A simulation with a sheet-declared
 ground plane ran as if the metal were not there.
 
-So this file drives the actual lanes and compares FIELDS, not masks.
+So this file drives the actual lanes and compares fields. ADI's unstable
+interior-PEC projection is refused; its contract below pins that refusal
+and checks that declared sheets and wires still reach the shared owner.
 
 Battery, on a 20 mm PEC-walled box at dx = 1 mm with an Ez source below
 the conductor and a probe above it:
@@ -29,7 +31,6 @@ import warnings
 import numpy as np
 import pytest
 
-import rfx
 from rfx import Box, Simulation
 
 DX = 1e-3
@@ -153,111 +154,104 @@ def test_the_vmap_sweep_fast_path_realizes_the_same_conductor():
         assert batched == pytest.approx(single, rel=2e-3), (kind, batched, single)
 
 
-# The 3-D ADI lane is unstable with interior PEC above unit CFL: measured on
-# this battery at 200 steps, ``adi_cfl_factor=5`` (the constructor default)
-# gives peak 4.1e+30 for the sheet and 6.9e+26 for the volume against a 0.0023
-# control, and ``2.0`` gives 2.39 and 0.107 against 0.0043. So the lane tests
-# below pin at ``1.0``, where all three kinds are finite. Without it "the
-# conductor changed the answer" is satisfied by an overflow, which is not
-# evidence that the conductor was realized.
-ADI_STABLE_CFL = 1.0
+def _adi_conductor(kind, mode="3d", **kwargs):
+    """The measured slab classes, with an in-plane slab on TMz."""
+    from rfx import PolylineWire
 
-
-def test_the_adi_lane_realizes_the_same_conductor():
-    """ADI zeroed E at the occupied CELL indices until #931."""
-    peaks = {}
-    for kind in ("none", "sheet", "volume"):
-        sim = _build(kind, solver="adi", adi_cfl_factor=ADI_STABLE_CFL)
-        peaks[kind] = _peak(sim)
-    assert all(np.isfinite(v) for v in peaks.values()), peaks
-    assert peaks["sheet"] != pytest.approx(peaks["none"], rel=1e-6), peaks
-    assert peaks["volume"] != pytest.approx(peaks["none"], rel=1e-6), peaks
-
-
-def _forward_peak(sim, **fwd_kw):
+    sim = Simulation(freq_max=15e9, domain=DOMAIN, dx=DX, boundary="pec",
+                     solver="adi", mode=mode, **kwargs)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = sim.forward(n_steps=200, **fwd_kw)
-    return float(np.max(np.abs(np.asarray(res.time_series)[:, 0])))
+        if kind == "wire":
+            sim.add(PolylineWire(((10e-3, 10e-3, 8e-3),
+                                  (10e-3, 10e-3, 14e-3)), radius=0.2e-3),
+                    material="pec")
+        else:
+            thickness = {"sheet": 0, "volume": DX, "thick_volume": 3 * DX}[kind]
+            if mode == "3d":
+                lo, hi = (4e-3, 4e-3, 10e-3), (16e-3, 16e-3, 10e-3 + thickness)
+            else:
+                lo, hi = (4e-3, 10e-3, 0), (16e-3, 10e-3 + thickness, 20e-3)
+            sim.add(Box(lo, hi), material="pec")
+    sim.add_source(position=SRC if mode == "3d" else (10e-3, 5e-3, 0),
+                   component="ez")
+    sim.add_probe(position=PROBE if mode == "3d" else (10e-3, 15e-3, 0),
+                  component="ez")
+    return sim
 
 
-def test_the_adi_lane_realizes_the_same_conductor_through_forward_too():
-    """``run()`` threaded the sheets and wires into the ADI lane; ``forward()``
-    passed only ``pec_mask``, and a sheet owns no cell.
+@pytest.mark.parametrize("mode", ["3d", "2d_tmz"])
+@pytest.mark.parametrize("kind", ["sheet", "volume", "thick_volume"])
+@pytest.mark.parametrize("entrypoint", ["run", "forward"])
+def test_adi_default_refuses_interior_pec_even_without_preflight(mode, kind, entrypoint):
+    """The shipped factor must refuse before returning the measured overflow.
 
-    Measured before the fix on a 20 x 20 mm 2-D TMz board at dx = 1 mm with a
-    PEC sheet across the middle and the probe INSIDE it: ``run()`` read 0 and
-    ``forward()`` read 0.0098782936 — bit-identical to the same model with the
-    conductor deleted. The lane itself was never wrong;
-    ``_run_adi_from_materials`` realizes sheets and wires through
-    ``realized_pec_edge_masks``, so the whole defect was two arguments missing
-    at one call site.
-
-    The control matters: "the probe read zero" is also what a simulation that
-    never ran reports, so ``none`` has to read nonzero on the same lane.
+    A finite 200-step factor-1 trace was not a stability bound: longer
+    measurements also grew at factor 1. No supported interior-PEC ADI
+    factor is inferred from these short conductor-realization witnesses.
     """
-    # "thin" is absent on purpose: ``add_thin_conductor`` is refused by name
-    # on the ADI lane (`_validate_adi_configuration`), which is the §1.9
-    # behaviour for a lane that cannot realize a declaration — pinned below.
-    for kind in ("none", "sheet", "volume"):
-        run_peak = _peak(_build(kind, solver="adi",
-                                adi_cfl_factor=ADI_STABLE_CFL))
-        fwd_peak = _forward_peak(_build(kind, solver="adi",
-                                        adi_cfl_factor=ADI_STABLE_CFL))
-        assert np.isfinite(run_peak) and np.isfinite(fwd_peak), (
-            kind, run_peak, fwd_peak)
-        assert fwd_peak == pytest.approx(run_peak, rel=1e-6), (
-            f"{kind}: forward() {fwd_peak:.10g} disagrees with run() "
-            f"{run_peak:.10g} on the ADI lane")
+    sim = _adi_conductor(kind, mode)
+    assert sim._adi_cfl_factor == 5.0
+    with pytest.raises(ValueError, match="adi_interior_pec_unsupported"):
+        getattr(sim, entrypoint)(n_steps=4, skip_preflight=True)
 
-    control = _forward_peak(_build("none", solver="adi",
-                                   adi_cfl_factor=ADI_STABLE_CFL))
-    assert control > 0, "the control read zero — nothing ran"
-    for kind in ("sheet", "volume"):
-        peak = _forward_peak(_build(kind, solver="adi",
-                                    adi_cfl_factor=ADI_STABLE_CFL))
-        assert peak != pytest.approx(control, rel=1e-6), (
-            f"{kind}: forward() on the ADI lane is indistinguishable from "
-            "empty geometry")
+
+@pytest.mark.parametrize("kind", ["sheet", "wire"])
+@pytest.mark.parametrize("entrypoint", ["run", "forward"])
+def test_adi_refusal_preserves_sheet_and_wire_forwarding(monkeypatch, kind, entrypoint):
+    """A refusal must not conceal a return of #931's dropped-conductor bug.
+
+    Both spies call production code: the declaration reaches the ADI
+    helper, its shared owner realizes nonempty edges, and the solver then
+    refuses. Neither an early declaration-only rejection nor dropping the
+    sheet/wire arguments satisfies this contract.
+    """
+    import rfx.boundaries.pec as pec
+
+    sim = _adi_conductor(kind)
+    original_lane = sim._run_adi_from_materials
+    original_owner = pec.realized_pec_edge_masks
+    lane_calls = []
+    owner_calls = []
+    in_lane = False
+
+    def owner_spy(*args, **kwargs):
+        masks = original_owner(*args, **kwargs)
+        if in_lane:
+            owner_calls.append(masks)
+        return masks
+
+    def lane_spy(*args, **kwargs):
+        nonlocal in_lane
+        lane_calls.append(kwargs)
+        in_lane = True
+        try:
+            return original_lane(*args, **kwargs)
+        finally:
+            in_lane = False
+
+    monkeypatch.setattr(pec, "realized_pec_edge_masks", owner_spy)
+    monkeypatch.setattr(sim, "_run_adi_from_materials", lane_spy)
+    with pytest.raises(ValueError, match="adi_interior_pec_unsupported"):
+        getattr(sim, entrypoint)(n_steps=4, skip_preflight=True)
+
+    assert len(lane_calls) == 1
+    assert lane_calls[0]["pec_mask"] is None
+    assert len(lane_calls[0]["pec_sheets" if kind == "sheet" else "pec_wires"]) == 1
+    assert len(owner_calls) == 1
+    assert any(np.any(np.asarray(mask)) for mask in owner_calls[0])
 
 
 def test_the_adi_forward_lane_refuses_the_thin_conductor_it_cannot_realize():
     """``add_thin_conductor`` has no carrier on the ADI lane, so both entry
     points refuse it by name rather than solving a board without its metal."""
-    sim = _build("thin", solver="adi", adi_cfl_factor=ADI_STABLE_CFL)
+    sim = _build("thin", solver="adi")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         with pytest.raises(ValueError, match="thin-conductor"):
             sim.run(n_steps=4, skip_preflight=True)
         with pytest.raises(ValueError, match="thin-conductor"):
-            _build("thin", solver="adi",
-                   adi_cfl_factor=ADI_STABLE_CFL).forward(n_steps=4)
-
-
-def test_the_adi_forward_lane_realizes_a_wire():
-    """A filament owns no cell either, so it rode out of ``forward()`` on the
-    same missing argument. Probed ON the wire's own Ez edge, with the wire
-    removed as the control."""
-    from rfx import PolylineWire
-
-    def _wire_sim(with_wire):
-        sim = Simulation(freq_max=15e9, domain=DOMAIN, dx=DX, boundary="pec",
-                         solver="adi", adi_cfl_factor=ADI_STABLE_CFL)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            if with_wire:
-                sim.add(PolylineWire(((10e-3, 10e-3, 8e-3),
-                                      (10e-3, 10e-3, 14e-3)), radius=0.2e-3),
-                        material="pec")
-        sim.add_source(position=SRC, component="ez")
-        sim.add_probe(position=(10e-3, 10e-3, 11e-3), component="ez")
-        return sim
-
-    with_wire = _forward_peak(_wire_sim(True))
-    without = _forward_peak(_wire_sim(False))
-    assert np.isfinite(with_wire) and np.isfinite(without), (with_wire, without)
-    assert without > 0, "the control read zero — nothing ran"
-    assert with_wire != pytest.approx(without, rel=1e-6), (with_wire, without)
+            _build("thin", solver="adi").forward(n_steps=4, skip_preflight=True)
 
 
 def test_the_subgridded_lane_refuses_a_sheet_it_cannot_realize():
