@@ -87,10 +87,6 @@ _Y_MID = _DOMAIN[1] / 2
 _L = _X2 - _X1
 _FREQS = np.linspace(3e9, 7e9, 9)
 _N_STEPS = 4000
-# Kept as the name of the advisory this fixture USED to pin, so a reader
-# grepping for it lands on the re-derivation note in the module fixture
-# below rather than on nothing (#931 phase 2b).
-_PEC_FACES_ADVISORY_SNIPPET = "INFINITE PEC boundary"
 
 
 def _build_thru(reference_plane_cells: int | None = None) -> Simulation:
@@ -110,10 +106,8 @@ def _build_thru(reference_plane_cells: int | None = None) -> Simulation:
     #
     # What moves and what does not, measured on this grid before the
     # change (dx = 0.5 mm, all four in-plane faces on node lines):
-    #   plane  z = 1.0 mm, node k=2, unchanged — the sheet's mid-plane sits
-    #          a half cell up, which is the tie, and a tie resolves to the
-    #          LOWER plane, the same plane the old node-half-open sampler
-    #          picked;
+    #   plane  z = 1.0 mm, node k=2, unchanged — the zero-thickness foil
+    #          declares that exact node plane, with no snapping offset;
     #   width  the footprint is now sampled CLOSED on the two in-plane
     #          axes, so the drawn 5.0 mm strip realizes 5.0 mm (11 nodes,
     #          10 edges). The old half-open rule dropped the hi row and
@@ -145,22 +139,32 @@ def test_the_thru_trace_realizes_the_drawn_foil():
     contract's claim is drawn == realized (#931 §1.3); this reads it back
     off the single owner rather than trusting the declaration.
 
-    Measured on this grid: plane z-node 2 (z = 1.0 mm, the substrate top
-    and the tie-to-lower resolution of the sheet's mid-plane), footprint
+    Measured on this grid: plane z-node 2 (z = 1.0 mm, exactly the
+    declared foil plane at the substrate top), footprint
     x nodes 23..57 and y nodes 23..33, i.e. 10 Ey edges across the strip
     = 5.0 mm, the drawn width. The pre-#931 half-open sampler dropped the
     hi row and realized 4.5 mm.
     """
+    _assert_thru_trace_realization(_build_thru())
+
+
+def _assert_thru_trace_realization(sim):
+    """Pin the foil itself, independently of conditional preflight notices."""
     from rfx.boundaries.pec import realized_wall_planes
+    from rfx.geometry.rasterize_grid import coords_from_uniform_grid
     from tests._realized_geometry import realized
 
-    rz = realized(_build_thru())
+    assert sim._pec_faces == {"z_lo"}, "the declared ground must be the z_lo PEC face"
+    rz = realized(sim)
     assert rz.sheet_planes == {2: [2]}, rz.sheet_planes
     assert rz.pec_mask is None or not bool(np.asarray(rz.pec_mask).any()), (
         "a foil owns no cell — the trace must not be in the volume mask")
     assert realized_wall_planes(rz.edge_masks, 2) == [2]
 
     (sheet,) = rz.sheets
+    z_realized = float(coords_from_uniform_grid(rz.grid).z[sheet.plane])
+    assert abs(z_realized - _H) < 1e-12, (
+        f"trace plane {z_realized} differs from declared height {_H}")
     occ = np.argwhere(np.asarray(sheet.footprint))
     ny = int(occ[:, 1].max() - occ[:, 1].min())     # Ey edges across the strip
     nx = int(occ[:, 0].max() - occ[:, 0].min())
@@ -872,50 +876,11 @@ def refplane_thru():
     issues = [str(i) for i in report]
     for msg in issues:
         print(f"\n[refplane thru] preflight (verbatim): {msg}")
-    # Exact known advisory set. RE-DERIVED 2026-09-07 (#931 phase 2b),
-    # after the preflight group's migration landed on the base branch and
-    # not before it — pinning this list while preflight was half-migrated
-    # would have pinned a state that was about to move again.
-    #
-    # It was, from 2026-07-11 (#319) to #931:
-    #     pec_faces_finite_pec, wire_port_dead_extent_cells x2
-    # and it is now one INFO, `sheet_plane_realized`. Both losses are
-    # accounted for, because an advisory that stops firing is exactly how
-    # a fixture stops being watched:
-    #
-    #   * wire_port_dead_extent_cells (one per port) said the thru's top
-    #     extent cell sat INSIDE the trace. It does not any more, and the
-    #     realization says so with no solve: the trace is a SHEET on node
-    #     plane 2, realizing 374 Ex and 350 Ey tangential edges and ZERO
-    #     Ez edges (contract §1.3 — the normal E through a foil stays
-    #     live). Each port's 1 mm extent spans two Ez edges below that
-    #     plane and neither is metal, so there is no dead cell left to
-    #     report. Post-#318 the dead cell was already excluded from the
-    #     sigma/drive/Z0 fold, so the 50-ohm termination the gates below
-    #     were measured through is unchanged; what changed is that there
-    #     is nothing to exclude.
-    #
-    #   * pec_faces_finite_pec said "you have an INFINITE PEC boundary
-    #     face AND finite PEC objects". Both are still true here — z_lo is
-    #     `pec` and the trace is a finite conductor — but the check reads
-    #     `material_name == "pec"` over `_geometry` entries only, and a
-    #     foil declared with add_thin_conductor is a SheetSpec, not a
-    #     geometry entry. So the advisory is silent for a reason that has
-    #     nothing to do with this fixture: under the contract a finite PEC
-    #     conductor can be declared in a place that check does not look.
-    #     Handed to the preflight owner (T6-RECOMPUTE.md, "the advisory
-    #     the contract made blind"); NOT worked around here, because this
-    #     fixture's job is to notice drift, not to hide it.
-    #
-    # Anything else = fixture drift, stop.
-    codes = sorted(getattr(i, "code", None) for i in report)
-    assert codes == ["sheet_plane_realized"], (
-        f"refplane thru preflight drifted from the baseline: {issues}")
-    # The one advisory that does fire is the load-bearing one for this
-    # module: every constant below is measured THROUGH this strip, so the
-    # strip has to be on the plane it was drawn on.
-    assert any("realized node plane 2" in m and "offset +0.000 cell" in m
-               for m in issues), issues
+    # Exact-plane sheets are intentionally silent (#931 section 6). The
+    # numerical lock depends on the realized foil, not an advisory census.
+    errors = [str(i) for i in report if i.severity == "error"]
+    assert not errors, errors
+    _assert_thru_trace_realization(sim)
     S, freqs, diag = compute_lumped_wire_s_matrix_via_scan(
         sim, _FREQS, n_steps=_N_STEPS, return_refplane_diagnostics=True)
     S = np.asarray(S).astype(np.complex128)
