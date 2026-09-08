@@ -115,8 +115,16 @@ the substrate — while the old rule happened to put its single wall at 320 µm,
 substrate the mesh realized as four cells. Neither is the declared board. The contract does
 not paper over this: the assembly warns when a sheet plane lies strictly inside one
 dielectric (same material on both sides), preflight reports the declared-vs-realized
-offset, and the fixtures are redrawn ON-LATTICE (dx = h_sub / n, as cv06b already does) —
-the #325/#802 class, now made visible instead of absorbed by a tie rule.
+offset, and the fixtures are redrawn ON-LATTICE — the #325/#802 class, now made visible
+instead of absorbed by a tie rule.
+
+**On-lattice is two conditions, not one.** `dx = h_sub / n` SIZES the laminate: it makes
+the thickness a whole number of cells. It does not PLACE it — the stack's own origin has
+to sit on a node line too, or every face in it is off by the same fraction of a cell. Both
+conditions, or neither is satisfied: a ground declared at 4 mm on a 196.75 µm mesh realizes
+at 3935 µm however exactly `h_sub` divides (measured 2026-09-07 on the public
+materials-geometry example, which stated the shorthand and demonstrated the failure it
+warns about). Say the plane in cells (`Z_GND = 20 * DX`) and the question does not arise.
 
 A lossy (`surface_impedance_f0`) sheet uses the SAME footprint and the SAME edge set; the
 #677 G4 identity ("f0 toggles loss, never geometry") is then true by construction, not by

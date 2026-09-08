@@ -112,8 +112,20 @@ sim.add_source(feed, "ez", waveform=GaussianPulse(f0=f0, bandwidth=0.8),
                amplitude_kind="current")   # required from 1.9
 sim.add_probe(probe, "ez")
 
-sim.preflight(strict=True)
+report = sim.preflight()
+print(report)
 ```
+
+Preflight is not silent here, and that is the point: its output is part of the
+result. This model draws one advisory, `conductor-Box design edge(s) sit
+off-lattice`, on the patch's `y` faces — the designed width `W = 38.01 mm` is
+not a whole number of `dx = 1 mm` cells, so each face lands 495 µm from where
+it was drawn. Read it, do not silence it. Rounding `L` and `W` to the lattice
+would remove the advisory by changing the antenna, which is the wrong trade for
+a resonator whose length sets `f_res`; refining `dx` is the right one, and the
+[benchmarks page](/rfx/guide/benchmarks/) shows what that costs. Reserve
+`preflight(strict=True)` for a model you expect to be advisory-free — it
+escalates every finding, informational ones included.
 
 Both `add_thin_conductor` calls warn: `sigma_bulk=5.80e+07 S/m is at or above
 the 1e+06 S/m PEC threshold, so this is a LOSSLESS PEC sheet`. That is the

@@ -8550,24 +8550,35 @@ class _PreflightMixin:
             for _o, e, a, k, realized_z, declared, off_cells
             in rows[:_CAMPAIGN_MAX_OFFENDERS])
         n_off = sum(1 for r in rows if r[0] > 1e-12)
-        _w.warn(PreflightWarning(
-            f"{len(sheets)} PEC sheet(s) realized (lattice ownership "
-            f"contract #931 §1.3: one node plane each, closed footprint, "
-            f"normal E through the plane live), {n_off} of them off their "
-            f"declared mid-plane; worst first: {desc}. A sheet snaps to the "
-            "node plane nearest its declared mid-plane (an exact half-cell "
-            "tie resolves LOWER); an offset means the declared plane — a "
-            "laminate face, a ground level — is not on this mesh's node "
-            "line, and the conductor sits that far from where it was "
-            "drawn. REMEDY when the offset matters: put a mesh node on the "
-            "declared plane (dx = h/N for an interface at height h, or a "
-            "preserved region on the non-uniform lane). COVERAGE: every "
-            f"sheet declaration on the {ctx.lane} lane (zero-thickness PEC "
-            "Boxes via add() and PEC add_thin_conductor entries). STALE "
-            "IF: the named sheet's SheetSpec.plane is not the printed node.",
-            code="sheet_plane_realized", severity="info",
-            source="_validate_cfg_pec_realization",
-        ))
+        # Say something only when there IS something to say. A model whose
+        # sheets all landed on the plane they declared is the expected case,
+        # and preflight(strict=True) escalates EVERY finding including
+        # info-severity (the historical contract at :2999), so an
+        # unconditional "N sheets realized, 0 of them off" line failed every
+        # strict run on a correct board — measured on
+        # docs/public/guide/first-patch.mdx. The realized planes stay
+        # available from fidelity_report(); this finding reports a CONDITION.
+        if n_off == 0 and not ties:
+            rows = []
+        if rows:
+            _w.warn(PreflightWarning(
+              f"{len(sheets)} PEC sheet(s) realized (lattice ownership "
+              f"contract #931 §1.3: one node plane each, closed footprint, "
+              f"normal E through the plane live), {n_off} of them off their "
+              f"declared mid-plane; worst first: {desc}. A sheet snaps to the "
+              "node plane nearest its declared mid-plane (an exact half-cell "
+              "tie resolves LOWER); an offset means the declared plane — a "
+              "laminate face, a ground level — is not on this mesh's node "
+              "line, and the conductor sits that far from where it was "
+              "drawn. REMEDY when the offset matters: put a mesh node on the "
+              "declared plane (dx = h/N for an interface at height h, or a "
+              "preserved region on the non-uniform lane). COVERAGE: every "
+              f"sheet declaration on the {ctx.lane} lane (zero-thickness PEC "
+              "Boxes via add() and PEC add_thin_conductor entries). STALE "
+              "IF: the named sheet's SheetSpec.plane is not the printed node.",
+              code="sheet_plane_realized", severity="info",
+              source="_validate_cfg_pec_realization",
+          ))
         if ties:
             desc_t = "; ".join(
                 f"{e.label} '{e.name}' normal {'xyz'[a]}: declared mid-plane "
