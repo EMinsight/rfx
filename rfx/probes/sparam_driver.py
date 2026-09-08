@@ -93,6 +93,7 @@ def compute_lumped_wire_s_matrix_via_scan(
     n_freqs = len(freqs)
 
     # Build grid + materials exactly as the uniform forward lane does.
+    sim._require_uniform_mesh("compute_lumped_wire_s_matrix_via_scan")
     grid = sim._build_grid()
     _sheet_specs: list = []
     _pec_sheets: list = []

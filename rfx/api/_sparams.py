@@ -3810,37 +3810,11 @@ class _SparamMixin:
         entries = list(self._msl_ports)
         n_ports = len(entries)
 
-        # Build the grid used for probe placement + the eps anchor. On the
-        # non-uniform lane this MUST be the SAME grid run_nonuniform_path
-        # builds (so probe_xs, port cells, dy/dz arrays and the eps anchor
-        # align with the run's field planes). build_nonuniform_grid needs a
-        # concrete dz_profile — synthesise from dx when absent into a LOCAL.
-        # self._dz_profile is mutated only INSIDE the run try/finally below (so
-        # the restore always runs even if probe placement / the trace-PEC scan
-        # raises) — the subsequent self.run() then reads the same dz and builds
-        # a byte-matching grid.
-        _dz_profile_saved = self._dz_profile
-        _dz_for_grid = self._dz_profile
-        if is_nonuniform:
-            from rfx.runners.nonuniform import build_nonuniform_grid
-            if _dz_for_grid is None:
-                _nz_syn = int(round(float(self._domain[2]) / float(self._dx)))
-                _dz_for_grid = np.full(max(_nz_syn, 1), float(self._dx))
-            grid = build_nonuniform_grid(
-                self._freq_max, self._domain, self._dx, self._cpml_layers,
-                _dz_for_grid,
-                dx_profile=self._dx_profile, dy_profile=self._dy_profile,
-                pec_faces=self._boundary_spec.pec_faces()
-                    if self._boundary_spec is not None else None,
-                pmc_faces=self._boundary_spec.pmc_faces()
-                    if self._boundary_spec is not None else None,
-                cpml_axes="".join(
-                    ax for ax in "xyz"
-                    if ax not in (self._periodic_axes or "")
-                ),
-            )
-        else:
-            grid = self._build_grid()
+        # Probe placement, material assembly and each run share the resolved
+        # mesh. Missing z profiles are synthesized locally by the grid builder;
+        # writing a derived profile into the declaration would freeze auto-mesh
+        # state and change the resolved domain during the driver.
+        grid = self._build_realized_grid()
 
         if freqs is None:
             freqs_arr = np.asarray(jnp.linspace(self._freq_max / 10, self._freq_max, n_freqs))
@@ -4038,11 +4012,6 @@ class _SparamMixin:
         saved_probes = list(self._probes)
         saved_internal_probes = set(self._internal_probe_indices)
         try:
-            # Mutate self._dz_profile to the (possibly synthesised) grid dz only
-            # now — inside the try — so the finally always restores it and the
-            # subsequent self.run() builds a grid matching the one above.
-            if is_nonuniform:
-                self._dz_profile = _dz_for_grid
             _complex_dtype = jnp.complex128 if jax.config.x64_enabled else jnp.complex64
             S = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
             Z0_per_run = jnp.zeros((n_ports, n_freqs_used), dtype=_complex_dtype)
@@ -4864,7 +4833,6 @@ class _SparamMixin:
             self._ports = saved_ports
             self._probes = saved_probes
             self._internal_probe_indices = saved_internal_probes
-            self._dz_profile = _dz_profile_saved
 
     def compute_mixed_s_matrix(
         self,
@@ -8136,15 +8104,6 @@ class _SparamMixin:
 
         n_ports = len(entries)
 
-        # ``_build_nonuniform_grid`` requires a concrete dz_profile.
-        # Synthesise one from the scalar dx when the user did not supply
-        # a dz_profile (same semantics as the uniform lane's implicit
-        # z-resolution). Restored in the ``finally`` below.
-        _dz_profile_saved = self._dz_profile
-        if self._dz_profile is None:
-            _nz = int(round(float(self._domain[2]) / float(self._dx)))
-            self._dz_profile = np.full(max(_nz, 1), float(self._dx))
-
         # Build the grid directly so we can restrict ``cpml_axes`` to
         # axes that are not fully PEC/PMC-bounded. The rasteriser (see
         # ``rfx/geometry/rasterize_grid.py::coords_from_nonuniform_grid``)
@@ -8168,19 +8127,17 @@ class _SparamMixin:
             if ax not in (self._periodic_axes or "")
             and not _axis_fully_closed(ax)
         )
-        try:
-            grid = build_nonuniform_grid(
-                self._freq_max, self._domain, self._dx, self._cpml_layers,
-                self._dz_profile,
-                dx_profile=self._dx_profile,
-                dy_profile=self._dy_profile,
-                pec_faces=pec_set or None,
-                pmc_faces=pmc_set or None,
-                cpml_axes=cpml_axes,
-            )
-        except Exception:
-            self._dz_profile = _dz_profile_saved
-            raise
+        # Missing z profiles are synthesized locally, preserving the declared
+        # auto mesh and its cached resolution throughout device/reference runs.
+        grid = build_nonuniform_grid(
+            self._freq_max, self._domain, self._dx, self._cpml_layers,
+            self._dz_profile,
+            dx_profile=self._dx_profile,
+            dy_profile=self._dy_profile,
+            pec_faces=pec_set or None,
+            pmc_faces=pmc_set or None,
+            cpml_axes=cpml_axes,
+        )
         if n_steps is None:
             # ``NonUniformGrid`` does not expose ``num_timesteps`` (known
             # asymmetry vs. ``Grid``); inline the same formula here.
@@ -8451,7 +8408,6 @@ class _SparamMixin:
                 s_columns.append(recv_col)
         finally:
             self._waveguide_ports = original_entries
-            self._dz_profile = _dz_profile_saved
 
         # Issue #827 (waveguide instance): the ring-down witness now reaches
         # the NU lane -- same aggregate truncation warning and settling_db

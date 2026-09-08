@@ -1035,6 +1035,16 @@ def vmap_material_sweep(
     # Validate param_name
     _parse_param_name(param_name)
 
+    # The batched kernel is uniform-only. Resolve before assembly so an
+    # auto-generated profile takes the existing run()-based fallback.
+    if sim._uses_nonuniform_mesh:
+        if n_steps is None:
+            n_steps = sim._nu_n_steps(num_periods)
+        import warnings
+        warnings.warn("Resolved non-uniform mesh: Falling back to sequential execution.",
+                      UserWarning, stacklevel=2)
+        return _sequential_fallback(sim, param_name, param_values, n_steps=n_steps)
+
     # Build grid and base materials once
     grid = sim._build_grid()
     _sweep_pec_sheets: list = []

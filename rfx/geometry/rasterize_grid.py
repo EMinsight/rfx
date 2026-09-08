@@ -791,6 +791,7 @@ def rasterize_geometry(
     chi3_arr = jnp.zeros(shape, dtype=jnp.float32)
     pec_mask = jnp.zeros(shape, dtype=jnp.bool_)
     pec_shapes = []
+    has_pec_cells = False
     has_kerr = False
     if centres is None:
         centres = cell_centres_from_nodes(coords, cell_sizes)
@@ -809,6 +810,7 @@ def rasterize_geometry(
                 entry.shape, coords, centres, cell_sizes,
                 name=entry.material_name)
             if cells is not None:
+                has_pec_cells = True
                 pec_mask = pec_mask | cells
                 mask = cells
             elif sheet is not None:
@@ -852,11 +854,15 @@ def rasterize_geometry(
                 grid, tc, materials, pec_mask=pec_mask, sheets=sheets)
             if tc.is_pec:
                 pec_shapes.append(tc.shape)
+                # A legacy applier can materialize a 2-D sheet as cells.
+                has_pec_cells = True
 
     debye_spec = _spec_from_pole_masks(debye_masks_by_pole)
     lorentz_spec = _spec_from_pole_masks(lorentz_masks_by_pole)
 
-    has_pec = bool(jnp.any(pec_mask))
+    # Match the uniform assembler: only the optional-mask decision is
+    # static under jit; classification/refusals above still use the grid.
+    has_pec = has_pec_cells if is_tracer(pec_mask) else bool(jnp.any(pec_mask))
     kerr_chi3 = chi3_arr if has_kerr else None
     refuse_vaporized_sheets(sheets, lane="non-uniform", periodic=periodic)
     return materials, debye_spec, lorentz_spec, pec_mask if has_pec else None, pec_shapes, kerr_chi3

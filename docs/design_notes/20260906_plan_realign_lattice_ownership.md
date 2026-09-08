@@ -365,6 +365,18 @@ falsifier=<the §5 item exercised>`.
 
 ## 6. Amendments from implementation and review (2026-09-07)
 
+**Auto-mesh resolution (2026-09-08).** Grid-dependent decisions consume a
+resolved view of the declared mesh inputs, before choosing a lane. The common
+mesh-field read boundary covers execution, inspection, optimization, builders,
+and export; the uniform builder refuses a resolved nonuniform mesh instead of
+silently building a surrogate. Preflight preserves declared dx/domain/profiles
+and caches the same resolution execution uses. Geometry/material replacement
+invalidates that cache. Auto-mesh selection warnings are outside preflight's
+legality findings. Static preflight diagnostics and NU grid construction stay
+host-side under an outer JIT, while explicitly traced profiles retain the
+differentiable mesh path.
+The §1.5 refusal and its numerical tolerance are unchanged.
+
 Where the branch and this note disagreed, the branch is right and the wording
 below replaces the earlier text. Each item names what actually shipped.
 

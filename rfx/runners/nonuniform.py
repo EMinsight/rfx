@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 
+import jax
 import numpy as np
 import jax.numpy as jnp
 
@@ -57,11 +58,18 @@ def build_nonuniform_grid(
         nz_phys = max(1, int(round(domain[2] / dx)))
         dz_profile = np.full(nz_phys, float(dx))
     domain_xy = (domain[0], domain[1])
-    return make_nonuniform_grid(
-        domain_xy, dz_profile, dx, cpml_layers,
-        dx_profile=dx_profile, dy_profile=dy_profile,
-        pec_faces=pec_faces, pmc_faces=pmc_faces, cpml_axes=cpml_axes,
-    )
+    # An outer jit must not turn a STATIC mesh into traced coordinates:
+    # conductor classification needs the same concrete lattice as preflight.
+    # Actual mesh design variables retain their differentiable build path.
+    from contextlib import nullcontext
+    traced = any(is_tracer(value) for value in (
+        dx, dx_profile, dy_profile, dz_profile))
+    with nullcontext() if traced else jax.ensure_compile_time_eval():
+        return make_nonuniform_grid(
+            domain_xy, dz_profile, dx, cpml_layers,
+            dx_profile=dx_profile, dy_profile=dy_profile,
+            pec_faces=pec_faces, pmc_faces=pmc_faces, cpml_axes=cpml_axes,
+        )
 
 
 def assemble_materials_nu(

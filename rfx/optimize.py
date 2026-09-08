@@ -552,14 +552,15 @@ def gradient_check(
     GradientCheckResult
         Contains ad_grad, fd_grad, and relative_error.
     """
-    grid = sim._build_grid()
+    grid = sim._build_realized_grid()
     from rfx.materials.thin_conductor import refuse_f0_sheets as _refuse_f0_gc
     _refuse_f0_gc(sim._thin_conductors, "gradient-check")
     # Baseline eps_r only; the solve is sim.forward(), which assembles and
     # realizes its own sheets and wires (#931 §1.9). Collect-and-drop so
     # the omission is a decision at this call site, not an accident.
-    base_materials, _, _, _, _, _, _ = sim._assemble_materials(
-        grid, pec_sheets=[], pec_wires=[])
+    assemble = (sim._assemble_materials_nu if sim._uses_nonuniform_mesh
+                else sim._assemble_materials)
+    base_materials, *_ = assemble(grid, pec_sheets=[], pec_wires=[])
     base_eps = base_materials.eps_r
 
     fwd_kw = {}

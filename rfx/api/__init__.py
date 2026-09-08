@@ -267,6 +267,7 @@ from rfx.api._compile import _CompileMixin  # noqa: E402
 # ---------------------------------------------------------------------------
 
 from rfx.api._execute import _ExecuteMixin  # noqa: E402
+from rfx.api._mesh import _MeshMixin  # noqa: E402
 from rfx.api._artifacts import _ArtifactsMixin  # noqa: E402
 
 
@@ -279,6 +280,7 @@ _LorentzSpec = tuple[list[LorentzPole], list[jnp.ndarray]]
 # ---------------------------------------------------------------------------
 
 class Simulation(
+    _MeshMixin,
     _PreflightMixin,
     _SparamMixin,
     _CompileMixin,
@@ -852,6 +854,7 @@ class Simulation(
         material/PEC discontinuity at artificial coarse/fine interfaces, and
         no unsupported RF post-processing features.
         """
+        self._require_uniform_mesh("validate_subgrid")
         # #931 §1.9: sheets and wires own no cell, so a validator handed
         # only pec_mask cannot see them — and this lane cannot realize
         # them (run(solver='subgridded') refuses). Collect and pass them
@@ -2384,15 +2387,28 @@ class Simulation(
             raise ValueError(
                 "calibration_preset cannot be combined with explicit reference_plane/probe_plane"
             )
-        grid = self._build_grid(extra_waveguide_axes=axis_name)
         pos_vec = [0.0, 0.0, 0.0]
         pos_vec[axis_idx] = x_position
-        x_index = grid.position_to_index(tuple(pos_vec))[axis_idx]
-        axis_pad = grid.axis_pads[axis_idx]
-        snapped_source_plane = (x_index - axis_pad) * grid.dx
         step_sign = 1 if direction.startswith("+") else -1
-        measured_reference_plane = snapped_source_plane + step_sign * ref_offset * grid.dx
-        measured_probe_plane = snapped_source_plane + step_sign * probe_offset * grid.dx
+        if self._uses_nonuniform_mesh:
+            from rfx.nonuniform import position_to_index
+            from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid
+            grid = self._build_nonuniform_grid()
+            x_index = position_to_index(grid, tuple(pos_vec))[axis_idx]
+            coords = coords_from_nonuniform_grid(grid)
+            nodes = np.asarray((coords.x, coords.y, coords.z)[axis_idx])
+            snapped_source_plane = float(nodes[x_index])
+            measured_reference_plane = float(nodes[np.clip(
+                x_index + step_sign * ref_offset, 0, len(nodes) - 1)])
+            measured_probe_plane = float(nodes[np.clip(
+                x_index + step_sign * probe_offset, 0, len(nodes) - 1)])
+        else:
+            grid = self._build_grid(extra_waveguide_axes=axis_name)
+            x_index = grid.position_to_index(tuple(pos_vec))[axis_idx]
+            axis_pad = grid.axis_pads[axis_idx]
+            snapped_source_plane = (x_index - axis_pad) * grid.dx
+            measured_reference_plane = snapped_source_plane + step_sign * ref_offset * grid.dx
+            measured_probe_plane = snapped_source_plane + step_sign * probe_offset * grid.dx
         axis_domain = self._domain[axis_idx]
         if (
             measured_reference_plane < 0.0
@@ -4185,7 +4201,7 @@ class Simulation(
         This keeps the planner from scattering direct ``Simulation`` private
         attribute reads while avoiding a larger public accessor surface.
         """
-        grid = self._build_grid()
+        grid = self._build_realized_grid()
         return {
             "freq_max": float(self._freq_max),
             "domain": tuple(float(v) for v in self._domain),
@@ -4218,7 +4234,7 @@ class Simulation(
         )
 
     def __repr__(self) -> str:
-        grid = self._build_grid()
+        grid = self._build_realized_grid()
         return (
             f"Simulation(\n"
             f"  freq_max={self._freq_max:.2e} Hz,\n"
