@@ -297,12 +297,19 @@ def _require_post_931(fx) -> None:
 
 
 # The numeric pins below the fold (_PIN_F0_ENV_MHZ, _PIN_F0_GATE_MHZ,
-# _PIN_TRACE_SHA256, the colpow pair) are measurements of the COMPENSATED
-# geometry. They must be re-pinned from the regenerated artifact in the same
-# commit that ingests it -- never re-tuned, never widened. Flip this flag in
-# that commit; until then the pin checks skip on a post-#931 fixture and say
-# why, instead of going red for a reason no one can fix by editing a test.
-_PINS_REPINNED_FOR_931 = False
+# _PIN_TRACE_SHA256, the colpow pair) must be re-pinned from the regenerated
+# artifact in the same commit that ingests it -- never re-tuned, never widened.
+# Flip this flag in that commit; until then the pin checks skip on a post-#931
+# fixture and say why, instead of going red for a reason no one can fix by
+# editing a test.
+#
+# DONE: cv19 pass 2 (VESSL 369367259297, output issue931-post-cv19-20260907T194954Z,
+# rc 0 on 2026-09-07, log ends "RESULT: ALL CHECKS PASSED") is the committed
+# fixture, and the four pins below are read back out of it. Only one of them
+# moved: the f0 envelope 12.1230 -> 12.1219 MHz, which leaves the gate at 19.0
+# because ceil(12.1219 x 1.5 = 18.18285) = 19.0. The digest moved because every
+# trace was re-solved. The two colpow pins did not move at all.
+_PINS_REPINNED_FOR_931 = True
 
 
 def _require_repinned(fx) -> None:
@@ -390,8 +397,17 @@ def test_reported_deltas_are_recomputed_from_the_bands(fixture):
         # the algebraic identity the earlier revision missed: the "asymmetric
         # edge residual" and the "bandwidth deficit" are one fact
         if "d_bw_mhz" in row:
+            # The three deltas are stored rounded to 0.01 MHz, so the identity
+            # can only be checked to the record's own precision: three
+            # independent roundings at half a unit each = 0.015. The unrounded
+            # identity is exact, and the recomputation just above already
+            # checks each field against the traces at 5e-3; a tighter bound
+            # here is a claim about the rounding grid, not about the case.
+            # cv19 pass 2 lands the coarse rung exactly on that edge:
+            # 15.24 - 24.51 = -9.27 against a recorded -9.26, from the
+            # unrounded 15.2447 - 24.5050 = -9.2603.
             assert row["d_bw_mhz"] == pytest.approx(
-                row["d_hi_mhz"] - row["d_lo_mhz"], abs=1e-2)
+                row["d_hi_mhz"] - row["d_lo_mhz"], abs=1.5e-2)
 
 
 def _zeros_interpolated(curve, freqs, lo, hi):
@@ -729,6 +745,60 @@ def test_gate_is_hard_pinned_and_equals_the_derived_relation(fixture):
     _require_repinned(fixture)
     assert g["f0_gate_mhz"] == _PIN_F0_GATE_MHZ
     assert g["f0_measured_envelope_mhz"] == pytest.approx(_PIN_F0_ENV_MHZ, abs=1e-4)
+
+
+def test_edge_and_bw_evidence_is_committed_and_the_gate_is_refused_on_purpose(fixture):
+    """The edges/BW posture, decided by measurement and recorded as arithmetic.
+
+    Before #931 this case gave one reason for not gating band edges and
+    bandwidth: a ~1/3-cell ambiguity about what the lattice actually built,
+    which made the comparator input uncertain. The contract removed that
+    reason, and the migration then had a second one -- a gate is
+    round-UP(measured envelope x 1.5) and no such envelope existed until the
+    record was regenerated. Pass 2 supplies it, so both of the old reasons are
+    discharged and the question had to be answered rather than deferred.
+
+    Answer: still NOT gated, for a THIRD reason that the envelope does not
+    touch. The nine-configuration population is single-mesh -- every member is
+    a/90 -- and the axes it varies (guide height, run length, port standoff,
+    absorber depth) are the axes these two observables are insensitive to. They
+    move ~22-40 MHz per cell of lattice rounding against f0's ~2.4 MHz, and the
+    a/60 diagnostic rung reads +24.5 / +15.2 MHz on the same quantities, which
+    is the scale of the term this population cannot see. A 1.5x lock over a
+    population blind to the dominant term locks the mesh choice, not the
+    solver. Re-gating needs its own pre-declaration and a cross-mesh
+    sensitivity measurement.
+
+    What IS committed is the arithmetic of the gate that is not applied, so a
+    future pre-declaration starts from a number someone checked rather than
+    re-measuring from scratch -- and so that "not gated" cannot quietly become
+    "not measured".
+    """
+    _require_post_931(fixture)
+    g = fixture["gates"]
+    pop = g["edge_bw_envelope_population"]
+    # the same population as the f0 envelope, member for member and in order:
+    # a subset would let a would-be gate be quoted off a friendlier set
+    assert [r["config"] for r in pop] == [
+        r["config"] for r in g["f0_envelope_population"]]
+    assert len(pop) == 9
+    # envelopes are the max over that population, not a typed-in number
+    assert g["edge_measured_envelope_mhz"] == pytest.approx(
+        max(max(abs(r["d_lo_mhz"]), abs(r["d_hi_mhz"])) for r in pop), abs=1e-4)
+    assert g["bw_measured_envelope_mhz"] == pytest.approx(
+        max(abs(r["d_bw_mhz"]) for r in pop), abs=1e-4)
+    # and the would-be gates are that envelope through the ONE shared policy
+    would = g["edge_bw_gate_would_be_mhz"]
+    assert would["applied"] is False
+    assert would["edges"] == gate_from_envelope(
+        g["edge_measured_envelope_mhz"], quantum=1)
+    assert would["bw"] == gate_from_envelope(
+        g["bw_measured_envelope_mhz"], quantum=1)
+    # the refusal must carry its reason with it; a bare applied=false would let
+    # the posture drift back to "nobody got round to it"
+    assert "single-mesh" in would["why_not"], would["why_not"]
+    # and it must stay a would-be: the live gate keys are still absent
+    assert "edge_gate_mhz" not in g and "bw_gate_mhz" not in g
 
 
 def test_script_live_gate_constant_matches_fixture(fixture, script_src):
@@ -1920,8 +1990,28 @@ def test_claim_scope_prose_matches_the_committed_numbers(fixture):
         for phrase in ("realized_pec_edge_masks", "realized == drawn"):
             assert phrase in low, phrase
     if _fixture_is_post_931(fixture):
-        assert "bounding zeroed node planes" not in low, (
-            "the claim scope still describes the deleted compensation")
+        # The retired phrase names the pre-contract cavity leg, (L_c + 1)*dx
+        # "between the bounding zeroed node planes". A post-#931 record must
+        # not offer it as the rule -- but it may, and this one does, keep it
+        # inside the labelled HISTORY passage, because the 107.5 MHz
+        # drawn-vs-realized bias and the -0.68-cell thickness fit are still
+        # committed numbers and stop meaning anything without it. A flat
+        # "not in" ban would force the record to delete its own evidence, so
+        # what is checked is POSITION: the current rule is stated first, and
+        # every occurrence of a retired phrase falls after the HISTORY mark.
+        flat = " ".join(low.split())
+        hist = flat.find("history,")
+        assert hist != -1, (
+            "no HISTORY mark in the claim scope, so a retired phrase has "
+            "nowhere legitimate to sit")
+        assert -1 < flat.find("realized == drawn") < hist, (
+            "the contract's rule must be stated before the history it replaced")
+        for phrase in ("bounding zeroed node planes", "round(t/dx) + 1",
+                       "round(l/dx) - 1"):
+            at = flat.find(phrase)
+            assert at == -1 or at > hist, (
+                "the claim scope states the deleted compensation as current "
+                "rather than as history", phrase, at, hist)
 
 
 def test_non_gated_quantities_are_declared_non_gated(fixture, script_src):
@@ -2019,9 +2109,9 @@ def test_passivity_is_gated_on_the_gated_row_and_bounded_elsewhere(fixture):
 # --------------------------------------------------------------------------- #
 # Hard numeric pins — filled from the committed fixture, never re-tuned.
 # --------------------------------------------------------------------------- #
-_PIN_F0_GATE_MHZ = 19.0
-_PIN_GATED_MAX_COLPOW = 1.0065
-_PIN_COARSE_MAX_COLPOW = 1.0315
-_PIN_F0_ENV_MHZ = 12.1230
-_PIN_TRACE_SHA256 = (
-    "25faa7447a1451f81c578fbbd73b0c7c256e2dbba4fae46696a79c885eff3044")
+_PIN_F0_GATE_MHZ = 19.0                # ceil(12.1219 x 1.5) at quantum 1
+_PIN_GATED_MAX_COLPOW = 1.0065         # unchanged by the redraw
+_PIN_COARSE_MAX_COLPOW = 1.0315        # unchanged by the redraw
+_PIN_F0_ENV_MHZ = 12.1219              # was 12.1230 on the compensated geometry
+_PIN_TRACE_SHA256 = (                  # re-solved traces, cv19 pass 2
+    "65934f75e51e92dc0ecc9ade1853ad82170bb3bd4b30c94492c4846fa84b482b")

@@ -19,8 +19,21 @@ filter did not move:
 * the declared-vs-realized assert now compares ABSOLUTE plane indices and
   passes at every witness configuration (feed 40 / 70 / 100 cells, b = 4/6/8).
 * the FDFD comparator's `self_test` on the new inputs reproduces the committed
-  block digit for digit: `empty_s11 4.998689747642886e-14`,
-  `unitarity 1.4655321400880439e-09`, `metal_nodes_z 9`, `unknowns 32663`.
+  discretisation exactly: `metal_nodes_z 9`, `unknowns 32663`, `nx 90`, `nz 366`,
+  `h 2.54e-4`.
+
+  CORRECTION (2026-09-07, after pass 2). This bullet first said "digit for digit"
+  and named `empty_s11 4.998689747642886e-14` and
+  `unitarity 1.4655321400880439e-09`. Pass 2 came back with
+  `4.9977732337688505e-14` and `2.3153723383018132e-09` -- 1.8e-4 relative and
+  x1.58. Both are round-off residuals of a sparse direct solve whose spread
+  across fill-reducing orderings is 1.25 decades on the SAME matrix
+  (`docs/design_notes/20260903_cv19_fdfd_unitarity_witness.md` sections 2.4 and
+  7), so a 0.20-decade move carries no information about the model. What is
+  actually load-bearing survives measured: the discretisation above is
+  identical, and `richardson_34` moved 75 Hz in f0 and 395 Hz in bandwidth,
+  1.1e-6 relative. "Digit for digit" was the wrong bar for two round-off
+  quantities; it is withdrawn rather than restated at the new values.
 
 So the FDFD leg (three levels, both Richardson estimates, the consistency
 witness) is expected to reproduce. The FDTD leg still has to be re-solved,
@@ -40,9 +53,8 @@ pass or fail.
 
 ## MEASURED — the pre-declared falsifier, read against the prediction
 
-Run 369367259160 was still in progress when this was written (it had finished
-the gated leg and moved on to the coarse rung), so this is the gated result
-only; the rest lands with the record.
+Pass 1 (369367259160) is the middle column below; pass 2, the committed
+record, is the right-hand one.
 
 Predicted, in commit 96c55c3a, BEFORE the run: "the built structure does not
 move, so the realized wall planes must come back at today's committed
@@ -59,11 +71,24 @@ was not geometry-preserving and the arithmetic is wrong."
 | rfx band | 10.80037-11.14082 GHz | 10.8003-11.1409 GHz |
 | rfx f0 | 10.97060 GHz | 10.9706 GHz |
 | **d_f0** | **+12.08 MHz** | **+12.12 MHz** |
-| d_lo / d_hi / d_bw | +17.08 / +7.09 / -9.99 MHz | +17.0 / +7.2 / -9.8 MHz |
+| d_lo / d_hi / d_bw | +17.08 / +7.09 / -9.99 MHz | +17.05 / +7.20 / -9.85 MHz |
 | zeros, span holes, max colpow | 3, 1, 1.0065 | 3, 1, 1.0065 |
 
+**PASS 2, the committed record.** `gated_rfx.d_f0_mhz = 12.12`, from VESSL
+369367259297 (output `issue931-post-cv19-20260907T194954Z`, rc 0 on
+2026-09-07, log ends `RESULT: ALL CHECKS PASSED`). Read against the
+pre-declaration verbatim: predicted `d_f0` stays at **+12.08 MHz**, measured
+**+12.12 MHz**. The pass-2 number is pass 1's, digit for digit, so the
+falsifier's verdict does not depend on which pass is read.
+
 **The falsifier passes.** d_f0 moved by 0.04 MHz, which is 0.3% of the residual
-and 0.01% of the passband; the filter did not move. That 0.04 MHz is where the
+and 0.01% of the passband; the filter did not move. The prediction also said a
+change of order 100 MHz would refute the geometry-preserving claim; the
+measured change is 2500x smaller than that.
+
+The FDFD leg reproduced as predicted (`richardson_34` f0 10.95742 GHz, BW
+351.42 MHz, `empty_s11` 5.0e-14), which was the other half of the
+geometry-preserving claim — measured, not asserted. That 0.04 MHz is where the
 one deliberate non-preserved change shows up: the metal span is now 276 cells
 rather than the compensated 277, so the trailing feed lost the extra cell it
 carried and P2 sits one cell closer, in uniform guide. It is the size such a
@@ -100,10 +125,16 @@ population (single gated run 1160 s; manifest `cases[19].cpu_runner.excluded_rea
 plus the FDFD sweeps at r = 2,3,4 and the 11-point oracle thickness sweep.
 Job timeout is set to 32400 s.
 
-| pass | VESSL run id | expected rc | what it is for |
+| pass | VESSL run id | rc | what it is for |
 |---|---|---|---|
-| 1 | 369367259160 | 1 (gate/envelope mismatch, by design) | measure the new f0 envelope |
-| 2 | not yet submitted | 0 | the committable record |
+| 1 | 369367259160 | 0 (expected 1; see below) | measure the new f0 envelope |
+| 2 | 369367259297 (`issue931-post-cv19-20260907T194954Z`) | 0, as expected | the committable record — INGESTED |
+
+Pass 1 in fact exited 0, not 1: `GATE_F0_MHZ` was already 19.0 and the
+re-derived value `ceil(12.1219 x 1.5 = 18.18285)` is also 19.0, so the
+self-check had nothing to complain about. The two-pass procedure was still
+run, because the constant could not be known to be unchanged before the
+envelope was measured.
 
 Outputs land in `/root/workspace/claude-workspace/rfx/runs/issue931-post-cv19-<ts>/`.
 The job runs IN the worktree, so `--write-fixture` writes
@@ -124,14 +155,37 @@ The job runs IN the worktree, so `--write-fixture` writes
    `test_claim_scope_prose_matches_the_committed_numbers` cross-checks the
    gate and envelope literals against the fixture, so the source edit and the
    regeneration land together.
-4. **Decide the edges/bandwidth gating posture** and record the decision. The
-   contract removed the half-cell input uncertainty that was the stated reason
-   for not gating them; this migration deliberately did NOT gate them, because
-   a gate comes from a measured envelope and that envelope only exists after
-   pass 1. With pass 1 in hand the repo rule applies directly:
-   `gate = round-UP(measured d_lo / d_hi / d_bw envelope x 1.5)` over the
-   nine-configuration population. Either gate them at that value or state in
-   the claim_scope why not.
+4. **Decide the edges/bandwidth gating posture** and record the decision.
+   DECIDED: still REPORTED, not gated, and the arithmetic of the gate that is
+   not applied is committed so the refusal is checkable.
+
+   Measured over the nine-configuration population: edges envelope
+   **17.0553 MHz** (a gate would be `ceil(17.0553 x 1.5 = 25.583)` = **26.0**),
+   bandwidth envelope **9.9024 MHz** (would be
+   `ceil(9.9024 x 1.5 = 14.854)` = **15.0**). Committed as
+   `gates.edge_measured_envelope_mhz`, `gates.bw_measured_envelope_mhz`,
+   `gates.edge_bw_envelope_population` (nine rows) and
+   `gates.edge_bw_gate_would_be_mhz` with `applied: false` and its reason
+   inline. No `edge_gate_mhz` / `bw_gate_mhz` key is emitted.
+
+   The rule for the refusal, written down so it can be argued with: **a
+   1.5x lock is only a bound on the solver if the population it is measured
+   over can see the dominant term.** Here it cannot. Every member of the
+   population is a/90, and the axes it varies — guide height, run length, port
+   standoff, absorber depth — are the axes edges and bandwidth are insensitive
+   to. Those two observables move ~22-40 MHz per cell of lattice rounding
+   against f0's ~2.4 MHz, and the a/60 diagnostic rung reads +24.51 / +15.24
+   MHz on the same quantities, which is the size of the term the population is
+   blind to. A gate derived from a single-mesh population would pin the mesh
+   choice, not bound the solver. Re-gating needs its own pre-declaration and a
+   cross-mesh sensitivity measurement, which is separate work.
+
+   This is NOT the pre-#931 reason. That one was a ~1/3-cell ambiguity about
+   what the lattice built, and the contract removed it. The second blocker (no
+   measured envelope existed) is discharged above. The reason that stands is
+   the third one, and it is the gate file's own standing refusal, asserted by
+   `test_gate_is_hard_pinned_and_equals_the_derived_relation` and by
+   `test_edge_and_bw_evidence_is_committed_and_the_gate_is_refused_on_purpose`.
 
 ## The job, for the record
 
