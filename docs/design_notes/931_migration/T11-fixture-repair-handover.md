@@ -1,5 +1,9 @@
 # Fixture repair handover: qualification incomplete
 
+**MSL update, 2026-09-09:** [T13](T13-msl-repin-closure.md) records the landed
+refinement, passing four-run adjudication and offline base re-pin. The MSL
+waiting/no-re-pin statements below are the historical handover snapshot.
+
 **Short-only update, 2026-09-09:** [T12](T12-short-witness-closure.md)
 closes the short by retiring its invalid physical advisory trigger and
 qualifying replacement warning-policy and isolation tests. The short status

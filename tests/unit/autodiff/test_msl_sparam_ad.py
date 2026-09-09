@@ -605,13 +605,30 @@ def test_compute_msl_s_matrix_end_to_end_matches_historical_base():
     dx=dy=50 um and dz=(50,50,38.5,38.5,38.5,38.5) um through the
     substrate, declare the foil at its actual interface, and hold domain/absorber thickness fixed under refinement.
     An explicit f0=5 GHz / bandwidth=.8 differentiated Gaussian covers all
-    ten measurement bins; the former implicit2.5 GHz pulse undersupplied
-    the final two bins. Live qualification of this drive remains pending.
+    ten measurement bins; the former implicit 2.5 GHz pulse undersupplied
+    the final two bins. All four named runs qualify this repaired drive.
     Raw physical qualification precedes the unchanged complex drift gate.
-    The historical golden is NOT yet re-pinned. Capture requires named base,
-    independent confirmation and refined-grid reports; a failed qualification
-    is a finding, never a reason to widen a gate. Historical replay binaries
-    keep their original uniform 80 um interpretation.
+
+    RE-PINNED 2026-09-09 (#931, T11 acceptance condition met): offline import
+    of base run 369367259636 S_projected, complex64 (2,2,10), from exact SHA
+    b36fc46cdf21d1c57f221e6a057654bcad60bae2. Confirmation 369367259638 is
+    array-identical; long 369367259637 differs by at most 5.331202e-7 projected
+    and 2.457562e-7 raw. Refinement 369367259648 halves every cell with fixed
+    geometry: all 40 raw entries differ by <=0.007206652 (budget 0.02),
+    projected <=0.007206839. Every physical screen passes, both drives settle
+    below -103 dB on base/refine, and refinement finishes with 11 pytest passes.
+    The old-pin gaps remain 0.2030584601 (base) and 0.1995657504 (refine).
+    This qualifies convergence within the declared mesh budget for a changed
+    board: the old 80 um lattice / 320 um trace plane was replaced by the
+    aligned graded mesh above / 254 um trace sheet. The persistent old-pin
+    gap is not numerical integration drift. The final live mesh is NOT the
+    intermediate scalar 254/3 um mesh. Historical 80 um replay binaries stay
+    frozen. No rfx/ code or physical/drift gate changes accompany this re-pin.
+    Full base values, source hashes, named reports/run IDs, per-entry
+    comparisons and offline base/confirmation verification are recorded in
+    tests/fixtures/msl_s_matrix_golden.json. The transfer uses
+    scripts/diagnostics/import_931_msl_golden.py; capture_msl_e2e_golden.py
+    --write-golden would run a new solve and was not used for this import.
 
     RE-BASELINED 2026-07-30 (PR #516; decision required by that PR's review,
     finding F4, and recorded here + in issue #509). The original golden was a
@@ -689,8 +706,7 @@ def test_compute_msl_s_matrix_end_to_end_matches_historical_base():
     assert not qualification["failures"], qualification["failures"]
     max_dev = float(np.max(np.abs(s_actual - golden)))
     print(f"[WI-1 MSL] max_abs_dev(aligned live coupon vs committed drift golden) = {max_dev:.3e}")
-    # Unchanged drift tolerance. The old-board golden must remain red until
-    # named qualification, refinement and confirmation evidence permits capture.
+    # Unchanged drift tolerance against the qualified repaired-board base.
     np.testing.assert_allclose(s_actual, golden, rtol=5e-3, atol=2e-3)
 
 
