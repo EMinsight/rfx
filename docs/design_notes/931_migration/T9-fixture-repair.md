@@ -1,5 +1,8 @@
 # Repair the physical premise before comparing historical outputs
 
+Historical repair/handoff record. Live follow-up and superseding dispositions:
+[T10 fixture qualification](T10-fixture-live-qualification.md).
+
 Source base: `949e1845b84b26826d4e5309363bea4c2ffa5920`;
 worktree `rfx-931-fastlane-reds`, branch `feat/931-fixture-repair`.
 The PI explicitly authorized fixture repair, keeping #931 and the corrected

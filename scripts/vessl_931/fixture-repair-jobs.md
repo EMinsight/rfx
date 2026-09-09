@@ -1,12 +1,14 @@
 # Fixture repair evidence jobs
 
-These six independent CPU jobs use the maintained CPU 8 / 32 GiB resource
-specification and image from `repin-v173a-lock-evidence.yaml` as the maintained
-configuration fallback. The local `/lab-shared/status` directory check and
-`command -v lab-status` returned no available status source; cluster admission
-was not queried. No VESSL job was inspected or launched. YAML parsing and
-`sh -n` passed for all six jobs;
-the runner passed Python syntax parsing. Runtime qualification is separate.
+Live launch results and resource correction are recorded in
+`docs/design_notes/931_migration/T10-fixture-live-qualification.md`.
+The five ordinary lanes use verified CPU-only `base-pod` (8 CPU / 32 GiB).
+The memory-heavy refinement uses its own `cpu-32-mem-64` job (32 CPU / 64 GiB).
+VESSL silently discarded both the original top-level cpu/memory fields and
+custom requests on this cluster; use the named presets. Every job records and
+checks its numeric cgroup CPU/memory limits before cloning or simulation.
+The submitter copies the YAML to a plain directory, avoiding the CLI's worktree
+.git-file error; the pod also trusts the exact linked Git administrative path.
 
 Each job requires the full final commit SHA, and the source checkout is fixed
 to `/root/workspace/byungkwan-workspace/research/rfx-931-fastlane-reds`. The job
@@ -34,7 +36,7 @@ times the base field-update work. This is a work estimate, not a measured
 wall-time ratio: compilation, memory traffic and CPU admission can change
 runtime. The 24-hour refinement cap is a budget, not evidence that it will
 finish; neither completion within that cap nor admission of these 8-CPU/32-GiB
-jobs has been verified. Check capacity before launching all six jobs.
+jobs has been verified. Check active jobs and the completed resource probes before launching all six jobs.
 
 MSL qualification failures and unchanged historical gate failures are recorded
 with their true return codes; remaining evidence commands still run. The job

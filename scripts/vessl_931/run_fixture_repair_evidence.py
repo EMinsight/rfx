@@ -15,7 +15,10 @@ import xml.etree.ElementTree as ET
 
 def commands(lane: str, out: Path, run_name: str):
     py = sys.executable
-    pytest = [py, '-m', 'pytest', '-o', 'addopts=', '-n', '4', '-v', '-s', '-rA',
+    # xdist does not forward worker stdout under -s. Capture it so -rA and
+    # JUnit preserve the complete per-bin witnesses even for passing tests.
+    pytest = [py, '-m', 'pytest', '-o', 'addopts=', '-n', '4', '-v',
+              '--capture=tee-sys', '-o', 'junit_logging=all', '-rA',
               '--timeout=7200', '--timeout-method=thread']
     if lane == 'v173a':
         yield 'capture', [py, 'scripts/harnesses/v173a_physics_equivalence.py',
