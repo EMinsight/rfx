@@ -9,6 +9,12 @@ ownership alone does not explain crossing the envelope. This is not a rollback
 proposal or a newly qualified physical baseline. Four sequential 600-step runs.
 Historical map is copied from a3e4dba4^:rfx/boundaries/pec.py tangential_edge_masks.
 All patching is process-local, restored after each counterfactual.
+
+Fixture repair qualification: --fixture repaired --operators current uses
+identical 250 um radiator/source lattices and grades only the NTFF shoulders.
+Its predeclared falsifier is local-cell error >= 5% OR >= scalar-cell error/2;
+either miss remains a finding, with no envelope change or profile sweep.
+Use --steps 1200 as an independently named duration-convergence witness.
 """
 from __future__ import annotations
 
@@ -28,7 +34,7 @@ from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid, coords_from
 from rfx.nonuniform import NonUniformGrid, position_to_index
 from rfx.sources import GaussianPulse
 from tests._realized_geometry import realized
-from tests.unit.farfield.test_farfield_inplane_nonuniform import _sim
+from tests.unit.farfield.test_farfield_inplane_nonuniform import _graded_profile, _sim
 
 
 ROOT = Path.cwd().resolve()
@@ -83,17 +89,22 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=ROOT / ".validation-931-closures")
     parser.add_argument("--operators", nargs="+", default=["current", "legacy"],
                         choices=["current", "legacy"])
+    parser.add_argument("--fixture", choices=["historical", "repaired"],
+                        default="historical")
+    parser.add_argument("--steps", type=int, default=600)
     args = parser.parse_args()
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
     payload = {"source": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-               "rfx_import": rfx.__file__, "predeclared_falsifier": __doc__, "cases": {}}
+               "rfx_import": rfx.__file__, "predeclared_falsifier": __doc__,
+               "fixture": args.fixture, "steps": args.steps, "cases": {}}
+    profile = _graded_profile() if args.fixture == "repaired" else PROF
     arrays = {"theta": TH, "phi": PH}
     for op in args.operators:
         for mesh in ("uniform", "graded"):
             key = op + "_" + mesh
             with operator(op):
-                sim = _sim() if mesh == "uniform" else _sim(dx_profile=PROF, dy_profile=PROF)
+                sim = _sim() if mesh == "uniform" else _sim(dx_profile=profile, dy_profile=profile)
                 rz = realized(sim)
                 grid = rz.grid
                 nu = isinstance(grid, NonUniformGrid)
@@ -103,7 +114,7 @@ def main():
                 source_idx = (position_to_index(grid, (11e-3, 11e-3, 9.5e-3)) if nu
                               else grid.position_to_index((11e-3, 11e-3, 9.5e-3)))
                 pulse = GaussianPulse(f0=30e9, bandwidth=0.5)
-                times = jnp.arange(600, dtype=jnp.float32) * grid.dt
+                times = jnp.arange(args.steps, dtype=jnp.float32) * grid.dt
                 waveform = np.asarray(pulse(times))
                 source_dft = float(grid.dt) * np.sum(waveform * np.exp(-2j * np.pi * 30e9 * np.asarray(times)))
                 if nu:
@@ -114,7 +125,7 @@ def main():
                 else:
                     source_dv = float(grid.dx) ** 3
                 record = {"shape": list(grid.shape), "dt": float(grid.dt),
-                          "duration": 600 * float(grid.dt),
+                          "duration": args.steps * float(grid.dt),
                           "occupied_cells": int(np.count_nonzero(rz.pec_mask)),
                           "node_vs_center_occupancy_xor": int(np.count_nonzero(old_cells != np.asarray(rz.pec_mask))),
                           "edge_counts": [int(np.count_nonzero(e)) for e in rz.edge_masks],
@@ -130,7 +141,7 @@ def main():
                 arrays[key + "_source_waveform"] = waveform
                 payload["cases"][key] = record
                 if not args.structural_only:
-                    res = sim.run(n_steps=600)
+                    res = sim.run(n_steps=args.steps)
                     assert res.grid.shape == grid.shape and res.grid.dt == grid.dt
                     final_coords = (coords_from_nonuniform_grid(res.grid) if nu
                                     else coords_from_uniform_grid(res.grid))
@@ -172,6 +183,10 @@ def main():
                                            ug / np.max(ug) - uu / np.max(uu)))),
                                        "power_normalized_pattern_relative_l2": float(np.linalg.norm(
                                            ug / g - uu / u) / np.linalg.norm(uu / u))}
+            if args.fixture == "repaired":
+                errors = payload[op + "_errors"]
+                errors["unchanged_5pct_gate_passed"] = errors["local"] < 0.05
+                errors["local_cell_discriminator_passed"] = errors["local"] < errors["scalar"] / 2
         (out / "farfield-attribution.json").write_text(json.dumps(payload, indent=2))
         print(json.dumps({k: v for k, v in payload.items() if k.endswith("_errors")}), flush=True)
 

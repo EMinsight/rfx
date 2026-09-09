@@ -1,4 +1,4 @@
-"""Controlled PEC-realization attribution; never changes the fixture or its gate.
+"""Controlled PEC-realization attribution on the repaired short fixture.
 
 Run serially, with PYTHONPATH=$PWD JAX_PLATFORMS=cpu. No alternate checkout.
 Hypothesis: the old (2.25, 3] interval witnesses the retired node sigma fold.
@@ -6,13 +6,14 @@ Falsifier: restoring ONLY that fold to the current extractor fails to restore
 the interval. The node_volume bridge separates sampling from edge ownership.
 This is an investigative intervention, not a supported alternate PEC contract.
 The legacy fold is documented at a3e4dba4^:rfx/api/_sparams.py:3012-3014.
-T7-slow-interaction-stop.md says attribution is owed and no gate tuning is
-authorized; this script is consistent with that instruction.
+The PI authorized fixture repair after the original attribution. This script
+now imports that repaired fixture; older artifacts retain their source hashes.
+The interval remains unchanged. The current arm qualifies the repaired planes;
+historical arms remain diagnostic interventions, never supported semantics.
 """
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import json
 from pathlib import Path
@@ -24,7 +25,6 @@ from unittest.mock import patch
 import jax.numpy as jnp
 import numpy as np
 import rfx
-from rfx import Box, Simulation
 import rfx.api._sparams as api_sparams
 import rfx.simulation as solver
 from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
@@ -33,15 +33,9 @@ from rfx.sources.waveguide_port import extract_waveguide_port_waves, waveguide_p
 
 
 def fixture_builder():
-    source = Path('tests/unit/sparams/test_sparam_passivity_guard.py').read_text()
-    test = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
-                and n.name == 'test_soft_advisory_real_coarse_pec_short_witness')
-    nodes = [n for n in test.body if (isinstance(n, ast.FunctionDef) and n.name == 'build')
-             or (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'DOMAIN' for t in n.targets))]
-    assert len(nodes) == 2, 'fixture structure changed: review diagnostic extraction'
-    namespace = dict(np=np, jnp=jnp, Box=Box, Simulation=Simulation)
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), '<actual-fixture-builder>', 'exec'), namespace)
-    return namespace['build'], hashlib.sha256(source.encode()).hexdigest()
+    from tests._pec_short_advisory_fixture import build
+    source = Path('tests/_pec_short_advisory_fixture.py').read_text()
+    return build, hashlib.sha256(source.encode()).hexdigest()
 
 
 def main():
@@ -77,7 +71,17 @@ def main():
                   current=census(current_cells, current_edges), node_volume=census(legacy_cells, node_edges),
                   legacy_sigma=dict(cell_count=int(np.sum(legacy_cells)),
                                     damped_x_nodes_m=np.asarray(nodes.x)[np.where(np.any(np.asarray(legacy_cells), axis=(1, 2)))[0]].tolist()),
-                  frequencies_hz=frequencies.tolist())
+                  frequencies_hz=frequencies.tolist(),
+                  fixture='931-fixture-repair-node-aligned-short',
+                  declared_short_faces_m=[float(box.corner_lo[0]), float(box.corner_hi[0])])
+    result['port_planes_m'] = [
+        {k: float(v) for k, v in waveguide_plane_positions(
+            sim._build_waveguide_port_config(port, grid, frequencies, 1)).items()}
+        for port in sim._waveguide_ports
+    ]
+    for planes in result['port_planes_m']:
+        assert (max(planes.values()) < box.corner_lo[0]
+                or min(planes.values()) > box.corner_hi[0]), planes
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output = args.output_dir / ('advisory_' + args.arm + ('_fine' if args.fine else ''))
     if args.build_only:
@@ -134,6 +138,9 @@ def main():
     result.update(elapsed_s=time.monotonic()-started, s_real=s.real.tolist(), s_imag=s.imag.tolist(),
                   s_abs=np.abs(s).tolist(), column_power=column_power.tolist(), max_column_power=float(column_power.max()),
                   in_original_witness_interval=bool(2.25 < column_power.max() <= 3),
+                  driven_incident_nonzero=[
+                      bool(np.all(np.asarray(summaries[d][d]['a_wave']['magnitude']) > 0))
+                      for d in range(len(summaries))],
                   settling_db=np.asarray(measured.settling_db).tolist(), records_summary=summaries,
                   warnings=[str(w.message) for w in caught])
     output.with_suffix('.json').write_text(json.dumps(result, indent=2) + '\n')
