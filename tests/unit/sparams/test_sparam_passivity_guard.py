@@ -230,42 +230,88 @@ def test_gross_violation_still_hard_not_soft():
     assert not _soft_fired(rec)
 
 
-@pytest.mark.slow
-def test_soft_advisory_real_coarse_pec_short_witness():
-    """Keep the historical advisory claim falsifiable after physical repair.
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("amplitude,expected", [
+    (np.nextafter(1.5, 0.0), "silent"),
+    (1.5, "silent"),
+    (np.nextafter(1.5, np.inf), "soft"),
+    (1.625, "soft"),
+    (2.0, "hard"),
+])
+def test_advisory_policy_boundaries(amplitude, expected, strict):
+    """Policy, not a PEC calibration: P=|b/a|^2, floor=1.5^2.
 
-    The old 85--87 mm short was off-lattice at dx=2 mm, and both right
-    measurement planes were across it from their source. Its ~2.51 column
-    power therefore did not measure two independent outgoing ports. The
-    repaired rectangular guide has node-aligned faces and measurements in
-    each source's connected region. The original (2.25, 3] interval remains:
-    a miss is a finding that this fixture is no longer an advisory witness,
-    not permission to tune the geometry or widen the interval. Synthetic
-    tests above independently cover the advisory's warn/silent behavior.
+    Adjacent float64 amplitudes test the open lower boundary without fitting
+    a simulated value. Strict mode must never promote a soft advisory.
+    """
+    s = np.full((1, 1, 3), amplitude, dtype=complex)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        if strict and expected == "hard":
+            with pytest.raises(ValueError, match="UNRELIABLE"):
+                _warn_if_nonpassive_smatrix(
+                    _result(s), extractor="compute_waveguide_s_matrix",
+                    passivity_tol=2.0, strict=strict)
+            return
+        _warn_if_nonpassive_smatrix(
+            _result(s), extractor="compute_waveguide_s_matrix",
+            passivity_tol=2.0, strict=strict)
+    assert _soft_fired(rec) == (expected == "soft")
+    assert _hard_fired(rec) == (expected == "hard")
+
+
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize("normalize", [False, True, "flux"])
+@pytest.mark.parametrize("power,loose_expected", [
+    (1.0, "silent"), (2.25, "silent"), (2.5, "soft"),
+    (3.0, "soft"), (3.25, "hard"),
+])
+def test_public_waveguide_advisory_policy(monkeypatch, normalize, strict,
+                                         power, loose_expected):
+    """Replace the retired coarse-short warning trigger with a public API gate.
+
+    Inject at the numerical extractor boundary, leaving the public assembly,
+    normalization dispatch, result epilogue and diagnostic code real. With
+    incident a_j=1, the constructed column has outgoing power P=sum |b_i|^2.
+    The declared policy is silent through 2.25, warn-only through 1+2, then
+    hard; normalized paths instead have hard limit 1+0.10. No measured pin.
     """
     from tests._pec_short_advisory_fixture import build
 
-    # Historical hypothesis, deliberately retained after fixture repair.
+    # Unit incident power; distribute outgoing power over two real entries.
+    # Check exact float64 column sums so rounding cannot move a boundary case.
+    diagonal = min(1.5, np.sqrt(power))
+    cross = np.sqrt(power - diagonal**2)
+    s = np.zeros((2, 2, 6), dtype=complex)
+    s[0, 0] = s[1, 1] = diagonal
+    s[0, 1] = s[1, 0] = cross
+    np.testing.assert_array_equal(np.sum(np.abs(s)**2, axis=0), power)
+    original = s.copy()
+    calls = []
+    target = {False: "extract_waveguide_s_matrix",
+              True: "extract_waveguide_s_params_normalized",
+              "flux": "extract_waveguide_s_matrix_flux"}[normalize]
+
+    def extract(*args, **kwargs):
+        calls.append(target)
+        assert kwargs["return_settling"] is True
+        return s, np.array([-80., -80.])
+
+    monkeypatch.setattr("rfx.api._sparams." + target, extract)
+    expected = loose_expected if normalize is False else (
+        "silent" if power <= 1.10 else "hard")
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        res = build(np.linspace(4e9, 6e9, 6), dx=2e-3, cpml=8).\
-            compute_waveguide_s_matrix(normalize=False, num_periods=30)
-    s = np.asarray(res.s_params)
-    assert np.isfinite(s).all()
-    assert np.all(np.abs(s[[0, 1], [0, 1], :]) > 0), (
-        "Each driven port must measure its own reflected wave; an all-zero "
-        "drive column is not evidence of a passive matched port"
-    )
-    cp = float(np.sum(np.abs(s) ** 2, axis=0).max())
-    assert 2.25 < cp <= 3.0, f"expected witness column power in the gap, got {cp:.4f}"
-    assert _soft_fired(rec), f"coarse PEC-short (colpow {cp:.4f}) must emit the advisory"
-    assert not _hard_fired(rec)
-
-    # Fine control keeps the same physical board and measurement planes.
-    with warnings.catch_warnings(record=True) as rec2:
-        warnings.simplefilter("always")
-        res2 = build(np.linspace(5e9, 7e9, 6), dx=1e-3, cpml=10).\
-            compute_waveguide_s_matrix(normalize=False, num_periods=40)
-    cp2 = float(np.sum(np.abs(np.asarray(res2.s_params)) ** 2, axis=0).max())
-    assert cp2 <= 2.25, f"validated PEC-short column power drifted into the gap: {cp2:.4f}"
-    assert not _soft_fired(rec2), "validated PEC-short must NOT emit the advisory"
+        sim = build(np.linspace(4e9, 6e9, 6), dx=2e-3, cpml=8)
+        if strict and expected == "hard":
+            with pytest.raises(ValueError, match="UNRELIABLE"):
+                sim.compute_waveguide_s_matrix(
+                    normalize=normalize, strict_passivity=strict, num_periods=1)
+        else:
+            result = sim.compute_waveguide_s_matrix(
+                normalize=normalize, strict_passivity=strict, num_periods=1)
+            np.testing.assert_array_equal(result.s_params, original)
+            assert _soft_fired(rec) == (expected == "soft")
+            assert _hard_fired(rec) == (expected == "hard")
+    assert calls == [target]
+    np.testing.assert_array_equal(s, original)
