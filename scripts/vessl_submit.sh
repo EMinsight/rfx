@@ -6,7 +6,7 @@
 # write its own id and every artifact that tried carries a placeholder. The
 # submitter is the only party that knows the id, so the submitter records it.
 #
-#   scripts/vessl_submit.sh <yaml> <runs-dir-glob-prefix>
+#   scripts/vessl_submit.sh <yaml> <runs-dir-glob-prefix> [artifact-root]
 #
 # Example:
 #   scripts/vessl_submit.sh /tmp/repin.yaml issue931-chain-repin
@@ -16,7 +16,16 @@
 # id was not captured is not a provenance-complete run.
 set -eu
 YAML="$1"; PREFIX="$2"
-RUNS=/root/workspace/claude-workspace/rfx/runs
+RUNS=${3:-/root/workspace/claude-workspace/rfx/runs}
+
+# Record submission start BEFORE create: a fast job can make its output
+# directory before the CLI returns. Own and remove only this marker directory.
+MARKER_DIR=$(mktemp -d)
+trap 'rm -f "$MARKER_DIR/marker"; rmdir "$MARKER_DIR"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+STAMP=$MARKER_DIR/marker
+: > "$STAMP"
 
 OUT=$(vessl run create -f "$YAML" 2>&1)
 echo "$OUT"
@@ -29,7 +38,6 @@ echo "run id: $ID"
 # without a run_id.txt" is not enough: a terminated earlier run under the same
 # label leaves exactly that, and the first use of this script wrote two ids into
 # stale directories from runs that had already been killed.
-STAMP=$(mktemp -d)/marker; : > "$STAMP"
 i=0
 while [ "$i" -lt 60 ]; do
   D=$(find "$RUNS" -maxdepth 1 -type d -name "$PREFIX*" -newer "$STAMP" 2>/dev/null | sort | tail -1 || true)

@@ -1,5 +1,5 @@
 name: rfx-931-v173a-lock-evidence
-description: "RE-PIN evidence for the v173a numerical lock on the #931 branch. Serial CPU. Records the delta and authorizes nothing; no golden is rewritten. Set RFX_CHECKOUT and RFX_SHA before creating the run."
+description: "Legacy entrypoint; prefer fixture-repair-v173a.yaml. RE-PIN evidence for the v173a numerical lock on the #931 branch. Serial CPU. Records the delta and authorizes nothing; no golden is rewritten. Set RFX_CHECKOUT and RFX_SHA before creating the run."
 tags: [rfx, issue-931, repin-evidence]
 resources:
   cluster: remilab-c0
@@ -15,7 +15,7 @@ env:
   LANG: "C.UTF-8"
   JAX_PLATFORMS: "cpu"
   MPLBACKEND: "Agg"
-  RFX_CHECKOUT: "/root/workspace/byungkwan-workspace/research/rfx-lattice-ownership"
+  RFX_CHECKOUT: "/root/workspace/byungkwan-workspace/research/rfx-931-fastlane-reds"
   RFX_SHA: "HEAD"
   RFX_LABEL: "v173a"
 mount:
@@ -48,7 +48,8 @@ run: |-
   set +e
   # Records BOTH extracted values; edits no baseline.
   "$PY" scripts/harnesses/v173a_physics_equivalence.py \
-    > "$OUT/v173a.json" 2> "$OUT/run.log"
+    --output "$OUT/v173a.json" --run-name "$(basename "$OUT")" \
+    > "$OUT/run.log" 2>&1
   rc=$?
   set -e
   echo "$rc" > "$OUT/rc"

@@ -152,11 +152,19 @@ def test_normalize_aware_tol_tolerates_documented_overshoot():
 # fires for normalize=False.  Message says "ADVISORY", NOT "UNRELIABLE".
 # =============================================================================
 def _soft_fired(rec):
-    return any("ADVISORY" in str(w.message) for w in rec)
+    return any("ADVISORY" in str(w.message) and "max column power" in str(w.message)
+               for w in rec)
 
 
 def _hard_fired(rec):
     return any("UNRELIABLE" in str(w.message) for w in rec)
+
+
+def test_soft_advisory_filter_excludes_reciprocity_warning():
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        warnings.warn("compute_waveguide_s_matrix: reciprocity ADVISORY")
+    assert not _soft_fired(rec)
 
 
 def test_soft_advisory_fires_in_the_over_unity_gap():
@@ -224,47 +232,36 @@ def test_gross_violation_still_hard_not_soft():
 
 @pytest.mark.slow
 def test_soft_advisory_real_coarse_pec_short_witness():
-    """REAL-geometry witness: a coarse (dx=2mm) WR-90 PEC-short on the
-    normalize=False path lands at column power ~2.51 — above the ~2.0
-    documented envelope, below the 3.0 hard limit — and used to return
-    silently. It must now emit the soft advisory. The finer validated
-    PEC-short (column power ~2.00) must stay silent (false-positive check)."""
-    import jax.numpy as jnp
-    from rfx import Box, Simulation
+    """Keep the historical advisory claim falsifiable after physical repair.
 
-    DOMAIN = (0.12, 0.04, 0.02)
+    The old 85--87 mm short was off-lattice at dx=2 mm, and both right
+    measurement planes were across it from their source. Its ~2.51 column
+    power therefore did not measure two independent outgoing ports. The
+    repaired rectangular guide has node-aligned faces and measurements in
+    each source's connected region. The original (2.25, 3] interval remains:
+    a miss is a finding that this fixture is no longer an advisory witness,
+    not permission to tune the geometry or widen the interval. Synthetic
+    tests above independently cover the advisory's warn/silent behavior.
+    """
+    from tests._pec_short_advisory_fixture import build
 
-    def build(freqs, dx, cpml):
-        freqs = np.asarray(freqs, float)
-        f0 = float(freqs.mean())
-        bw = max(0.2, min(0.8, (freqs[-1] - freqs[0]) / f0))
-        sim = Simulation(freq_max=float(freqs[-1]), domain=DOMAIN,
-                         boundary="cpml", cpml_layers=cpml, dx=dx)
-        # WR-90 PEC short: a VOLUME (#931 §1.2) — walls on both drawn x
-        # faces, Ex shorted between. dx is parametrized here, so the cell
-        # count varies; the assertions are passivity advisories, which the
-        # extra far-face wall does not move.
-        sim.add(Box((0.085, 0, 0), (0.087, DOMAIN[1], DOMAIN[2])), material="pec")
-        pf = jnp.asarray(freqs)
-        sim.add_waveguide_port(0.01, direction="+x", mode=(1, 0), mode_type="TE",
-                               freqs=pf, f0=f0, bandwidth=bw,
-                               waveform="modulated_gaussian", name="left")
-        sim.add_waveguide_port(0.09, direction="-x", mode=(1, 0), mode_type="TE",
-                               freqs=pf, f0=f0, bandwidth=bw,
-                               waveform="modulated_gaussian", name="right")
-        return sim
-
-    # Witness: coarse mesh -> column power in the gap -> soft advisory fires.
+    # Historical hypothesis, deliberately retained after fixture repair.
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         res = build(np.linspace(4e9, 6e9, 6), dx=2e-3, cpml=8).\
             compute_waveguide_s_matrix(normalize=False, num_periods=30)
-    cp = float(np.sum(np.abs(np.asarray(res.s_params)) ** 2, axis=0).max())
+    s = np.asarray(res.s_params)
+    assert np.isfinite(s).all()
+    assert np.all(np.abs(s[[0, 1], [0, 1], :]) > 0), (
+        "Each driven port must measure its own reflected wave; an all-zero "
+        "drive column is not evidence of a passive matched port"
+    )
+    cp = float(np.sum(np.abs(s) ** 2, axis=0).max())
     assert 2.25 < cp <= 3.0, f"expected witness column power in the gap, got {cp:.4f}"
     assert _soft_fired(rec), f"coarse PEC-short (colpow {cp:.4f}) must emit the advisory"
     assert not _hard_fired(rec)
 
-    # False-positive: the finer validated PEC-short (~2.00) stays silent.
+    # Fine control keeps the same physical board and measurement planes.
     with warnings.catch_warnings(record=True) as rec2:
         warnings.simplefilter("always")
         res2 = build(np.linspace(5e9, 7e9, 6), dx=1e-3, cpml=10).\
