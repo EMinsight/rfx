@@ -1,5 +1,11 @@
 # Fixture repair handover: qualification incomplete
 
+**Short-only update, 2026-09-09:** [T12](T12-short-witness-closure.md)
+closes the short by retiring its invalid physical advisory trigger and
+qualifying replacement warning-policy and isolation tests. The short status
+below is the historical handover snapshot. The MSL disposition and pickup
+condition are unchanged.
+
 Disk-only handover, 2026-09-09, from `feat/931-fixture-repair` at
 `b36fc46cdf21d1c57f221e6a057654bcad60bae2` plus the previous session's
 uncommitted work. No VESSL query, launch, restart, solve, or wait was performed

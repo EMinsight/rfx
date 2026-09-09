@@ -34,8 +34,8 @@ The replacement public-API test injects S at the numerical extractor boundary,
 then exercises real assembly, normalization dispatch, result construction and
 the diagnostic epilogue. Unit incident power and real outgoing entries give
 P=1, 2.25, 2.5, 3, 3.25; exact float64 sums are checked before use. This covers
-the open lower and closed upper boundaries, both sides, all three normalization
-modes, strict/non-strict handling, and exact preservation of S. The helper tests
+both loose-policy boundaries (open lower and closed upper), both sides,
+all three normalization modes, strict/non-strict handling, and exact preservation of S. The helper tests
 also check the adjacent floating-point values around |S|=1.5. These are policy
 inputs derived from the boundary, not fitted FDTD outputs.
 
@@ -99,5 +99,77 @@ campaigns and the running MSL refinement are outside this task's cleanup scope.
 
 ## Live result
 
-Pending the three predeclared lanes; append exact runs, counts and traces before
-closing. This preparation commit is not the final qualification claim.
+**Closed by retirement and passing replacement coverage.** All three named
+runs executed pinned source **db4ee4a1797e2109f1fe8f70b14f93740fbd249b** and
+completed successfully. All resource records verify 8 CPU / 32 GiB, CPU JAX,
+and no product changes. Submitter run IDs, exact submitted YAMLs, commit files,
+return codes, complete logs/JUnit and machine-readable outcomes are archived
+in [short-closure-evidence](short-closure-evidence/summary.json).
+
+| Run name | VESSL ID | Passed | Failed | Errors | Skipped |
+|---|---|---:|---:|---:|---:|
+| rfx-931-short-closure-policy | 369367259732 | 55 | 0 | 0 | 0 |
+| rfx-931-short-closure-coarse | 369367259733 | 1 | 0 | 0 | 0 |
+| rfx-931-short-closure-fine | 369367259734 | 1 | 0 | 0 | 0 |
+| Total, newly launched | | **57** | **0** | **0** | **0** |
+
+No failed/terminated launches or retries. Local policy/geometry separately
+passed 55 tests, with 0 failures; collect-only selected 55/1/1. The three
+injected policy faults were all rejected; those were diagnostic calls, not
+additional pytest cases. This is the selected short closure scope, not a full
+repository-suite result. The retired node is removed and replaced, not xfailed,
+skipped, or hidden behind a marker filter.
+
+| Diagnostic (not an acceptance pin) | Coarse 369367259733 | Fine 369367259734 |
+|---|---:|---:|
+| Max column power, original float32 arithmetic | 1.0444785356521606 | 1.0494229793548584 |
+| Left/right settling dB | -25.4948909801 / -49.5955696612 | -47.4758522315 / -103.1566072296 |
+| Samples per V/I record | 1312 | 2998 |
+| Cross-region nonzero samples, all eight records combined | 0 | 0 |
+| Both off-diagonal S entries, every frequency | exactly 0 | exactly 0 |
+| Both driven a/b spectra and eight local V/I records | finite, nonzero | finite, nonzero |
+
+Every complex S bin, driven a/b magnitudes and trace peak is saved in
+[coarse.json](short-closure-evidence/coarse/coarse.json) and
+[fine.json](short-closure-evidence/fine/fine.json). The corresponding
+`*-records.npz` files retain all 16 V/I records per lane. The
+[inspection figure](short-closure-evidence/short-closure.png) was rendered and
+visually inspected: zero cross-region traces, nonzero driven pulses, coarse
+late left-drive lobe and the 4 GHz deficit are all visible. Full complex bins
+were inspected separately, including phase. Plot envelopes normalize each
+record to its own driven peak; they are not the energy-settling diagnostic.
+
+For explicit per-bin review, left/right reflection magnitudes are:
+
+| GHz, coarse | abs(S11) | abs(S22) | GHz, fine | abs(S11) | abs(S22) |
+|---:|---:|---:|---:|---:|---:|
+| 4.0 | 0.55135090 | 1.01479124 | 5.0 | 0.93018902 | 0.99981368 |
+| 4.4 | 1.02199734 | 1.00075651 | 5.4 | 0.99654694 | 0.99966238 |
+| 4.8 | 1.00598729 | 0.99971339 | 5.8 | 0.99964555 | 0.99954825 |
+| 5.2 | 0.99963299 | 0.99906418 | 6.2 | 1.00016184 | 0.99947482 |
+| 5.6 | 0.99564621 | 0.99842106 | 6.6 | 1.00131600 | 0.99942868 |
+| 6.0 | 0.94419927 | 0.99301034 | 7.0 | 1.02441349 | 0.99949123 |
+
+The coarse maximum differs from 369367259618 by -7.15e-7; no cross-host bitwise
+identity is claimed. No golden, numerical pin, fixture dimensions, solver
+setting, production threshold or rfx/ file changed in this closure. This is a
+retirement and property replacement, not a re-pin to 1.0445. The commit records
+both named runs and their diagnostic values nevertheless.
+
+**Unsettled and explicitly outside the new gate:** absolute reflection/phase
+accuracy and fixed-configuration convergence of this particular short remain
+unqualified. Coarse settling fails the existing -40 dB screen and both cases
+retain absorber-depth warnings. Neither the near-unity maximum nor fine
+settling establishes whole-band accuracy (see 0.93019 at fine 5 GHz). The
+separate existing short-magnitude oracle named above covers reflection
+accuracy within its own declared envelope. Production comments and changelog
+about the historical ~2.0 envelope remain historical policy rationale, not a
+newly endorsed physical explanation. No product defect was established or
+product change needed. The MSL golden, test and running refinement were left
+untouched; its acceptance condition in T11 is unchanged.
+
+Pre-final-commit audit: the result agrees with the declared topology and
+warning-policy falsifiers; R2-attempts=1 per resolution, both closing, no
+iteration. Independent read-only review found no blocking issue. Exact SHA
+and JUnit counts are verified, the figure and full records inspected, and the
+final diff is checked for an empty rfx/ and MSL scope.
