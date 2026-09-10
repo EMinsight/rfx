@@ -89,6 +89,11 @@ ALLOWED = {
         "API page; names the keyword to say passing it raises TypeError",
     "docs/public/guide/benchmarks.mdx":
         "names the retired one-plane/two_plane A/B as history",
+    "scripts/diagnostics/slow_931_farfield_attribution.py":
+        "attribution diagnostic; its header cites the removed map by commit "
+        "(a3e4dba4^:rfx/boundaries/pec.py tangential_edge_masks) to say which "
+        "historical operator it reconstructs in-process. Dated history, and the "
+        "citation is what makes the counterfactual checkable",
     # -- #313 two-PROBE-plane wave decomposition, same token, different thing
     "scripts/diagnostics/coax_msl_flux_adjudication.py":
         "#313 two-PROBE-plane decomposition (two_plane_delta, a local array)",
