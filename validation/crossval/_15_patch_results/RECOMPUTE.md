@@ -312,3 +312,50 @@ neither number may be quoted without the code state that produced it.
   arm is a near-total reflector — its feed stops a cell short of the patch, so
   its S11 dip is −0.010 dB.
 * `openems.json` did not move and was not re-run.
+
+## 6. A further candidate inside the bundled 58 % (2026-09-10 review)
+
+Section 4 already refuses to credit "the ownership contract" alone for leg 1 →
+leg 2's +2.744 % (58.2 % of the total): it names the port-extent fix on the
+pre-#931 feed spelling (3 edges → 2) as riding along with the conductor
+declarations, and says plainly "it is not the contract's contribution alone."
+One more rider was not yet named or measured: the patch's realized IN-PLANE
+footprint also changed when it stopped being declared a one-cell volume.
+
+Measured directly (both legs cheap: `_build_grid` + `_assemble_materials`, no
+solve):
+
+* pre-#931 patch declaration (`build_rfx_sim(patch_kind='volume_1cell')`):
+  footprint **51 x 63 cells = 40.4812 x 50.0062 mm**.
+* current sheet declaration (production board, `stack_check.n_footprint_x` /
+  `patch_extent_x_mm`, now recorded by `assert_realized_stack`): footprint
+  **50 x 63 cells = 39.6875 x 50.0062 mm**.
+
+The resonant-length footprint (x) shrank by one cell, **-1.96 %**
+(40.4812 -> 39.6875 mm), while the radiating-width footprint (y) did not move
+(63 cells both ways). A shorter resonant length raises f0 by the same
+first-order mechanism section 4 already invokes for the ground-cavity
+shortening ("removing the ... own cell shortens an electrically inflated
+cavity, which RAISES f0") — so this is a plausible, same-direction, partial
+explanation for some of leg 1 -> leg 2's un-attributed +2.744 %.
+
+**What this is not.** The footprint CHANGE is measured and reproducible (the
+two numbers above). Its EFFECT on f0/Q is not — no leg has varied ONLY the
+patch's volume-vs-sheet declaration while holding the ground declaration and
+the feed span fixed at their CURRENT (production) spellings, so leg 1 -> leg
+2's +2.744 % still has at least two unseparated riders (the port-extent fix,
+named in section 4, and this footprint change) and nothing here apportions
+between them. Do not read "-1.96 % length -> roughly 2 points of the 2.744 %"
+as measured; it is the same order of magnitude and the same sign, which is
+why it is a candidate, not an attribution.
+
+**To separate it: one more run**, cheap. `build_rfx_sim(patch_kind='volume_1cell')`
+already exists as a supported code path (used above for the footprint-only
+measurement); running it through a full solve with `feed='full_span'` (the
+CURRENT feed spelling, unlike the existing decomposition arm which uses the
+pre-#931 feed) isolates the patch-declaration axis alone against the
+production leg. Existing legs at this problem size solve in 77-129 s CPU
+(`rfx_decomposition_feed_pre931.json::runtime_s = 76.83`,
+`rfx.json::runtime_s = 129.11`), so the new leg is the same order of cost —
+one VESSL job, not a new code path. Not run here: this stays a named,
+unmeasured candidate, per the instruction not to widen this merge's scope.

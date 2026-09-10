@@ -495,12 +495,32 @@ def assert_realized_stack(sim, grid, patch_shape=None):
     n_sub_cells = k_patch - k_ground
     eps_between = [float(np.mean(eps[:, :, k][footprint]))
                    for k in range(k_ground, k_patch)]
+
+    # In-plane footprint extent (2026-09-10, #931 lattice-ownership merge
+    # review). assert_realized_stack has, since #931, recorded the wall
+    # PLANES (z) the patch stack realizes but never the FOOTPRINT (x, y) the
+    # patch sheet itself realizes -- so a change to how many columns the
+    # footprint covers (a sheet-vs-volume declaration change, for one) moved
+    # the resonant length silently: nothing here caught it, and nothing
+    # downstream could tell a feed-only change from a footprint-and-feed
+    # change without re-deriving it by hand. Recorded here, not asserted --
+    # a tolerance is a separate decision (see design-note prose below).
+    i_idx = [c[0] for c in columns]
+    j_idx = [c[1] for c in columns]
+    n_footprint_x = len(set(i_idx))
+    n_footprint_y = len(set(j_idx))
+    patch_extent_x_mm = round(n_footprint_x * DX * 1e3, 4)
+    patch_extent_y_mm = round(n_footprint_y * DX * 1e3, 4)
+
     print(f"\n[STACK CHECK #931] realized walls: ground z={z_sub_lo*1e3:.4f} "
           f"mm (k={k_ground}), patch z={z_sub_hi*1e3:.4f} mm (k={k_patch}); "
           f"no other wall plane over the {len(columns)}-column patch "
           f"footprint; n_sub_cells={n_sub_cells} (intended {N_SUB}); "
           f"eps_between={['%.3f' % e for e in eps_between]} (intended "
-          f"{EPS_R}); distinct eps values={n_distinct_eps}")
+          f"{EPS_R}); distinct eps values={n_distinct_eps}; "
+          f"footprint {n_footprint_x}x{n_footprint_y} cells = "
+          f"{patch_extent_x_mm:.4f}x{patch_extent_y_mm:.4f} mm "
+          f"(declared L_PATCH={L_PATCH*1e3:.4f}, W_PATCH={W_PATCH*1e3:.4f} mm)")
 
     ground_is_sheet = any(sp.normal_axis == 2 and sp.plane == k_ground
                           for sp in pec_sheets)
@@ -508,6 +528,13 @@ def assert_realized_stack(sim, grid, patch_shape=None):
         ground_wall_z=z_sub_lo, patch_wall_z=z_sub_hi,
         n_sub_cells=n_sub_cells, eps_between=eps_between,
         n_distinct_eps=n_distinct_eps,
+        # Realized in-plane footprint -- COUNT of distinct rasterized
+        # columns per axis and the physical extent that implies
+        # (n_footprint * DX), not a re-derivation of L_PATCH/W_PATCH. This is
+        # what the resonant/radiating dimensions the solver actually BUILT
+        # were, independent of what run_rfx's provenance banner declares.
+        n_footprint_x=n_footprint_x, n_footprint_y=n_footprint_y,
+        patch_extent_x_mm=patch_extent_x_mm, patch_extent_y_mm=patch_extent_y_mm,
         # Recorded PROVENANCE only -- the gate above (and compare()'s
         # re-check) is on the MEASURED planes, not this label, so a later
         # realization landing the same walls by a different mechanism does
