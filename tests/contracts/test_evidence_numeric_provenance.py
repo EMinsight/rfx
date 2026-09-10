@@ -514,6 +514,11 @@ CLASSIFICATION: dict[str, str] = {
     # document's whole job is naming real paths.
     "docs/design_notes/20260908_docs_truth_audit.md": GATED,
     "docs/design_notes/20260908_docs_truth_field_ledger.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-10 (cv05 crossval disposition, issues #959/#965): one `::` span,
+    # `test_patch_mode_identification.py::test_cv05_constants_...` -- a
+    # test-name reference, not an artifact path (no `.json`), so it lands in
+    # `others` and never `parses`; NO_ARTIFACT_REFERENCE only checks `parses`.
+    "docs/design_notes/20260910_cv05_crossval_disposition.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-10 (#931 lattice-ownership merge): 591e296e added a resolvable
     # citation to this note (cv18's Richardson envelope); opted in rather than
     # left failing NO_ARTIFACT_REFERENCE's own vacuity check.
