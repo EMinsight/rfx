@@ -546,6 +546,18 @@ CLASSIFICATION: dict[str, Entry] = {
         "builder_fused_with_solve",
         "`_tm110_error()`/`_tm111_error()` each build and call .run(...) in "
         "the same function"),
+    "validation/research/nu_cost/g4/cpml_baseline.py": Entry(
+        "no_simulation",
+        "G4 frozen low-level CPML reference; defines operators and state, "
+        "constructs no Simulation"),
+    "validation/research/nu_cost/g4/cpml_candidate.py": Entry(
+        "no_simulation",
+        "G4 rejected low-level CPML candidate retained for reproduction; "
+        "constructs no Simulation"),
+    "validation/research/nu_cost/g4/diagnose.py": Entry(
+        "no_simulation",
+        "G4 compiler-contraction diagnosis using a low-level Yee scan and "
+        "scalar arithmetic replay; constructs no Simulation"),
     "validation/research/nu_cost/w8_nu_kernel_ablation.py": Entry(
         "builder_fused_with_solve",
         "W8 G1 kernel-ablation bench (2026-09-07 nu-cost lane): "
