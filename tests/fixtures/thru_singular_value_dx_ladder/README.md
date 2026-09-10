@@ -80,3 +80,29 @@ locks them. The re-read on the corrected extractor is a SEPARATE record in
 md5, same ladder fences), with its own `verdict.json` computed by the same
 pre-declared adjudication procedure. Cite `post_897/` for anything about the live
 extractor; cite this directory only for what the pre-#897 extractor measured.
+
+## Realization note (#931, lattice ownership contract)
+
+These three rungs were measured on the PRE-#931 realization and are frozen as
+such. The fixture they come from —
+`tests/unit/sparams/test_lumped_twoport_vi_validation_battery.py::_build_thru` —
+draws its wire-THRU trace as a ONE-CELL PEC Box, and each rung's
+`rasterization.trace_thickness_cells = 1` records exactly that.
+
+Under the ownership contract a Box is a VOLUME: it realizes tangential walls on
+BOTH bounding planes and shorts the normal edge between them, where the old rule
+gave one wall at the lower plane. Declared as a foil instead — an
+`add_thin_conductor` sheet, which is what a 1-cell trace over a substrate means
+— the plane is unchanged for a face-registered Box (the mid-plane is the
+half-cell tie, and a tie resolves to the lower plane) but the in-plane footprint
+is sampled CLOSED, so a drawn width realizes exactly instead of one row short.
+On the sibling 16 mm thru in `tests/locks/test_refplane_port_waves.py`, measured
+on the same 0.5 mm cell, that is 5.0 mm realized against 4.5 mm before.
+
+So: **do not mix a post-#931 rung into this ladder.** Either re-run all three
+rungs through `scripts/diagnostics/thru_singular_value_dx_ladder.py` on the
+contract build and write a NEW directory (the sha256s above are the provenance,
+and a ladder whose rungs were measured under two realizations adjudicates
+nothing), or leave this one frozen as the record of the realization it belongs
+to. Section 9 of the predeclaration is adjudicated against THIS ladder and stays
+valid for it.

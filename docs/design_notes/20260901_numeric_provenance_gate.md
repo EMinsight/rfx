@@ -48,19 +48,33 @@ in the same commit as its reason.
   `test_the_gate_fires_on_the_measured_cv15_regression` reproduces that artifact mutation
   (−0.3448 dB, the constant `CV15_REGENERATED_VALUE`) in a scratch tree and asserts the gate
   reports the document, the reference and both values. A second arm asserts the same for a
-  sign inversion of the cited literal.
+  sign inversion of the cited literal. The arm is anchored on whatever the live artifact
+  holds, which is what makes it a falsifier rather than a frozen quotation.
 
   **Re-anchored 2026-09-06 (issue #920).** cv15's leg was regenerated again, this time
   because the fixture itself was wrong: the rfx feed post was floating between the two
   conductors instead of galvanically bridging them, so its dip was a correct extraction of
-  the wrong circuit. The committed leg now reads
-  `validation/crossval/_15_patch_results/rfx.json::s11_dip_db = -21.9242`, and the two
-  values above (−4.4298 and −0.3448) are the pre-#920 history, no longer resolvable against
-  the current artifact. Criterion (B) is unaffected: it fires whenever the artifact holds
-  something other than what this document cites, and the injected −0.3448 dB is still a
-  value the leg does not hold. The pre-#920 leg is kept as
-  `validation/crossval/_15_patch_results/rfx_floating_post_1f005d0d.json::s11_dip_db = -4.4298`
-  so the round-1 narrative above keeps a resolvable artifact of its own.
+  the wrong circuit. On the pre-#931 conductor declarations (still one-cell PEC Boxes) the
+  committed leg read `s11_dip_db = -21.9242`, and the two values above (−4.4298 and −0.3448)
+  became pre-#920 history, no longer resolvable against that artifact.
+
+  **Re-anchored again 2026-09-10 (issue #931, merge of #920 and #931).** #931 changed the
+  conductor declarations too -- both ground and patch became zero-thickness SHEETS -- and,
+  measured (not assumed), #920's galvanic-feed derivation and #931's independently-chosen
+  full-substrate feed are algebraically the SAME span once both conductors are sheets, so
+  the two fixes converge on one geometry rather than compounding into a third. The committed
+  leg now reads
+  `validation/crossval/_15_patch_results/rfx.json::s11_dip_db = -19.0480` (VESSL
+  369367260032), and the #920-only value above (−21.9242, measured on the
+  pre-#931 volume conductors) is itself now history, no longer resolvable against the current
+  artifact. Criterion (B) is unaffected throughout every re-anchor: it fires whenever the
+  artifact holds something other than what this document cites, and the injected −0.3448 dB
+  is still a value no version of the leg holds. Every pre-fix leg is kept as its own
+  resolvable artifact: `_15_patch_results/rfx_floating_post_1f005d0d.json::s11_dip_db =
+  -4.4298` (main's archival name for the pre-#920 leg) and
+  `_15_patch_results/rfx_pre931_two_plane_ground_1f005d0d.json` (this branch's archival name
+  for the SAME bytes -- both kept, see the branch-merge resolution note), so the round-1
+  narrative above keeps a resolvable artifact of its own.
 
 ## 5. What this gate does NOT catch
 

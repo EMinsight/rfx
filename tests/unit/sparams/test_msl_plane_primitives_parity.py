@@ -49,9 +49,11 @@ F_MAX = 5e9
 
 # Node-dependent synthetic markers so the closed Ampere loop is not
 # identically zero and the V span's inclusive/exclusive boundary is
-# discriminating: Ez varies by z-node (cell 3 sits inside the one-cell PEC
-# trace on both meshes below), Hy varies by k (bottom vs. top leg differ),
-# Hz varies by j (left vs. right leg differ).
+# discriminating: Ez varies by z-node (node 3 IS the realized trace plane
+# on both meshes below — #931 §1.3 puts a foil sheet on the node nearest
+# its declared plane, and round(254/84.67) = round(254/80) = 3), Hy varies
+# by k (bottom vs. top leg differ), Hz varies by j (left vs. right leg
+# differ).
 _EZ_MARKER = {0: 1.0, 1: 1.0, 2: 1.0, 3: 10.0, 4: -1000.0}
 _RTOL = 1e-6  # fast (fake-run) lane tolerance -- same-function-call parity
 
@@ -100,8 +102,9 @@ def _build_thru(dx: float) -> Simulation:
     sim.add_material("sub", eps_r=EPS_R)
     sim.add(Box((0, 0, 0), (lx, ly, H_SUB)), material="sub")
     y_c = ly / 2
+    # 35 um foil -> a SHEET on the laminate face (#931 §1.3).
     sim.add(
-        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB + dx)),
+        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB)),
         material="pec",
     )
     for x, d in ((MARGIN, "+x"), (MARGIN + L_LINE, "-x")):
@@ -112,8 +115,9 @@ def _build_thru(dx: float) -> Simulation:
 
 @pytest.mark.parametrize("dx,label", [
     (H_SUB / 3, "aligned dx=h_sub/3"),   # h_sub/dx = 3.0 exactly: node-aligned
-    (80e-6, "bisecting dx=80um"),         # h_sub/dx = 3.175: Box rasterizes
-                                          # the trace 1 edge past round()
+    (80e-6, "bisecting dx=80um"),         # h_sub/dx = 3.175: the sheet
+                                          # snaps down to node 3, 14 um
+                                          # below the declared face
 ])
 def test_plane_path_v_and_i_match_production(dx, label):
     sim = _build_thru(dx)

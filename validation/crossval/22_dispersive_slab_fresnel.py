@@ -22,6 +22,18 @@ Exit codes (rfx crossval convention):
   1 = any gate failed (a falsifier arm MUST exit 1)
   2 = E2 pass but a Meep JSON is missing -- inconclusive, NOT a pass
 
+Lattice ownership contract (#931): this case contains NO conductor. The
+slab is a dispersive DIELECTRIC written straight into ``MaterialArrays``
+(``init_materials`` plus a boolean slab mask for the ADE pole) and the
+boundaries are CPML in x, periodic in y/z. The contract changes PEC
+realization only — dielectric sampling (node, half-open) is untouched
+(§1.8) — so cv22 is one of the cases whose committed artifacts must come
+back BIT-IDENTICAL after it. If a cv22 re-run moves, the change leaked
+outside the conductor path, and that is the finding, not a tolerance to
+widen. (There is no ``Simulation`` here to ask ``assert_no_conductor``;
+the arrays ARE the fixture. cv23's api arm carries that assertion for the
+shared slab rig.)
+
 Run:
   python validation/crossval/22_dispersive_slab_fresnel.py            # all arms
   python validation/crossval/22_dispersive_slab_fresnel.py --falsifier debye_tau_x2

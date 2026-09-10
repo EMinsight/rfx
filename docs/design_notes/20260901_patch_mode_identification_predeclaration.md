@@ -1,5 +1,24 @@
 # cv05 + cv15: replacing the self-confirming resonance selector with mode-resolved identification
 
+> **SUPERSEDED IN PART by #931 (the lattice ownership contract), 2026-09-07.**
+> Kept as dated history and deliberately NOT rewritten.
+> Its `build_rfx_sim(two_plane=False/True)` arms and the `two_plane_ground`
+> fixture key describe a keyword that no longer exists. Under the contract
+> cv15's ground and patch are declared sheets and there is no A/B to run; the
+> fixtures this note defines were regenerated from the migrated declaration.
+> The current rule is
+> `docs/design_notes/20260906_plan_realign_lattice_ownership.md` §1, and for
+> users `docs/public/guide/materials-geometry.mdx` ("How conductors land on
+> the lattice").
+> Live-path clarification (2026-09-08): the numeric citations below describe
+> the historical #812 fixtures. At the current `cv05_ringdown_spectra.json`
+> path, the 22.0 mm TM110 pole is **`modes[1].freq = 3.043213 GHz`**, not
+> the former `modes[0] = 2.993459 GHz`; the 38.0 mm pole is now
+> **`modes[1].freq = 2.702632 GHz`**, outside the TM100 identification window.
+> Thus the old cluster-only 38.0 mm false acceptance is historical, not a
+> current fixture verdict. See `931_migration/XA-manifest-2b.md` for the
+> regenerated run and the changed 22.5/22.0 mm realization census.
+
 **Status:** PRE-DECLARATION (this note and the gate code it describes are
 committed BEFORE the measurements that judge them).
 **Opened:** 2026-09-01 · **Issue:** #812, cv05 + cv15 lane · **Author:** implementation agent
@@ -576,16 +595,19 @@ statistics can be pre-declared in a later round. The rfx leg's gate stands.
 stops firing.** `build_cv05_ringdown_spectra.py` (the round-1 harness, now committed,
 driven by the `RFX_CV05_PATCH_L_MM` hook) rebuilt all five lengths on the cluster. Same
 mode count at four of five lengths; the design-mode frequencies moved by ≤ 2e-4 relative
-at three lengths and 1.3e-3 at 22.0 mm (`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.patch_len_22p0mm.modes[0].freq = 2.993459 GHz`,
+at three lengths and 1.3e-3 at 22.0 mm (`runs.patch_len_22p0mm.modes[0].freq = 2.993459` GHz,
 was 2.98956; the audit's point now reads +23.52 %), Q by up to 4 %. The committed fixture
 is now the cluster build, with provenance, because it is the one the repo can regenerate
 and it matches the same job's shipped-script rfx leg exactly
-(`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.baseline.modes[0].freq = 2.331855 GHz` = `validation/crossval/_05_patch_results/cv05_run_openems_369367257743.json::rfx_harminv_hz = 2.331855 GHz`).
-The macOS values are kept in the test's comment and in git history.
+(runs.baseline.modes[0].freq = 2.331855 GHz = cv05_run_openems_369367257743.json::rfx_harminv_hz = 2.331855 GHz).
+The macOS values are kept in the test's comment and in git history. (Superseded 2026-09-10
+by §6.12 below -- #931 rebuilt this same fixture again, moving the pole indices, not just
+their values; the citations above are left as bare `key = value` text, historical for the
+pre-#931 cluster board, not machine-checked against the current artifact.)
 
 At **38.0 mm** the cluster build has a **third pole**,
-`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.patch_len_38p0mm.modes[1].freq = 2.609612 GHz` (+7.68 % of TM100, Q 57.7,
-amplitude `tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.patch_len_38p0mm.modes[1].amplitude = 25317.8` against 2.8e5 and
+`runs.patch_len_38p0mm.modes[1].freq = 2.609612` GHz (+7.68 % of TM100, Q 57.7,
+amplitude `runs.patch_len_38p0mm.modes[1].amplitude = 25317.8` against 2.8e5 and
 3.4e5 for its neighbours), inside the identification window. The identifier names it
 TM100 and the case PASSES on that build — the −25 % falsifier that fired on macOS does
 not fire here. This is a **fired falsifier against the instrument**: a spurious
@@ -596,3 +618,45 @@ three other mis-realized lengths, including the audit's +24 % point, still fail 
 on this fixture. What would close it, pre-declared next time: an amplitude floor relative
 to the strongest pole (an order of magnitude would separate this case) and a check that
 the assigned design member is not the weakest pole in the band.
+
+### 6.12 Re-anchor (2026-09-10, merge of #920 into #931) -- the fixture moved again, and a
+pole index moved with it
+
+`efc9d2b1` (2026-09-07, VESSL run 369367259142, the #931 X-A group; an ancestor of this
+branch's pre-merge head, so this predates the merge) rebuilt
+`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json` a second time, this
+time for the ownership contract rather than a host change. §6.11's citations are frozen to
+the pre-#931 cluster board (ground/patch as one-cell PEC `Box`es); this section re-anchors
+them to the current sheet board. `test_cv05_22p5_and_22p0_are_one_realization_since_931`
+and the parametrization in `tests/crossval/test_patch_mode_identification.py` already carry
+the current numbers; this note had not caught up.
+
+**A pole appeared, and the indices after it shifted.** On the pre-#931 board, mis-realized
+lengths (including 22.0 mm) resolved no separate TM010 pole, so `modes[0]` WAS the drifted
+a-axis design mode directly. On the sheet board every mis-realized length also resolves
+TM010 (the b-axis mode; the length hook only touches x) as a genuine, correctly-identified
+`modes[0]`, and the drifted a-axis mode moves to `modes[1]`. This is not a value drift at
+a fixed key -- the key that carries the number this section cites has itself moved.
+
+`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.patch_len_22p0mm.modes[1].freq = 3.043213 GHz`
+(was `modes[0].freq = 2.993459` GHz); the audit's point now reads +25.57 % (was +23.52 %).
+`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.baseline.modes[1].freq = 2.446497 GHz`
+(was `modes[0].freq = 2.331855` GHz), which now equals the PAIRED "after" run record
+`validation/crossval/_05_patch_results/cv05_run_openems_369367259142.json::rfx_harminv_hz = 2.446497 GHz`
+rather than the "before" record cited in §6.11
+(`cv05_run_openems_369367257743.json`, unchanged, per `efc9d2b1`). Verdict unchanged: TM100
+has no measured mode inside the window at this length, identification refuses, no neighbour
+is reported as the resonance -- WHICH pole is which moved, not the verdict.
+
+`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.patch_len_38p0mm.modes[1].freq = 2.702632 GHz`
+(was 2.609612), now +11.52 % of TM100 (was +7.68 %), Q 81.8 (was 57.7), amplitude
+`tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json::runs.patch_len_38p0mm.modes[1].amplitude = 31034.6`
+(was 25317.8) against 3.566e5 and 3.669e5 for its neighbours (was 2.8e5 and 3.4e5) -- same
+index this time (both boards resolve a third pole here), same verdict: the falsifier still
+fires, the same weak-pole-in-window mechanism, no amplitude floor added.
+
+R5, the trace and not the headline (`efc9d2b1`'s own record, not re-derived here): the
+baseline leg gained a pole and the identification improved rather than degraded -- three
+declared members are now matched (TM010 -0.76 %, TM100 +0.95 %, TM110 +3.18 %) where the
+pre-#931 leg matched two and missed TM010 entirely. Both arms remain UNDER-SETTLED at
+-20.4 / -21.6 dB against a -40 dB bar; no accuracy claim is read from that.

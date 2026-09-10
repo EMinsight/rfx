@@ -6,9 +6,11 @@ produced them.
 
 | File | Run | Repo SHA | Status |
 |---|---|---|---|
-| `cv05_run_openems_369367258715.json` / `.log` | VESSL 369367258715, remilab-c0, 2026-09-06 | `f5ee3b59c3e83832f7df1682f0ad30abb260a42e` | **CURRENT.** Post-PR-#897 (wire-port half-step current-DFT phase) and post-PR-#847 (mode-resolved selector). |
+| `cv05_run_openems_369367259142.json` / `.log` | VESSL 369367259142, remilab-c0, 2026-09-07 | `efc9d2b1` (2026-09-07, #931 X-A group; ancestor of this branch's pre-merge head) | **CURRENT.** Regenerated for the lattice-ownership contract (ground/patch declared as sheets, not one-cell PEC `Box`es); supersedes `...369367258715.json` below, which never measured the sheet board. `docs/design_notes/20260901_patch_mode_identification_predeclaration.md` §6.12 cites this record by name. |
+| `cv05_ringdown_fixture_rebuild_369367259142.log` | VESSL 369367259142 | — | build log for `tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json` on the CURRENT (sheet) board. |
+| `cv05_run_openems_369367258715.json` / `.log` | VESSL 369367258715, remilab-c0, 2026-09-06 | `f5ee3b59c3e83832f7df1682f0ad30abb260a42e` | **HISTORICAL.** Was CURRENT 2026-09-06 to 2026-09-07 (post-PR-#897 wire-port half-step current-DFT phase, post-PR-#847 mode-resolved selector), superseded same-day by `...369367259142.json` above when #931 rebuilt the board it measured. Kept because it is still the last record of the pre-#931 (one-cell-`Box`) board on the post-#897 extractor; not cited by name elsewhere in this tree as of this commit. |
 | `cv05_run_openems_369367257743.json` / `.log` | VESSL 369367257743, remilab-c0, 2026-09-02 | the #812 working checkout, pre-#847 | **HISTORICAL, kept on purpose.** This is the artifact `validation/crossval/manifest.json` (case `05_patch_antenna`) and `docs/design_notes/20260901_patch_mode_identification_predeclaration.md` §6.11 cite by name for the #812 mode-identification measurement. Its `rfx_s11*` block predates PR #897; do not read S11 from it. |
-| `cv05_ringdown_fixture_rebuild_369367257743.log` | VESSL 369367257743 | — | build log for `tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json`. |
+| `cv05_ringdown_fixture_rebuild_369367257743.log` | VESSL 369367257743 | — | build log for `tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json` on the pre-#931 board (superseded, see above). |
 
 ## What differs between the two records (issue #912, measured)
 

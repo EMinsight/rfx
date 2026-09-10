@@ -377,6 +377,20 @@ def msl_cross_section_span(grid, port: MSLPort) -> dict:
     )
 
 
+def msl_normal_component(port: MSLPort) -> str:
+    """The E component the MSL modal source drives: the SUBSTRATE NORMAL.
+
+    The modal voltage is ``V = sum(E_normal * d_normal)`` down the column
+    between ground and trace, so the normal component is the one the port
+    must be able to drive — and the only one the runner releases from the
+    realized PEC edges at the feed cross-section (#931 §1.9).  Releasing
+    the two in-plane components as well opens the ground plane and the
+    trace along the whole port width.
+    """
+    _prop, _width, normal, _sign = msl_axis_roles(port.direction)
+    return "e" + normal
+
+
 def msl_cell(direction: str, i_prop: int, i_width: int, i_normal: int
              ) -> tuple[int, int, int]:
     """Assemble a physical ``(i, j, k)`` index from port-frame indices."""

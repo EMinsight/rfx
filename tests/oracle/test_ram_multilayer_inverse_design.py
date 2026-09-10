@@ -40,6 +40,21 @@ lossless PEC-backed |Gamma|~1 in the mean (ripple 0.92-1.16 = the two-run
 extractor's domain standing-wave, worst on a total reflector); d|Gamma|/dsigma AD==FD
 0.05% (self-consistency) and sign-consistent with analytic; settling on the PEC
 runs -92 to -96 dB (< -40 dB drained); inverse design brackets the analytic sigma*.
+
+LATTICE OWNERSHIP CONTRACT (#931). The PEC backing here is a cell mask built
+by index (``m[xb:xpec] = True``) and handed to ``forward(pec_mask_override=)``,
+which stays a VOLUME override (design note §1.8). Under §1.2 that slab now
+realizes tangential walls on BOTH bounding node planes and shorts the normal
+edges between them, where the old rule gave one wall per masked cell plane.
+
+The analytic TMM oracle puts its short (``z_load = 0``) at ``X_BACK``, the
+LEADING face at index ``xb`` — the face the incident wave meets — and that face
+does not move. So the envelope is expected to be unchanged, and the expectation
+is checked by running the module rather than argued: VESSL run 369367259193
+(``rfx-931-post-ram-backings``), recorded in
+``docs/design_notes/931_migration/T6-RECOMPUTE.md``. If the |Gamma| envelope or
+either AD-vs-FD leg moves, the far face at ``xpec`` is what moved it and this
+row becomes a re-measure.
 """
 from __future__ import annotations
 

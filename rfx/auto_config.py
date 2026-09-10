@@ -100,9 +100,36 @@ class FeatureInfo(NamedTuple):
     has_pec: bool             # any PEC geometry present
     estimated_Q: float        # estimated cavity Q from material loss
     z_features: list = []     # list of (z_lo, z_hi, eps_r) for z-grading
+    z_sheet_planes: list = []  # declared z planes of PEC sheets (#931 §1.9)
 
 
-def analyze_features(geometry: list, materials: dict, pec_threshold: float = 1e6) -> FeatureInfo:
+def _sheet_z_plane(shape) -> float | None:
+    """The z plane a conductor SHEET declares, or ``None`` (#931 §1.3).
+
+    A sheet is a zero-thickness Box (the canonical declaration, §1.5) or a
+    thin-conductor shape whose thinnest bounding-box axis is z; its plane is
+    the shape's own mid-plane along that axis. The mesh has to put a node
+    there — a sheet snapped to a node half a cell away is a different board
+    (the dx = 80 um / h_sub = 254 um microstrip, design note §1.3).
+    """
+    lo = getattr(shape, "corner_lo", None)
+    hi = getattr(shape, "corner_hi", None)
+    if lo is None or hi is None:
+        bbox = getattr(shape, "bounding_box", None)
+        if bbox is None:
+            return None
+        try:
+            lo, hi = bbox()
+        except NotImplementedError:
+            return None
+    ext = [abs(float(hi[i]) - float(lo[i])) for i in range(3)]
+    if min(range(3), key=lambda i: ext[i]) != 2:
+        return None
+    return 0.5 * (float(lo[2]) + float(hi[2]))
+
+
+def analyze_features(geometry: list, materials: dict, pec_threshold: float = 1e6,
+                     thin_conductors=()) -> FeatureInfo:
     """Extract critical dimensions and material properties from geometry.
 
     Parameters
@@ -110,6 +137,11 @@ def analyze_features(geometry: list, materials: dict, pec_threshold: float = 1e6
     geometry : list of (Shape, material_name) tuples
     materials : dict of material_name -> MaterialSpec or dict
     pec_threshold : sigma above which material is PEC
+    thin_conductors : iterable of ThinConductor
+        Declared sheets (``sim.add_thin_conductor``). Their planes join the
+        zero-thickness PEC boxes found in ``geometry`` as z FEATURES
+        (#931 §1.9): a sheet has no thickness to resolve, but the mesh must
+        carry a node at its plane.
     """
     thicknesses = []
     extents = []
@@ -119,6 +151,7 @@ def analyze_features(geometry: list, materials: dict, pec_threshold: float = 1e6
     has_pec = False
     max_loss_tangent = 0.0
     z_features = []  # (z_lo, z_hi, eps_r) for non-uniform z detection
+    z_sheet_planes = []  # declared z planes of PEC sheets (#931 §1.9)
 
     for shape, mat_name in geometry:
         mat = materials.get(mat_name, {})
@@ -156,6 +189,15 @@ def analyze_features(geometry: list, materials: dict, pec_threshold: float = 1e6
         z_thickness = z_hi - z_lo
         if z_thickness > 1e-12 and sigma < pec_threshold:
             z_features.append((z_lo, z_hi, eps_r))
+        if sigma >= pec_threshold:
+            plane = _sheet_z_plane(shape)
+            if plane is not None and z_thickness <= 1e-12:
+                z_sheet_planes.append(plane)
+
+    for tc in thin_conductors or ():
+        plane = _sheet_z_plane(getattr(tc, "shape", tc))
+        if plane is not None:
+            z_sheet_planes.append(plane)
 
     # Bounding box of all geometry
     if all_corners_lo:
@@ -178,6 +220,7 @@ def analyze_features(geometry: list, materials: dict, pec_threshold: float = 1e6
         has_pec=has_pec,
         estimated_Q=estimated_Q,
         z_features=z_features,
+        z_sheet_planes=sorted(set(z_sheet_planes)),
     )
 
 
@@ -312,6 +355,7 @@ def auto_configure(
     n_steps_override: int | None = None,
     max_memory_mb: float | None = None,
     waveform=None,
+    thin_conductors=(),
 ) -> SimConfig:
     """Derive all simulation parameters from geometry + frequency range.
 
@@ -351,6 +395,11 @@ def auto_configure(
         ``9*tau``) is fully covered. Without a waveform the historical
         cutoff=3 envelope (``6*tau`` at bw=0.8) is used, bitwise-identical
         to the previous hardcode.
+    thin_conductors : iterable of ThinConductor
+        Declared sheets. Their planes (and any zero-thickness PEC box in
+        ``geometry``) become z FEATURES: the non-uniform z profile puts a
+        mesh line on each, so a sheet is realized where it was declared
+        (#931 §1.9).
 
     Returns
     -------
@@ -378,7 +427,8 @@ def auto_configure(
     preset = presets[accuracy]
 
     # Analyze geometry
-    features = analyze_features(geometry, materials)
+    features = analyze_features(geometry, materials,
+                                thin_conductors=thin_conductors)
     warnings = []
 
     # Detect empty geometry — use wavelength-only sizing to avoid oversized grids
@@ -476,7 +526,8 @@ def auto_configure(
         # are already fixed here, so this is dx-independent and the profile
         # below is a pure function of the candidate dx — the same call
         # step 4 makes with the dx this loop settles on.
-        _phys_z = (max(f[1] for f in features.z_features) + margin
+        _phys_z = (max([f[1] for f in features.z_features]
+                       + features.z_sheet_planes) + margin
                    if needs_nonuniform_z else None)
         for _ in range(20):  # safety limit on iterations
             _domain = tuple(max(d, 8 * dx) for d in _phys_extent)
@@ -488,7 +539,9 @@ def auto_configure(
             # dropping the NTFF/dispersion terms made the loop stop at a
             # number ``estimated_memory_mb`` never reproduced, so the
             # documented postcondition failed on non-uniform-z boards.
-            _dz_prof = (_make_dz_profile(features.z_features, _phys_z, dx)
+            _dz_prof = (_make_dz_profile(
+                            features.z_features, _phys_z, dx,
+                            sheet_planes=features.z_sheet_planes)
                         if needs_nonuniform_z else None)
             _nx, _ny, _nz = _auto_grid_shape(_domain, dx, _cpml, _dz_prof)
             _cells = _nx * _ny * _nz
@@ -521,9 +574,11 @@ def auto_configure(
     dz_profile = None
     if needs_nonuniform_z:
         # Physical z domain = geometry extent + margin above for radiation
-        geo_z_max = max(f[1] for f in features.z_features)
+        geo_z_max = max([f[1] for f in features.z_features]
+                        + features.z_sheet_planes)
         phys_z = geo_z_max + margin
-        dz_profile = _make_dz_profile(features.z_features, phys_z, dx)
+        dz_profile = _make_dz_profile(features.z_features, phys_z, dx,
+                                      sheet_planes=features.z_sheet_planes)
         warnings.append(
             f"Non-uniform z mesh enabled: {len(dz_profile)} cells, "
             f"dz={np.min(dz_profile)*1e3:.3f}–{np.max(dz_profile)*1e3:.3f} mm"
@@ -593,11 +648,53 @@ def auto_configure(
     )
 
 
+# A cut this close to an existing mesh line is that line (#931): splitting
+# there would make a sliver cell whose only effect is to collapse dt.
+_CUT_MERGE_FRACTION = 0.25
+
+
+def _uniform_run(length: float, dx: float, cuts=()) -> list[float]:
+    """Fill ``length`` with near-``dx`` cells, putting an EDGE at each cut.
+
+    ``cuts`` are offsets measured from the start of the run; each one
+    strictly inside it splits the run, so a declared plane (a PEC sheet,
+    #931 §1.9) lands on a mesh line instead of being snapped to whichever
+    node the uniform division happens to leave nearby.
+
+    A cut within ``dx/4`` of an edge the run already has — its own two
+    ends, or a cut already taken — is MERGED into that edge rather than
+    creating a cell.  A 35 µm foil declared half its thickness off a
+    laminate face used to open a 17.5 µm cell in series with the board:
+    one sliver cell, dt down by ~23x, and the #702 vacuum slot realized
+    with no warning.  Merging snaps the plane to the interface, which is
+    where the declaration meant it.
+    """
+    if length <= 0:
+        return []
+    tol = _CUT_MERGE_FRACTION * dx
+    edges = [0.0]
+    for c in sorted(cuts):
+        c = float(c)
+        if c <= tol or c >= length - tol:
+            continue                      # merges into a run end
+        if c - edges[-1] <= tol:
+            continue                      # merges into the cut before it
+        edges.append(c)
+    edges.append(float(length))
+    cells: list[float] = []
+    for a, b in zip(edges[:-1], edges[1:]):
+        seg = b - a
+        n = max(1, int(round(seg / dx)))
+        cells.extend([seg / n] * n)
+    return cells
+
+
 def _make_dz_profile(
     z_features: list[tuple[float, float, float]],
     domain_z: float,
     dx: float,
     min_cells_per_feature: int = 4,
+    sheet_planes=(),
 ) -> np.ndarray:
     """Generate non-uniform z cell profile from z-feature boundaries.
 
@@ -610,10 +707,17 @@ def _make_dz_profile(
     domain_z : total physical z domain height (excluding CPML)
     dx : uniform x/y cell size (used as coarse z cell size)
     min_cells_per_feature : minimum cells to resolve each feature
+    sheet_planes : iterable of float
+        Declared z planes of PEC sheets (#931 §1.9). Each one that falls in
+        a free (air) run splits it so the plane is a mesh line; one that
+        falls on a dielectric interface is already one.
     """
+    planes = sorted(float(z) for z in (sheet_planes or ()))
     if not z_features:
         n = max(1, int(round(domain_z / dx)))
-        return np.ones(n) * dx
+        if not planes:
+            return np.ones(n) * dx
+        return np.asarray(_uniform_run(domain_z, dx, planes), dtype=float)
 
     # Sort features by z_lo
     features = sorted(z_features, key=lambda f: f[0])
@@ -637,8 +741,8 @@ def _make_dz_profile(
         # Air gap before this feature
         gap = z_lo - z_cursor
         if gap > dx * 0.5:
-            n_gap = max(1, int(round(gap / dx)))
-            cells.extend([gap / n_gap] * n_gap)
+            cells.extend(_uniform_run(
+                gap, dx, [p - z_cursor for p in planes]))
             running += gap
 
         # Mark the air-to-dielectric boundary
@@ -658,8 +762,7 @@ def _make_dz_profile(
 
     # Air above features
     if air_height > dx * 0.5:
-        n_air = max(1, int(round(air_height / dx)))
-        cells.extend([air_height / n_air] * n_air)
+        cells.extend(_uniform_run(air_height, dx, [p - z_max for p in planes]))
 
     # P3: Apply thirds rule at material interfaces
     cells = apply_thirds_rule(cells, boundary_indices)

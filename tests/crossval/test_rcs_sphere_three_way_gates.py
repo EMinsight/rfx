@@ -15,6 +15,18 @@ Posture (honest, additive):
     in ``test_rcs_mie_reference_gates.py``; the fine point in
     ``test_rcs_mie_fixture.py``. All cross-solver distances are stated as
     rfx-centric / method-distance facts, never a verdict that a solver is wrong.
+
+
+#931 SCOPE, measured not assumed: the rfx scatterer on this lane is built with
+the low-level ``rasterize(grid, [(shape, 1.0, PEC_SIGMA)])`` — a sigma = 1e7
+CELL FILL. Design note §1.8 fences that model out of the lattice ownership
+contract (it is a lossy volume, not a realized PEC edge set), so nothing here
+moves under #931 and no re-run is scheduled. The two models are NOT the same
+object: at the cube fixture's mesh, node- and centre-sampling put a sphere at
+3023 vs 3082 cells. That difference is pinned in
+``tests/crossval/test_rcs_cube_bem_gates.py::test_the_sigma_fill_and_the_pec_contract_are_not_the_same_object``,
+so this lane's agreement figures must not be read as evidence about conductor
+realization.
 """
 from __future__ import annotations
 

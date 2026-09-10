@@ -209,10 +209,12 @@ sim = Simulation(**cfg.to_sim_kwargs())
 ```
 
 `SimConfig.uses_nonuniform` is `True` when `dz_profile is not None`.
-This example plans from the dielectric thickness only. A zero-thickness
-`Box` does not rasterize a conductor; register a physical sheet separately
-with `sim.add_thin_conductor(...)` after constructing the simulation, or give a
-volumetric conductor a finite, cell-aligned thickness.
+This example plans from the dielectric thickness only. Register the conductor
+separately after constructing the simulation: a sheet with
+`sim.add_thin_conductor(...)` (or the equivalent zero-thickness `Box` through
+`sim.add()`), or a volume with a cell-aligned thickness of at least one local
+cell. A PEC `Box` thinner than one cell raises rather than thin-rasterizing
+([How conductors land on the lattice](/rfx/guide/materials-geometry/#how-conductors-land-on-the-lattice)).
 
 ---
 
