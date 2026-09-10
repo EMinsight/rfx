@@ -486,10 +486,49 @@ if "--lattice-witness" in sys.argv:
                                 d_slab_m=d_slab)
     _doc["gated_here"] = False
     _doc["gated_here_reason"] = (
-        "the committed 719-step record does not settle to -40 dB (tails "
+        "THIS rung stays reported, not gated: the committed 719-step record "
+        "does not settle to -40 dB (tails "
         f"{tail_refl_rel:.3f} / {tail_trans_rel:.3f} of the incident peak), so the "
-        "derived W_witness exceeds this case's own band-mean window; REPORTED, "
-        "see docs/design_notes/20260903_lattice_witness_standard.md section 5.3")
+        "derived W_witness exceeds this case's own band-mean window (note "
+        "docs/design_notes/20260903_lattice_witness_standard.md section 5.3). "
+        "That does NOT leave this material unvalidated -- see "
+        "'borrowed_evidence' below: the same material IS gated, on a "
+        "settled rig, by a different case. A separate cv04-owned rerun was "
+        "considered and declined (note section 8.3, 2026-09-03): this "
+        "script derives n_steps once from a fixed NX_INTERIOR and a CPML "
+        "round-trip formula, with no override to extend it, and the "
+        "settled rig already measures this exact material.")
+    _doc["borrowed_evidence"] = {
+        "claim": (
+            "cv04's material (eps'=4, sigma=0, d=10mm, dx=1mm) IS validated "
+            "against the exact-lattice model -- by cv23's falsifier arm "
+            "below, not by this rung."
+        ),
+        "case": "23_lossy_slab_fresnel", "arm": "tand0p1",
+        "path": "validation/crossval/_23_lossy_results/rfx__falsifier_tand0p1_sigma_zero.json",
+        "why_this_file": (
+            "cv23's own sigma_zero falsifier for tand0p1: params_run "
+            "{'eps_inf': 4.0, 'sigma': 0.0} -- cv04's exact material, run "
+            "on cv23's settled (adaptive-extension) rig instead of cv04's "
+            "own fixed-length one. Its own verdict.exit_code is 1 (it is a "
+            "cv23 FALSIFIER, judged on purpose against cv23's declared "
+            "lossy material, and correctly fails that judgment) -- that is "
+            "NOT the number this claim rests on; the lattice-witness "
+            "verdict against sigma_zero's OWN declared (correct) params is."
+        ),
+        "n_steps": 1078,
+        "tail_scat_refl_rel": 0.0036064494721074255,
+        "tail_total_trans_rel": 0.001213668066483564,
+        "settling_bar": 1e-2,
+        "verified_by": (
+            "tests/crossval/test_lattice_witness_gates.py::"
+            "test_the_cv04_material_rung_is_the_committed_sigma_zero_arm "
+            "-- asserts this arm's own witness_ok is True (judged against "
+            "its declared sigma=0) and False when judged against the "
+            "wrong (lossy) material, i.e. the gate discriminates in both "
+            "directions on this exact data."
+        ),
+    }
     _out04 = os.path.join(SCRIPT_DIR, "_04_fresnel_results")
     os.makedirs(_out04, exist_ok=True)
     with open(os.path.join(_out04, _LW.witness_json_name()), "w") as _fh:
