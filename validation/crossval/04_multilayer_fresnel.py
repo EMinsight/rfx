@@ -79,6 +79,25 @@ def _load_slab_family():
 slab_family = _load_slab_family()
 C0 = slab_family.C0_SCRIPT     # 2.998e8, the value this script has always used
 
+
+def _load_cv22_gates():
+    """cv22's own gates module -- reused here only for NX_GROW_CELLS, the
+    same box-growth step cv22/cv23's own settling-extension loops use
+    (issue: this case gets that same mechanism, docs/design_notes/
+    20260903_lattice_witness_standard.md section 8.3 overridden -- see the
+    commit message for why)."""
+    import importlib.util
+
+    path = os.path.join(SCRIPT_DIR, "comparators", "cv22_dispersive_gates.py")
+    spec = importlib.util.spec_from_file_location("_cv04_cv22_gates", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+G = _load_cv22_gates()
+
 # =============================================================================
 # Parameters
 # =============================================================================
@@ -141,135 +160,224 @@ from rfx.sources.tfsf import (
     apply_tfsf_e, apply_tfsf_h,
 )
 
-# 2D TMz grid (nz=1, much faster than 3D for this 1D physics problem)
-grid = Grid(freq_max=20e9, domain=(nx_interior * dx, 0.004, dx),
-            dx=dx, cpml_layers=n_cpml, mode="2d_tmz")
-dt = grid.dt
-periodic = (False, True, True)  # Periodic in y for plane wave; z trivially periodic
-print(f"Grid shape: {grid.shape}, dt={dt:.4e} s")
-
-tfsf_cfg, tfsf_st = init_tfsf(
-    grid.nx, dx, dt, cpml_layers=n_cpml, tfsf_margin=5,
-    f0=f0, bandwidth=bw, amplitude=1.0,
-    polarization="ez", direction="+x",
-    ny=grid.ny, nz=grid.nz,
-)
-x_lo, x_hi = tfsf_cfg.x_lo, tfsf_cfg.x_hi
-i0 = tfsf_cfg.i0
-print(f"TFSF box: x_lo={x_lo}, x_hi={x_hi}")
-
-# Slab position (grid indices)
-slab_lo_g = grid.nx // 2 - int(d_slab / (2 * dx))
-slab_hi_g = grid.nx // 2 + int(d_slab / (2 * dx))
-assert x_lo + 10 < slab_lo_g < slab_hi_g < x_hi - 10, \
-    f"Slab [{slab_lo_g},{slab_hi_g}) must be inside TFSF [{x_lo},{x_hi}]"
-
-# Probes (both inside TFSF total-field region):
-# - reflection: before slab — measures incident + reflected (subtract 1D incident)
-# - transmission: after slab — measures transmitted (normalize by 1D incident)
-probe_refl_x = slab_lo_g - 30  # 30 cells before slab
-probe_trans_x = slab_hi_g + 30  # 30 cells after slab
-probe_refl = (probe_refl_x, grid.ny // 2, 0)
-probe_trans = (probe_trans_x, grid.ny // 2, 0)
-# 1D auxiliary grid indices at the same x positions (for exact incident spectrum)
-ref_1d_refl = i0 + (probe_refl_x - x_lo)
-ref_1d_trans = i0 + (probe_trans_x - x_lo)
-print(f"Probes (TF region): refl=cell {probe_refl_x}, trans=cell {probe_trans_x}")
-print(f"1D ref indices: refl={ref_1d_refl}, trans={ref_1d_trans}")
-print(f"Slab: cells [{slab_lo_g}, {slab_hi_g})")
-
-# Time-gate: stop signal acquisition before CPML reflections arrive
-# Round-trip from trans probe to CPML hi
-v_cells = C0 * dt / dx  # numerical phase velocity (cells/step)
-dist_to_cpml_hi = grid.nx - n_cpml - probe_trans_x
-dist_to_cpml_lo = probe_refl_x - n_cpml
-t_safe_steps_hi = int(2 * dist_to_cpml_hi / v_cells * 0.95)
-t_safe_steps_lo = int(2 * dist_to_cpml_lo / v_cells * 0.95)
-n_steps_safe = min(t_safe_steps_hi, t_safe_steps_lo)
-n_steps = min(n_steps_safe, 8000)
-print(f"v_cells={v_cells:.3f}, dist_hi={dist_to_cpml_hi}, dist_lo={dist_to_cpml_lo}")
-print(f"Safe steps: hi={t_safe_steps_hi}, lo={t_safe_steps_lo}")
-print(f"n_steps={n_steps}, total time={n_steps*dt*1e9:.2f} ns")
-
-# Materials
-materials = init_materials(grid.shape)
-materials = materials._replace(
-    eps_r=materials.eps_r.at[slab_lo_g:slab_hi_g, :, :].set(eps_slab)
-)
-
-state = init_state(grid.shape)
-cp, cs = init_cpml(grid)
-
-ts_refl = np.zeros(n_steps)    # Total field at reflection probe
-ts_trans = np.zeros(n_steps)   # Total field at transmission probe
-ts_inc_refl = np.zeros(n_steps)  # 1D incident at refl probe x-position
-ts_inc_trans = np.zeros(n_steps) # 1D incident at trans probe x-position
-
-t0_wall = time.time()
-for step in range(n_steps):
-    t = step * dt
-    state = update_h(state, materials, dt, dx, periodic)
-    state = apply_tfsf_h(state, tfsf_cfg, tfsf_st, dx, dt)
-    state, cs = apply_cpml_h(state, cp, cs, grid, axes="x")
-    tfsf_st = update_tfsf_1d_h(tfsf_cfg, tfsf_st, dx, dt)
-
-    state = update_e(state, materials, dt, dx, periodic)
-    state = apply_tfsf_e(state, tfsf_cfg, tfsf_st, dx, dt)
-    state, cs = apply_cpml_e(state, cp, cs, grid, axes="x")
-    tfsf_st = update_tfsf_1d_e(tfsf_cfg, tfsf_st, dx, dt, t)
-
-    ts_refl[step] = float(state.ez[probe_refl])
-    ts_trans[step] = float(state.ez[probe_trans])
-    ts_inc_refl[step] = float(tfsf_st.e1d[ref_1d_refl])
-    ts_inc_trans[step] = float(tfsf_st.e1d[ref_1d_trans])
-
-elapsed = time.time() - t0_wall
-print(f"Simulation: {elapsed:.1f}s")
-print(f"  refl max={np.max(np.abs(ts_refl)):.4e}, trans max={np.max(np.abs(ts_trans)):.4e}")
-print(f"  inc max: refl={np.max(np.abs(ts_inc_refl)):.4e}, trans={np.max(np.abs(ts_inc_trans)):.4e}")
-
-# Compute scattered (reflected) field by subtracting 1D incident from total
-ts_scattered_refl = ts_refl - ts_inc_refl
-
-# -----------------------------------------------------------------------------
-# Settling-tail witness (GATED — issue #341; previously an ungated print).
-#
-# Window choice: the old window (last 100 steps) contained the direct pulse —
-# in the committed config (nx=600, 719 steps) the 1D incident at the trans
-# probe peaks at step ~544 and is still ~11% of peak inside the last 100
-# steps, so a "tail" there mostly measured the pulse itself. The last 50
-# steps are clean: measured incident there is 2.1e-4 of peak (2026-07-13,
-# committed config). The purity check below enforces that property at
-# RUNTIME, so a future change to n_steps/geometry cannot silently re-admit
-# the direct pulse into the witness window.
-#
-# Thresholds (measured envelope + headroom, committed config 2026-07-13):
-#   - window purity: incident 2.1e-4 of peak measured -> gate 1e-3 (~5x).
-#   - tails: scattered@refl 0.036, total@trans 0.051 of incident peak; this
-#     residual is the order-2 etalon echo still in flight at run end (rung
-#     C4, job 369367246779 — collapses to ~5e-5 rel at nx=1500/1940 steps).
-#     Gate 0.10 (~2x): bounds gross non-settling (CPML contamination,
-#     late-time growth, broken time gate) while accepting the documented
-#     committed-config echo residual.
-# -----------------------------------------------------------------------------
 TAIL_WINDOW = slab_family.TAIL_WINDOW
 TAIL_PURITY_LIMIT = slab_family.TAIL_PURITY_LIMIT
 TAIL_LIMIT = slab_family.TAIL_LIMIT
-inc_peak = max(np.max(np.abs(ts_inc_refl)), np.max(np.abs(ts_inc_trans)))
-tail_inc_rel = max(np.max(np.abs(ts_inc_refl[-TAIL_WINDOW:])),
-                   np.max(np.abs(ts_inc_trans[-TAIL_WINDOW:]))) / inc_peak
-tail_refl_rel = np.max(np.abs(ts_scattered_refl[-TAIL_WINDOW:])) / inc_peak
-tail_trans_rel = np.max(np.abs(ts_trans[-TAIL_WINDOW:])) / inc_peak
-tail_window_clean = tail_inc_rel < TAIL_PURITY_LIMIT
-tail_ok = bool(tail_window_clean
-               and tail_refl_rel < TAIL_LIMIT
-               and tail_trans_rel < TAIL_LIMIT)
-print(f"  Tail witness (last {TAIL_WINDOW} steps, rel. to incident peak): "
-      f"scat_refl={tail_refl_rel:.4f}, trans={tail_trans_rel:.4f} "
-      f"(limit {TAIL_LIMIT})")
-print(f"  Tail window purity: incident={tail_inc_rel:.2e} of peak "
-      f"(limit {TAIL_PURITY_LIMIT:g}) -> "
-      f"{'clean' if tail_window_clean else 'CONTAMINATED BY DIRECT PULSE'}")
+
+
+def _run_slab_fdtd(nx_interior_try: int) -> dict:
+    """One attempt of the TFSF slab solve at a given interior cell count.
+
+    Settling-extension mechanism cv22/cv23 already have (docs/design_notes/
+    20260903_lattice_witness_standard.md section 8.3's "cv04 has no record
+    derivation and no --nx-interior" is the defect this fixes, not a
+    constraint honoured going forward -- overridden by the PI, 2026-09-10:
+    a case that cannot settle its own spectra cannot gate its own case).
+    A bigger interior box delays the CPML round trip, which raises the
+    safe step count this rig can run before boundary reflections
+    contaminate the probes -- exactly the mechanism cv23's own grow-loop
+    (``23_lossy_slab_fresnel.py``'s ``while True: run = run_rfx_arm(...)``)
+    already uses; ported here rather than reinvented.
+
+    Returns a dict with everything the rest of the script needs (grid, dt,
+    n_steps, the four probe time series, and both tail-settling reads),
+    plus ``tail_settled_to_family_bar`` -- whether THIS attempt clears the
+    family-wide -40 dB / 1e-2 bar (``slab_family.SETTLING_LIMIT``), which is
+    what the lattice witness needs and is NOT the same as this case's own
+    (looser, 0.10) ``TAIL_LIMIT`` continuum gate below -- conflating the two
+    would silently loosen the thing being fixed.
+    """
+    grid = Grid(freq_max=20e9, domain=(nx_interior_try * dx, 0.004, dx),
+                dx=dx, cpml_layers=n_cpml, mode="2d_tmz")
+    dt = grid.dt
+    periodic = (False, True, True)  # Periodic in y for plane wave; z trivially periodic
+    print(f"  [nx_interior={nx_interior_try}] Grid shape: {grid.shape}, dt={dt:.4e} s")
+
+    tfsf_cfg, tfsf_st = init_tfsf(
+        grid.nx, dx, dt, cpml_layers=n_cpml, tfsf_margin=5,
+        f0=f0, bandwidth=bw, amplitude=1.0,
+        polarization="ez", direction="+x",
+        ny=grid.ny, nz=grid.nz,
+    )
+    x_lo, x_hi = tfsf_cfg.x_lo, tfsf_cfg.x_hi
+    i0 = tfsf_cfg.i0
+    print(f"  TFSF box: x_lo={x_lo}, x_hi={x_hi}")
+
+    # Slab position (grid indices)
+    slab_lo_g = grid.nx // 2 - int(d_slab / (2 * dx))
+    slab_hi_g = grid.nx // 2 + int(d_slab / (2 * dx))
+    assert x_lo + 10 < slab_lo_g < slab_hi_g < x_hi - 10, \
+        f"Slab [{slab_lo_g},{slab_hi_g}) must be inside TFSF [{x_lo},{x_hi}]"
+
+    # Probes (both inside TFSF total-field region):
+    # - reflection: before slab — measures incident + reflected (subtract 1D incident)
+    # - transmission: after slab — measures transmitted (normalize by 1D incident)
+    probe_refl_x = slab_lo_g - 30  # 30 cells before slab
+    probe_trans_x = slab_hi_g + 30  # 30 cells after slab
+    probe_refl = (probe_refl_x, grid.ny // 2, 0)
+    probe_trans = (probe_trans_x, grid.ny // 2, 0)
+    # 1D auxiliary grid indices at the same x positions (for exact incident spectrum)
+    ref_1d_refl = i0 + (probe_refl_x - x_lo)
+    ref_1d_trans = i0 + (probe_trans_x - x_lo)
+    print(f"  Probes (TF region): refl=cell {probe_refl_x}, trans=cell {probe_trans_x}")
+    print(f"  1D ref indices: refl={ref_1d_refl}, trans={ref_1d_trans}")
+    print(f"  Slab: cells [{slab_lo_g}, {slab_hi_g})")
+
+    # Time-gate: stop signal acquisition before CPML reflections arrive
+    # Round-trip from trans probe to CPML hi
+    v_cells = C0 * dt / dx  # numerical phase velocity (cells/step)
+    dist_to_cpml_hi = grid.nx - n_cpml - probe_trans_x
+    dist_to_cpml_lo = probe_refl_x - n_cpml
+    t_safe_steps_hi = int(2 * dist_to_cpml_hi / v_cells * 0.95)
+    t_safe_steps_lo = int(2 * dist_to_cpml_lo / v_cells * 0.95)
+    n_steps_safe = min(t_safe_steps_hi, t_safe_steps_lo)
+    n_steps = min(n_steps_safe, 8000)
+    print(f"  v_cells={v_cells:.3f}, dist_hi={dist_to_cpml_hi}, dist_lo={dist_to_cpml_lo}")
+    print(f"  Safe steps: hi={t_safe_steps_hi}, lo={t_safe_steps_lo}")
+    print(f"  n_steps={n_steps}, total time={n_steps*dt*1e9:.2f} ns")
+
+    # Materials
+    materials = init_materials(grid.shape)
+    materials = materials._replace(
+        eps_r=materials.eps_r.at[slab_lo_g:slab_hi_g, :, :].set(eps_slab)
+    )
+
+    state = init_state(grid.shape)
+    cp, cs = init_cpml(grid)
+
+    ts_refl = np.zeros(n_steps)    # Total field at reflection probe
+    ts_trans = np.zeros(n_steps)   # Total field at transmission probe
+    ts_inc_refl = np.zeros(n_steps)  # 1D incident at refl probe x-position
+    ts_inc_trans = np.zeros(n_steps) # 1D incident at trans probe x-position
+
+    t0_wall = time.time()
+    for step in range(n_steps):
+        t = step * dt
+        state = update_h(state, materials, dt, dx, periodic)
+        state = apply_tfsf_h(state, tfsf_cfg, tfsf_st, dx, dt)
+        state, cs = apply_cpml_h(state, cp, cs, grid, axes="x")
+        tfsf_st = update_tfsf_1d_h(tfsf_cfg, tfsf_st, dx, dt)
+
+        state = update_e(state, materials, dt, dx, periodic)
+        state = apply_tfsf_e(state, tfsf_cfg, tfsf_st, dx, dt)
+        state, cs = apply_cpml_e(state, cp, cs, grid, axes="x")
+        tfsf_st = update_tfsf_1d_e(tfsf_cfg, tfsf_st, dx, dt, t)
+
+        ts_refl[step] = float(state.ez[probe_refl])
+        ts_trans[step] = float(state.ez[probe_trans])
+        ts_inc_refl[step] = float(tfsf_st.e1d[ref_1d_refl])
+        ts_inc_trans[step] = float(tfsf_st.e1d[ref_1d_trans])
+
+    elapsed = time.time() - t0_wall
+    print(f"  Simulation: {elapsed:.1f}s")
+    print(f"    refl max={np.max(np.abs(ts_refl)):.4e}, trans max={np.max(np.abs(ts_trans)):.4e}")
+    print(f"    inc max: refl={np.max(np.abs(ts_inc_refl)):.4e}, trans={np.max(np.abs(ts_inc_trans)):.4e}")
+
+    # Compute scattered (reflected) field by subtracting 1D incident from total
+    ts_scattered_refl = ts_refl - ts_inc_refl
+
+    # -----------------------------------------------------------------------
+    # Settling-tail witness (GATED — issue #341; previously an ungated print).
+    #
+    # Window choice: the old window (last 100 steps) contained the direct
+    # pulse — at nx=600 (the pre-fix committed config) the 1D incident at the
+    # trans probe peaks at step ~544 and is still ~11% of peak inside the
+    # last 100 steps, so a "tail" there mostly measured the pulse itself.
+    # The last 50 steps are clean at that config: measured incident there is
+    # 2.1e-4 of peak (2026-07-13). The purity check below enforces that
+    # property at RUNTIME, so a change to n_steps/geometry cannot silently
+    # re-admit the direct pulse into the witness window.
+    #
+    # TAIL_LIMIT=0.10 (this case's own continuum tail_ok gate, below) is
+    # DELIBERATELY looser than slab_family.SETTLING_LIMIT=1e-2 (the family's
+    # -40 dB bar the lattice witness needs) -- see this function's own
+    # docstring. tail_settled_to_family_bar checks the STRICTER one.
+    # -----------------------------------------------------------------------
+    inc_peak = max(np.max(np.abs(ts_inc_refl)), np.max(np.abs(ts_inc_trans)))
+    tail_inc_rel = max(np.max(np.abs(ts_inc_refl[-TAIL_WINDOW:])),
+                       np.max(np.abs(ts_inc_trans[-TAIL_WINDOW:]))) / inc_peak
+    tail_refl_rel = np.max(np.abs(ts_scattered_refl[-TAIL_WINDOW:])) / inc_peak
+    tail_trans_rel = np.max(np.abs(ts_trans[-TAIL_WINDOW:])) / inc_peak
+    tail_window_clean = tail_inc_rel < TAIL_PURITY_LIMIT
+    tail_ok = bool(tail_window_clean
+                   and tail_refl_rel < TAIL_LIMIT
+                   and tail_trans_rel < TAIL_LIMIT)
+    tail_settled_to_family_bar = bool(
+        tail_window_clean
+        and tail_refl_rel < slab_family.SETTLING_LIMIT
+        and tail_trans_rel < slab_family.SETTLING_LIMIT
+    )
+    print(f"  Tail witness (last {TAIL_WINDOW} steps, rel. to incident peak): "
+          f"scat_refl={tail_refl_rel:.4f}, trans={tail_trans_rel:.4f} "
+          f"(this case's own limit {TAIL_LIMIT}, family -40dB bar "
+          f"{slab_family.SETTLING_LIMIT:g})")
+    print(f"  Tail window purity: incident={tail_inc_rel:.2e} of peak "
+          f"(limit {TAIL_PURITY_LIMIT:g}) -> "
+          f"{'clean' if tail_window_clean else 'CONTAMINATED BY DIRECT PULSE'}")
+
+    return dict(
+        nx_interior=nx_interior_try, grid=grid, dt=dt, n_steps=n_steps,
+        n_steps_safe=n_steps_safe, v_cells=v_cells,
+        x_lo=x_lo, probe_refl_x=probe_refl_x, probe_trans_x=probe_trans_x,
+        ts_refl=ts_refl, ts_trans=ts_trans,
+        ts_inc_refl=ts_inc_refl, ts_inc_trans=ts_inc_trans,
+        tail_inc_rel=tail_inc_rel,
+        tail_refl_rel=tail_refl_rel, tail_trans_rel=tail_trans_rel,
+        tail_window_clean=tail_window_clean, tail_ok=tail_ok,
+        tail_settled_to_family_bar=tail_settled_to_family_bar,
+        elapsed_s=elapsed,
+    )
+
+
+# Settling-extension loop (cv22/cv23's own mechanism, ported -- see
+# _run_slab_fdtd's docstring). Grows nx_interior by G.NX_GROW_CELLS (the
+# SAME step cv22/cv23 use) until the tail clears the family's -40 dB bar,
+# and records where it actually stopped, not a number anyone typed.
+_nx_arm = nx_interior
+_grows = []
+while True:
+    _run = _run_slab_fdtd(_nx_arm)
+    if _run["tail_settled_to_family_bar"]:
+        break
+    if _nx_arm > 4 * slab_family.NX_INTERIOR:
+        raise RuntimeError(
+            f"record never settled to the family's {slab_family.SETTLING_LIMIT:g} "
+            f"bar within 4x the declared box (last attempt: nx_interior={_nx_arm}, "
+            f"tail scat/trans={_run['tail_refl_rel']:.4f}/{_run['tail_trans_rel']:.4f})"
+        )
+    _grows.append({"nx_interior": _nx_arm, "tail_refl_rel": _run["tail_refl_rel"],
+                   "tail_trans_rel": _run["tail_trans_rel"]})
+    print(f"  tail not settled to the family bar {slab_family.SETTLING_LIMIT:g} "
+          f"(scat_refl={_run['tail_refl_rel']:.4f}, trans={_run['tail_trans_rel']:.4f}) "
+          f"-- growing nx_interior {_nx_arm} -> {_nx_arm + G.NX_GROW_CELLS}")
+    _nx_arm += G.NX_GROW_CELLS
+
+nx_interior = _run["nx_interior"]  # the FINAL, grown value -- PART 3 (Meep) reads this
+grid = _run["grid"]
+dt = _run["dt"]
+n_steps = _run["n_steps"]
+n_steps_safe = _run["n_steps_safe"]
+v_cells = _run["v_cells"]
+x_lo = _run["x_lo"]
+probe_refl_x = _run["probe_refl_x"]
+probe_trans_x = _run["probe_trans_x"]
+ts_refl = _run["ts_refl"]
+ts_trans = _run["ts_trans"]
+ts_inc_refl = _run["ts_inc_refl"]
+ts_inc_trans = _run["ts_inc_trans"]
+tail_refl_rel = _run["tail_refl_rel"]
+tail_trans_rel = _run["tail_trans_rel"]
+tail_window_clean = _run["tail_window_clean"]
+tail_inc_rel = _run["tail_inc_rel"]
+tail_ok = _run["tail_ok"]
+elapsed = _run["elapsed_s"]
+# Recomputed at module level (cheap; PART 1b/2 both read it) since the
+# function's own copy is local to its scope.
+ts_scattered_refl = ts_refl - ts_inc_refl
+print(f"\n  SETTLED at nx_interior={nx_interior} (declared {slab_family.NX_INTERIOR}, "
+      f"{len(_grows)} grow attempt(s)): n_steps={n_steps}, tail scat_refl/trans = "
+      f"{tail_refl_rel:.4f}/{tail_trans_rel:.4f} (family bar "
+      f"{slab_family.SETTLING_LIMIT:g})")
 
 # =============================================================================
 # PART 1b: Time-domain diagnostic
@@ -484,12 +592,43 @@ if "--lattice-witness" in sys.argv:
                                 commit=_SF.staged_commit(os.path.dirname(os.path.dirname(SCRIPT_DIR)),
                                                           cwd=SCRIPT_DIR),
                                 d_slab_m=d_slab)
-    _doc["gated_here"] = False
-    _doc["gated_here_reason"] = (
-        "the committed 719-step record does not settle to -40 dB (tails "
-        f"{tail_refl_rel:.3f} / {tail_trans_rel:.3f} of the incident peak), so the "
-        "derived W_witness exceeds this case's own band-mean window; REPORTED, "
-        "see docs/design_notes/20260903_lattice_witness_standard.md section 5.3")
+    # gated_here now reflects the settling-extension loop above, not a fixed
+    # 719-step record: this case has its own settled record (tail scat/trans
+    # below the family's -40 dB / 1e-2 bar, slab_family.SETTLING_LIMIT), not
+    # borrowed from cv23 (that path was tried and reverted -- see the commit
+    # message: the PI's ruling was that cv04 answers its own question with
+    # its own data). gated_here=True requires BOTH that this run's own tail
+    # cleared the family bar AND that the witness's own gates (GL1/GL2, the
+    # CPML/tail/aux-echo preconditions) all pass -- either failing alone must
+    # not leave a gated verdict standing.
+    _tail_settled_here = bool(
+        tail_window_clean
+        and tail_refl_rel < slab_family.SETTLING_LIMIT
+        and tail_trans_rel < slab_family.SETTLING_LIMIT
+    )
+    _doc["gated_here"] = bool(_tail_settled_here and _doc["verdict"]["all_rungs_ok"])
+    if _doc["gated_here"]:
+        _doc["gated_here_reason"] = (
+            f"this rung's own {n_steps}-step record (nx_interior={nx_interior}, "
+            f"{len(_grows)} grow attempt(s) from the declared "
+            f"{slab_family.NX_INTERIOR}) settles to tails "
+            f"{tail_refl_rel:.4f} / {tail_trans_rel:.4f} of the incident peak, "
+            f"under the family's {slab_family.SETTLING_LIMIT:g} (-40 dB) bar -- "
+            "gated on its OWN data, not cv23's sigma_zero arm (that borrowing "
+            "was tried and reverted; a case that cannot settle its own "
+            "spectra cannot gate its own case, so the fix was to settle it, "
+            "not to cite elsewhere)."
+        )
+    else:
+        _doc["gated_here_reason"] = (
+            f"this rung's own {n_steps}-step record (nx_interior={nx_interior}) "
+            f"has tails {tail_refl_rel:.4f} / {tail_trans_rel:.4f} against the "
+            f"family's {slab_family.SETTLING_LIMIT:g} bar (settled={_tail_settled_here}) "
+            f"and witness gates {_doc['verdict']}; REPORTED, not gated, until "
+            "both hold. See docs/design_notes/20260903_lattice_witness_standard.md "
+            "section 5.3 for the record this superseded (719 steps, tails "
+            "0.036/0.051, never settled)."
+        )
     _out04 = os.path.join(SCRIPT_DIR, "_04_fresnel_results")
     os.makedirs(_out04, exist_ok=True)
     with open(os.path.join(_out04, _LW.witness_json_name()), "w") as _fh:
