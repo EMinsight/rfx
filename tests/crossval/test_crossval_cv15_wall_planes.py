@@ -631,3 +631,49 @@ def test_cv15_negative_control_pre920_span_is_refused(capsys):
         cv15.assert_galvanic_feed(sim, grid, geom)
     capsys.readouterr()
 
+
+# ---------------------------------------------------------------------------
+# The archived pre-fix leg has TWO names -- deliberately, not a merge leftover
+# to clean up. Guard against them silently drifting apart.
+# ---------------------------------------------------------------------------
+
+def test_the_two_archived_pre_fix_leg_names_stay_byte_identical():
+    """``rfx_floating_post_1f005d0d.json`` (main's name, cited by CHANGELOG.md)
+    and ``rfx_pre931_two_plane_ground_1f005d0d.json`` (this branch's name,
+    cited by docs/design_notes/20260908_docs_truth_field_ledger.md,
+    RECOMPUTE.md and scripts/diagnostics/cv15_before_after_931.py) are the
+    SAME artifact -- the #768 leg, before #920's galvanic-feed fix and before
+    #931's sheet declarations, archived independently by two campaigns that
+    each named it after the defect they were chasing (a floating feed post;
+    a two_plane-ground realization). Both descriptions are accurate; that is
+    the point, not an error to resolve by picking one.
+
+    Neither file is to be deleted or renamed: each has its own dated,
+    committed document citing it by that name, and rewriting a dated record
+    to point at a file that no longer exists under the name it used is worse
+    than the duplication. What must never happen instead is the two
+    diverging -- someone regenerates one and not the other, and both
+    campaigns' evidence silently stops describing the same board. This
+    fails loudly, cheaply, the moment that happens.
+    """
+    import hashlib
+
+    results = REPO_ROOT / "validation/crossval/_15_patch_results"
+    a = results / "rfx_floating_post_1f005d0d.json"
+    b = results / "rfx_pre931_two_plane_ground_1f005d0d.json"
+    assert a.is_file(), f"{a} is missing -- do not delete either archived name"
+    assert b.is_file(), f"{b} is missing -- do not delete either archived name"
+    ha = hashlib.sha256(a.read_bytes()).hexdigest()
+    hb = hashlib.sha256(b.read_bytes()).hexdigest()
+    assert ha == hb, (
+        f"the two archived names for the #768 pre-fix cv15 leg have "
+        f"diverged: {a.name} sha256={ha} vs {b.name} sha256={hb}. They "
+        f"must stay byte-identical -- both names are cited by dated "
+        f"documents (CHANGELOG.md for the first, "
+        f"20260908_docs_truth_field_ledger.md/RECOMPUTE.md/"
+        f"cv15_before_after_931.py for the second) as the SAME artifact. "
+        f"If the board was legitimately re-measured, regenerate BOTH files "
+        f"identically, or retire one name explicitly (updating every "
+        f"document that cites it) rather than letting them silently split."
+    )
+
