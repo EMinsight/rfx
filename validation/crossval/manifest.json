@@ -48,7 +48,7 @@
       "artifact_paths": [
         "validation/crossval/_02_ring_resonator_results/crossval.json"
       ],
-      "cpu_runner": {"order": 7},
+      "cpu_runner": {"order": 6},
       "scheduled_external_order": 2,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -73,7 +73,7 @@
       "artifact_paths": [
         "docs/design_notes/issue812_cv03_dispersion_matched_frequency.json"
       ],
-      "cpu_runner": {"order": 8},
+      "cpu_runner": {"order": 7},
       "scheduled_external_order": 3,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -115,7 +115,7 @@
       "script": "validation/crossval/05_patch_antenna.py",
       "role": "diagnostic-reporter",
       "public_group": "B",
-      "execution_tiers": ["cpu-runner", "vessl-external"],
+      "execution_tiers": ["external-manual"],
       "evidence_levels": ["E2", "E4"],
       "references": [
         {"kind": "analytic", "name": "Balanis transmission-line patch resonance (printed reference, NOT a pass gate)", "required_for_script_pass": false},
@@ -127,7 +127,7 @@
       "expected_exit_codes": [0, 1, 2],
       "gate_paths": ["tests/locks/test_patch_edgefed_resonance_harminv.py", "tests/locks/test_patch_edgefed_s11_passivity.py", "tests/oracle/test_patch_cavity_eps_oracle.py", "tests/crossval/test_patch_canonical_farfield_e4.py"],
       "artifact_paths": ["tests/fixtures/patch_canonical_farfield_e4/patch_farfield_openems.json", "validation/crossval/_05_patch_results/cv05_run_openems_369367257743.json", "validation/crossval/_05_patch_results/cv05_run_openems_369367259142.json", "scripts/diagnostics/patch_tutorial_openems.py", "scripts/diagnostics/patch_tutorial_rfx.py"],
-      "cpu_runner": {"order": 3},
+      "cpu_runner": {"excluded_reason": "Retired from automated scheduling 2026-09-10 (issues #959/#965, docs/design_notes/20260910_cv05_crossval_disposition.md): none of its four gate_paths tests check this case's own board (they measure different geometries or an idealized cavity); the test that does, tests/crossval/test_cv05_realized_sheet_planes.py, runs the script by subprocess in RFX_CV05_BUILD_ONLY=1 mode and needs no schedule slot of its own. The openEMS comparison this case would otherwise run is REPORTED, not gated, per its own claim_scope, and issue #959 (28x37mm realized vs 29.5x38.0mm declared) means that comparison is currently between two different antennas. Script retained (do not delete): scripts/diagnostics/build_cv05_ringdown_spectra.py execs it directly to regenerate the GATED test_patch_mode_identification.py fixture, and four more files key registry/allowlist entries on this exact path. Run by hand via scripts/vessl_crossval05_openems.yaml or scripts/vessl_cv05_openems_and_ringdown_fixture.yaml if the openEMS leg is ever needed again."},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -205,7 +205,7 @@
         "scripts/diagnostics/build_sheen_lpf_palace_referee.py",
         "tests/fixtures/cv07_estimator_regate/cv07_estimator_falsifiers.json"
       ],
-      "cpu_runner": {"order": 9},
+      "cpu_runner": {"order": 8},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -234,7 +234,7 @@
       "artifact_paths": [
         "docs/design_notes/issue812_cv09_mirror_plane_regate.md"
       ],
-      "cpu_runner": {"order": 4},
+      "cpu_runner": {"order": 3},
       "scheduled_external_order": 5,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -262,7 +262,7 @@
         "tests/crossval/test_cv09_cv10_body_contract_controls.py"
       ],
       "artifact_paths": [],
-      "cpu_runner": {"order": 5},
+      "cpu_runner": {"order": 4},
       "scheduled_external_order": 6,
       "evidence_status": "external-scheduled",
       "evidence_producer": ".github/workflows/validation.yml::crossval-external",
@@ -291,7 +291,7 @@
       "artifact_paths": [
         "tests/fixtures/waveguide_broad_e5/wr90_rectangular_broad_e4_comparison.json"
       ],
-      "cpu_runner": {"order": 6},
+      "cpu_runner": {"order": 5},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -314,7 +314,7 @@
       "artifact_paths": [
         "docs/design_notes/cv14_rect_cavity_gate_predeclaration.md"
       ],
-      "cpu_runner": {"order": 10},
+      "cpu_runner": {"order": 9},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -332,7 +332,7 @@
         {"kind": "external-solver", "name": "openEMS canonical Simple_Patch_Antenna tutorial reproduce-gate at two mesh densities (comparator-first setup confirmation in `tutorial` mode; not a gate of the default compare run)", "required_for_script_pass": false},
         {"kind": "external-solver", "name": "openEMS same-geometry RT/Duroid 5880 patch run (committed leg validation/crossval/_15_patch_results/openems.json; required for a full run)", "required_for_script_pass": true}
       ],
-      "claim_scope": "INTEGRATION study on a DIFFERENT laminate from id 05: a probe-fed 40x50 mm patch on RT/Duroid 5880 (eps_r 2.2, h = 3.175 mm) built identically in rfx and openEMS on a UNIFORM dx = h/4 = 793.75 um mesh (no dz_profile, so the #325 graded-mesh class cannot arise; the script asserts the substrate rasterizes to exactly 4 z-cells before quoting any f0). It exercises probe/lumped feed + finite ground plane + CPML + ring-down harminv + NTFF directivity end-to-end and gates a same-geometry coarse-mesh envelope: rfx ring-down f0 vs the openEMS S11 dip within 8%, the -40 dB open-domain settling witness, passivity on BOTH legs (max|S11| <= 1.05), and broadside directivity within 3 dB. Patch ACCURACY is NOT claimed here and is NOT re-opened: it remains DELEGATED to id 05 and the committed tests that case names (test_patch_canonical_farfield_e4.py and friends), which stay authoritative. MERGE OF TWO INDEPENDENT FIXES (2026-09-10): main issue #920 (the rfx probe post floated between the two conductors, touching neither -- closes #920) and this branch's issue #931 (the lattice ownership contract: BOTH conductors declared SHEETS -- zero-thickness PEC `Box`es on the two substrate faces, the same structure both openEMS legs build; before #931 the ground was a one-cell PEC Box drawn below the floor and flagged `two_plane=True` (issue #706) so a second wall landed on z_sub_lo, and #931 deletes the flag along with the volume declaration it patched). These are NOT two compounding changes: #920's derivation (the port spans from the ground Box's realized corner to the patch Box's) and #931's independently-chosen full-substrate feed (`z_sub_lo -> z_sub_hi`) are algebraically the SAME span once both conductors are sheets, because a sheet's `corner_lo` and `corner_hi` coincide -- verified by measurement, not assumed: the merged code reproduces the pre-merge #931 leg's settling witness bit-for-bit (-68.69142333390357 dB). `assert_galvanic_feed`/`_feed_check_ok` (#920) had to be RESPELT for sheets: a sheet's normal E component never goes PEC (design note §1.3, \"normal E through a sheet stays live\"), so #920's original first/last-cell-dead criterion is unsatisfiable on this board and was replaced with a plane criterion -- the feed's two endpoints must themselves be realized conductor wall planes, read through the SAME `realized_pec_edge_masks`/`realized_wall_planes` pair `assert_realized_stack` uses. `assert_realized_stack()` reads the contract's one edge set and refuses to quote f0 unless the realized wall planes over the patch footprint are EXACTLY {z_sub_lo, z_sub_hi} -- no wall at k_patch+1 -- and the assembled eps_r still holds exactly the two declared values, a sheet owning no cell and writing no material. MEASURED on the merged leg (VESSL 369367260032): rfx reads 3.99 % HIGH vs openEMS (2.4230 vs 2.330 GHz) and +0.31 % vs the analytic anchor, openEMS -3.54 %. The two solvers no longer sit on the same side of the closed form -- rfx reads high, openEMS low -- and the rfx-vs-openEMS distance grew from 0.69 % to 3.99 % while the rfx-vs-analytic distance shrank from -4.21 % to +0.31 %; the openEMS leg did not move. The S11 dip deepened from -4.4 dB to -19.0 dB against openEMS's -20.1 dB, off-resonance max|S11| went from 0.787 to 0.991 against openEMS's 0.992, and the ring-down Q fell from 18.9 to 10.1: the feed now reaches the conductor instead of coupling capacitively. A decomposition run on the pre-merge #931-only base (production sheets with the PRE-#931 feed, VESSL 369367259279, `_15_patch_results/rfx_decomposition_feed_pre931.json`) splits the +4.71 % into 58 % / 42 % -- from the #768 leg to sheets with the pre-#931 feed is +2.74 % (2.3139 → 2.3774 GHz, Q 18.9 → 18.3), and from there to the full-span feed a further +1.92 % (2.3774 → 2.4230 GHz, Q 18.3 → 10.1, and essentially all of the Q collapse). Only the second step is a clean A/B: both its legs are on one code state and differ only in the declared feed span. UNEXPLAINED REMAINDER (2026-09-10): a further isolating leg (VESSL 369367260082, `validation/crossval/_15_patch_results/rfx_decomposition_patchkind_volume_1cell.json`) measured the patch-declaration term alone (volume -> sheet, ground and feed held at their current values) at +111.827 MHz (+4.838 %) -- larger than the +2.74 % (63.484 MHz) first-step bundle it sits inside. The ground-declaration term (two_plane -> sheet) is not isolated by any leg in this record. The terms do not sum, by an amount and sign this record does not explain; nobody has measured the ground leg alone. The old 0.69 % agreement with openEMS was therefore not a better model: it was a cavity electrically 55 % too thick, read through a feed that never touched the patch. Both pre-fix legs are preserved verbatim: `validation/crossval/_15_patch_results/rfx_pre931_two_plane_ground_1f005d0d.json` (this branch's archival name) and `validation/crossval/_15_patch_results/rfx_floating_post_1f005d0d.json` (main's archival name for the SAME bytes, sha256 identical -- both kept because each has its own dated documents citing it; see the branch-merge resolution note). All seven gates pass on the merged leg, including the stack gate and the respelt galvanic-feed gate. ISSUE #812 (2026-09-01, round 2): the f0 gate is BLIND to the #740 one-plane-ground realization that PR #768 fixed -- the pre-fix leg reads `validation/crossval/_15_patch_results/rfx_one_plane_ground_b29f9de7.json::f_harminv_hz = 2471858108` Hz against the openEMS dip `validation/crossval/_15_patch_results/openems.json::f_dip_hz = 2330000000` Hz, +6.09 %, inside the 8 % gate, and only assert_realized_stack (a build assertion, not a physics gate) catches it. A mode-pair RATIO gate was tried: a declared-anchored band CAN separate the two builds (the admissible half-width interval is `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.admissible_interval_is_nonempty`, from `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.min_half_width_admitting_correct_build = 0.001407` to `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.max_half_width_still_rejecting_740 = 0.003338`), but both endpoints are properties of the two measurements the band would judge and the interval is `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.upper_endpoint_over_identification_tolerance = 0.0314` of the tightest window derivable from geometry alone, so no window with provenance this lane can supply meets criterion (B). cv15 is an honest STOP: no re-gate, script and committed leg unchanged, the blindness stated here.",
+      "claim_scope": "INTEGRATION study on a DIFFERENT laminate from id 05: a probe-fed 40x50 mm patch on RT/Duroid 5880 (eps_r 2.2, h = 3.175 mm) built identically in rfx and openEMS on a UNIFORM dx = h/4 = 793.75 um mesh (no dz_profile, so the #325 graded-mesh class cannot arise; the script asserts the substrate rasterizes to exactly 4 z-cells before quoting any f0). It exercises probe/lumped feed + finite ground plane + CPML + ring-down harminv + NTFF directivity end-to-end and gates a same-geometry coarse-mesh envelope: rfx ring-down f0 vs the openEMS S11 dip within 8%, the -40 dB open-domain settling witness, passivity on BOTH legs (max|S11| <= 1.05), and broadside directivity within 3 dB. Patch ACCURACY is NOT claimed here and is NOT re-opened: it remains DELEGATED to the committed tests (test_patch_canonical_farfield_e4.py and friends), which stay authoritative -- id 05 (05_patch_antenna) is retired from the scheduled crossval cases as of 2026-09-10 (docs/design_notes/20260910_cv05_crossval_disposition.md), its script file retained, unscheduled. MERGE OF TWO INDEPENDENT FIXES (2026-09-10): main issue #920 (the rfx probe post floated between the two conductors, touching neither -- closes #920) and this branch's issue #931 (the lattice ownership contract: BOTH conductors declared SHEETS -- zero-thickness PEC `Box`es on the two substrate faces, the same structure both openEMS legs build; before #931 the ground was a one-cell PEC Box drawn below the floor and flagged `two_plane=True` (issue #706) so a second wall landed on z_sub_lo, and #931 deletes the flag along with the volume declaration it patched). These are NOT two compounding changes: #920's derivation (the port spans from the ground Box's realized corner to the patch Box's) and #931's independently-chosen full-substrate feed (`z_sub_lo -> z_sub_hi`) are algebraically the SAME span once both conductors are sheets, because a sheet's `corner_lo` and `corner_hi` coincide -- verified by measurement, not assumed: the merged code reproduces the pre-merge #931 leg's settling witness bit-for-bit (-68.69142333390357 dB). `assert_galvanic_feed`/`_feed_check_ok` (#920) had to be RESPELT for sheets: a sheet's normal E component never goes PEC (design note §1.3, \"normal E through a sheet stays live\"), so #920's original first/last-cell-dead criterion is unsatisfiable on this board and was replaced with a plane criterion -- the feed's two endpoints must themselves be realized conductor wall planes, read through the SAME `realized_pec_edge_masks`/`realized_wall_planes` pair `assert_realized_stack` uses. `assert_realized_stack()` reads the contract's one edge set and refuses to quote f0 unless the realized wall planes over the patch footprint are EXACTLY {z_sub_lo, z_sub_hi} -- no wall at k_patch+1 -- and the assembled eps_r still holds exactly the two declared values, a sheet owning no cell and writing no material. MEASURED on the merged leg (VESSL 369367260032): rfx reads 3.99 % HIGH vs openEMS (2.4230 vs 2.330 GHz) and +0.31 % vs the analytic anchor, openEMS -3.54 %. The two solvers no longer sit on the same side of the closed form -- rfx reads high, openEMS low -- and the rfx-vs-openEMS distance grew from 0.69 % to 3.99 % while the rfx-vs-analytic distance shrank from -4.21 % to +0.31 %; the openEMS leg did not move. The S11 dip deepened from -4.4 dB to -19.0 dB against openEMS's -20.1 dB, off-resonance max|S11| went from 0.787 to 0.991 against openEMS's 0.992, and the ring-down Q fell from 18.9 to 10.1: the feed now reaches the conductor instead of coupling capacitively. A decomposition run on the pre-merge #931-only base (production sheets with the PRE-#931 feed, VESSL 369367259279, `_15_patch_results/rfx_decomposition_feed_pre931.json`) splits the +4.71 % into 58 % / 42 % -- from the #768 leg to sheets with the pre-#931 feed is +2.74 % (2.3139 → 2.3774 GHz, Q 18.9 → 18.3), and from there to the full-span feed a further +1.92 % (2.3774 → 2.4230 GHz, Q 18.3 → 10.1, and essentially all of the Q collapse). Only the second step is a clean A/B: both its legs are on one code state and differ only in the declared feed span. UNEXPLAINED REMAINDER (2026-09-10): a further isolating leg (VESSL 369367260082, `validation/crossval/_15_patch_results/rfx_decomposition_patchkind_volume_1cell.json`) measured the patch-declaration term alone (volume -> sheet, ground and feed held at their current values) at +111.827 MHz (+4.838 %) -- larger than the +2.74 % (63.484 MHz) first-step bundle it sits inside. The ground-declaration term (two_plane -> sheet) is not isolated by any leg in this record. The terms do not sum, by an amount and sign this record does not explain; nobody has measured the ground leg alone. The old 0.69 % agreement with openEMS was therefore not a better model: it was a cavity electrically 55 % too thick, read through a feed that never touched the patch. Both pre-fix legs are preserved verbatim: `validation/crossval/_15_patch_results/rfx_pre931_two_plane_ground_1f005d0d.json` (this branch's archival name) and `validation/crossval/_15_patch_results/rfx_floating_post_1f005d0d.json` (main's archival name for the SAME bytes, sha256 identical -- both kept because each has its own dated documents citing it; see the branch-merge resolution note). All seven gates pass on the merged leg, including the stack gate and the respelt galvanic-feed gate. ISSUE #812 (2026-09-01, round 2): the f0 gate is BLIND to the #740 one-plane-ground realization that PR #768 fixed -- the pre-fix leg reads `validation/crossval/_15_patch_results/rfx_one_plane_ground_b29f9de7.json::f_harminv_hz = 2471858108` Hz against the openEMS dip `validation/crossval/_15_patch_results/openems.json::f_dip_hz = 2330000000` Hz, +6.09 %, inside the 8 % gate, and only assert_realized_stack (a build assertion, not a physics gate) catches it. A mode-pair RATIO gate was tried: a declared-anchored band CAN separate the two builds (the admissible half-width interval is `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.admissible_interval_is_nonempty`, from `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.min_half_width_admitting_correct_build = 0.001407` to `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.max_half_width_still_rejecting_740 = 0.003338`), but both endpoints are properties of the two measurements the band would judge and the interval is `tests/fixtures/patch_mode_identification/cv15_mode_pair_ratio_band.json::declared_anchored_band.upper_endpoint_over_identification_tolerance = 0.0314` of the tightest window derivable from geometry alone, so no window with provenance this lane can supply meets criterion (B). cv15 is an honest STOP: no re-gate, script and committed leg unchanged, the blindness stated here.",
       "external_dependencies": ["openEMS", "CSXCAD"],
       "expected_exit_codes": [0, 1, 2],
       "gate_paths": ["validation/crossval/15_patch_antenna_rt5880.py"],
@@ -344,7 +344,7 @@
         "validation/crossval/_15_patch_results/rfx_decomposition_feed_pre931.json",
         "validation/crossval/_15_patch_results/rfx_decomposition_patchkind_volume_1cell.json"
       ],
-      "cpu_runner": {"order": 11},
+      "cpu_runner": {"order": 10},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -374,7 +374,7 @@
       "artifact_paths": [
         "validation/crossval/_16_ka_sweep_results/rfx.json"
       ],
-      "cpu_runner": {"order": 12},
+      "cpu_runner": {"order": 11},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -407,7 +407,7 @@
         "validation/crossval/_17_dielectric_results/cv17_permittivity_island.json",
         "validation/crossval/_17_dielectric_results/cv17_gated_A.log"
       ],
-      "cpu_runner": {"order": 13},
+      "cpu_runner": {"order": 12},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -441,7 +441,7 @@
         "validation/crossval/_18_wr90_iris_results/one_cell_defect_live.json",
         "validation/crossval/_18_wr90_iris_results/cv18_gated_A.log"
       ],
-      "cpu_runner": {"order": 14},
+      "cpu_runner": {"order": 13},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -529,7 +529,7 @@
         "tests/fixtures/msl_phase_referee/msl_thru_rfx_dx50.json",
         "validation/crossval/_20_msl_phase_referee_logs/20260827T102342Z_result.json"
       ],
-      "cpu_runner": {"order": 15},
+      "cpu_runner": {"order": 14},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -570,7 +570,7 @@
         "validation/crossval/_21_coax_two_port_referee_logs/run3_369367251629_run.log",
         "validation/crossval/_21_coax_two_port_referee_logs/mesh_refinement_369367251845_result.json"
       ],
-      "cpu_runner": {"order": 16},
+      "cpu_runner": {"order": 15},
       "scheduled_external_order": null,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -669,7 +669,7 @@
         "validation/crossval/_22_dispersive_diag/rfx__debye_tail3e4.json",
         "validation/crossval/_22_dispersive_diag/lattice_witness.json"
       ],
-      "cpu_runner": {"order": 17},
+      "cpu_runner": {"order": 16},
       "scheduled_external_order": 7,
       "evidence_status": "committed",
       "evidence_producer": null,
@@ -744,7 +744,7 @@
         "validation/crossval/_23_lossy_results/rfx__tand3_dx4.json",
         "validation/crossval/_23_lossy_results/lattice_witness.json"
       ],
-      "cpu_runner": {"order": 18},
+      "cpu_runner": {"order": 17},
       "scheduled_external_order": 8,
       "evidence_status": "committed",
       "evidence_producer": null,

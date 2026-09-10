@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 .omc/
 .omx/
+.gjc/
+.omo/
 .rfx-experiments/
 .playwright-cli/
 build/
