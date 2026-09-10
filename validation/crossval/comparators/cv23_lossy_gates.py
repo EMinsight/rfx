@@ -93,6 +93,18 @@ API_MATERIAL_NAME = "lossy_slab"
 # used to be `G.W_BIN` and friends. Re-exporting them made this module a
 # consumer of a consumer: a review re-pointed cv22 at a doubled revision and
 # cv23's windows doubled with it, silently, with cv23's own record untouched.
+#
+# 2026-09-10 disclosure (PR #974): the adopted r1 values are NOT measured on
+# cv04's settled record -- cv04 got its own settling-extension fix that day
+# (docs/design_notes/20260903_lattice_witness_standard.md, top UPDATE, and
+# its §5.3/§10(4) for the settled numbers), but r1 in `envelope.json` is
+# unchanged and this adoption is still pinned to it; r1's per-bin closure was
+# a truncation artefact of cv04's pre-fix record, the settled run measures
+# far tighter (same note, same sections -- not restated here, to keep this
+# file free of a second copy of the number). Whether to re-adopt a settled
+# revision, and whether W_BIN's own recipe should track it, is open under
+# issue #928 -- not decided here, and not something a producer re-run may do
+# to this file silently either way.
 CV04_ADOPTION = {
     "envelope": slab_family.CV04_ENVELOPE_REL,
     "adopted_revision": "r1",

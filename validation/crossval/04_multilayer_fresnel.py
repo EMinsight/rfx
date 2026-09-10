@@ -106,13 +106,18 @@ bw = slab_family.TFSF_BW
 # exceeds the simulation time (otherwise CPML reflections contaminate
 # the probe via multiple bounces).
 n_cpml = slab_family.N_CPML
+# DECLARED starting point, not necessarily what runs: the settling-extension
+# loop below (2026-09-10 fix) grows this by slab_family.NX_GROW_CELLS until
+# the record settles, and reassigns the module-level `nx_interior` to
+# whatever it actually stopped on (800 on the committed run, not 600).
 nx_interior = slab_family.NX_INTERIOR   # 600 mm interior — large to delay CPML round-trip
 
 print("=" * 70)
 print("Crossval 04: Fresnel Slab — TFSF plane wave — rfx vs Analytic")
 print("=" * 70)
 print(f"Slab: eps={eps_slab}, n={n_slab:.1f}, d={d_slab*1e3:.0f} mm")
-print(f"Interior: {nx_interior} cells, dx={dx*1e3:.1f} mm, CPML={n_cpml} layers")
+print(f"Interior (declared, may grow to settle): {nx_interior} cells, "
+      f"dx={dx*1e3:.1f} mm, CPML={n_cpml} layers")
 print()
 
 # =============================================================================
@@ -453,11 +458,17 @@ c_ok = cons_rfx.mean() < 0.05
 
 # Per-bin energy-conservation ceiling (ADDED, issue #341; the mean gates above
 # are untouched). Root cause of the pinned envelope (rung C4, job
-# 369367246779): committed config (nx=600, 719 steps) measures
-# max|R+T-1| = 0.0487, worst bin at the 11.87 GHz mask edge, and the error is
-# ENTIRELY order-2 etalon-echo truncation — widening to nx=1500/1940 steps
-# collapses it to 0.0002 while band-mean |dT|,|dR| shift < 0.005 (negligible
-# mean-side bias). Ceiling = measured envelope + headroom; it bounds the
+# 369367246779), HISTORICAL -- predates and is not restated by the
+# 2026-09-10 settling-extension fix below: committed config (nx=600, 719
+# steps) measured max|R+T-1| = 0.0487, worst bin at the 11.87 GHz mask edge,
+# and the error was ENTIRELY order-2 etalon-echo truncation -- widening to
+# nx=1500/1940 steps collapsed it to 0.0002 while band-mean |dT|,|dR| shifted
+# < 0.005 (negligible mean-side bias); this is exactly what the settling fix
+# now does automatically (nx=800/990 steps): the committed run's own
+# max|R+T-1| is 0.0010 (validation/crossval/_04_fresnel_logs/cv04.log), not
+# the 0.0487 this history cites. CONS_MAX_LIMIT itself (the gate ceiling, not
+# the measured value) is UNCHANGED by any of this. Ceiling = measured
+# envelope + headroom; it bounds the
 # previously-silent mask-amplified single-bin spike class (up to ~10) to 6%.
 CONS_MAX_LIMIT = slab_family.CONS_MAX_LIMIT
 cons_max_ok = bool(cons_rfx.max() <= CONS_MAX_LIMIT)
@@ -530,13 +541,18 @@ rfx_self_ok = bool(
 # record: |rfx - lattice(f; eps'=4, sigma=0, d, dx, dt)| against a W_witness
 # DERIVED from the lattice model's own error budget (record truncation, the
 # incident reference's truncation, float32), evaluated at the one dx rung this
-# case runs. Nothing here can change the exit code: the note derives, from
-# THIS config's committed tail levels (0.036 / 0.051 of the incident peak,
-# against cv22's -40 dB bar), that W_witness is 5.2e-2 in the gated mean here
-# -- looser than the case's own band-mean window -- so the cv04 lattice gate is
-# declared NON-DISCRIMINATING at the committed 719-step record and is REPORTED,
-# not gated (note section 5.3). The claims-bearing rung for this material is
-# the settled one, cv23's `sigma_zero` arm.
+# case runs. Nothing here can change the exit code.
+#
+# UPDATE 2026-09-10 (settling-extension fix, PI override of the note's
+# earlier "no new physics" call, note section 5.3 top UPDATE): the loop above
+# grows nx_interior until this rung's OWN tails clear the family's -40 dB /
+# 1e-2 bar (slab_family.SETTLING_LIMIT), instead of running a fixed 719-step
+# record whose tails read 0.036 / 0.051 and did not settle. At the settled
+# record the gated-mean W_witness collapses (~85x in R) and the cv04 lattice
+# gate is no longer non-discriminating -- see gated_here below, which is
+# computed from THIS run's own tails, not restated here. cv23's sigma_zero
+# arm on the same material remains a cheap corroborating cross-check, not the
+# load-bearing rung it was before this fix.
 # -----------------------------------------------------------------------------
 if "--lattice-witness" in sys.argv:
     _cmp = os.path.join(SCRIPT_DIR, "comparators")
@@ -667,8 +683,11 @@ if HAVE_MEEP:
     # so fwidth ≥ 14 GHz. We use fwidth = 1.5*fcen ≈ 15 GHz to comfortably span this.
     fwidth_m = 1.5 * fcen_m
 
-    # Convert dimensions to Meep units (cm)
-    sx_m = nx_interior * dx / a_meep   # 60 cm
+    # Convert dimensions to Meep units (cm). nx_interior here is whatever the
+    # settling-extension loop above settled on (800 cells / 80 cm on the
+    # committed run, not the 600/60 cm this comment historically said before
+    # the 2026-09-10 fix) -- it is read live, not restated.
+    sx_m = nx_interior * dx / a_meep
     sy_m = 0.4                          # 0.4 cm transverse (periodic)
     dpml_m = n_cpml * dx / a_meep      # 2 cm PML
     d_slab_m = d_slab / a_meep         # 1 cm slab thickness

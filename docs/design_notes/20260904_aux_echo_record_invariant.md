@@ -216,8 +216,11 @@ centre column the 13 rungs span **0.500 to 0.575** — `tand0p1` at 0.4998 is th
 0.50 the cv04 note reports, `lorentz` at 0.575 its 0.57 (the note's table used
 `v_g(f0)`, 0.3 % slower than the Courant speed used here, and reads 0.573
 there). At the gated convention, which subtracts the pulse's leading edge, the
-same rungs span **0.520 to 0.601**. Both columns are in the artifact so neither
-claim rests on a retyped number.
+same rungs span **0.520 to 0.610** (was 0.520 to 0.601 before cv04's
+2026-09-10 settling fix; cv04 is the rung that sets the upper bound both
+before and after, `record/arrival` 0.601 -> 0.610 with its own record growing
+719 -> 990 steps). Both columns are in the artifact so neither claim rests on
+a retyped number.
 
 ---
 
@@ -227,12 +230,16 @@ claim rests on a retyped number.
 
 cv04's rig, geometry untouched, only the record changed. The FDTD columns were
 measured here with a harness that reproduces `04_multilayer_fresnel.py` PART 1 + PART 2
-verbatim (it returns 0.0066 / 0.0487 at the committed 719, which is what
-licenses the rest):
+verbatim (it returns 0.0066 / 0.0487 at the then-committed 719, which is what
+licenses the rest). This sweep predates cv04's 2026-09-10 settling-extension
+fix and its rows are read as historical: the case's OWN committed record is
+990 steps now, not 719, and does not appear in this sweep (this harness was
+not re-run at 990; the case's own `--lattice-witness` output is the current
+source, §2 above):
 
 | record | ratio | guard | measured `mean\|ΔR\|` | measured `max\|R+T−1\|` |
 |---|---|---|---|---|
-| 719 (committed) | 0.601 | silent | 0.0066 | 0.0487 |
+| 719 (PRE-FIX, superseded 2026-09-10) | 0.601 | silent | 0.0066 | 0.0487 |
 | 1100 | 0.920 | silent | 0.0073 | 0.0004 |
 | 1195 | 0.999 | silent | 0.0073 | 0.0004 |
 | **1196** | **1.000** | **FIRES** | — | — |
@@ -258,7 +265,9 @@ Reproduce: the harness is in this note's §8; ~11 s per record locally.
 
 ### 4.2 The guard is silent at every committed rung
 
-All 13 rungs carry `precond_aux_echo_record: true` at ratios 0.520–0.601 (§3).
+All 13 rungs carry `precond_aux_echo_record: true` at ratios 0.520–0.610 (§3;
+was 0.520–0.601 before cv04's 2026-09-10 settling fix moved the rung that
+sets the upper bound).
 `test_no_committed_rung_is_anywhere_near_the_arrival` asserts the whole
 population, its size (13), and the band.
 
@@ -303,7 +312,8 @@ none.
    measurable only from ~1230 — 34 steps, 2.8 %, in which a clean record is
    rejected (§4.1: 1200 steps measures 0.0073 / 0.0004 and is refused). That is
    the correct direction for a guard and it costs nothing at any committed rung,
-   whose worst ratio is 0.601.
+   whose worst ratio is 0.610 (cv04, post-2026-09-10 settling fix; was 0.601 at
+   cv04's pre-fix 719-step record).
 
 5. **`reflector_depth_cells` is measured, at two geometries, not derived.**
    6.88 cells at `nx_interior = 600` and 1038.88 → 6.88 at `nx_interior = 1000`
