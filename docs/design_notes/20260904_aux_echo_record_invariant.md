@@ -168,7 +168,7 @@ its committed record, and written into the artifact.
 
 | case | rung | K | `nx_interior` | record | arrival (gated) | **ratio** | arrival (centre) | ratio (centre) |
 |---|---|---|---|---|---|---|---|---|
-| cv04 | `slab_eps4` | 1 | 600 | 719 | 1196 | **0.601** | 1278 | 0.563 |
+| cv04 | `slab_eps4` | 1 | 800 | 990 | 1624 | **0.610** | 1707 | 0.580 |
 | cv22 | `debye` | 1 | 1000 | 1108 | 2053 | **0.540** | 2135 | 0.519 |
 | cv22 | `drude` | 1 | 1000 | 1168 | 2053 | **0.569** | 2135 | 0.547 |
 | cv22 | `lorentz` | 1 | 1000 | 1228 | 2053 | **0.598** | 2135 | 0.575 |
@@ -182,8 +182,14 @@ its committed record, and written into the artifact.
 | cv23 | `tand3_dx2` | 2 | 2000 | 2362 | 4043 | **0.584** | 4207 | 0.561 |
 | cv23 | `tand3_dx4` | 4 | 4000 | 4723 | 8022 | **0.589** | 8349 | 0.566 |
 
+cv04's row reflects the settling-extension fix (2026-09-10): `nx_interior`
+grew from the declared 600 to 800 (one grow attempt) so the record could
+reach the family's −40 dB settling bar, which is why cv04's own numbers here
+differ from an earlier reading of this table -- they are read fresh from
+the same artifact, not retyped by hand.
+
 Every value in the "ratio" column is read back from the artifact:
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_over_echo_arrival = 0.601`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_over_echo_arrival = 0.610`,
 `validation/crossval/_22_dispersive_results/lattice_witness.json::rungs.debye.aux_echo.record_over_echo_arrival = 0.540`,
 `validation/crossval/_22_dispersive_results/lattice_witness.json::rungs.drude.aux_echo.record_over_echo_arrival = 0.569`,
 `validation/crossval/_22_dispersive_results/lattice_witness.json::rungs.lorentz.aux_echo.record_over_echo_arrival = 0.598`,
@@ -198,12 +204,12 @@ Every value in the "ratio" column is read back from the artifact:
 `validation/crossval/_23_lossy_results/lattice_witness.json::rungs.tand3_dx4.aux_echo.record_over_echo_arrival = 0.589`.
 
 cv04's arrival and record, likewise:
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_steps = 1196`,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_steps = 719`,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_centre_steps = 1278`,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_n_1d = 652`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_steps = 1624`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_steps = 990`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_centre_steps = 1707`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_n_1d = 852`,
 and the reflector the phase slope located,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_reflector_index = 638.88`.
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_reflector_index = 838.88`.
 
 **The notes' 0.50–0.57 is confirmed, at the notes' own convention.** In the
 centre column the 13 rungs span **0.500 to 0.575** — `tand0p1` at 0.4998 is the

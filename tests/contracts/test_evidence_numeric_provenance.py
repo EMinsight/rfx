@@ -383,7 +383,16 @@ REQUIRED_SITES: dict[tuple[str, str], int] = {
     # found reconstructed numbers in; its floor is the point of opting the note in.
     (LATTICE_NOTE, "5.1 cv23 \u2014 nine committed entries, eight distinct meshes, all green"): 4,
     (LATTICE_NOTE, "5.2 cv22 \u2014 three rungs, all green; the pole lattice predicts the residual a priori"): 8,
-    (LATTICE_NOTE, "5.3 cv04 \u2014 the witness is REPORTED, not gated, and the derivation says why"): 16,
+    # 2026-09-10: cv04's settling-extension fix landed (PI override of this
+    # section's own 8.3, "no new physics" -- see the commit message). The
+    # header changed to reflect the new state, and the floor dropped from 16
+    # to 10: six of the original citations now describe the PRE-FIX 719-step
+    # record explicitly as historical, non-live numbers (the artifact no
+    # longer holds them, so citing them live would fail this same contract),
+    # while new live citations to the POST-FIX 990-step record were added.
+    # The reduction is a deliberate consequence of that split, not a
+    # loosened floor.
+    (LATTICE_NOTE, "5.3 cv04 \u2014 the witness was REPORTED, not gated; the derivation said why, and the settling-extension fix (2026-09-10) closed it"): 10,
     (LATTICE_NOTE, "8.1 cv22 Debye at a 3e-4 settling bar (the only rung a claim requires)"): 3,
     # 2026-09-03 (#884): the cv19 witness note's two load-bearing sections. §6.2
     # cites the committed unitarity that U3's floor is compared against; §6.3

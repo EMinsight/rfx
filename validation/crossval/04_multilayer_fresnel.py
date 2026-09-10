@@ -640,7 +640,8 @@ if "--lattice-witness" in sys.argv:
           f"(limit {_ae['limit']:.1f}); ok={_ae['ok']}")
     print(f"  cv04-lattice-witness slab_eps4: |rfx-lattice| mean R "
           f"{_r['mean_dR_lattice_gated']:.2e} vs W {_r['mean_W_witness_R_gated']:.2e} "
-          f"(ceiling {_r['mean_W_ceiling_R_gated']:.2e}); reported, not gated")
+          f"(ceiling {_r['mean_W_ceiling_R_gated']:.2e}); "
+          f"{'GATED' if _doc['gated_here'] else 'reported, not gated'}")
     print(f"  wrote {os.path.join(_out04, _LW.witness_json_name())}")
 
 # =============================================================================
