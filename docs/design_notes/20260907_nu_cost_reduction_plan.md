@@ -433,6 +433,160 @@ both ladder fits produced. The G1 suite smoke still runs every original
 arm. GPU numbers: none yet — this section is closed to edits once the run
 starts; results go in a new "G1b — measured" section.
 
+### G1b — measured (2026-09-10, VESSL run 369367259965, RTX 4090)
+
+**Decision: no implementation candidate under the frozen G1b rule.**
+Scalar-inv and combo pass timing at both sizes but are attribution-only
+arms. Foldinv fails the 300^3 spread rule and the 4-ulp epsilon gate.
+Inv3d loses throughput at both sizes. Part B identifies whole-array work
+in the CPML op on both lanes; it does not nominate an implementation.
+
+Run provenance: staged `fe86c11b6e83d0b0a12aee1b4f77804f34bd1d3f`,
+`scripts/vessl_nu_cost_ablation_g1b.yaml`, remilab-c0 / gpu-rtx4090,
+nvcr jax:24.10, JAX `0.4.33.dev20241023+e3c6d6430`, backend gpu / cuda:0.
+Instrument time 03:43:01–04:29:59 UTC (12:43:01–13:29:59 KST), 46 min
+58 s. Same fp32, 64 -> 1088 marginal-cost differencing, three windows,
+one soft source, no monitors, `skip_preflight=True`. All 19 rows completed;
+no SKIPPED row or OOM. One submission; the run did not fail, so there was
+no instrument fix or resubmission. No `rfx/` source change.
+
+Harvested with `harvest.sh 369367259965 rfx-nu-cost-g1b-ablation`:
+`~/Documents/vessl-run-logs/369367259965_rfx-nu-cost-g1b-ablation.log`
+(461 lines); CLI confirmed `Deleted #369367259965`.
+NFS artifacts: `claude-workspace/rfx/runs/nu-cost-ablation-g1b/20260910T034258Z-fe86c11b/`.
+The run JSON was copied unchanged to
+`validation/research/nu_cost/results/w8b_nu_kernel_ablation_4090.json`
+(SHA256 `6d478a046e2889ae15748e13d773f565223bc37a6470c957c21bb92a4bde30e4`).
+
+Table A — CPML-8. Rates and spreads are Mcells/s; spread is max minus min
+of the three windows, not a confidence interval. Every timing ratio uses
+the same-run, same-size **nu-z** reference, as pre-declared. Identity uses
+the same-mesh reference named in the gate column. Timing PASS requires
+gain >= 3% and delta > 2x the larger spread; candidate eligibility requires
+both sizes plus the implementability and identity/epsilon gates.
+
+| n | arm | median | spread | ratio to nu-z | gain | delta / 2x larger spread | identity / epsilon gate (96^3, 64 steps) | timing at this size | implementation candidate (both sizes) |
+|---|---|---:|---:|---:|---:|---:|---|---|---|
+| 300 | nu-z | 1787.938 | 77.039 | 1.000000 | 0% | — | unpatched reference | reference | — |
+| 300 | nu-z-scalar-inv | 2125.555 | 12.524 | 1.188830 | +18.883% | 337.617 / 154.078 | bit-identical to nu-uniform | PASS | no: attribution only |
+| 300 | nu-z-combo | 2157.236 | 15.816 | 1.206549 | +20.655% | 369.297 / 154.078 | bit-identical to nu-uniform | PASS | no: attribution only |
+| 300 | nu-z-foldinv | 1937.186 | 18.868 | 1.083475 | +8.347% | 149.248 / 154.078 | not identical; epsilon FAIL, 6.75 > 4 ulp | FAIL | no: spread and epsilon gates fail |
+| 300 | nu-z-inv3d | 1355.653 | 0.630 | 0.758221 | −24.178% | −432.285 / 154.078 | bit-identical to nu-z | FAIL | no: attribution only; timing fails |
+| 400 | nu-z | 1586.587 | 0.287 | 1.000000 | 0% | — | unpatched reference | reference | — |
+| 400 | nu-z-scalar-inv | 1764.017 | 2.638 | 1.111831 | +11.183% | 177.430 / 5.277 | bit-identical to nu-uniform | PASS | no: attribution only |
+| 400 | nu-z-combo | 1724.552 | 14.135 | 1.086957 | +8.696% | 137.964 / 28.269 | bit-identical to nu-uniform | PASS | no: attribution only |
+| 400 | nu-z-foldinv | 1704.026 | 2.664 | 1.074020 | +7.402% | 117.438 / 5.328 | not identical; epsilon FAIL, 6.75 > 4 ulp | PASS | no: 300^3 spread and epsilon gates fail |
+| 400 | nu-z-inv3d | 764.940 | 0.389 | 0.482129 | −51.787% | −821.647 / 0.777 | bit-identical to nu-z | FAIL | no: attribution only; timing fails |
+
+All three bit-identical arms have zero differing elements on ex..hz.
+Foldinv family-normalised differences (ex, ey, ez, hx, hy, hz) are
+**0.5, 0.5, 0.5, 6.75, 6.75, 0.327472 ulp**. Hx and hy each differ by
+0.01318359375 against an allowed 0.0078125; the gate fails on both.
+The 300^3 nu-z windows are 1785.038, 1862.077, 1787.938 Mcells/s;
+their full 77.039 spread is retained in the rule without removing a window.
+
+Pre-declared readings, using unrounded JSON values:
+
+| n | combo − scalar-inv | 2x larger spread | declared additivity reading | inv3d − nu-z | 2x larger spread | declared inv3d reading |
+|---|---:|---:|---|---:|---:|---|
+| 300 | +31.680322 | 31.632541 | additive: exceeds threshold by 0.047781 | −432.285103 | 154.078182 | full-array reads cost more than broadcast |
+| 400 | −39.465639 | 28.269131 | hoist costs on top of scalars | −821.647431 | 0.777447 | full-array reads cost more than broadcast |
+
+The combo result therefore does not establish a size-independent additive
+or same-cost mechanism. The 300^3 additive label follows the frozen rule
+even though its threshold margin is only 0.047781 Mcells/s. The inv3d
+reading at both sizes is that the broadcast op itself is cheap and the
+scalar-inv gain is a fusion effect, not a traffic saving, as pre-declared.
+Hoist/fold/materialization records are True on every corresponding trace.
+Extra constants at 300^3 / 400^3: combo 254.840 / 580.094 MB;
+foldinv 891.940 / 2030.328 MB; inv3d 764.520 / 1740.281 MB.
+Maximum reported device peak allocation is 11.876 GB (process high-water
+mark, not an isolated per-arm allocation); no arm failed to compile.
+
+Table B — CPML-layer ladder, n = 300. Cost c = 1000 / rate is ns per
+allocated cell-step; f = 1 − (301/(301+2L))^3. All eight slow-lane rows
+report `fast_path_seen=False`; every bare-slow row records
+`slow_path_forced=True`. The bare context row reports fast path True.
+
+| lane / arm | L | allocated cells | f | median Mcells/s | spread Mcells/s | c (ns) | c(L)/c(0), own slow lane |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| uniform / bare-slow | 0 | 27270901 | 0.000000 | 10015.874 | 82.343 | 0.099842 | 1.000000 |
+| uniform / bare-slow | 4 | 29503629 | 0.075676 | 2030.471 | 124.760 | 0.492497 | 4.932784 |
+| uniform / bare-slow | 8 | 31855013 | 0.143906 | 2120.836 | 0.033 | 0.471512 | 4.722608 |
+| uniform / bare-slow | 16 | 36926037 | 0.261472 | 2037.088 | 81.398 | 0.490897 | 4.916760 |
+| NU / nu-uniform | 0 | 27270901 | 0.000000 | 10037.887 | 57.932 | 0.099623 | 1.000000 |
+| NU / nu-uniform | 4 | 29503629 | 0.075676 | 1795.296 | 76.819 | 0.557011 | 5.591216 |
+| NU / nu-uniform | 8 | 31855013 | 0.143906 | 1780.745 | 3.281 | 0.561563 | 5.636902 |
+| NU / nu-uniform | 16 | 36926037 | 0.261472 | 1549.203 | 52.644 | 0.645493 | 6.479387 |
+| uniform / bare (fused context) | 0 | 27270901 | 0.000000 | 8669.857 | 37.074 | 0.115342 | — |
+
+Table B fits — ordinary least squares on L = 4, 8, 16 only, with c in ns.
+Coefficients a, b fit **c = a + b f**; a', b' fit **c = a' + b' L**.
+
+| lane | a | b | a' | b' (ns/layer) | intercept_excess = (a−c0)/c0 | rho_16/4 | rho_8/4 | frozen reading |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| bare-slow | 0.483304458 | 0.010377825 | 0.482804340 | 0.000231880 | 3.840717 | 0.995926 | 0.946558 | whole-array work |
+| nu-uniform | 0.507486821 | 0.502243996 | 0.515045955 | 0.007818899 | 4.094095 | 1.193450 | 1.009951 | whole-array work |
+
+Fraction-fit residuals at L = 4 / 8 / 16 are +0.008407 / −0.013286 /
++0.004879 ns (bare-slow) and +0.011516 / −0.018200 / +0.006683 ns (NU).
+Layer-fit residuals are +0.008765 / −0.013147 / +0.004382 ns and
++0.010690 / −0.016035 / +0.005345 ns respectively. These three-point fits
+describe medians; the reported window spreads are not fit confidence bounds.
+Proportional expectations are rho_16/4 = 3.455137 and rho_8/4 = 1.901591.
+Both lanes meet both declared whole-array criteria: intercept_excess >= 1
+and rho_16/4 <= 1.5. **The CPML pass contains whole-array work rather than
+scaling only with the absorbing-region fraction.** NU also has a positive
+fraction-dependent term; whole-array classification does not mean zero
+layer-dependent cost. At eight layers, costs are 4.722608x / 5.636902x
+plain-step cost, against the pre-run k=2 expectation of 1.287811x.
+The fused context is 8669.857 versus slow 10015.874 Mcells/s: forcing slow
+gains 15.525%, delta 1346.017, larger spread 82.343. Its recorded identity
+is False, with the reference fast path True; as declared, this is context,
+not a candidate or a failed identity gate.
+
+Prior-run sanity check (run 369367259106; exact source JSON values, rounded
+below). The two available bare checks reproduce within the previous
+run's spread: −0.811 versus 3.332 at CPML-8/300 and +5.885 versus 36.429
+at PEC/300. Bare-slow at CPML-8 uses the same slow stepper as the previous
+bare row, whose fused path was already disabled by CPML.
+
+| fixture / n / arm | previous median (spread) | this median (spread) | delta | agreement |
+|---|---:|---:|---:|---|
+| cpml8 / 300 / bare → bare-slow | 2121.647 (3.332) | 2120.836 (0.033) | −0.811 | within previous spread |
+| pec / 300 / bare fused | 8663.972 (36.429) | 8669.857 (37.074) | +5.885 | within both spreads |
+| cpml8 / 300 / nu-uniform | 1780.859 (5.207) | 1780.745 (3.281) | −0.114 | within both spreads |
+| cpml8 / 300 / nu-z | 1779.158 (12.578) | 1787.938 (77.039) | +8.780 | within both spreads |
+| cpml8 / 300 / scalar-inv | 2123.303 (24.154) | 2125.555 (12.524) | +2.252 | within both spreads |
+| cpml8 / 400 / nu-z | 1584.652 (1.132) | 1586.587 (0.287) | +1.935 | outside even summed spreads 1.418; +0.122% |
+| cpml8 / 400 / scalar-inv | 1764.593 (14.618) | 1764.017 (2.638) | −0.576 | within both spreads |
+| pec / 300 / nu-uniform | 10039.455 (29.452) | 10037.887 (57.932) | −1.569 | within both spreads |
+
+The frozen G1b matrix has no bare 400^3, nu-z-hoist 400^3, or PEC nu-z
+row, so agreement with their previous 1767.442, 1797.425, and 10018.026
+medians cannot be tested directly here. No extra row or second run was
+added. The available bare checks support comparable conditions; they do
+not establish within-spread agreement for every prior row. Candidate
+decisions use each size's same-run reference, without changing the rule.
+
+What this means for implementation: the single pre-declared graded-mesh
+design is **fold inv_* into precomputed E/H coefficients (nu-z-foldinv)**.
+Its observed gain is +8.347% at 300^3 (1937.186, spread 18.868, versus
+1787.938, spread 77.039) and +7.402% at 400^3 (1704.026, spread 2.664,
+versus 1586.587, spread 0.287); these are measured gains, not an approved
+expected implementation gain. It would need the existing <=4-family-ulp
+gate and >=3% plus delta >2x larger spread at both sizes. It meets neither
+the epsilon gate (6.75 ulp) nor the 300^3 spread condition (149.248 <=
+154.078), so **do not implement it on this evidence**. No other arm can be
+substituted as a candidate. Part B motivates investigation of CPML
+whole-array work, but supplies no measured gain for a CPML rewrite and
+no implementation authorization. The frozen pre-declaration is unchanged.
+
+Validation of the delivered artifact: independently recomputed all row
+medians/spreads, both-size timing predicates, candidate eligibility, and
+both OLS fits; checked all 19 matrix entries, three windows per row, and
+fast-path probes. No GPU rerun was used for validation.
+
 ## Not pursued
 
 Local time stepping / domain-wise dt — excluded by the support matrix (late-
