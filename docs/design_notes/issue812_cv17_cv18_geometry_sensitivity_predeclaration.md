@@ -484,6 +484,16 @@ Every quantity this lane asserts in a durable document, and where it now lives:
 | cv18 live-FDTD (B) run (`0.02842` / `0.00588`) | **prose only, §5.2** — not gate-bearing; criterion (B) is carried by the committed model table. `scripts/diagnostics/probe_cv18_one_cell_aperture_defect.py` re-runs that pair and writes `one_cell_defect_live.json` (it exits 1 unless the defect passes the pooled 0.04 gate and fails the per-config 0.015 one); it is submitted by a VESSL yaml reported to the orchestrator (`scripts/vessl_issue812_r2_cv17_cv18.yaml` in the worktree; `**/vessl*.yaml` is gitignored by repo convention, so the yaml is a hand-off artifact, not a commit). Its geometry half is verified locally with `--geometry-only`: aperture 20 nodes at the fine rung and 10 at the coarse, against nominal 19 / 9. |
 | cv17 live-FDTD defect runs (four dB magnitudes) | **prose only, §5.1** — not gate-bearing; the window is carried by `material_blind_window.json`. |
 
+**Why the cv18 fine gates in this ledger moved (2026-09-10, #931).** `901a3ad9`
+(VESSL run `369367259159`) found that this case's own iris realized its drawn
+thickness one cell short at both mesh rungs; fixing that fed the oracle the
+geometry that was actually built, and every measured envelope the gate rule
+reads shrank. Each constant above is the same repo rule — `round-up(measured
+envelope x 1.5)` — re-applied to the smaller envelope; none is hand-picked,
+and the `--write-fixture` self-check in `18_wr90_iris_modematch.py` demands
+exact equality with it. All ten gate values in that commit moved down or held;
+none widened.
+
 Both builders are deterministic, read only committed artifacts, run no FDTD,
 and support `--check` (rebuild and diff, exit 1 on any drift).
 The same VESSL yaml re-runs criterion (A) for both cases through their live
