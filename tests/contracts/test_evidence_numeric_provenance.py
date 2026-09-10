@@ -348,6 +348,16 @@ MARKDOWN_SITES: dict[str, str] = {
     CV19_WITNESS_NOTE: r"^#+\s+(.*\S)\s*$",
     # 2026-09-04 (#888): see AUX_ECHO_NOTE above.
     AUX_ECHO_NOTE: r"^#+\s+(.*\S)\s*$",
+    # 2026-09-10 (#931 lattice-ownership merge): two notes opted in because
+    # they now carry a resolvable citation each -- see the CLASSIFICATION
+    # comments below at the same date for why each one moved. (A third,
+    # v18_waveguide_s_chain_plan.md, also gained a resolvable citation but
+    # stays OUT of DOCUMENTS: it carries a second `::` span,
+    # `nu_flux_ad::..._grad_finite_and_fd_consistent`, a test-name reference
+    # this parser rejects by construction -- SYMBOL_SPAN_PARSER_SCOPE, not
+    # GATED. Adding it here breaks collection for every doc.)
+    "docs/design_notes/20260908_docs_truth_audit.md": r"^#+\s+(.*\S)\s*$",
+    "docs/design_notes/chain_closure_contract.md": r"^#+\s+(.*\S)\s*$",
 }
 
 DOCUMENTS = (MANIFEST, *MARKDOWN_SITES)
@@ -497,8 +507,17 @@ CLASSIFICATION: dict[str, str] = {
     "docs/design_notes/20260906_plan_realign_lattice_ownership.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_adi_interior_pec_guard.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_automesh_regressions.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-10 (#931 lattice-ownership merge): a single `::referee` span
+    # cited a dict (DT-F01), which is what test_every_enumerated_document_is_
+    # classified caught. Repointed to the leaf the finding's sentence
+    # actually describes (argmin_first_null.note) and opted in -- an audit
+    # document's whole job is naming real paths.
+    "docs/design_notes/20260908_docs_truth_audit.md": GATED,
     "docs/design_notes/20260908_docs_truth_field_ledger.md": NO_ARTIFACT_REFERENCE,
-    "docs/design_notes/chain_closure_contract.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-10 (#931 lattice-ownership merge): 591e296e added a resolvable
+    # citation to this note (cv18's Richardson envelope); opted in rather than
+    # left failing NO_ARTIFACT_REFERENCE's own vacuity check.
+    "docs/design_notes/chain_closure_contract.md": GATED,
     "docs/design_notes/cv10_pmc_realization_regate.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/cv14_rect_cavity_gate_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/estimator_resolution_regate.md": GATED,
@@ -536,7 +555,14 @@ CLASSIFICATION: dict[str, str] = {
     "docs/design_notes/thru_feedpost_junction_windows_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/thru_feedpost_twoseg_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/thru_singular_value_dx_ladder_predeclaration.md": NO_ARTIFACT_REFERENCE,
-    "docs/design_notes/v18_waveguide_s_chain_plan.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-10 (#931 lattice-ownership merge): 591e296e added a resolvable
+    # cv19 citation here too (missing its tests/fixtures/ prefix, fixed in the
+    # same pass) -- but unlike chain_closure_contract.md this document ALSO
+    # carries `nu_flux_ad::..._grad_finite_and_fd_consistent` in its timing
+    # table, a test-name reference the artifact-reference parser rejects by
+    # construction. GATED would break collection for the whole test module;
+    # SYMBOL_SPAN_PARSER_SCOPE is the classification that is actually true.
+    "docs/design_notes/v18_waveguide_s_chain_plan.md": SYMBOL_SPAN_PARSER_SCOPE,
     "docs/design_notes/waveguide_chain_battery_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/waveguide_chain_battery_remeasure_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/waveguide_false_lane_column_power_predeclaration.md": NO_ARTIFACT_REFERENCE,

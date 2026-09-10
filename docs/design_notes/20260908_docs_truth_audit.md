@@ -85,7 +85,7 @@ in-band Z0 windows contain 16 and 61 bins respectively.
 ## Named unresolved findings (no fixture/physics repair in this commit)
 
 - **DT-F01 — cv07 referee narrative disagrees with its current numbers.**
-  `tests/fixtures/sheen_lpf_e4/sheen_lpf_palace_referee.json::referee` retains the
+  `tests/fixtures/sheen_lpf_e4/sheen_lpf_palace_referee.json::referee.argmin_first_null.note` retains the
   claim that current FDTD solvers choose different doublet members. Both current
   FDTD argmins and Palace-mid choose the upper member; Palace-coarse chooses the
   lower. External prose is corrected. The fixture and its producer's frozen
