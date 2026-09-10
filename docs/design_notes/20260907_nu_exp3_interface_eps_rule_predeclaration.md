@@ -306,6 +306,39 @@ and is NOT touched here.
 
 ## Results
 
+### Resume correction declared before the production patch (2026-09-10)
+
+The previous STOP below is retained as historical evidence, but its absolute-green
+interpretation is superseded by the lead's clarification. E3-B is a DELTA gate:
+**the after-patch failure SET must equal the before-patch failure SET, and every
+pinned value in the passing set must be unchanged.** No frozen window above
+Results is edited. The baseline carries these four pre-existing failures:
+
+- `tests/unit/nonuniform/test_band_accuracy_ad_replay.py::test_replay_ad3`
+- `tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_envelope_regression_lock`
+- `tests/oracle/test_leontovich_alpha_oracle.py::test_o3_model_fits_measured_field`
+- `tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_oracle_o3`
+
+The lead verified the middle two on `origin/main d990e18c` by running exactly
+those two tests in the main checkout (selector command: `pytest
+tests/oracle/test_leontovich_alpha_oracle.py -k "test_alpha_envelope_regression_lock
+or test_o3_model_fits_measured_field"`): **"2 failed, 11 deselected"**.
+Both are `@pytest.mark.slow_physics`; the normal battery's
+`-m "not gpu and not slow and not slow_physics"` excludes them. The lead's
+sibling-branch CPU battery under that marker set was 6140 passed / 0 failed.
+This is lead-provided evidence, not a new run in another checkout.
+AD3 attempt 1 was FIRED and its replay intentionally remains red, as recorded in
+`docs/design_notes/20260907_nu_band_accuracy_ad_predeclaration.md`.
+The fourth failure is the baseline's O3 model-fit trust assertion; no independent
+main-branch verification of that fourth test is claimed.
+
+Before-patch baseline: 4 failed, 1490 passed, 8 skipped, 92 deselected,
+19 xfailed. The existing baseline JSON is retained verbatim. After-patch battery
+will use the identical baseline command and compare failure sets; new E3 tests
+will be accounted for separately when comparing pass counts.
+
+### Historical stopped run (superseded gate interpretation)
+
 2026-09-10: **STOP at E3-B, before the production patch.** No E3 ladder
 unit was attempted. The frozen declaration above is unchanged.
 
