@@ -115,12 +115,15 @@ def test_cpml_localization_identity(name):
 @pytest.mark.parametrize('variable', ['dz_profile', 'eps_r'])
 def test_cpml_localization_ad(variable):
     dz = jnp.linspace(0.5e-3, 1e-3, 12)
+    # Fixed mesh stays concrete when only eps is differentiated. Indexing a
+    # closed-over JAX array inside jit would trace the host grid builder.
+    dz_host = np.asarray(dz)
     shape = (fixture('graded8').nx, fixture('graded8').ny, fixture('graded8').nz)
     eps = jnp.full(shape, 1.5, dtype=jnp.float32)
 
     def objective(value, implementation):
         st = runner('graded8', implementation,
-                    dz=value if variable == 'dz_profile' else dz,
+                    dz=value if variable == 'dz_profile' else dz_host,
                     eps=value if variable == 'eps_r' else eps)[0][0]
         return sum(jnp.sum(getattr(st, field) ** 2) for field in ('ex', 'ey', 'ez'))
 
