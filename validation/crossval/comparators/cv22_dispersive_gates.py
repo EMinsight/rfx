@@ -84,7 +84,12 @@ MEEP_PRIMARY_RESOLUTION = 40   # §12: the converged Meep reference (first-order
 RING_W_MIN = slab_family.RING_W_MIN
 RING_F_MAX_HZ = slab_family.RING_F_MAX_HZ
 RECORD_EXTEND_STEPS = 100
-NX_GROW_CELLS = 200
+# Re-exported, not redeclared (moved to slab_family.py, cv04 settling-
+# extension fix 2026-09-10): cv04 is the envelope PRODUCER and needs this
+# same constant, and issue #928's producer-import-graph invariant forbids
+# the producer importing a module named after a consumer case, even for a
+# constant. Same pattern RING_W_MIN/RING_F_MAX_HZ already use.
+NX_GROW_CELLS = slab_family.NX_GROW_CELLS
 TAIL_ENVELOPE_STEPS = 300      # stored in the artifact so the decay can be fitted offline
 MEEP_LADDER_RESOLUTIONS = (10, 20, 40)
 

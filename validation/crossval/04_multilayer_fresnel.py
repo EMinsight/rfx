@@ -80,23 +80,15 @@ slab_family = _load_slab_family()
 C0 = slab_family.C0_SCRIPT     # 2.998e8, the value this script has always used
 
 
-def _load_cv22_gates():
-    """cv22's own gates module -- reused here only for NX_GROW_CELLS, the
-    same box-growth step cv22/cv23's own settling-extension loops use
-    (issue: this case gets that same mechanism, docs/design_notes/
-    20260903_lattice_witness_standard.md section 8.3 overridden -- see the
-    commit message for why)."""
-    import importlib.util
-
-    path = os.path.join(SCRIPT_DIR, "comparators", "cv22_dispersive_gates.py")
-    spec = importlib.util.spec_from_file_location("_cv04_cv22_gates", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-G = _load_cv22_gates()
+# NX_GROW_CELLS (the settling-extension loop's box-growth step, the same
+# one cv22/cv23's own loops use) lives in slab_family.py, NOT
+# cv22_dispersive_gates.py -- cv04 is the envelope PRODUCER (issue #928)
+# and must not import a module named after a CONSUMER case, even
+# transitively, even for a constant (tests/crossval/
+# test_producer_import_graph.py holds this; importing cv22_dispersive_gates
+# here directly, tried first, failed that test's own static+dynamic-import
+# walk). slab_family.py re-exports it for cv22/cv23's own convenience;
+# cv04 reads it from there like every other shared constant.
 
 # =============================================================================
 # Parameters
@@ -330,7 +322,7 @@ def _run_slab_fdtd(nx_interior_try: int) -> dict:
 
 
 # Settling-extension loop (cv22/cv23's own mechanism, ported -- see
-# _run_slab_fdtd's docstring). Grows nx_interior by G.NX_GROW_CELLS (the
+# _run_slab_fdtd's docstring). Grows nx_interior by slab_family.NX_GROW_CELLS (the
 # SAME step cv22/cv23 use) until the tail clears the family's -40 dB bar,
 # and records where it actually stopped, not a number anyone typed.
 _nx_arm = nx_interior
@@ -349,8 +341,8 @@ while True:
                    "tail_trans_rel": _run["tail_trans_rel"]})
     print(f"  tail not settled to the family bar {slab_family.SETTLING_LIMIT:g} "
           f"(scat_refl={_run['tail_refl_rel']:.4f}, trans={_run['tail_trans_rel']:.4f}) "
-          f"-- growing nx_interior {_nx_arm} -> {_nx_arm + G.NX_GROW_CELLS}")
-    _nx_arm += G.NX_GROW_CELLS
+          f"-- growing nx_interior {_nx_arm} -> {_nx_arm + slab_family.NX_GROW_CELLS}")
+    _nx_arm += slab_family.NX_GROW_CELLS
 
 nx_interior = _run["nx_interior"]  # the FINAL, grown value -- PART 3 (Meep) reads this
 grid = _run["grid"]
