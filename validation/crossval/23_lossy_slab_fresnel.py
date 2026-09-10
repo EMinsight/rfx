@@ -358,6 +358,39 @@ def main(argv=None) -> int:
                   f"tail scat/trans {run['tail']['scat_refl_rel']:.2e}/{run['tail']['total_trans_rel']:.2e} "
                   f"vs {G.SETTLING_LIMIT:g} -> {'ok' if run['tail']['ok'] else 'FAIL'}; fitted tail rate "
                   f"scat/trans {run['tail']['fitted_rate_scat_refl_1_s']:.3e}/{run['tail']['fitted_rate_total_trans_1_s']:.3e} /s")
+
+        # --- Lattice-witness gate, WIRED into the verdict (was print-only;
+        # docs/design_notes/20260903_lattice_witness_standard.md, issue #970).
+        # LW.evaluate() is a pure, in-memory, single-arm function -- no file
+        # I/O, no other rungs -- so this runs the SAME computation the
+        # standalone `--lattice-witness` mode and tests/crossval/
+        # test_lattice_witness_gates.py already trust, live on THIS run's own
+        # freshly-computed R/T, not a re-read of a committed artifact. `e2`
+        # already has every field LW.evaluate() needs (dt_s, model, params,
+        # gated, freqs_hz, R_rfx/T_rfx, inc_amp_rel, tail, run.record) --
+        # it is the identical shape a committed rfx.json's arms[name] block
+        # has, by construction (this dict IS what gets written there).
+        # Needs run["record"] (rate_ring_1_s, t_safe_cpml_steps): absent on
+        # a recipe with no adaptive settling derivation (cv04's legacy
+        # 719-step rule, --recipe cv04) -- not evaluated there, gates
+        # unchanged, noted rather than silently skipped.
+        if run.get("record") is not None:
+            witness = LW.evaluate(e2, params=params)
+            e2["lattice"]["witness_ok"] = witness["witness_ok"]
+            e2["lattice"]["witness_detail"] = witness
+            e2["gates"]["GL_witness"] = witness["witness_ok"]
+            e2.update(G.aggregate_gates(
+                e2["gates"], declared=L.DECLARED_GATES + ("GL_witness",),
+                require_complete=True))
+        else:
+            e2["lattice"]["witness_ok"] = None
+            e2["lattice"]["witness_note"] = (
+                f"no adaptive settling record on this run (recipe={a.recipe!r}) -- "
+                "the live lattice-witness gate needs run['record'] "
+                "(rate_ring_1_s, t_safe_cpml_steps); not evaluated here, "
+                "gates unchanged."
+            )
+
         if not run["band_inc_ok"]:
             e2["gates"]["rig_incident_floor"] = False
             e2["e2_ok"] = False
@@ -369,10 +402,12 @@ def main(argv=None) -> int:
               f"max R+T (masked) = {1 + e2['max_RT_closure_masked']:.4f}")
         print(f"  E2 gates: {e2['gates']} -> {'PASS' if e2['e2_ok'] else 'FAIL'}")
         lat = e2["lattice"]
-        print(f"  lattice witness (reported, not gated): W_lat mean R/T/A {lat['mean_W_lat_R_gated']:.5f}/"
+        _witness_label = ("GATED (GL_witness)" if lat.get("witness_ok") is not None
+                          else "not evaluated, see witness_note")
+        print(f"  lattice witness ({_witness_label}): W_lat mean R/T/A {lat['mean_W_lat_R_gated']:.5f}/"
               f"{lat['mean_W_lat_T_gated']:.5f}/{lat['mean_W_lat_A_gated']:.5f}; |rfx - lattice| mean R/T/A "
               f"{lat['mean_dR_lattice_gated']:.2e}/{lat['mean_dT_lattice_gated']:.2e}/{lat['mean_dA_lattice_gated']:.2e} "
-              f"(max R {lat['max_dR_lattice_gated']:.2e})")
+              f"(max R {lat['max_dR_lattice_gated']:.2e}); witness_ok={lat.get('witness_ok')}")
         for fi in (4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0):
             i = int(np.argmin(np.abs(np.asarray(e2["freqs_hz"]) - fi * 1e9)))
             print(f"    {e2['freqs_hz'][i]/1e9:6.2f} GHz  R {e2['R_tmm'][i]:.4f}/{e2['R_rfx'][i]:.4f} | "

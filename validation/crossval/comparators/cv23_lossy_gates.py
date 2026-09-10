@@ -208,8 +208,14 @@ def evaluate_e2(freqs_hz, R_rfx, T_rfx, params: dict, dt: float, *, tail: dict |
                 dx: float | None = None, require_complete: bool = False) -> dict:
     """E2 gates G1 (per-bin R, T, A), G2 (band-mean R, T, A), G3 (witnesses).
     With ``dx`` given, the exact Yee-lattice solution at (dx, dt) is added as
-    a REPORTED witness (``lattice``: W_lat per bin and |rfx - lattice|; note
-    section 13) -- it enters no gate."""
+    a witness (``lattice``: W_lat per bin and |rfx - lattice|; note section
+    13) -- THIS FUNCTION does not gate on it (no run/record is available at
+    this scope to derive W_witness from). The caller
+    (validation/crossval/23_lossy_slab_fresnel.py's main(), which has the
+    run's record) wires it into the live verdict via
+    comparators/lattice_witness.py's evaluate(), re-aggregating gates with
+    GL_witness added -- issue #970. Do not re-describe it as reported-only
+    here without checking that caller first."""
     out = G.evaluate_e2(freqs_hz, R_rfx, T_rfx, MODEL, params, dt, tail=tail,
                         require_complete=require_complete, windows=WINDOWS)
     f = np.asarray(freqs_hz, dtype=float)
