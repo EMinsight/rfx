@@ -1,7 +1,7 @@
 # cv05 leaves the scheduled crossval cases (issues #959, #965)
 
 **Correction (2026-09-10, later the same day):** the first version of this note said
-`05_patch_antenna` was *removed* from `manifest.json`'s `cases` array. That was tried and
+`05_patch_antenna` was *removed* from `validation/crossval/manifest.json`'s `cases` array. That was tried and
 reverted within the hour: `test_manifest_covers_every_crossval_script_exactly_once` requires
 every non-underscore `.py` file under `validation/crossval/` to have exactly one manifest case,
 and the script stays (see "What changed" below for why), so deleting the case broke that
@@ -25,17 +25,17 @@ runs cv05's own declared board:
 
 - the two `test_patch_edgefed_*` files measure a different geometry, `DX = 0.197 mm` exactly,
   "Board S", a 44x51-cell patch — their own docstrings say so;
-- `test_patch_canonical_farfield_e4.py` measures openEMS's canonical thirds-rule tutorial
+- `tests/crossval/test_patch_canonical_farfield_e4.py` measures openEMS's canonical thirds-rule tutorial
   recipe — a 32x40 mm patch, eps_r = 3.38, 1.524 mm substrate, 60x60 mm ground — not cv05's
   29.5x38 mm FR4 board;
-- `test_patch_cavity_eps_oracle.py` measures an idealized closed PEC cavity, 24x24x12 mm,
+- `tests/oracle/test_patch_cavity_eps_oracle.py` measures an idealized closed PEC cavity, 24x24x12 mm,
   eps_r = 4.0 — not patch-shaped at all.
 
 All four are real, useful regression locks or oracles on their OWN boards. None of them checks
 cv05's specific probe-fed 29.5x38 mm FR4 patch with the NU-graded z-mesh.
 
 **What actually checks cv05's own board is `tests/crossval/test_cv05_realized_sheet_planes.py`
-— and it is not in `gate_paths` either.** It runs `05_patch_antenna.py` via subprocess in
+— and it is not in `gate_paths` either.** It runs `validation/crossval/05_patch_antenna.py` via subprocess in
 `RFX_CV05_BUILD_ONLY=1` mode, which exits (`SystemExit(0)`, around line 686) after building the
 full NU-graded z-mesh and running `assert_realized_sheets` on both builds, strictly before any
 `openEMS`/`CSXCAD` import (those start at line 758+, reached only in full-run mode). So the
@@ -59,7 +59,7 @@ case. Deleting the case while keeping the file is therefore not a legal state; i
 first and reverted (see the correction notice above).
 
 **What actually retires cv05 from automated scheduling:** the case entry stays in
-`manifest.json`'s `cases` array, with `execution_tiers` changed from `["cpu-runner",
+`validation/crossval/manifest.json`'s `cases` array, with `execution_tiers` changed from `["cpu-runner",
 "vessl-external"]` to `["external-manual"]`, and `cpu_runner` changed from `{"order": 3}` to
 `{"excluded_reason": "..."}` (same shape cv06b/cv19/cv24 already use for CPU-infeasible cases —
 not a new pattern). `scripts/run_crossval_cpu.py` builds `CPU_SUBSET` from `cpu_order` values
@@ -79,7 +79,7 @@ shape, not an invented one. `docs/public/guide/benchmarks.mdx` needed no edit as
 **Consequence: `cpu_runner.order` needed renumbering, contradicting earlier advice not to.**
 Orders were `[1,2,4,5,...,18]` (17 values, 3 missing) when the case still held slot 3.
 `test_manifest_entries_are_self_consistent_and_grounded` asserts `sorted(cpu_orders) ==
-list(range(1, len(cpu_orders) + 1))` — no gaps, ever — which `run_crossval_cpu.py`'s own runtime
+list(range(1, len(cpu_orders) + 1))` — no gaps, ever — which `scripts/run_crossval_cpu.py`'s own runtime
 sort tolerates but this separate contract test does not. Advice earlier in this thread said the
 gap was harmless and not to renumber; that was checked against the runner's behavior, not this
 test, and does not hold once cv05's slot is vacated by `excluded_reason` rather than filled by
@@ -161,33 +161,34 @@ consistent with keeping the file where it is:
 
 `docs/design_notes` gained a link, not a rewrite. In particular:
 
-- The three other `gate_paths` tests (`test_patch_edgefed_resonance_harminv.py`,
-  `test_patch_edgefed_s11_passivity.py`, `test_patch_cavity_eps_oracle.py`) never depended on
+- The three other `gate_paths` tests (`tests/locks/test_patch_edgefed_resonance_harminv.py`,
+  `tests/locks/test_patch_edgefed_s11_passivity.py`, `tests/oracle/test_patch_cavity_eps_oracle.py`) never depended on
   cv05 being a scheduled case — they are independent boards. No change.
-- `test_patch_canonical_farfield_e4.py` is likewise independent (different geometry). No
+- `tests/crossval/test_patch_canonical_farfield_e4.py` is likewise independent (different geometry). No
   change.
 - The two committed `_05_patch_results/cv05_run_openems_*.json` legs and their logs are
   retained as historical record (README added in the same directory, same convention as
-  `_15_patch_results/README.md` and `_06b_msl_notch_results/README.md`).
+  `validation/crossval/_15_patch_results/README.md` and
+  `validation/crossval/_06b_msl_notch_results/README.md`).
 
 ## Issue #959 (the 28x37 mm vs 29.5x38 mm geometry mismatch) is not fixed here
 
 Disposition was settled before touching #959's geometry, on purpose: fixing a comparator that
 is about to stop being scheduled would have been wasted work if the disposition had gone the
 other way. Checked for a live consumer of the mismatched number outside the retiring leg and
-found none — `test_patch_canonical_farfield_e4.py` uses an unrelated geometry, and
-`test_patch_mode_identification.py`'s fixture pipeline uses the rfx-only Part 1 engine with no
+found none — `tests/crossval/test_patch_canonical_farfield_e4.py` uses an unrelated geometry, and
+`tests/crossval/test_patch_mode_identification.py`'s fixture pipeline uses the rfx-only Part 1 engine with no
 openEMS comparison, so it is blind to #959 by construction, not by luck. #959 stays open,
 re-scoped: the comparison it names is retired, not fixed.
 
 ## Do any of the deselected "slow" tests touch cv05's board?
 
-No. Of the 34 tests across the four `gate_paths` files plus `test_cv05_realized_sheet_planes.py`,
+No. Of the 34 tests across the four `gate_paths` files plus `tests/crossval/test_cv05_realized_sheet_planes.py`,
 23 are collected by default and 11 are marked slow and deselected. All 11 are in
-`test_patch_edgefed_resonance_harminv.py` (4), `test_patch_edgefed_s11_passivity.py` (1),
-`test_patch_cavity_eps_oracle.py` (1) and `test_patch_canonical_farfield_e4.py` (5) — the four
+`tests/locks/test_patch_edgefed_resonance_harminv.py` (4), `tests/locks/test_patch_edgefed_s11_passivity.py` (1),
+`tests/oracle/test_patch_cavity_eps_oracle.py` (1) and `tests/crossval/test_patch_canonical_farfield_e4.py` (5) — the four
 files already established above as measuring OTHER boards, not cv05's. Zero of
-`test_cv05_realized_sheet_planes.py`'s 11 tests are marked slow; all ran in the 23-test pass.
+`tests/crossval/test_cv05_realized_sheet_planes.py`'s 11 tests are marked slow; all ran in the 23-test pass.
 So the deselection is a real gap in coverage of those other boards' physics, but not a gap in
 coverage of cv05's board specifically.
 
