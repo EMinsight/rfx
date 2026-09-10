@@ -312,7 +312,7 @@ def _geom_banner():
 # ===========================================================================
 # rfx side
 # ===========================================================================
-def assert_realized_stack(sim, grid, patch_shape=None):
+def assert_realized_stack(sim, grid, patch_shape=None, *, allow_volume_patch=False):
     """MANDATORY geometry-fidelity self-check: assert the REALIZED electric
     wall PLANES the solver actually built are EXACTLY the declared ones.
 
@@ -470,7 +470,7 @@ def assert_realized_stack(sim, grid, patch_shape=None):
             f"(z~{[_z_mm(k) for k in sorted(extra)]} mm). Refuse to "
             "quote f0 for a cavity that is not the "
             "declared substrate (#931 §1.3).")
-    if extra:
+    if extra and not (allow_volume_patch and extra == {k_patch + 1}):
         raise RuntimeError(
             "assert_realized_stack: the realized wall planes over the patch "
             f"footprint are {sorted({k_ground, k_patch} | extra)}, not exactly "
@@ -480,6 +480,21 @@ def assert_realized_stack(sim, grid, patch_shape=None):
             "realized as a one-cell VOLUME, which the openEMS zero-thickness "
             "reference has no counterpart for; declare it as a sheet "
             "(zero-thickness PEC Box) instead. Refuse to quote f0.")
+    if extra:
+        # allow_volume_patch and extra == {k_patch + 1}: the KNOWN, DECLARED
+        # negative control (2026-09-10 cv15 in-plane-footprint decomposition
+        # review) -- a caller that explicitly asked for patch_kind=
+        # 'volume_1cell' already knows it is not the production board; this
+        # function's job here is to NAME the extra wall (the docstring's own
+        # words), not to refuse quoting f0 for a run whose whole point is to
+        # measure that board. Production (patch_kind='sheet', the default)
+        # never reaches this branch: 'extra' is empty for a sheet-declared
+        # patch, so allow_volume_patch is inert unless the caller deliberately
+        # built the pre-#931 board.
+        print(f"[STACK CHECK #931] allow_volume_patch: extra wall at "
+              f"k={sorted(extra)} (z~{[_z_mm(k) for k in sorted(extra)]} mm) "
+              "NAMED, not refused -- this is the declared pre-#931 negative "
+              "control, not a production board.")
 
     eps = np.asarray(mats.eps_r)
     n_distinct_eps = int(np.unique(eps).size)
@@ -804,7 +819,7 @@ def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
 
 
 def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
-            feed="full_span", out_name="rfx.json"):
+            feed="full_span", patch_kind="sheet", out_name="rfx.json"):
     sys.path.insert(0, REPO_ROOT)
     import io
     import contextlib
@@ -817,7 +832,7 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
 
     sim, patch_shape, geom = build_rfx_sim(do_gain=do_gain,
                                            ground_plane_z=ground_plane_z,
-                                           feed=feed)
+                                           feed=feed, patch_kind=patch_kind)
     z_sub_lo, z_sub_hi = geom["z_sub_lo"], geom["z_sub_hi"]
 
     # ---- Build the actual grid: exact dt + FAITHFUL substrate rasterization ----
@@ -842,7 +857,8 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
             f"substrate landed on {n_sub_raster} cells, intended {N_SUB} -- "
             "uniform-mesh rasterization mismatch, refuse to quote f0")
 
-    stack_check = assert_realized_stack(sim, grid, patch_shape)
+    stack_check = assert_realized_stack(sim, grid, patch_shape,
+                                        allow_volume_patch=(patch_kind != "sheet"))
     feed_check = assert_galvanic_feed(sim, grid, geom)
     dt_grid = float(grid.dt)
 
@@ -1468,9 +1484,17 @@ def main():
                          "-- the old 2*DX feed one cell above the floor -- "
                          "which separates the feed term from the conductor "
                          "declaration term in the #931 before/after")
+    ap.add_argument("--patch-kind", choices=["sheet", "volume_1cell"],
+                    default="sheet",
+                    help="patch conductor declaration. sheet (production, "
+                         "#931). volume_1cell is a SECOND decomposition arm "
+                         "-- the pre-#931 one-cell PEC Box, whose in-plane "
+                         "footprint is 51x63 cells against the sheet's "
+                         "50x63 -- isolating the footprint term from the "
+                         "feed term (2026-09-10 cv15 audit review)")
     ap.add_argument("--out-name", default=None,
                     help="filename under _15_patch_results for the rfx leg "
-                         "(default rfx.json; the decomposition arm must NOT "
+                         "(default rfx.json; a decomposition arm must NOT "
                          "overwrite the production leg)")
     a = ap.parse_args()
     # Solver-producing modes write a result leg and are not themselves gated;
@@ -1482,11 +1506,17 @@ def main():
         run_openems(a.n_freqs, a.gain)
         return 0
     if a.mode == "rfx":
-        out_name = a.out_name or (
-            "rfx.json" if a.feed == "full_span"
-            else f"rfx_decomposition_feed_{a.feed}.json")
+        production = a.feed == "full_span" and a.patch_kind == "sheet"
+        if a.out_name:
+            out_name = a.out_name
+        elif production:
+            out_name = "rfx.json"
+        elif a.patch_kind != "sheet" and a.feed == "full_span":
+            out_name = f"rfx_decomposition_patchkind_{a.patch_kind}.json"
+        else:
+            out_name = f"rfx_decomposition_feed_{a.feed}.json"
         run_rfx(a.num_periods, a.n_freqs, a.gain, feed=a.feed,
-                out_name=out_name)
+                patch_kind=a.patch_kind, out_name=out_name)
         return 0
     return 0 if compare(a.f0_env_pct) else 1
 
