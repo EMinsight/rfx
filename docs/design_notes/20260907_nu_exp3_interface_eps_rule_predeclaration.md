@@ -448,3 +448,91 @@ entry is needed. An initial auxiliary four-cell test had an invalid y-profile
 before assembly. Its fixture was corrected to have matching boundary cells;
 no E3-C window fired (all nine declared columns passed on that first check).
 No A1 ladder unit has yet been attempted.
+
+### One-attempt measured results (2026-09-10)
+
+Production/tests commit: `7b846c0b716c5e2e72e9e7f6c0722987a042cebb`.
+Every selfcheck and ladder row records this SHA, `git_dirty=False`, and
+`rfx_file=/Users/byungkwankim/Documents/rfx-nu-exp3/rfx/__init__.py`.
+The requested PYTHONPATH/interpreter and `JAX_PLATFORMS=cpu` were used.
+Six units, one attempt each, no `--force`, no smoke, no retuning.
+
+| Gate | Status | Measured versus frozen window |
+|---|---|---|
+| E3-B | PENDING full battery | explicit/omitted sampled: 200-step max difference 0; material arrays byte-identical; all 27 default table entries unchanged; example-fidelity 175 passed before and after |
+| E3-C | HELD | 9 meshes; maximum Ey relative difference 9.706317172231138e-8 <= 5e-7; Ez difference exactly 0 |
+| E3-O | HELD | all_pass=True; oracle (i)/(i')/(i'') residuals 1.8128774706335932e-16 / 1.8796313675281302e-16 / 1.314136397143784e-16 <= 1e-12; all model/table/order/ratio selfchecks pass their unchanged windows |
+| E3-G3 | HELD | max absolute model residual 0.0593851955242157 MHz <= 0.15 MHz |
+| E3-V | HELD | max 15/10 ns difference 0.06576602301216125 MHz <= 0.1 MHz; 3 valid fit points on each arm |
+| E3-F1 | HELD | UC 2.007492133930114 and MB 2.009959571601154 >= 1.8; UC also in [1.8, 2.2] |
+| E3-F2 | HELD | all six differences from lane F's full-precision dual rows exactly 0 MHz <= 0.5 MHz |
+| E3-R | HELD | 11 refusal cases raise before the stepper; all error messages name interface_eps |
+| E3-P | HELD | 2 report cases pass: text states sampled/dual_average, domain key present only for opt-in |
+
+| Arm | Scale | Error (MHz) | Model residual (MHz) | 15/10 ns difference (MHz) | Difference from lane F dual (MHz) |
+|---|---:|---:|---:|---:|---:|
+| UC | 2 | -64.3221257513771 | -0.01917725951576233 | 0.036346180366516115 | 0.0 |
+| MB | 2 | -121.67696552715682 | -0.0593851955242157 | 0.008576109344482422 | 0.0 |
+| UC | 1 | -16.03996319467926 | -0.034505641912460326 | 0.06576602301216125 | 0.0 |
+| MB | 1 | -30.09341446830559 | 0.004069466527938843 | 0.023096275793075563 | 0.0 |
+| UC | 0.5 | -3.978594629137039 | 0.01844343797492981 | 0.03517198579978943 | 0.0 |
+| MB | 0.5 | -7.500533034704208 | 0.004676412994384766 | 0.004772365056991577 | 0.0 |
+
+Instrument stdout, verbatim (the final generic W7 verdict needs both dual
+and production arms for its separate G1/G2 judges; this E3 run deliberately
+contains only production rows. E3 uses the frozen production orders and
+per-row G3/invariance judges, rechecked by its passing replay):
+
+```text
+A1 UC s=2 production: f=10.497397 GHz err=-64.3221 MHz model=-64.3029 MHz resid=-0.0192 MHz inv=0.0363 MHz zfrac=0.964 valid=True cells=19215 steps=13627 wall=1s
+A1 MB s=2 production: f=10.440043 GHz err=-121.6770 MHz model=-121.6176 MHz resid=-0.0594 MHz inv=0.0086 MHz zfrac=0.980 valid=True cells=14091 steps=13627 wall=1s
+A1 UC s=1 production: f=10.545680 GHz err=-16.0400 MHz model=-16.0055 MHz resid=-0.0345 MHz inv=0.0658 MHz zfrac=0.964 valid=True cells=139997 steps=27254 wall=6s
+A1 MB s=1 production: f=10.531626 GHz err=-30.0934 MHz model=-30.0975 MHz resid=+0.0041 MHz inv=0.0231 MHz zfrac=0.980 valid=True cells=102245 steps=27254 wall=4s
+A1 UC s=0.5 production: f=10.557741 GHz err=-3.9786 MHz model=-3.9970 MHz resid=+0.0184 MHz inv=0.0352 MHz zfrac=0.964 valid=True cells=1066425 steps=54508 wall=83s
+A1 MB s=0.5 production: f=10.554219 GHz err=-7.5005 MHz model=-7.5052 MHz resid=+0.0047 MHz inv=0.0048 MHz zfrac=0.980 valid=True cells=777225 steps=54508 wall=50s
+A1 judge: FIXTURE-INVALID or incomplete (G1, G2, G3 not passed)
+wrote validation/research/multiband_nu/results/e3_interface_eps_rule.json
+```
+
+E3 contract/replay command: `-m pytest tests/unit/nonuniform/test_interface_eps_rule.py
+-q -s -o addopts="" -p no:cacheprovider`. Verbatim final summary:
+
+```text
+27 passed, 14 warnings in 7.29s
+```
+
+Example fidelity used the identical baseline command including
+`-p no:cacheprovider`. Verbatim after summary:
+
+```text
+175 passed, 10 warnings in 36.58s
+```
+
+An orchestration mistake is retained explicitly: the first after-battery
+started while the ladder JSON was incomplete. The newly added replay raised
+`KeyError: 'uc|0.5|production'`; this was not a measured-window failure.
+That battery was interrupted after 86.97 seconds (2 failed, 142 passed,
+1 skipped, 92 deselected); its other failure was the known AD3 replay.
+Evidence: `e3_battery_incomplete_artifact.json` and its log. The source and
+replay were not changed, and the ladder was never restarted. Once all six
+rows existed, all 27 E3 tests passed and the identical full battery was
+started again. Its completed comparison is appended below when available.
+
+### Separate main-branch finding for the lead to file
+
+Lead-verified on `origin/main d990e18c`: the two selected tests produced
+"2 failed, 11 deselected". The measured quantities in this worktree's
+unpatched baseline were:
+
+- `tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_envelope_regression_lock`:
+  two-plane alpha 0.8733294904232025 versus pin 0.72494; relative difference
+  0.20469209924021636 exceeds the 0.05 window.
+- `tests/oracle/test_leontovich_alpha_oracle.py::test_o3_model_fits_measured_field`:
+  8 GHz relative RMS 0.010769780031860503 versus the <= 0.01 window.
+
+Both tests are `slow_physics` only (not `slow`); the normal battery
+`-m "not gpu and not slow and not slow_physics"` hides these reds.
+The E3 baseline marker set includes them. This report does not claim to
+have rerun main, and no other checkout was modified. The related baseline
+`test_alpha_oracle_o3` also fails its model-fit trust check at the same RMS.
+No upstream issue or message was posted; this is the finding for the lead.
