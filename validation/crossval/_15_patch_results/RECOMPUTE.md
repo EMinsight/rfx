@@ -313,7 +313,7 @@ neither number may be quoted without the code state that produced it.
   its S11 dip is −0.010 dB.
 * `openems.json` did not move and was not re-run.
 
-## 6. A further candidate inside the bundled 58 % (2026-09-10 review)
+## 6. The in-plane footprint term — measured, and it does not fit inside the bundle (2026-09-10 review)
 
 Section 4 already refuses to credit "the ownership contract" alone for leg 1 →
 leg 2's +2.744 % (58.2 % of the total): it names the port-extent fix on the
@@ -349,13 +349,47 @@ between them. Do not read "-1.96 % length -> roughly 2 points of the 2.744 %"
 as measured; it is the same order of magnitude and the same sign, which is
 why it is a candidate, not an attribution.
 
-**To separate it: one more run**, cheap. `build_rfx_sim(patch_kind='volume_1cell')`
-already exists as a supported code path (used above for the footprint-only
-measurement); running it through a full solve with `feed='full_span'` (the
-CURRENT feed spelling, unlike the existing decomposition arm which uses the
-pre-#931 feed) isolates the patch-declaration axis alone against the
-production leg. Existing legs at this problem size solve in 77-129 s CPU
-(`rfx_decomposition_feed_pre931.json::runtime_s = 76.83`,
-`rfx.json::runtime_s = 129.11`), so the new leg is the same order of cost —
-one VESSL job, not a new code path. Not run here: this stays a named,
-unmeasured candidate, per the instruction not to widen this merge's scope.
+**Separated (2026-09-10, VESSL run `369367260082`).** `build_rfx_sim(patch_kind=
+'volume_1cell')` with `feed='full_span'` — the CURRENT feed spelling, ground
+held at its CURRENT (sheet) declaration, ONLY the patch declaration reverted
+to pre-#931 — required one code addition: `assert_realized_stack` refuses a
+volume-declared patch by design (assertion 2 exists exactly to stop this by
+accident), so a controlled `allow_volume_patch` escape hatch was added,
+scoped to a caller that explicitly asks for `patch_kind='volume_1cell'`
+(commit `eccf572e`; production's own call site is unaffected — it never
+passes that flag). Written to
+`_15_patch_results/rfx_decomposition_patchkind_volume_1cell.json`; does not
+touch `rfx.json`.
+
+```
+volume patch, sheets ground, full-span feed:  f0 2.3112 GHz  Q 10.71
+sheet patch,   sheets ground, full-span feed: f0 2.4230 GHz  Q 10.06  (production, rfx.json)
+```
+
+Patch declaration ALONE (volume -> sheet), holding ground and feed at their
+CURRENT values: **+111.827 MHz (+4.838 %)**, RAISING f0 as predicted by the
+same shorter-resonant-length mechanism. Q moves the other way but only
+slightly, -0.65 (10.71 -> 10.06) — nowhere near the feed term's "essentially
+the whole Q collapse" (18 -> 10 in section 4); the patch term is not a
+meaningful Q driver, consistent with it being an in-plane, not a coupling,
+change.
+
+**This does not apportion leg 1 -> leg 2's +2.744 % (+63.484 MHz), and
+should not be forced to.** The patch-alone term measured here, +111.827 MHz,
+is LARGER than the entire leg 1 -> leg 2 bundle it was meant to help explain.
+"-1.96 % length -> roughly 2 points of the 2.744 %", the candidate this
+section named above, was the wrong magnitude — the real, isolated effect is
+almost twice the whole bundle, not a fraction of it. Naive subtraction
+(bundle - patch term = 63.484 - 111.827 = **-48.343 MHz**) would require the
+OTHER bundled factor — the ground declaration (two_plane -> sheet), which
+this run does not isolate — to contribute a strongly NEGATIVE amount at the
+point it was actually applied (with the OLD patch and feed still in place),
+opposite in sign to the "shortens an inflated cavity, RAISES f0" mechanism
+already invoked for it elsewhere in this document. No leg in this record
+isolates the ground term alone (holding patch and feed at THEIR old values),
+so this is not resolved: either the ground and patch terms interact
+(non-additively) rather than summing independently, or one of the sign/
+magnitude assumptions carried from section 4 is wrong. Recorded as an open
+remainder, not closed by assumption — a further "ground alone" leg would
+settle it and is not run here (out of this merge's scope, same as the
+rest of the audit).
