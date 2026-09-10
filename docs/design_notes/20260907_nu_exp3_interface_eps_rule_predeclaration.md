@@ -459,7 +459,7 @@ Six units, one attempt each, no `--force`, no smoke, no retuning.
 
 | Gate | Status | Measured versus frozen window |
 |---|---|---|
-| E3-B | PENDING full battery | explicit/omitted sampled: 200-step max difference 0; material arrays byte-identical; all 27 default table entries unchanged; example-fidelity 175 passed before and after |
+| E3-B | HELD (completed comparison below) | explicit/omitted sampled: 200-step max difference 0; material arrays byte-identical; all 27 default table entries unchanged; example-fidelity 175 passed before and after |
 | E3-C | HELD | 9 meshes; maximum Ey relative difference 9.706317172231138e-8 <= 5e-7; Ez difference exactly 0 |
 | E3-O | HELD | all_pass=True; oracle (i)/(i')/(i'') residuals 1.8128774706335932e-16 / 1.8796313675281302e-16 / 1.314136397143784e-16 <= 1e-12; all model/table/order/ratio selfchecks pass their unchanged windows |
 | E3-G3 | HELD | max absolute model residual 0.0593851955242157 MHz <= 0.15 MHz |
@@ -536,3 +536,63 @@ The E3 baseline marker set includes them. This report does not claim to
 have rerun main, and no other checkout was modified. The related baseline
 `test_alpha_oracle_o3` also fails its model-fit trust check at the same RMS.
 No upstream issue or message was posted; this is the finding for the lead.
+
+### Completed E3-B delta comparison — HELD (2026-09-10)
+
+The after battery finished with the **identical argv and marker set** as
+its baseline, including all four known-red tests (no deselections by name):
+
+```sh
+JAX_PLATFORMS=cpu PYTHONPATH=/Users/byungkwankim/Documents/rfx-nu-exp3 /Users/byungkwankim/Documents/rfx/.venv/bin/python -m pytest tests/unit/nonuniform tests/unit/geometry tests/unit/materials tests/oracle -q -o addopts="" -m "not gpu and not slow" -p no:cacheprovider
+```
+
+Verbatim before summary:
+
+```text
+4 failed, 1490 passed, 8 skipped, 92 deselected, 19 xfailed, 573 warnings in 1765.01s (0:29:25)
+```
+
+Verbatim completed after summary:
+
+```text
+4 failed, 1517 passed, 8 skipped, 92 deselected, 19 xfailed, 586 warnings in 1632.51s (0:27:12)
+```
+
+The after count includes **27 new E3 passes**: 1517 - 27 = 1490, exactly
+matching the baseline. Skips=8, deselections=92, xfails=19 and failures=4
+are unchanged. The example-fidelity contract is 175 passed before and after.
+
+**Before failure SET = after failure SET**, explicitly:
+
+```text
+tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_envelope_regression_lock
+tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_oracle_o3
+tests/oracle/test_leontovich_alpha_oracle.py::test_o3_model_fits_measured_field
+tests/unit/nonuniform/test_band_accuracy_ad_replay.py::test_replay_ad3
+```
+
+Set difference in both directions is empty. No existing test, pinned
+expectation or lane F reference JSON was edited. All previously passing
+pins still pass; the default material bytes, 200-step trace (max difference
+0) and all 27 interface-table entries are unchanged. The known-red
+assertion values also reproduce exactly:
+
+| Quantity | Before | After | Unchanged comparator |
+|---|---:|---:|---|
+| Two-plane alpha | 0.8733294904232025 | 0.8733294904232025 | pin 0.72494; relative window <= 0.05 |
+| Two-plane alpha relative difference | 0.20469209924021636 | 0.20469209924021636 | <= 0.05 |
+| O3 field-fit RMS and O3 trust RMS at 8 GHz | 0.010769780031860503 | 0.010769780031860503 | <= 0.01 |
+| AD3 worst dominant relative error | 0.5224044347795822 | 0.5224044347795822 | <= 0.15 |
+
+Evidence: `e3_battery_after.json` contains full verbatim output, argv,
+import path, starting SHA, completion SHA, exact failure sets and counts.
+The battery started on source/tests commit `7b846c0b`; HEAD advanced only
+to the documentation/evidence commit `ce5fc0d0` during execution. A git
+diff verifies that source, tests and instrument were unchanged throughout.
+`e3_gate_results.json` now records every E3 gate as HELD.
+
+All requested work is complete. No E3 numeric window fired; there was no
+ladder reroll or window change. The invalid auxiliary test fixture and
+premature partial-artifact replay are preserved above, with their evidence.
+The frozen text above Results is byte-identical to `7b7dc182`. Nothing was
+pushed, no PR was opened, and no other rfx worktree was modified.

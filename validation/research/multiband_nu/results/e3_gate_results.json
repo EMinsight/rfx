@@ -10,11 +10,44 @@
   },
   "gates": {
     "E3-B": {
-      "status": "PENDING",
+      "status": "HELD",
       "max_trace_difference": 0,
       "material_bytes_identical": true,
       "default_interface_tables_unchanged": 27,
-      "reason": "Completed after-patch battery pending"
+      "reason": "Identical full-command failure sets and normalized counts; no existing tests or pins modified",
+      "before_failure_set": [
+        "tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_envelope_regression_lock",
+        "tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_oracle_o3",
+        "tests/oracle/test_leontovich_alpha_oracle.py::test_o3_model_fits_measured_field",
+        "tests/unit/nonuniform/test_band_accuracy_ad_replay.py::test_replay_ad3"
+      ],
+      "after_failure_set": [
+        "tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_envelope_regression_lock",
+        "tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_oracle_o3",
+        "tests/oracle/test_leontovich_alpha_oracle.py::test_o3_model_fits_measured_field",
+        "tests/unit/nonuniform/test_band_accuracy_ad_replay.py::test_replay_ad3"
+      ],
+      "before_counts": {
+        "failed": 4,
+        "passed": 1490,
+        "skipped": 8,
+        "deselected": 92,
+        "xfailed": 19
+      },
+      "after_counts": {
+        "failed": 4,
+        "passed": 1517,
+        "skipped": 8,
+        "deselected": 92,
+        "xfailed": 19
+      },
+      "added_e3_passes": 27,
+      "known_red_measured_values_unchanged": {
+        "two_plane_alpha": 0.8733294904232025,
+        "alpha_relative_difference": 0.20469209924021636,
+        "o3_relative_rms": 0.010769780031860503,
+        "ad3_worst_relative_error": 0.5224044347795822
+      }
     },
     "E3-C": {
       "status": "HELD",
@@ -65,5 +98,6 @@
       "status": "HELD",
       "report_cases_passed": 2
     }
-  }
+  },
+  "finalized_utc": "2026-09-10T04:54:18.455392+00:00"
 }
