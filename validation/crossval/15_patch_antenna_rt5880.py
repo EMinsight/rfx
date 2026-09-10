@@ -88,14 +88,69 @@ two declared values), which is the witness for the deleted #702 resample.
 ``compare()`` re-verifies the measured planes against this module's own
 constants (not a recorded label) before gating the f0 comparison.
 
+#920 GALVANIC FEED (mandatory) -- the two solvers must feed the same structure
+------------------------------------------------------------------------------
+openEMS's ``AddLumpedPort`` bridges ground plane to patch conductively. Until
+issue #920 this script's rfx port did not: it ran from ``z_sub_lo + DX`` for
+``2*DX``, across the two INTERIOR substrate cells, touching neither conductor.
+That floating post added a series gap capacitance (~0.20 pF, ~-347j ohm at
+2.32 GHz) which never resonated out, so rfx's |S11| dip filled in to -0.32 dB
+while its Re(Z_in) still peaked at ~46 ohm on the patch resonance. The dip was
+a correct extraction of the WRONG fixture, and the two solvers were never
+modelling the same feed.
+
+MERGE NOTE (#931): #920 was fixed against the pre-#931 VOLUME conductors
+(a one-cell ground Box, a one-cell patch Box), where "galvanic" meant the
+port's end CELLS sit inside those bodies and are shorted (PEC) by them.
+Under the #931 ownership contract the ground and patch are SHEETS, and a
+sheet's normal component stays LIVE through the sheet by construction
+(design note §1.3: "normal E through a sheet stays live") -- a z-directed
+port's Ez edges are therefore NEVER classified PEC by either conductor, at
+ANY z, so the cell/edge-dead criterion #920 checked is unsatisfiable here and
+was respelt as a PLANE criterion instead: the port's declared z0/z1 must
+themselves BE the two conductors' realized wall planes (the same
+``realized_pec_edge_masks``/``realized_wall_planes`` pair
+``assert_realized_stack`` reads, at the feed's own (i, j) column), which is
+what "touching the sheet" geometrically means when the sheet has no
+thickness to be "inside" of. Measured (see the branch-merge resolution note
+governing this file): main's #920 derivation
+(``ground_shape.corner_lo[2]`` -> ``patch_shape.corner_lo[2]``) and this
+branch's own independently-derived "full_span" feed (``z_sub_lo`` ->
+``z_sub_hi``) are the SAME span once both conductors are sheets, since a
+sheet's ``corner_lo`` and ``corner_hi`` coincide -- the two fixes converge on
+one geometry rather than compounding into a third.
+``assert_galvanic_feed()`` re-derives the plane criterion from the assembled
+geometry and refuses to quote a number otherwise; the #556 one-cell-short
+preflight advisory is silent at both ends (neither end cell is inside a
+conductor VOLUME to be short of). ``compare()`` then RE-verifies the recorded
+``feed_check`` against this module's own constants and GATES on it, the same
+way it does for #740/#931's wall planes -- ``assert_galvanic_feed`` only ever
+sees the leg it is producing, so without that gate an archived floating-post
+leg still passes every gate (measured; item-A review, section 3 issue 1).
+MEASURED on the merged leg (VESSL 369367260032, num_periods 45, --gain): the
+ring-down frequency is 2.423039 GHz (Q 10.1), against the pre-#920/#931
+floating-post leg's 2.313947 GHz (Q 18.9) -- a 4.71 % (2.313947 -> 2.423039
+GHz) shift, the patch finally being loaded by its probe.
+
 rfx f0 = ring-down Harminv (NOT the |S11| dip)
 ----------------------------------------------
-The earlier short feed gave a shallow |S11| dip. The committed #931 full-span
-feed now reads -19.05 dB at 2.420 GHz; the ring-down frequency is 2.423039 GHz
-(VESSL 369367259275). The PRIMARY rfx resonance remains the ring-down Harminv
-frequency (port-calibration independent); the |S11| dip is reported as a secondary /
-passivity check and its local minimum is located near the ring-down frequency.
-openEMS's lumped-port |S11| dip is deep (~-20 dB) and used directly.
+The PRIMARY rfx resonance is the ring-down Harminv frequency, for a METHOD
+reason and not a depth one: it is port-calibration independent, while any dip
+depth mixes the resonance with the feed's match. The |S11| dip is reported as a
+secondary / passivity check, its local minimum located near the ring-down
+frequency, and its depth is CLASSIFIED from the measured value against the
+-10 dB return-loss convention (``S11_MATCHED_DB``) rather than asserted.
+Under the merged #920+#931 feed (galvanic, full-span across the two
+conductor sheets) that classification comes out matched on both legs: rfx
+-19.05 dB at 2.420 GHz, openEMS -20.10 dB -- so the dip is no longer the
+poorly-defined quantity this section used to describe. The pre-#920/#931
+"shallow ~-3 dB rfx lumped port" text was a description of the floating
+post, not of rfx's port primitive; the
+shallow-dip caveats still standing in validation/crossval/05_patch_antenna.py
+and examples/tutorials/patch_antenna_demo.py are NOT re-validated here and
+carry their own feed geometry (cv05's post ends 1.5 cells above ground --
+flagged in the #920 spot-check as its own follow-up, both solvers shallow
+there, so it is not this class).
 
 HONEST SCOPE (PI penalises overclaiming)
 ----------------------------------------
@@ -209,6 +264,21 @@ DOM_Z = AIR_BELOW + H_SUB + AIR_ABOVE
 F_DESIGN = 2.4e9
 F_LO, F_HI = 1.6e9, 3.4e9   # S11 search / sweep band
 
+# The -10 dB return-loss convention -- the same criterion this script's
+# `tutorial` mode already uses to call openEMS's canonical Simple_Patch
+# "matched" (see `_tutorial()`'s `matched = ... < S11_MATCHED_DB and ~50 ohm`).
+# It is a depth CLASSIFIER for a measured dip, never a gate and never a claim
+# about a particular board: every use below feeds it the number that was just
+# measured (#920 -- the label it replaces was printed unconditionally).
+S11_MATCHED_DB = -10.0
+
+
+def _dip_label(s11_dip_db: float) -> str:
+    """Classify a MEASURED |S11| dip depth against the -10 dB convention."""
+    if s11_dip_db <= S11_MATCHED_DB:
+        return f"matched, <= {S11_MATCHED_DB:.0f} dB"
+    return f"shallow, > {S11_MATCHED_DB:.0f} dB"
+
 
 def f_res_analytic():
     """Balanis transmission-line model (Antenna Theory, Ch.14), re-derived.
@@ -283,6 +353,19 @@ def assert_realized_stack(sim, grid, patch_shape=None):
        witness for the deleted #702 "resample the sheet's own cell" family --
        before #931 the ground's own cell was deliberately handed the live
        edge's material.
+
+    Reads the PRE-port-clearing geometry (``sim._assemble_materials``, called
+    before ``run()``'s per-port release runs). Since #920/#931 the feed port
+    DOES span both conductors' planes (see ``build_rfx_sim``'s
+    ``port_z0``/``port_extent``: from the ground sheet's plane to the
+    patch sheet's), so this no longer rests on the port being elsewhere in z.
+    It rests on WHICH component ``run()`` releases: a port releases only the
+    ONE component it drives (design note §1.9/§6), and this ``ez`` feed
+    cannot release the tangential Ex/Ey edges this function's wall census
+    reads, regardless of where along z it stands -- ``assert_galvanic_feed``
+    is the function that checks the feed's OWN component/span, not this one.
+    So the ground and patch wall planes checked below survive the port in
+    the solved geometry, not just in this pre-clearing read.
 
     The footprint comes from the patch's OWN realized ``SheetSpec``, not from
     a re-derived index range and not from ``patch_shape.mask(grid)``: under
@@ -434,6 +517,109 @@ def assert_realized_stack(sim, grid, patch_shape=None):
     )
 
 
+def assert_galvanic_feed(sim, grid, geom):
+    """MANDATORY feed-fidelity self-check (issue #920, respelt for #931
+    sheets): assert the probe post the solver actually builds runs from the
+    ground conductor's realized plane to the patch conductor's -- rather
+    than floating between them -- so the two solvers model the same feed.
+
+    This is the feed-side twin of ``assert_realized_stack``. #920: cv15's
+    port used to run across the two INTERIOR substrate cells and touch
+    neither conductor; the resulting series gap capacitance (~-347j ohm)
+    filled the |S11| dip in to -0.32 dB against openEMS's galvanically fed
+    -20.1 dB, and nothing in the script objected. #920 fixed that by
+    deriving the span from the ground/patch Box corners; #931 independently
+    moved the same span to ``z_sub_lo -> z_sub_hi`` because the conductors
+    became SHEETS. The two land on the SAME geometry once both conductors
+    are sheets (a sheet's ``corner_lo``/``corner_hi`` coincide), which is
+    why this function checks planes, not cells: everything below is DERIVED
+    from the assembled geometry and the port's own declared span; no cell
+    index, gap or length is typed for this board.
+
+    #920's original criterion -- the port's first/last rasterized CELL is
+    PEC ("dead", shorted by the conductor it sits inside) -- has NO
+    analogue under the ownership contract. A sheet is zero thickness and
+    its normal component stays LIVE through it by construction (design note
+    §1.3: "normal E through a sheet stays live"), so a z-directed port's Ez
+    edges are never classified PEC by either the ground or the patch sheet,
+    at ANY z. Requiring a dead end cell would therefore refuse EVERY feed on
+    this board, including the correct one -- unsatisfiable, not stricter.
+    What "galvanic" means when the conductor has no thickness to be
+    "inside" of is that the feed's own endpoint coincides with the
+    conductor's plane, so this reads the SAME edge set
+    ``assert_realized_stack`` does (``rfx.boundaries.pec.
+    realized_pec_edge_masks`` through ``realized_wall_planes``) at the
+    feed's own (i, j) column, and checks the feed's two z endpoints against
+    the realized wall-plane indices there.
+
+    Raises RuntimeError (refusing to quote f0) unless the port's declared z0
+    node lands on a realized wall plane at its own column, its declared z1
+    (= z0 + extent) node lands on a DIFFERENT realized wall plane there, and
+    ``assert_realized_stack`` has therefore already confirmed those planes
+    are real conductors, not an accident of index arithmetic. Returns a
+    dict of the measured classification for the result leg.
+    """
+    from rfx.boundaries.pec import realized_pec_edge_masks, realized_wall_planes
+
+    pec_sheets: list = []
+    pec_wires: list = []
+    _mats, _, _, pec_mask, *_ = sim._assemble_materials(
+        grid, pec_sheets=pec_sheets, pec_wires=pec_wires)
+    if pec_mask is None and not pec_sheets and not pec_wires:
+        raise RuntimeError(
+            "assert_galvanic_feed: no PEC volume, sheet or wire realized -- "
+            "a probe-fed patch with no conductor has no feed to classify")
+
+    periodic = sim._periodic_flags()
+    edges = tuple(np.asarray(m) for m in realized_pec_edge_masks(
+        pec_mask, sheets=pec_sheets, wires=pec_wires, periodic=periodic))
+
+    axis = {"ex": 0, "ey": 1, "ez": 2}[geom["port_component"]]
+    idx0 = grid.position_to_index(
+        (geom["feed_x"], geom["cy"], geom["port_z0"]))
+    idx1 = grid.position_to_index(
+        (geom["feed_x"], geom["cy"], geom["port_z0"] + geom["port_extent"]))
+    in_plane = [a for a in range(3) if a != axis]
+    ij = (int(idx0[in_plane[0]]), int(idx0[in_plane[1]]))
+    k0, k1 = int(idx0[axis]), int(idx1[axis])
+
+    planes = realized_wall_planes(edges, axis, ij=ij, periodic=periodic)
+    z0_on_plane = k0 in planes
+    z1_on_plane = k1 in planes
+    galvanic = bool(z0_on_plane and z1_on_plane and k0 != k1)
+
+    def _z_mm(k):
+        return round((int(k) - int(grid.pad_z_lo)) * DX * 1e3, 4)
+
+    if not galvanic:
+        raise RuntimeError(
+            "assert_galvanic_feed: the declared feed span does not run "
+            f"between two realized conductor planes. Port axis "
+            f"{'xyz'[axis]}, column (i,j)={ij}: z0 node k={k0} "
+            f"(z={_z_mm(k0)} mm) {'IS' if z0_on_plane else 'is NOT'} a "
+            f"realized wall plane; z1 node k={k1} (z={_z_mm(k1)} mm) "
+            f"{'IS' if z1_on_plane else 'is NOT'}. Realized wall planes at "
+            f"this column = {sorted(planes)} "
+            f"(z~{[_z_mm(p) for p in sorted(planes)]} mm). Required: the "
+            "feed's two ends land EXACTLY on two DIFFERENT realized "
+            "conductor planes -- a sheet has no thickness to be 'inside', "
+            "so touching its plane IS the galvanic condition (issue #920, "
+            "respelt for #931 sheets).")
+
+    print(f"[FEED CHECK #920/#931] galvanic post: z0 k={k0} "
+          f"(z={_z_mm(k0)} mm) on a realized wall plane, z1 k={k1} "
+          f"(z={_z_mm(k1)} mm) on a realized wall plane, "
+          f"{k1 - k0} cells driven across the substrate")
+
+    return dict(
+        port_z0=geom["port_z0"], port_extent=geom["port_extent"],
+        z0_node_k=k0, z1_node_k=k1,
+        z0_on_realized_plane=bool(z0_on_plane),
+        z1_on_realized_plane=bool(z1_on_plane),
+        galvanic=galvanic,
+    )
+
+
 def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
                   patch_kind: str = "sheet", feed: str = "full_span"):
     """Build cv15's rfx Simulation WITHOUT solving it -- the production
@@ -554,6 +740,14 @@ def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
     # PEC" (#929 defect 1). A port also releases only the ONE component it
     # drives (design note §6), so this ez feed cannot punch a hole in the
     # ground sheet's tangential walls.
+    #
+    # Same span issue #920 derives from the ground/patch Box corners
+    # (``ground_shape.corner_lo[2] -> patch_shape.corner_lo[2]``): a sheet's
+    # ``corner_lo`` and ``corner_hi`` coincide, so that derivation and this
+    # one land on the identical z_sub_lo -> z_sub_hi span once both
+    # conductors are sheets (see the module docstring's #920 section and
+    # ``assert_galvanic_feed``, which verifies it against the realized wall
+    # planes rather than against cell occupancy).
     if feed == "full_span":
         port_z0 = z_sub_lo
         port_extent = H_SUB
@@ -577,7 +771,8 @@ def build_rfx_sim(*, do_gain: bool = False, ground_plane_z: float | None = None,
                          freqs=np.array([2.2e9, 2.3e9, 2.4e9, 2.5e9]))
     geom = dict(z_sub_lo=z_sub_lo, z_sub_hi=z_sub_hi, z_ground=z_ground,
                 patch_kind=patch_kind, feed=feed, port_z0=port_z0,
-                port_extent=port_extent, feed_x=feed_x, cy=cy)
+                port_extent=port_extent, feed_x=feed_x, cy=cy,
+                port_component="ez")
     return sim, patch_shape, geom
 
 
@@ -593,10 +788,10 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
     print("=" * 72)
     _geom_banner()
 
-    sim, patch_shape, _geom = build_rfx_sim(do_gain=do_gain,
-                                            ground_plane_z=ground_plane_z,
-                                            feed=feed)
-    z_sub_lo, z_sub_hi = _geom["z_sub_lo"], _geom["z_sub_hi"]
+    sim, patch_shape, geom = build_rfx_sim(do_gain=do_gain,
+                                           ground_plane_z=ground_plane_z,
+                                           feed=feed)
+    z_sub_lo, z_sub_hi = geom["z_sub_lo"], geom["z_sub_hi"]
 
     # ---- Build the actual grid: exact dt + FAITHFUL substrate rasterization ----
     grid = sim._build_grid()
@@ -621,6 +816,7 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
             "uniform-mesh rasterization mismatch, refuse to quote f0")
 
     stack_check = assert_realized_stack(sim, grid, patch_shape)
+    feed_check = assert_galvanic_feed(sim, grid, geom)
     dt_grid = float(grid.dt)
 
     # preflight verbatim (explicit NTFF check family, #303)
@@ -662,11 +858,15 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
           f"-> {'SETTLED' if settled else 'UNDER-SETTLED (f0 carries truncation error)'}")
 
     # PRIMARY rfx f0 = ring-down Harminv (clean, port-calibration independent).
-    # The rfx single-cell lumped-port |S11| dip is SHALLOW (parasitic cell
-    # reactance -> monotonic background, documented in validation/crossval/05 and
-    # examples/tutorials/patch_antenna_demo.py), so it is reported as SECONDARY
-    # and its local dip is located NEAR the ring-down frequency, not by a global
-    # argmin (which lands on the band-edge background).
+    # The |S11| dip stays SECONDARY here for a method reason, not a depth one:
+    # the ring-down frequency does not depend on the port's calibration at all,
+    # while a dip depends on both the resonance and the feed's match. The dip is
+    # located NEAR the ring-down frequency rather than by a global argmin (which
+    # lands on the band-edge background). Its depth is measured and LABELLED
+    # from the measurement (S11_MATCHED_DB), never asserted in advance -- the
+    # unconditional "(shallow, secondary)" this print used to carry survived
+    # #920 unchanged while the feed under it was a floating post, and a label
+    # that cannot be wrong cannot be evidence.
     fr_an = f_res_analytic()[0]
     f_harminv, q_harminv = _harminv_f0(ts, dt_ts)
     f_center = f_harminv if f_harminv else fr_an
@@ -694,17 +894,18 @@ def run_rfx(num_periods, n_freqs, do_gain, *, ground_plane_z=None,
         f_harminv_hz=f_harminv, q_harminv=q_harminv,
         f_analytic_hz=fr_an,
         gain_dbi=d_dbi, preflight=preflight_txt,
-        stack_check=stack_check,
-        feed=_geom["feed"], port_z0=_geom["port_z0"],
-        port_extent=_geom["port_extent"],
+        stack_check=stack_check, feed_check=feed_check,
+        feed=geom["feed"], port_z0=geom["port_z0"],
+        port_extent=geom["port_extent"],
     )
     with open(os.path.join(RES_DIR, out_name), "w") as fp:
         json.dump(out, fp, indent=2)
     print(f"\n[rfx] PRIMARY f0 (ring-down Harminv) = "
           f"{f_harminv/1e9 if f_harminv else float('nan'):.4f} GHz "
           f"(Q={q_harminv if q_harminv else float('nan'):.1f}) | "
-          f"S11 local dip {f_dip/1e9:.4f} GHz @ {s11_dip_db:.2f} dB (shallow, "
-          f"secondary) | analytic {fr_an/1e9:.4f} GHz | max|S11|={max_abs:.3f}"
+          f"S11 local dip {f_dip/1e9:.4f} GHz @ {s11_dip_db:.2f} dB "
+          f"({_dip_label(s11_dip_db)}, secondary) | "
+          f"analytic {fr_an/1e9:.4f} GHz | max|S11|={max_abs:.3f}"
           + (f" | D={d_dbi:.2f} dBi (order-of-mag)" if d_dbi is not None else ""))
     print(f"saved {os.path.join(RES_DIR, out_name)}")
 
@@ -854,7 +1055,7 @@ def run_openems_tutorial():
     f_coarse, f_fine = rows[0][2], rows[1][2]
     conv_up = f_fine > f_coarse
     near_doc = abs(f_fine / 1e9 - 2.42) < 0.15
-    matched = rows[0][3] < -10 and 30 < rows[0][5] < 80    # deep dip + ~50 ohm R
+    matched = rows[0][3] < S11_MATCHED_DB and 30 < rows[0][5] < 80  # deep dip + ~50 ohm R
     print(f"\n  convergence: {f_coarse/1e9:.3f} -> {f_fine/1e9:.3f} GHz as mesh "
           f"halves ({'UP toward ~2.42' if conv_up else 'NOT converging up'})")
     ok = matched and conv_up and (near_doc or f_fine / 1e9 > 2.25)
@@ -1033,6 +1234,65 @@ def _stack_check_ok(sc, tol=1e-9, eps_tol=1e-4):
     return ok, detail
 
 
+def _feed_check_ok(fc, tol=1e-9):
+    """Re-verify a leg's ``feed_check`` dict against THIS MODULE's OWN
+    geometry constants -- the #920 counterpart of ``_stack_check_ok``, and the
+    item-A review's required change: ``assert_galvanic_feed`` runs inside
+    ``run_rfx``, so it only ever sees the leg being produced. ``compare()`` is
+    the path crossval actually consumes, and without this gate an ARCHIVED or
+    stale leg whose feed was a floating post still passes ALL GATES -- measured
+    on the archived floating-post leg, which came through ``compare()`` clean
+    (docs/research_notes/audit-2026-09-02/i920/solve/A_cv15_fix.verify.md,
+    section 3 issue 1).
+
+    A missing ``feed_check`` is a FAIL, not a skip, for the same reason
+    ``_stack_check_ok`` treats a missing ``stack_check`` that way: the #920
+    defect is exactly a leg that looks fine without it.
+
+    #931 respelling: the two expected PLANES are recomputed from
+    ``AIR_BELOW``/``H_SUB`` -- the ground sheet's realized plane is
+    ``AIR_BELOW`` (``z_sub_lo``), the patch sheet's is ``z_sub_hi ==
+    AIR_BELOW + H_SUB``. There is no cell/edge liveness to re-check here (a
+    sheet's normal component never goes PEC, design note §1.3), so this is a
+    span check, not a cell-classification re-derivation: the feed's endpoints
+    must land exactly on those two planes, and ``assert_galvanic_feed`` must
+    itself have confirmed (against the realized edge set, not a recorded
+    label) that both endpoints ARE realized wall planes.
+
+    Pure function (synthetic dicts in, bool+detail out) so
+    ``tests/crossval/test_crossval_cv15_wall_planes.py`` can pin the gate MATH
+    without a solve, matching ``_stack_check_ok``'s precedent.
+    """
+    if not fc:
+        return False, ("missing feed_check (leg predates the #920/#931 "
+                       "galvanic-feed self-check)")
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    z_ground = AIR_BELOW               # ground sheet's realized plane
+    z_patch = AIR_BELOW + H_SUB        # patch sheet's realized plane
+    z0 = _num(fc.get("port_z0"))
+    z1 = z0 + _num(fc.get("port_extent"))
+    ok = (
+        bool(fc.get("galvanic"))
+        and bool(fc.get("z0_on_realized_plane"))
+        and bool(fc.get("z1_on_realized_plane"))
+        and abs(z0 - z_ground) < tol
+        and abs(z1 - z_patch) < tol
+    )
+    detail = (
+        f"galvanic={fc.get('galvanic')}, "
+        f"z0_on_realized_plane={fc.get('z0_on_realized_plane')}, "
+        f"z1_on_realized_plane={fc.get('z1_on_realized_plane')}, "
+        f"span z=[{z0:.6g}, {z1:.6g}] (want [{z_ground:.6g}, {z_patch:.6g}])"
+    )
+    return ok, detail
+
+
 def compare(f0_env_pct):
     R, O = _load_legs()
     fr_an = R["f_analytic_hz"]
@@ -1056,8 +1316,12 @@ def compare(f0_env_pct):
         print(f"!! |S11|>1 bins (EXTRACTION/PASSIVITY artifact, not physics): "
               f"rfx={nbad_r} oems={nbad_o}")
     print()
-    print("f0 method: rfx = ring-down Harminv (the rfx single-cell lumped-port S11")
-    print("dip is shallow -> secondary); openEMS = its deep matched S11 dip.")
+    print("f0 method: rfx = ring-down Harminv (port-calibration independent, so")
+    print("secondary status for the dip is a method choice, not a depth claim);")
+    print("openEMS = its S11 dip. Measured depths, classified on the -10 dB")
+    print(f"return-loss convention: rfx {R['s11_dip_db']:.2f} dB "
+          f"({_dip_label(R['s11_dip_db'])}), "
+          f"openEMS {O['s11_dip_db']:.2f} dB ({_dip_label(O['s11_dip_db'])}).")
     print()
     print(f"{'quantity':<36}{'rfx':>11}{'openEMS':>11}{'analytic':>11}")
     print("-" * 69)
@@ -1104,6 +1368,9 @@ def compare(f0_env_pct):
     sc_ok, sc_detail = _stack_check_ok(R.get("stack_check"))
     gate("stack geometry fidelity (realized wall planes + sheet writes no "
          "material, #931)", sc_ok, sc_detail)
+    fc_ok, fc_detail = _feed_check_ok(R.get("feed_check"))
+    gate("galvanic feed fidelity (probe on realized GP/patch planes, #920)",
+         fc_ok, fc_detail)
     gate("settling witness (open CPML, -40 dB bar)", bool(R["settled"]),
          f"{R['settle_db']:.1f} dB")
     # Passivity is GATED on both legs: |S11| > ~1.05 on a passive radiator is an

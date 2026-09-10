@@ -421,27 +421,48 @@ def test_cv15_two_wall_realization_would_pass_with_margin():
     assert worst < 0.5 * ident.tol        # margin, not a squeaker
 
 
-def test_cv15_reproduction_ringdown_matches_the_leg_it_was_recorded_from():
+def test_cv15_reproduction_ringdown_matches_the_floating_post_leg():
     """The reproduction the two cv15 fixtures rest on is the same ring-down as
     the leg #768 committed -- so reverting this lane's regeneration of that leg
     (design note section 6.9) costs no evidence.
 
-    #931 moved the target, and the fix is to name it. The leg this fixture was
-    recorded against is #768's two_plane-ground build; the lattice ownership
-    contract deletes that spelling (both conductors become declared SHEETS and
-    the feed spans the full substrate), so ``_15_patch_results/rfx.json`` is now
-    a DIFFERENT STRUCTURE and comparing a frozen 2026-09-01 reproduction to it
-    would be comparing two boards. #768's leg is preserved verbatim beside it as
-    ``rfx_pre931_two_plane_ground_1f005d0d.json`` -- same file, same bytes, named
-    for the commit that produced it, following the
-    ``rfx_one_plane_ground_b29f9de7.json`` precedent -- and that is what this
-    fixture rests on, permanently.
+    ROOT CAUSE of the re-anchor, TWICE OVER. Issue #920 (2026-09-06): this
+    test used to read ``_15_patch_results/rfx.json``, the leg cv15 currently
+    ships. It no longer can, and the reason is not a tolerance: cv15's feed
+    was FIXED. Its probe post used to float between the two conductors,
+    touching neither; it now bridges them galvanically, as openEMS's
+    ``AddLumpedPort`` always did. A floating post barely loads the patch, so
+    the ring-down it recorded (f0 2.3139 GHz, Q 18.9) was the cavity's
+    nearly-unloaded resonance. Issue #931 (the lattice ownership contract,
+    merged with #920 2026-09-10): the SAME leg regeneration also changed the
+    conductor declarations -- both ground and patch became SHEETS -- and,
+    measured rather than assumed, #920's galvanic-feed derivation and #931's
+    independently-chosen full-substrate feed are the SAME span once both
+    conductors are sheets, so the two causes converge on one leg instead of
+    compounding into two. The galvanic post loads the cavity properly
+    (2.4230 GHz, Q 10.1, committed in the regenerated leg). Both fixtures
+    under this lane were recorded through the pre-#920/#931 builder, so the
+    leg they correspond to is the archived one,
+    ``rfx_floating_post_1f005d0d.json`` -- byte-identical to the leg this
+    test was written against, and named explicitly rather than reached
+    through a path whose contents moved underneath it. The SAME bytes are
+    also archived under this branch's own name,
+    ``rfx_pre931_two_plane_ground_1f005d0d.json`` (see the branch-merge
+    resolution note for why both names are kept).
+
+    What this costs the #812 lane: nothing that it claims. Its finding is
+    that a dimensionless mode-pair instrument cannot separate the #740
+    one-plane ground from the correct build, and both members of that
+    comparison were recorded under the SAME feed, so the feed cancels out of
+    it. What the fixtures no longer are is a live reproduction of today's
+    production builder -- re-recording them is the #920/#931 follow-up, not
+    this fix.
 
     The leg carries no mode list; f0 is the field the two share."""
     fx = _leg(_fixture("cv15_ringdown_spectra.json"), "two_wall")
     leg = json.loads(
         (REPO_ROOT / "validation/crossval/_15_patch_results"
-         / "rfx_pre931_two_plane_ground_1f005d0d.json").read_text(encoding="utf-8"))
+         / "rfx_floating_post_1f005d0d.json").read_text(encoding="utf-8"))
     assert "modes" not in leg          # the committed leg is #768's, untouched
     assert fx["f_harminv_hz"] == pytest.approx(leg["f_harminv_hz"], rel=1e-7)
     # ... and it IS the pre-#931 build: the two_plane ground realization, which
@@ -466,6 +487,41 @@ def test_cv15_pre931_leg_is_the_receipt_for_what_the_contract_closed():
     assert "issue #702" in pf
     # and no key that only the post-#931 stack check writes
     assert "n_distinct_eps" not in leg["stack_check"]
+
+
+def test_cv15_current_leg_is_the_galvanic_feed_and_moved_the_ringdown():
+    """The counterpart of the re-anchor above: cv15's SHIPPING leg is the
+    merged galvanic-feed regeneration (#920+#931), and it is a different
+    measurement from the fixtures -- pinned here so the substitution above
+    cannot be read as "the leg did not really change".
+
+    Where the Q bar comes from (item-A review nit 4 -- it was an undocumented
+    0.75). A probe that actually loads a resonator adds its own dissipation:
+    at critical coupling the loaded Q is HALF the lightly-loaded one
+    (Q_L = Q_0 / (1 + beta), beta = 1 at match). The floating post barely
+    loaded the patch, the galvanic one lands at Z_in ~ 49.5 + 11.2j, so the
+    expected ratio is ~0.5 -- measured 10.0605 / 18.8974 = 0.532. The bar is
+    NOT that measurement: it sits halfway between the physics expectation
+    (0.5) and no loading at all (1.0), so the test fires if the probe stops
+    loading the patch and does not re-pin the measured ratio. The -10 dB
+    return-loss threshold is the script's own ``S11_MATCHED_DB`` convention,
+    imported rather than retyped."""
+    cv15 = _load_cv15()
+    q_loading_bar = 0.5 * (0.5 + 1.0)   # halfway: match (0.5) <-> no load (1.0)
+    leg = json.loads(
+        (REPO_ROOT / "validation/crossval/_15_patch_results/rfx.json")
+        .read_text(encoding="utf-8"))
+    old = json.loads(
+        (REPO_ROOT / "validation/crossval/_15_patch_results"
+         / "rfx_floating_post_1f005d0d.json").read_text(encoding="utf-8"))
+    assert leg["feed_check"]["galvanic"] is True
+    assert leg["feed_check"]["z0_on_realized_plane"] is True
+    assert leg["feed_check"]["z1_on_realized_plane"] is True
+    # the probe now loads the patch: f0 up, Q down, dip matched
+    assert leg["f_harminv_hz"] > old["f_harminv_hz"]
+    assert leg["q_harminv"] < q_loading_bar * old["q_harminv"]
+    assert leg["s11_dip_db"] < cv15.S11_MATCHED_DB
+    assert old["s11_dip_db"] > cv15.S11_MATCHED_DB      # the floating post
 
 
 def test_cv15_740_defect_is_a_common_mode_dilation():

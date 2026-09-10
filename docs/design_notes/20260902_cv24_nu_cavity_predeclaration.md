@@ -3,10 +3,10 @@
 Date: 2026-09-02. Gap lane 3 of the cross-validation campaign (PI-approved 2026-09-02). Written and committed BEFORE any arm runs. Numbers here are derived from committed data and from an exact lattice model of the solver's own difference operators, never from a run of this case. Every constant lives once, in `validation/crossval/comparators/nu_cavity_gates.py`; the note quotes it.
 
 > **Historical timing scope (2026-09-08).** The dated measurement tables below
-> retain the original run's timings. The regenerated
-> `_24_nu_cavity_results/rfx.json::arms.*.cost.wall_harminv_s` is now
-> **43.8 / 128.3 / 128.4 / 97.9 s** for uniform / single_band / multi_band /
-> uniform_fine (formerly **20.2 / 64.0 / 61.6 / 45.2 s**). Run and energy-audit
+> retain the original run's timings. The regenerated `_24_nu_cavity_results/
+> rfx.json`, `arms.<name>.cost.wall_harminv_s` for each of the four arms, is
+> now **43.8 / 128.3 / 128.4 / 97.9 s** for uniform / single_band / multi_band
+> / uniform_fine (formerly **20.2 / 64.0 / 61.6 / 45.2 s**). Run and energy-audit
 > timings also changed. The physics differences in this regeneration are
 > below the precision of the quoted error summaries; the frozen model and
 > numerical windows below are unchanged. These timing differences are run

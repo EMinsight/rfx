@@ -489,3 +489,145 @@ def test_cv15_current_measurement_prose_follows_committed_legs():
         assert f"{shift:.2f} % ({pair})" in carrier
     assert f'{after["s11_dip_db"]:.2f} dB at {after["f_dip_hz"] / 1e9:.3f} GHz' in script
     assert f'ring-down frequency is {after["f_primary_hz"] / 1e9:.6f} GHz' in script
+# ---------------------------------------------------------------------------
+# compare()'s GALVANIC-FEED gate (issue #920, respelt for #931 sheets) -- the
+# feed-side twin of the wall-plane gate above. #920's original criterion was
+# CELL-based (the port's first/last rasterized cell is PEC, i.e. dead/shorted
+# by the conductor it sits inside); under the ownership contract a sheet's
+# normal component never goes PEC (design note #931 sec1.3, "normal E through
+# a sheet stays live" -- Mz is unchanged by a z-normal sheet), so that
+# criterion is unsatisfiable for cv15 (no volume conductor at all in the
+# production build) and was respelt as a PLANE criterion: the feed's two
+# endpoints must themselves be realized conductor wall planes, read through
+# the SAME realized_pec_edge_masks/realized_wall_planes pair
+# assert_realized_stack uses. Same synthetic-dict style as the stack gate
+# above -- no solve.
+# ---------------------------------------------------------------------------
+
+def _good_feed_check(cv15):
+    """The classification a galvanic post produces, expressed in the module's
+    own constants (never this board's cell indices): the feed spans
+    z_sub_lo (the ground sheet's realized plane) to z_sub_hi (the patch
+    sheet's), and both ends must be RECORDED as landing on a realized wall
+    plane -- which assert_galvanic_feed only sets True after checking the
+    real edge set, never assumed from the span numbers alone."""
+    z0 = cv15.AIR_BELOW
+    z1 = cv15.AIR_BELOW + cv15.H_SUB
+    return dict(
+        port_z0=z0, port_extent=z1 - z0,
+        z0_node_k=0, z1_node_k=0,
+        z0_on_realized_plane=True, z1_on_realized_plane=True,
+        galvanic=True,
+    )
+
+
+def test_feed_check_ok_accepts_the_galvanic_classification():
+    cv15 = _load_cv15()
+    ok, detail = cv15._feed_check_ok(_good_feed_check(cv15))
+    assert ok, detail
+
+
+def test_feed_check_ok_accepts_the_committed_leg():
+    """The synthetic dict above must be the same shape the SHIPPING leg
+    carries -- otherwise the gate math is pinned against a fiction."""
+    cv15 = _load_cv15()
+    import json
+    leg = json.loads(
+        (REPO_ROOT / "validation/crossval/_15_patch_results/rfx.json")
+        .read_text(encoding="utf-8"))
+    ok, detail = cv15._feed_check_ok(leg["feed_check"])
+    assert ok, detail
+
+
+def test_feed_check_ok_rejects_missing_leg():
+    """A leg from before #920/#931 has no ``feed_check`` key -- FAIL, not
+    skip. This is the gap the item-A review measured: the archived
+    floating-post leg (no ``feed_check``) otherwise passes every gate."""
+    cv15 = _load_cv15()
+    ok, detail = cv15._feed_check_ok(None)
+    assert not ok
+    assert "missing" in detail
+
+
+def test_feed_check_ok_rejects_the_archived_floating_post_leg():
+    """The measured #920 defect itself, through the committed artifact: the
+    archived leg predates the self-check entirely, so it has no
+    ``feed_check`` key at all."""
+    cv15 = _load_cv15()
+    import json
+    old = json.loads(
+        (REPO_ROOT / "validation/crossval/_15_patch_results"
+         / "rfx_floating_post_1f005d0d.json").read_text(encoding="utf-8"))
+    ok, detail = cv15._feed_check_ok(old.get("feed_check"))
+    assert not ok, detail
+
+
+def test_feed_check_ok_rejects_a_displaced_span():
+    """A leg whose recorded flags claim both ends are on realized planes but
+    whose actual span numbers have moved off the two conductors' planes --
+    the gate rests on the NUMERIC re-check against this module's own
+    constants, not on the recorded flags alone."""
+    cv15 = _load_cv15()
+    fc = _good_feed_check(cv15)
+    fc["port_z0"] = fc["port_z0"] + cv15.DX
+    ok, detail = cv15._feed_check_ok(fc)
+    assert not ok, detail
+
+
+def test_feed_check_ok_rejects_a_self_declared_galvanic_flag():
+    """``galvanic``/``z0_on_realized_plane``/``z1_on_realized_plane`` are
+    recorded labels; the gate must not rest on any one of them alone. A leg
+    with the correct span but a dropped plane flag FAILS, and the converse
+    -- honest plane flags with the ``galvanic`` label dropped -- also FAILS,
+    so no single field can rescue or be rescued by the others."""
+    cv15 = _load_cv15()
+    fc = _good_feed_check(cv15)
+    fc["z0_on_realized_plane"] = False
+    ok, _ = cv15._feed_check_ok(fc)
+    assert not ok
+    fc2 = _good_feed_check(cv15)
+    fc2["galvanic"] = False
+    ok2, _ = cv15._feed_check_ok(fc2)
+    assert not ok2
+
+
+# ---------------------------------------------------------------------------
+# assert_galvanic_feed on the REAL rasterized geometry (no solve), and the
+# round trip into the gate.
+# ---------------------------------------------------------------------------
+
+def test_cv15_committed_geometry_rasterizes_a_galvanic_feed(capsys):
+    """The production builder's port must classify as galvanic on the real
+    assembled geometry, and what it records must satisfy ``compare()``'s
+    gate -- the two halves of the #920/#931 fix pinned against each other."""
+    cv15 = _load_cv15()
+    sim, _patch_shape, geom = cv15.build_rfx_sim(do_gain=False)
+    grid = sim._build_grid()
+    fc = cv15.assert_galvanic_feed(sim, grid, geom)
+    capsys.readouterr()
+
+    assert fc["galvanic"] is True
+    assert fc["z0_on_realized_plane"] is True
+    assert fc["z1_on_realized_plane"] is True
+    assert fc["port_z0"] == pytest.approx(cv15.AIR_BELOW, abs=1e-12)
+    assert fc["port_extent"] == pytest.approx(cv15.H_SUB, abs=1e-12)
+    ok, detail = cv15._feed_check_ok(fc)
+    assert ok, detail
+
+
+def test_cv15_negative_control_pre920_span_is_refused(capsys):
+    """FAIL-BEFORE-FIX for #920/#931, through the script's OWN assert: feed
+    it the span cv15 shipped before either fix -- the DECOMPOSITION arm's
+    ``feed="pre931"``, one cell above the floor and spanning two INTERIOR
+    substrate cells, touching neither conductor's plane -- and it must
+    refuse. Driven through the PRODUCTION builder (``build_rfx_sim``), not a
+    hand-rolled geom dict, for the same #740-review reason every other test
+    in this file does: a mirrored copy cannot catch a script regression.
+    """
+    cv15 = _load_cv15()
+    sim, _patch_shape, geom = cv15.build_rfx_sim(do_gain=False, feed="pre931")
+    grid = sim._build_grid()
+    with pytest.raises(RuntimeError, match="assert_galvanic_feed"):
+        cv15.assert_galvanic_feed(sim, grid, geom)
+    capsys.readouterr()
+
