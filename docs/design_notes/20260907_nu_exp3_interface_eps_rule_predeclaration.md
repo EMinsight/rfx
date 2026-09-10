@@ -427,3 +427,24 @@ was changed. No script was added, so no CLASSIFICATION entry is needed.
 The required code-and-tests commit before any E3 measurement was not made
 because the mandatory baseline stop occurred first. Only the stop record
 and its provenance are committed; nothing is pushed and no PR is opened.
+
+### Implementation before the one-attempt ladder
+
+The opt-in emits `(eps_x, eps_y, eps_z)` through `aniso_eps`; scalar eps,
+sigma, source normalization and the sampled default remain untouched.
+Each component averages the four cells sharing its edge with transverse
+area weights and zero PEC-cell weights. The normal component keeps its
+own cell-centre value: a node-aligned interface does not cut its edge,
+so the normal harmonic rule reduces to that one cell. Sub-cell cuts and
+lossy interfaces remain outside this prototype's measured domain.
+Bounding nodes copy the last real cell; all-PEC averages use finite sampled
+eps as a fallback and leave field enforcement to the existing PEC mask.
+
+The declared JSON-free contracts and measurement replay live together in
+`tests/unit/nonuniform/test_interface_eps_rule.py`. No script is added;
+only the already-classified w7 instrument is wired, so no new CLASSIFICATION
+entry is needed. An initial auxiliary four-cell test had an invalid y-profile
+(two unequal boundary cells), rejected by the existing grid constructor
+before assembly. Its fixture was corrected to have matching boundary cells;
+no E3-C window fired (all nine declared columns passed on that first check).
+No A1 ladder unit has yet been attempted.

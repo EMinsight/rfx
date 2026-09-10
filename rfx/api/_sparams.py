@@ -2837,6 +2837,8 @@ class _SparamMixin:
             or self._dx_profile is not None
             or self._dy_profile is not None
         ):
+            if self._interface_eps == "dual_average":
+                raise ValueError("interface_eps='dual_average' is not supported on the S-parameter NU lane")
             if checkpoint_segments is not None and checkpoint_segments < 1:
                 raise ValueError(
                     f"checkpoint_segments must be >= 1, got {checkpoint_segments}"
@@ -8012,6 +8014,8 @@ class _SparamMixin:
         normalisation (see ``extract_waveguide_s_params_normalized``
         in ``rfx/sources/waveguide_port.py``).
         """
+        if self._interface_eps == "dual_average":
+            raise ValueError("interface_eps='dual_average' is not supported on the S-parameter NU lane")
         from dataclasses import replace as _dc_replace
         from rfx.runners.nonuniform import (
             run_nonuniform_path,

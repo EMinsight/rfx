@@ -641,7 +641,8 @@ def a1_model(prof: np.ndarray, eps_nodes: np.ndarray, dx: float, dt: float,
             "mu_x": mu_x, "lambda": lam_p, "dt": float(dt)}
 
 
-def a1_production_column(prof: np.ndarray, s: float, f_true: float | None = None) -> dict:
+def a1_production_column(prof: np.ndarray, s: float, f_true: float | None = None,
+                         interface_eps: str = "sampled") -> dict:
     """The eps column the PRODUCTION path assembles for this profile (note
     1a): ``Simulation(boundary="pec", dz_profile=prof)`` with three ``Box``
     entries filling [0, 14), [14, 16), [16, 30) mm on the A1 transverse box,
@@ -652,7 +653,8 @@ def a1_production_column(prof: np.ndarray, s: float, f_true: float | None = None
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         sim = Simulation(freq_max=2 * f_true, domain=(A1_A_X, A1_B_Y, L_Z),
-                         boundary="pec", dx=dx, dz_profile=np.asarray(prof, np.float64))
+                         boundary="pec", dx=dx, dz_profile=np.asarray(prof, np.float64),
+                         interface_eps=interface_eps)
         sim.add_material("w7_core", eps_r=4.3)
         sim.add_material("w7_thin", eps_r=3.0)
         sim.add(Box((0.0, 0.0, A1_EDGES[0]), (A1_A_X, A1_B_Y, A1_EDGES[1])), material="w7_core")
@@ -660,7 +662,11 @@ def a1_production_column(prof: np.ndarray, s: float, f_true: float | None = None
         sim.add(Box((0.0, 0.0, A1_EDGES[2]), (A1_A_X, A1_B_Y, A1_EDGES[3])), material="w7_core")
         grid = sim._build_nonuniform_grid()
         mats = sim._assemble_materials_nu(grid)[0]
-    eps = np.asarray(mats.eps_r, np.float64)
+    if interface_eps == "dual_average":
+        from rfx.runners.nonuniform import assemble_interface_eps_nu
+        eps = np.asarray(assemble_interface_eps_nu(sim, grid, mats)[1], np.float64)
+    else:
+        eps = np.asarray(mats.eps_r, np.float64)
     col = eps[grid.nx // 2, grid.ny // 2, :]
     zn = np.concatenate([[0.0], np.cumsum(np.asarray(prof, np.float64))])
     table = {}
@@ -694,7 +700,7 @@ def extract_a1(ts: np.ndarray, dt: float, n_skip: int, f_true: float) -> tuple:
 
 
 def measure_a1(arm: str, s: float, rule: str, smoke: bool = False,
-               f_true: float | None = None) -> dict:
+               f_true: float | None = None, interface_eps: str = "sampled") -> dict:
     """One (arm, scale, rule) unit of the A1 ladder."""
     assert arm in A1_ARMS and rule in A1_RULES
     f_true = a1_f_true() if f_true is None else f_true
@@ -711,7 +717,7 @@ def measure_a1(arm: str, s: float, rule: str, smoke: bool = False,
         col = f32_values(col64)
         column_info = {"rule": "dual", "column_source": "instrument dual-cell average, float32"}
     else:
-        pc = a1_production_column(prof, s, f_true)
+        pc = a1_production_column(prof, s, f_true, interface_eps=interface_eps)
         col = np.asarray(pc["column"], np.float64)
         column_info = {"rule": "production",
                        "column_source": "Simulation._assemble_materials_nu column at (nx//2, ny//2)",
@@ -755,6 +761,7 @@ def measure_a1(arm: str, s: float, rule: str, smoke: bool = False,
     resid = (f_meas - model["f_model"]) if valid else float("nan")
     row = {
         "arm": arm, "scale": s, "rule": rule, "smoke": bool(smoke),
+        "interface_eps_rule": interface_eps,
         "profile_m": prof.tolist(), "nz": len(prof), "declared_match": declared_match,
         "profile": {k: v for k, v in rep.items() if k != "cells_m"},
         "eps_column": col.tolist(), "interface_eps": iface, **column_info,
@@ -1847,6 +1854,7 @@ def main(argv=None):
     ap.add_argument("--arms", default="",
                     help="comma list from a1,a2,a3,ad1,ad2,ad3,ad4 (second pass: a2ext,a3ext,ad3b)")
     ap.add_argument("--scales", default="2,1,0.5", help="A1 scales")
+    ap.add_argument("--interface-eps", choices=("sampled", "dual_average"), default="sampled")
     ap.add_argument("--rules", default="dual,production", help="A1 eps rules")
     ap.add_argument("--a1-arms", default="uc,mb,az", help="A1 profiles")
     ap.add_argument("--out", default=DEFAULT_OUT)
@@ -1872,7 +1880,8 @@ def main(argv=None):
     print("rfx.__file__ =", rfx.__file__, flush=True)
     data = _load(args.out)
     run = {**provenance(), "arms": args.arms, "scales": args.scales, "rules": args.rules,
-           "a1_arms": args.a1_arms, "smoke": args.smoke, "selfcheck_only": args.selfcheck}
+           "a1_arms": args.a1_arms, "smoke": args.smoke, "selfcheck_only": args.selfcheck,
+           "interface_eps_rule": args.interface_eps}
     data.setdefault("runs", []).append(run)
     sc = selfcheck()
     data["selfcheck"] = sc
@@ -1894,7 +1903,8 @@ def main(argv=None):
                     key = a1_key(arm, s, rule)
                     if not _supersede(units, key):
                         continue
-                    row = measure_a1(arm, s, rule, smoke=args.smoke, f_true=f_true)
+                    row = measure_a1(arm, s, rule, smoke=args.smoke, f_true=f_true,
+                                     interface_eps=args.interface_eps)
                     if args.smoke:
                         units[key + "|smoke"] = row
                     else:

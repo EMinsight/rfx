@@ -243,6 +243,8 @@ def fidelity_report(sim, print_report: bool = True):
     _bspec = getattr(sim, "_boundary_spec", None)
     pmc_faces = _bspec.pmc_faces() if _bspec is not None else set()
     dom_item = dict(entity="domain (the solved box)", findings=[], axes=[])
+    if nonuniform and getattr(sim, "_interface_eps", "sampled") == "dual_average":
+        dom_item["interface_eps_rule"] = sim._interface_eps
     for a in range(3):
         axis_name = _axis_names()[a]
         p_lo = int(getattr(grid, f"pad_{axis_name}_lo"))
@@ -750,6 +752,8 @@ def fidelity_report(sim, print_report: bool = True):
                        "do not read this report as covering them")]))
 
     if print_report:
+        if nonuniform:
+            print(f"interface eps rule (NU lane): {getattr(sim, '_interface_eps', 'sampled')}")
         _print(report)
     return report
 
