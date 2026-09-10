@@ -303,3 +303,94 @@ and is NOT touched here.
   cell its edge lies in (1a). That is a change of the normal component at
   nodes where the ulp landed "lower" — deliberate, stated, and checked by
   E3-C's E_z clause.
+
+## Results
+
+2026-09-10: **STOP at E3-B, before the production patch.** No E3 ladder
+unit was attempted. The frozen declaration above is unchanged.
+
+Baseline provenance: branch `exp/nu-experiments-e3`, git SHA
+`4129591bb7cef863adf0f8249c788d31c9b4337c`, CPU only (`JAX_PLATFORMS=cpu`),
+`rfx.__file__ = /Users/byungkwankim/Documents/rfx-nu-exp3/rfx/__init__.py`.
+Every Python invocation used the requested venv interpreter with
+`PYTHONPATH=/Users/byungkwankim/Documents/rfx-nu-exp3`. `git diff
+fea9f078 4129591b` contains only this predeclaration, so the tested
+production source is exactly the declared baseline source.
+
+Evidence (including verbatim pytest failure reports and invocation
+provenance):
+`validation/research/multiband_nu/results/e3_interface_eps_rule_baseline.json`.
+This is baseline evidence, not the declared A1 measurement artifact;
+`e3_interface_eps_rule.json` was not created.
+
+### E3-B: FIRED — a pinned default value has moved
+
+The requested battery, with `-q -o addopts="" -m "not gpu and not slow"
+-p no:cacheprovider`, completed once on the unpatched tree:
+
+```text
+4 failed, 1490 passed, 8 skipped, 92 deselected, 19 xfailed, 573 warnings in 1765.01s (0:29:25)
+```
+
+The example-fidelity contract, with `-q -o addopts="" -m "not gpu"
+-p no:cacheprovider`, completed once:
+
+```text
+175 passed, 9 warnings in 34.21s
+```
+
+The decisive failure is the default-path diagnostic pin in
+`tests/oracle/test_leontovich_alpha_oracle.py::test_alpha_envelope_regression_lock`:
+
+| Quantity | Measured | Frozen comparator/window | Outcome |
+|---|---:|---:|---|
+| Two-plane attenuation | 0.8733294904232025 | recorded 0.72494 | pin moved |
+| Absolute relative difference from that pin | 0.20469209924021636 | <= 0.05 | FIRED |
+
+This fires the task's explicit rule, **“If any pinned value moves on the
+DEFAULT path, STOP and report which; never adjust it.”** It also fails
+section 3's requirement that the batteries pass. The discrepancy already
+exists at the starting commit: it is **not attributed to E3**, since no
+production patch was applied. Its cause was not investigated or tuned in
+this experiment.
+
+The other baseline failures, with verbatim assertion quantities, were:
+
+| Test | Measured | Window |
+|---|---:|---:|
+| `test_replay_ad3` | worst dominant AD-vs-FD 0.5224044347795822 | <= 0.15 |
+| `test_o3_model_fits_measured_field` | relative RMS 0.010769780031860503 at 8 GHz | <= 0.01 |
+| `test_alpha_oracle_o3` | model-fit trust relative RMS 0.010769780031860503 at 8 GHz | <= 0.01 |
+
+Lane F's Results already identify `test_replay_ad3` as red by design.
+That inherited replay failure alone was initially treated as a possible
+zero-regression baseline exception; the later, explicit attenuation-pin
+failure requires STOP regardless of that interpretation. The complete
+pytest report is authoritative for the failed test names.
+
+**After-patch counts: NOT RUN.** There is no production patch to compare.
+The uncommitted E3 test draft was removed when the stop fired. E3-B(b)'s
+200-step bit comparison and E3-B(c)'s selfcheck/table replay were not run.
+No unchanged-bit or zero-regression claim is made from this stopped run.
+
+### Remaining gates: not evaluated after the mandatory stop
+
+| Gate | Status | Measured versus frozen window |
+|---|---|---|
+| E3-C | NOT RUN | no columns emitted; Ey <= 5e-7 relative and Ez exactly 0 difference not evaluated |
+| E3-O | NOT RUN | no selfcheck; `all_pass = True`, oracle <= 1e-12, model <= 1e-7 and orders/ratios <= 1e-3 not evaluated |
+| E3-G3 | NOT RUN | no A1 frequency; <= 0.15 MHz not evaluated |
+| E3-V | NOT RUN | no A1 trace; <= 0.1 MHz and >= 3 fit points per arm not evaluated |
+| E3-F1 | NOT RUN | UC and MB orders absent; >= 1.8 and UC [1.8, 2.2] not evaluated |
+| E3-F2 | NOT RUN | zero of six units attempted; <= 0.5 MHz agreement not evaluated |
+| E3-R | NOT RUN | no opt-in implementation; refusal tests not executed |
+| E3-P | NOT RUN | no opt-in implementation; report-rule tests not executed |
+
+NOT RUN is deliberately neither HELD nor FIRED: these gates have no
+measurement. The normal-component rule and its justification remain the
+predeclared proposal in section 1a, not an implemented or validated result.
+No source, pinned value, reference JSON, default, or support-matrix row
+was changed. No script was added, so no CLASSIFICATION entry is needed.
+The required code-and-tests commit before any E3 measurement was not made
+because the mandatory baseline stop occurred first. Only the stop record
+and its provenance are committed; nothing is pushed and no PR is opened.
