@@ -167,7 +167,6 @@ def build_sim(scale: float, dz_profile: np.ndarray, antisym: bool = True,
     """
     assert abs(dz_profile.sum() - PC_TOTAL_H) < 1e-9
     dx = PC_DX0 * scale
-    dzf = PC_DZF0 * scale
     assert abs(round(PC_A / dx) * dx - PC_A) < 1e-9
     sim = Simulation(
         freq_max=F_MAX, domain=(PC_A, PC_B, PC_TOTAL_H),
