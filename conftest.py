@@ -418,7 +418,9 @@ def _repair_rfx_submodule_bindings() -> list[str]:
     ``importlib._bootstrap._find_and_load``, which is skipped whenever the
     child is already present in ``sys.modules`` -- so a fresh ``rfx.runners``
     object can end up missing ``.nonuniform`` / ``.subgridded`` /
-    ``.distributed``. Any later test that resolves a dotted string target
+    ``._distributed_common`` / ``.distributed`` (the guard reports all four;
+    an earlier draft of this comment only named three). Any later test that
+    resolves a dotted string target
     through that package (for example
     ``monkeypatch.setattr("rfx.runners.nonuniform.run_nonuniform_path", ...)``)
     then fails with ``AttributeError`` -- order-dependent, invisible when the
@@ -479,17 +481,50 @@ def _guard_rfx_import_state_is_consistent():
 
     Same shape as ``_no_x64_leak`` right above, and for the same reason:
     REPAIR the process-global state first, then assert -- so a leak costs
-    exactly one red test (the one that caused it) instead of cascading into
-    every test scheduled after it in this worker. There is deliberately no
-    symmetric ``before``-check: unlike ``jax_enable_x64`` (which has a
-    legitimate session-supported non-default value, hence ``_x64_baseline``),
-    an ``rfx`` package missing an attribute for an already-loaded submodule
-    is never legitimate, and the repair above already guarantees no test
-    starts with this inconsistent -- a ``before`` assertion here could only
-    ever fire immediately after this same fixture's own ``after`` check on
-    the previous test, i.e. never name a different culprit, only add a
-    second, redundant red for the one test that actually caused it.
+    exactly one red test instead of cascading into every test scheduled
+    after it in this worker.
+
+    Both sides are checked, with two DIFFERENT messages, and this is not
+    redundant. The repair on the ``after`` side only guarantees that no
+    later test starts inconsistent BECAUSE OF a previous test's own
+    function-scoped phase. It guarantees nothing about pollution that
+    predates this fixture's first teardown in the worker -- collection-time
+    module imports, ``pytest_configure``, plugin or xdist worker startup --
+    nor about a higher-scoped fixture (module/session-scoped, or one that
+    runs before this one) that pollutes and then raises during setup: this
+    fixture is function-scoped and autouse, so it is set up AFTER
+    higher-scoped fixtures and never runs at all for a test whose
+    higher-scoped setup already errored. In both of those paths, the FIRST
+    test to run after the damage is an innocent bystander, and the
+    ``after``-only design would blame it with "this test left ... "
+    -- factually wrong. The ``before``-check exists to cover exactly those
+    two paths: it names the state as ALREADY broken on entry, not caused by
+    this test, and repairs it before asserting so the bystander test still
+    only costs one red, not a cascade.
+
+    Accepted consequence, not a bug: if the ``before``-assert fires, this
+    fixture never reaches ``yield``, so its OWN ``after``-check does not run
+    for that same test. If that test's body also pollutes state, the damage
+    is attributed to whichever test runs next instead -- an edge case of an
+    edge case, since the state was already repaired by the before-check
+    before its assert ran, so nothing accumulates or cascades from it.
+
+    Today neither path fires in this repo (importing every ``rfx.*``
+    submodule yields zero violations, and no test module mutates an
+    ``rfx.*`` ``sys.modules`` entry at import time) -- but the guarantee the
+    ``after``-check alone can make is narrower than "no test ever starts
+    inconsistent", and a comment claiming the wider guarantee would be wrong
+    the day either path is exercised.
     """
+    stale = _repair_rfx_submodule_bindings()
+    assert not stale, (
+        "rfx's package/submodule attribute bindings were ALREADY "
+        "inconsistent when this test STARTED -- this test is not the "
+        "culprit. The damage predates it: a collection-time module import, "
+        "pytest_configure, xdist/plugin worker startup, or a higher-scoped "
+        "fixture that raised during its own setup. (now repaired so later "
+        f"tests are unaffected): {stale}"
+    )
     yield
     violations = _repair_rfx_submodule_bindings()
     assert not violations, (

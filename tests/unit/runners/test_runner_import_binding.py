@@ -56,14 +56,15 @@ def test_runner_uniform_resolves_run_after_patch_window_closes(
     resolves the CURRENT ``rfx.simulation.run`` rather than a frozen
     reference to the fake.
 
-    ``evict_from_sys_modules`` (see ``tests/conftest.py``) restores the
-    ORIGINAL ``rfx.runners`` / ``rfx.runners.uniform`` module objects once
-    this test ends -- a bare ``sys.modules.pop`` here used to leave the
-    fresh ``rfx.runners`` object permanently missing its ``.nonuniform`` /
-    ``.subgridded`` / ``.distributed`` submodule attributes (those were
-    never popped, so CPython's import machinery never re-bound them onto
-    the new package object), which broke any later test in the same
-    process that resolved a string target through ``rfx.runners.<sub>``.
+    ``evict_from_sys_modules`` (see ``conftest.py`` at the repo root)
+    restores the ORIGINAL ``rfx.runners`` / ``rfx.runners.uniform`` module
+    objects once this test ends -- a bare ``sys.modules.pop`` here used to
+    leave the fresh ``rfx.runners`` object permanently missing its
+    ``.nonuniform`` / ``.subgridded`` / ``.distributed`` submodule
+    attributes (those were never popped, so CPython's import machinery
+    never re-bound them onto the new package object), which broke any
+    later test in the same process that resolved a string target through
+    ``rfx.runners.<sub>``.
     """
     evict_from_sys_modules("rfx.runners.uniform", "rfx.runners")
 
