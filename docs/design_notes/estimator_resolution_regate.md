@@ -673,10 +673,13 @@ on a 0.886 % term.
 
 **Superseded 2026-09-10 (see section 8) -- board changed under it.** Every
 value below is frozen to the pre-#931 board this run measured (ground/trace
-as one-cell PEC `Box`es); the committed artifact at the same path is now the
-post-#931 sheet board (section 8). References below are stated as plain
-values, not machine-checked citations, because the live artifact no longer
-describes this run.
+as one-cell PEC `Box`es); the committed artifact at the live path
+(`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary.json`)
+is now the post-#931 sheet board (section 8). The pre-#931 board this section
+measured is archived, byte-identical to `fae08d10^`, at
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json`
+(see that directory's `README.md`), so the citations below still resolve
+against a committed artifact instead of being stated as bare prose.
 
 `scripts/vessl_cv06b_estimator_falsifiers.yaml`, VESSL run 369367257702 (remilab-c0,
 one RTX 4090; log harvested, run deleted). Two earlier attempts are part of the record:
@@ -685,42 +688,45 @@ script's `savefig` hit the read-only NFS checkout (the job now stages to local d
 and 369367257701 died on an inline heredoc under VESSL's script wrapper (replaced by
 `scripts/diagnostics/compare_json_close.py`). Artifacts are committed under
 `validation/crossval/_06b_msl_notch_results/`; the run's CPU replay reproduced the
-committed cv06b falsifier artifact to 1e-9.
+committed cv06b falsifier artifact to 1e-9 (against the board this section describes;
+see section 8 for the current one).
 
 **Criterion (A) — demonstrated, on this board, exit 0.** The shipped
 `06b_msl_notch_filter_uniform.py` (`cv06b_baseline_run.exit` = `EXIT:0`) and the
 build-falsifier baseline leg agree:
-`criterion_A_baseline.all_pass` with
-`criterion_A_baseline.err_pct = 1.453` (G1, window 4.0 %),
-`criterion_A_baseline.bw_ratio = 0.9684` (G2, window 0.80–1.20),
-`criterion_A_baseline.witness_bins = 0.3175` (G3, threshold 1.000),
-`criterion_A_baseline.z0_median_ohm = 46.48` (G4, 40–65 Ω) and a notch depth of
-`criterion_A_baseline.notch_depth_db = -43.49` dB (witness only). Section 6.2's
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::criterion_A_baseline.all_pass` with
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::criterion_A_baseline.err_pct = 1.453` (G1, window 4.0 %),
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::criterion_A_baseline.bw_ratio = 0.9684` (G2, window 0.80–1.20),
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::criterion_A_baseline.witness_bins = 0.3175` (G3, threshold 1.000),
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::criterion_A_baseline.z0_median_ohm = 46.48` (G4, 40–65 Ω) and a notch depth of
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::criterion_A_baseline.notch_depth_db = -43.49` dB (witness only). Section 6.2's
 "UNDEMONSTRATED" is superseded by this paragraph. Solve time
-`criterion_A_baseline.solve_s = 312.7` s.
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::criterion_A_baseline.solve_s = 312.7` s.
 
 **Criterion (B), narrow stub — fires, and the old gate stays blind.** `W_STUB` = 5·`DX`
-(`stub_narrow.w_stub_m = 0.0003175` m): the −10 dB width ratio reads
-`stub_narrow.bw_ratio = 0.648`, so `stub_narrow.G2_fired`; section 4
+(`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_narrow.w_stub_m = 0.0003175` m): the −10 dB width ratio reads
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_narrow.bw_ratio = 0.648`, so `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_narrow.G2_fired`; section 4
 predicted ~0.674 from the closed form, the solve lands 3.9 % lower — inside the window's
 margin either way. The retained depth witness still passes at
-`stub_narrow.notch_depth_db = -35.10` dB
-(`stub_narrow.depth_witness_still_passes`), and G1 still passes at
-`stub_narrow.err_pct = 0.208` %: the blindness #812 measured, reproduced on the
-board itself, next to the gate that catches it.
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_narrow.notch_depth_db = -35.10` dB
+(`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_narrow.depth_witness_still_passes`), and G1 still passes at
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_narrow.err_pct = 0.208` %: the blindness #812 measured, reproduced on the
+board itself, next to the gate that catches it. (On this board only — section 8's
+narrow-stub paragraph is the current one.)
 
 **Criterion (B), one-cell stub — the pre-declared falsifier FIRED.** Section 4 declared
 that a one-cell stub-length error (`STUB_LEN` − `DX`,
-`stub_1cell.stub_len_m = 0.0119365` m) would move the *reported* notch by ~0.5 %
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_1cell.stub_len_m = 0.0119365` m) would move the *reported* notch by ~0.5 %
 instead of the bin-quantised 0.000 %. Measured on the board: the analytic shift is
-`stub_1cell.true_shift_pct = 0.532` % (`stub_1cell.true_shift_bins = 0.303`
-bin); the bin argmin moved `stub_1cell.bin_argmin_delta_pct = 0.0` % as
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_1cell.true_shift_pct = 0.532` % (`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_1cell.true_shift_bins = 0.303`
+bin); the bin argmin moved `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_1cell.bin_argmin_delta_pct = 0.0` % as
 predicted; the refined estimate moved
-`stub_1cell.refined_delta_pct = 0.145` % — non-zero, so the estimator is not
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_1cell.refined_delta_pct = 0.145` % — non-zero, so the estimator is not
 bin-quantised, but **27 % of the predicted shift**, below the builder's pre-declared
 visibility criterion (half the predicted shift):
-`stub_1cell.visible` is false and `verdict.all_ok` is false. This is
-reported as the result, not adjusted.
+`validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::stub_1cell.visible` is false and `validation/crossval/_06b_msl_notch_results/cv06b_build_falsifiers_summary_pre931_fae08d10.json::verdict.all_ok` is false. This is
+reported as the result on this board, not adjusted (section 8: it no longer holds on
+the current one).
 
 *Not attributed here.* Two mechanisms are consistent with the number and this run
 cannot separate them: (i) the estimator under-responds — the own-board notch is
@@ -768,6 +774,23 @@ passes (`stub_narrow.depth_witness_still_passes`). `test_cv06b_build_falsifier_p
 no longer requires G1 to stay silent on the narrow arm -- 7.6's "old gate stays
 blind" described a coincidence of the pre-#931 board, not a property of the
 instrument, and is retracted rather than restated with new digits.
+
+**Why this does not contradict `verdict.all_ok` flipping to `true` below.**
+`stub_narrow`'s new G1 failure and `verdict.all_ok`'s flip are not two readings
+of the same check -- `all_ok` never reads `stub_narrow`'s G1 at all.
+`scripts/diagnostics/cv06b_build_falsifiers.py:160` defines it directly:
+`good = ok and visible and (not g2) and dep`, where `ok` is
+`criterion_A_baseline.all_pass`, `visible` is `stub_1cell.visible`, `g2` is
+`stub_narrow.gates["G2 -10 dB stopband width"]` (so `not g2` is
+`stub_narrow.G2_fired`, expected `true`) and `dep` is
+`stub_narrow.depth_witness_still_passes`. `stub_narrow.gates["G1 notch freq vs
+analytic"]` is computed and written to the JSON for the record but was never
+one of the four terms `good` ANDs together -- by design: the docstring at the
+top of that script (lines 19-24) predeclares `stub_narrow` as a probe of G2
+and the depth witness only ("`-> G2 must FAIL while the retained -10 dB depth
+gate still PASSES`"), never of G1. So `all_ok`'s `true` is an honest read of
+its own four-term, predeclared definition, not a definition that quietly grew
+to cover fewer failures than before.
 
 **Criterion (B), one-cell stub — the pre-declared falsifier CLOSES; it no longer
 fires.** This is the substantial flip, not a magnitude update. Against a true
