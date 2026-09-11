@@ -80,6 +80,7 @@ def build_materials(rig: dict, params: dict, path: str):
         raise ValueError(path)
     from rfx import Box, Simulation
     from rfx.geometry.csg import _grid_coords
+    from validation.crossval.comparators import realized_conductors as RC
     sim = Simulation(freq_max=20e9, domain=rig["domain"], dx=rig["dx"],
                      cpml_layers=rig["n_cpml"], mode="2d_tmz")
     sim.add_material(L.API_MATERIAL_NAME, eps_r=eps_r, sigma=sigma)
@@ -90,12 +91,24 @@ def build_materials(rig: dict, params: dict, path: str):
     api_grid = sim._build_grid()
     if tuple(api_grid.shape) != tuple(grid.shape) or float(api_grid.dt) != float(grid.dt):
         raise RuntimeError(f"API grid {api_grid.shape}/{api_grid.dt} != rig grid {grid.shape}/{grid.dt}")
-    mats, _debye, _lorentz, pec_mask, *_rest = sim._assemble_materials(api_grid)
+    # Collectors, not a bare positional unpack: "no PEC" now has to mean
+    # no PEC CELL, no sheet and no wire. A sheet owns no cell (#931 §1.3),
+    # so a pec_mask test alone would report "no conductor" for a case that
+    # had declared one, and the api_no_pec flag this arm commits would go
+    # on reading True while being wrong. The dielectric path is what this
+    # case locks; the conductor-free premise is what makes the lock mean
+    # something.
+    _sheets: list = []
+    _wires: list = []
+    mats, _debye, _lorentz, pec_mask, *_rest = sim._assemble_materials(
+        api_grid, pec_sheets=_sheets, pec_wires=_wires)
     same = (bool(jnp.array_equal(mats.eps_r, direct.eps_r)) and bool(jnp.array_equal(mats.sigma, direct.sigma))
             and bool(jnp.array_equal(mats.mu_r, direct.mu_r)))
-    no_pec = pec_mask is None or not bool(jnp.any(pec_mask))
+    no_pec = ((pec_mask is None or not bool(jnp.any(pec_mask)))
+              and not _sheets and not _wires)
     if not (same and no_pec):
         raise RuntimeError("Simulation.add_material path did not reproduce the direct slab arrays")
+    RC.assert_no_conductor(sim, grid=api_grid, label="cv23 api slab arm")
     info.update({"api_equals_direct": True, "api_no_pec": True, "api_material": L.API_MATERIAL_NAME,
                  "box_x_m": [float(xs[lo]), float(xs[hi])], "api_grid_shape": [int(s) for s in api_grid.shape]})
     return mats, info
@@ -324,8 +337,10 @@ def main(argv=None) -> int:
                 raise RuntimeError("record never settled to -40 dB within 4x the declared box")
         run["record"] = None if run["record"] is None else dict(run["record"], nx_grows=grows)
         # The oracle is ALWAYS the declared material (cv22 note section 10.1).
+        # require_complete: claims-bearing invocation -- an absent witness
+        # cannot leave a PASS standing (#928).
         e2 = L.evaluate_e2(run["freqs_hz"], run["R_rfx"], run["T_rfx"], params, run["dt_s"], tail=run["tail"],
-                           dx=run["dx_m"])
+                           dx=run["dx_m"], require_complete=True)
         e2["params_run"] = {k: float(v) for k, v in params_run.items()}
         e2["materials_path"] = path
         e2["materials"] = run["materials"]

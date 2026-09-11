@@ -1,4 +1,4 @@
-"""Project a ``rfx-design-ir/v1`` design document onto a runnable openEMS script.
+"""Project a ``rfx-design-ir/v2`` design document onto a runnable openEMS script.
 
 ``emit_openems_script(document)`` is text in, text out: it needs no solver, no
 licence and no ``Simulation``.  The returned string is a self-contained Python
@@ -1127,10 +1127,10 @@ def plan_openems_projection(
     """
     document = _require_mapping(document, "document")
     schema = str(_get(document, "schema", "document"))
-    if schema != "rfx-design-ir/v1":
+    if schema != "rfx-design-ir/v2":
         raise _refuse(
             f"design document schema {schema!r}",
-            "this emitter reads rfx-design-ir/v1 only; a different schema may "
+            "this emitter reads rfx-design-ir/v2 only; a different schema may "
             "spell fields differently and silently mis-project them",
         )
     rfx_version = str(_get(document, "rfx_version", "document"))
@@ -1822,7 +1822,7 @@ def emit_openems_script(
     end_criteria: float | None = None,
     msl_port_w_cells: int = 6,
 ) -> str:
-    """Project a ``rfx-design-ir/v1`` document onto a runnable openEMS script.
+    """Project a ``rfx-design-ir/v2`` document onto a runnable openEMS script.
 
     Parameters
     ----------

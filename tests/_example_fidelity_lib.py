@@ -287,6 +287,16 @@ CLASSIFICATION: dict[str, Entry] = {
         "no_simulation",
         "same two-stage openEMS-referee shape as cv20: no rfx Simulation is "
         "constructed by this script"),
+    "validation/crossval/_wr90_iris_realized.py": Entry(
+        "no_simulation",
+        "cv18/cv19's shared realized-geometry reader (#931 crossval-D): takes "
+        "a built Simulation and reads realized_pec_edge_masks / "
+        "realized_wall_planes -- constructs no Simulation"),
+    "validation/crossval/comparators/realized_conductors.py": Entry(
+        "no_simulation",
+        "crossval-side build-time realized-conductor gate (#931): takes a "
+        "built Simulation and delegates to the shared realized-edge spelling "
+        "-- constructs no Simulation"),
     "validation/crossval/comparators/fdfd_hplane.py": Entry(
         "no_simulation",
         "plain numpy/scipy.sparse FDFD comparator -- no rfx import at all"),
@@ -327,6 +337,12 @@ CLASSIFICATION: dict[str, Entry] = {
         "no_simulation",
         "shared quasi-1-D TFSF slab rig helpers (record-length derivation, "
         "tail witness, envelope fit) factored out of cv22 -- no Simulation()"),
+    "validation/crossval/comparators/slab_family.py": Entry(
+        "no_simulation",
+        "the slab family's leaf declaration (#928): the cv04 rig constants, "
+        "the gated band, the incident-pulse and ring-down helpers, and the "
+        "calibration-envelope loader that resolves a consumer's adoption "
+        "record against the producer's artifact -- stdlib + numpy, no rfx"),
     "validation/crossval/comparators/ring_mode_judge.py": Entry(
         "no_simulation",
         "plain numpy/scipy mode-list comparator for cv02 (#812) -- compares "
@@ -503,6 +519,19 @@ CLASSIFICATION: dict[str, Entry] = {
     "examples/tutorials/nonuniform_patch_demo.py": Entry(
         "module_level_solve",
         "builds and calls .run(...) at module scope with no main guard"),
+    # VENDORED UPSTREAM, NOT OURS. Meep's own python/examples/bend-flux.py,
+    # byte-identical to blob f56ab649 (see the sibling PROVENANCE.md); cv01's
+    # reproduce-gate runs it unmodified so the comparator is checked against
+    # upstream's own code rather than a transcription of it. Classified rather
+    # than excluded from discovery on purpose: the recursive-and-unfiltered
+    # sweep exists because a filter let a file land unclassified and green
+    # (2026-08-27 review), and re-adding a filter for this one would reopen it.
+    # It is `module_level_solve` because that is what upstream wrote, not a
+    # style we chose -- and it must not be "fixed" to add a main guard.
+    "validation/crossval/_01_waveguide_bend_upstream/bend-flux.py": Entry(
+        "module_level_solve",
+        "vendored upstream Meep tutorial, unmodified: builds and calls "
+        ".run(...) at module scope with no main guard. Do not edit."),
 
     # ---- builder_fused_with_solve (10): build+solve share one function ---
     "examples/quickstart/hello_world.py": Entry(
@@ -517,9 +546,12 @@ CLASSIFICATION: dict[str, Entry] = {
         "builder_fused_with_solve",
         "`main()` builds and calls .run(...) in the same function"),
     "validation/crossval/07_sheen_lpf.py": Entry(
-        "builder_fused_with_solve",
-        "`run_rfx()` builds `sim` and calls sim.compute_msl_s_matrix(...) in "
-        "the same function -- no separable build-only path"),
+        "audited",
+        "`build_rfx_sim(dx)` returns Simulation with no solve call (split out "
+        "of run_rfx() by the #931 crossval-B migration so the build-time "
+        "realized-metal gate is exercised against the production builder); "
+        "run_rfx() consumes it and solves",
+        (Builder("build_rfx_sim", None, (_v("default", dx=200e-6),)),)),
     "validation/crossval/09_half_symmetric_waveguide.py": Entry(
         "builder_fused_with_solve",
         "`_run_cavity()` builds and calls .run(...) in the same function"),
@@ -530,10 +562,14 @@ CLASSIFICATION: dict[str, Entry] = {
         "function"),
     "validation/crossval/15_patch_antenna_rt5880.py": Entry(
         "audited",
-        "`build_rfx_sim(do_gain=, two_plane=)` returns (sim, patch_shape, "
-        "geom) with no solve call (separated from run_rfx() for the #740 "
-        "review so the wall-plane tests exercise the production toggle); "
-        "run_rfx() consumes it and solves",
+        "`build_rfx_sim(...)` returns (sim, patch_shape, geom) with no solve "
+        "call (separated from run_rfx() for the #740 review so the wall-plane "
+        "tests build the production geometry without solving); run_rfx() "
+        "consumes it and solves. The separable builder is still worth having "
+        "after the lattice ownership contract (#931) removed the two_plane "
+        "toggle it used to exercise: what the wall-plane tests read now is "
+        "the realized edge set itself, through realized_pec_edge_masks / "
+        "realized_wall_planes",
         (Builder("build_rfx_sim", 0, (_v("default", do_gain=False),)),)),
     "validation/crossval/18_wr90_iris_modematch.py": Entry(
         "builder_fused_with_solve",
@@ -843,7 +879,13 @@ CLASSIFICATION: dict[str, Entry] = {
         "audited",
         "`build_sim(scale, dz_profile, antisym=True)` returns Simulation "
         "with no solve call (W4R redesign: mode-selective anti-symmetric "
-        "port pair, knife-edge-free PEC drawing)",
+        "port pair). Its trace is drawn with the half-cell midpoint recipe "
+        "(corners +/- dx/2), NOT on node planes as its sibling "
+        "w4_supraconvergence.py draws the same trace — under the lattice "
+        "ownership contract's centre sampling (#931 §1.1) the two realize "
+        "different traces. Neither script is migrated yet; re-verify this "
+        "reason when they are, and do not read the old 'knife-edge-free' "
+        "label as still true",
         (Builder("build_sim", None, (
             _v_from("s1.5_multiband", lambda m: dict(
                 scale=1.5, dz_profile=m.fx.pc_dz_profile_sym(1.5))),
@@ -880,6 +922,17 @@ def _entity_key(item: dict, seen: dict[str, int]) -> str:
         return "domain"
     lo, hi = item.get("declared_lo"), item.get("declared_hi")
     if lo is not None and hi is not None:
+        # The prefix names the DECLARATION ROUTE, not the realization class:
+        # under the lattice ownership contract (#931) a sheet can be declared
+        # either as a zero-thickness Box through ``add()`` (entity name
+        # "geometry[i]") or through ``add_thin_conductor`` (entity name
+        # "thin_conductor[i]"), and the two realize identically. Migrating a
+        # foil from the first spelling to the second therefore moves its row
+        # from ``geometry|...`` to ``thin_conductor|...`` in the snapshot —
+        # that is the intended, reviewable diff, not a key regression. A sheet
+        # still reports declared_lo/declared_hi (its drawn corners, with
+        # lo == hi on the normal axis), so it stays on this
+        # position-independent branch.
         kind = "thin_conductor" if name.startswith("thin_conductor") else "geometry"
         mat = item.get("material") or {}
         tag = mat.get("name", mat.get("kind", "?"))

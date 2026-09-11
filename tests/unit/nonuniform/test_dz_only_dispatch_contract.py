@@ -157,8 +157,54 @@ def test_msl_dz_only_reaches_the_nu_lane():
     )
     sim.add_msl_port(position=(0.004, 0.003, 0.0), width=0.5e-3,
                      height=0.5e-3, direction="+x", mode="laplace")
-    with pytest.raises(RuntimeError, match="no PEC trace conductor"):
+    with pytest.raises(RuntimeError,
+                       match="no realized PEC trace conductor"):
         sim.compute_msl_s_matrix(n_steps=1)
+
+
+def test_a_sheet_declared_msl_trace_is_found_by_the_detector():
+    """Positive control for the negative test above (#931 §1.9).
+
+    The witness in ``test_msl_dz_only_reaches_the_nu_lane`` is a RAISE, so
+    on its own it is satisfied by a detector that finds NOTHING ever. Until
+    #931 that was a live risk in the other direction: the detector scanned
+    the primal-cell ``pec_mask`` column above the substrate, and a sheet
+    owns no cell, so declaring the trace as a foil — the declaration the
+    contract asks for — turned every working MSL fixture into that same
+    RuntimeError. The detector reads realized WALL PLANES now, so a sheet
+    trace answers with its single plane and a volume trace with its two.
+    Build-time only: no solve.
+    """
+    from rfx.probes.msl_wave_decomp import realized_trace_planes_on_column
+    from tests._realized_geometry import node_index, realized
+
+    h_sub, w_trace, dx = 0.5e-3, 1.0e-3, 0.25e-3
+    lx, ly, lz = 4e-3, 4e-3, 2e-3
+    y_c = ly / 2.0
+
+    def _sim(sheet: bool):
+        s = Simulation(freq_max=10e9, domain=(lx, ly, lz), dx=dx,
+                       boundary="pec")
+        s.add_material("sub", eps_r=4.3)
+        s.add(Box((0.0, 0.0, 0.0), (lx, ly, h_sub)), material="sub")
+        z_hi = h_sub if sheet else h_sub + dx
+        s.add(Box((0.0, y_c - w_trace / 2, h_sub),
+                  (lx, y_c + w_trace / 2, z_hi)), material="pec")
+        return s
+
+    for sheet, expect_span in ((True, 0), (False, 1)):
+        rz = realized(_sim(sheet))
+        assert len(rz.sheets) == (1 if sheet else 0)
+        i = node_index(rz.grid, 0, lx / 2)
+        j = node_index(rz.grid, 1, y_c)
+        k_sub = node_index(rz.grid, 2, h_sub)
+        lo, hi = realized_trace_planes_on_column(
+            rz.edge_masks, 2, (i, j), k_from=k_sub)
+        assert lo == k_sub, (
+            f"sheet={sheet}: the trace must be found at the plane it is "
+            f"drawn on ({k_sub}), got {lo}")
+        assert hi - lo == expect_span, (
+            "a sheet is ONE plane; a one-cell volume is two")
 
 
 def test_mixed_dz_only_raises():
@@ -175,8 +221,13 @@ def test_mixed_dz_only_raises():
     sim.add_material("sub", eps_r=4.3)
     sim.add(Box((0.0, 0.0, 0.0), (lx, ly, _H_SUB)), material="sub")
     y_c = ly / 2.0
+    # #931: the MSL trace is a FOIL, so it is a sheet on the substrate-top
+    # node plane — a zero-extent axis IS the sheet declaration (§1.5). Drawn
+    # one cell thick it would be a VOLUME: walls at z = H_SUB and
+    # z = H_SUB + dx with Ez shorted between, a 0.25 mm solid bar where the
+    # board carries copper foil.
     sim.add(Box((0.0, y_c - _W_TRACE / 2, _H_SUB),
-                (lx, y_c + _W_TRACE / 2, _H_SUB + _DX)), material="pec")
+                (lx, y_c + _W_TRACE / 2, _H_SUB)), material="pec")
     sim.add_msl_port(position=(5.5e-3, y_c, 0.0), width=_W_TRACE,
                      height=_H_SUB, direction="-x", impedance=50.0,
                      waveform=GaussianPulse(f0=2.5e9, bandwidth=0.5))
