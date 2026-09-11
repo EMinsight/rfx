@@ -1402,10 +1402,17 @@ def msl_loop_current(
         ``|alpha| >> |gamma|`` at both ports on drive 0 and the reverse
         on drive 1.
 
-        Only the docstring was wrong; no code changed for this. The
-        other two items on issue #524 — the passive port's ~30 ohm
-        termination reading and the 0.194-vs-0.073 drive asymmetry — are
-        untouched here and keep that issue open.
+        Only the docstring was wrong; no code changed for this. Of the
+        other two items on issue #524, both were re-measured on current
+        main on 2026-08-30 (VESSL 369367257265, PR #799): the drive
+        asymmetry is CLOSED (the two ports read |Gamma| 0.1799 and 0.1759
+        on the shipped fixture, reproduced to 4 decimals by the
+        cell-aligned and ±y-rotated variants, so the July 0.194-vs-0.073
+        split does not exist here), and the "~30 Ω termination" inference
+        is WITHDRAWN (it rested on a July line Zc of 38.75 Ω; the fitted
+        Zc is 41.9 Ω against the Hammerstad-Jensen 47.9 Ω, which is the
+        #487 dx bias, not a termination error). #524 stays open for the
+        passive port's unexplained reflection alone.
 
     Axis generality (issue #661)
     ----------------------------

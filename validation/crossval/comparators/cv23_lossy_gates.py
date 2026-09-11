@@ -93,6 +93,22 @@ API_MATERIAL_NAME = "lossy_slab"
 # used to be `G.W_BIN` and friends. Re-exporting them made this module a
 # consumer of a consumer: a review re-pointed cv22 at a doubled revision and
 # cv23's windows doubled with it, silently, with cv23's own record untouched.
+#
+# 2026-09-10 disclosure (PR #974): the adopted r1 values are NOT measured on
+# cv04's settled record -- cv04 got its own settling-extension fix that day
+# (docs/design_notes/20260903_lattice_witness_standard.md section 5.3's
+# 2026-09-10 UPDATE, and its section 10 item 4 for the settled numbers), but
+# r1 in `envelope.json` is unchanged and this adoption is still pinned to it;
+# r1's per-bin closure was a truncation artefact of cv04's pre-fix record,
+# the settled run measures far tighter (same note, same sections -- not
+# restated here, to keep this file free of a second copy of the number).
+# DIRECTION (S6, PR #974 round 2, not the literals): a re-adoption of the
+# settled revision would move the band-mean R residual UP slightly (widening
+# W_MEAN_R a little) while the band-mean T residual and the per-bin closure
+# both move DOWN (narrowing W_MEAN_T and W_BIN) -- not a uniform tightening.
+# Whether to re-adopt a settled revision, and whether W_BIN's own recipe
+# should track it, is open under issue #928 -- not decided here, and not
+# something a producer re-run may do to this file silently either way.
 CV04_ADOPTION = {
     "envelope": slab_family.CV04_ENVELOPE_REL,
     "adopted_revision": "r1",
@@ -208,8 +224,14 @@ def evaluate_e2(freqs_hz, R_rfx, T_rfx, params: dict, dt: float, *, tail: dict |
                 dx: float | None = None, require_complete: bool = False) -> dict:
     """E2 gates G1 (per-bin R, T, A), G2 (band-mean R, T, A), G3 (witnesses).
     With ``dx`` given, the exact Yee-lattice solution at (dx, dt) is added as
-    a REPORTED witness (``lattice``: W_lat per bin and |rfx - lattice|; note
-    section 13) -- it enters no gate."""
+    a witness (``lattice``: W_lat per bin and |rfx - lattice|; note section
+    13) -- THIS FUNCTION does not gate on it (no run/record is available at
+    this scope to derive W_witness from). The caller
+    (validation/crossval/23_lossy_slab_fresnel.py's main(), which has the
+    run's record) wires it into the live verdict via
+    comparators/lattice_witness.py's evaluate(), re-aggregating gates with
+    GL_witness added -- issue #970. Do not re-describe it as reported-only
+    here without checking that caller first."""
     out = G.evaluate_e2(freqs_hz, R_rfx, T_rfx, MODEL, params, dt, tail=tail,
                         require_complete=require_complete, windows=WINDOWS)
     f = np.asarray(freqs_hz, dtype=float)

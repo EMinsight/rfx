@@ -2090,7 +2090,12 @@ def run(
         and not _ctx["use_kerr"]
         and not _ctx["use_mag_sources"]
         # #677: the GPU baked fast path has an inline H+E update with no
-        # sheet-operator slot; per-plane baking is tracked in issue #701.
+        # sheet-operator slot, so a surface-impedance sheet is DELIBERATELY
+        # unsupported here: an f0 sheet takes the standard path, which costs
+        # performance only -- no accuracy loss, nothing silently wrong.
+        # Per-plane baking is a parked capability, not a promised follow-up;
+        # it waits on the thin-sheet plane-BC architecture decision (#701),
+        # and the parking itself is backlog #787.
         and not _ctx["use_sheet_impedance"]
         and aniso_eps is None
         and periodic == (False, False, False)
