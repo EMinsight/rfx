@@ -514,6 +514,19 @@ CLASSIFICATION: dict[str, Entry] = {
     "examples/tutorials/nonuniform_patch_demo.py": Entry(
         "module_level_solve",
         "builds and calls .run(...) at module scope with no main guard"),
+    # VENDORED UPSTREAM, NOT OURS. Meep's own python/examples/bend-flux.py,
+    # byte-identical to blob f56ab649 (see the sibling PROVENANCE.md); cv01's
+    # reproduce-gate runs it unmodified so the comparator is checked against
+    # upstream's own code rather than a transcription of it. Classified rather
+    # than excluded from discovery on purpose: the recursive-and-unfiltered
+    # sweep exists because a filter let a file land unclassified and green
+    # (2026-08-27 review), and re-adding a filter for this one would reopen it.
+    # It is `module_level_solve` because that is what upstream wrote, not a
+    # style we chose -- and it must not be "fixed" to add a main guard.
+    "validation/crossval/_01_waveguide_bend_upstream/bend-flux.py": Entry(
+        "module_level_solve",
+        "vendored upstream Meep tutorial, unmodified: builds and calls "
+        ".run(...) at module scope with no main guard. Do not edit."),
 
     # ---- builder_fused_with_solve (10): build+solve share one function ---
     "examples/quickstart/hello_world.py": Entry(

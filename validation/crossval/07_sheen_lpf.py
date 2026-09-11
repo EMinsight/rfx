@@ -958,9 +958,122 @@ def _openems_common_setup(f_max):
     return FDTD, CSX
 
 
+# ---------------------------------------------------------------------------
+# Reproduce-gate record -- audit artifact (docs/agent-memory/task_recipes/
+# external_solver_comparator.md step 2). Committed UNRUN; a VESSL run fills
+# these fields AND must supply a log path under a git-TRACKED prefix (same
+# PR #548 lesson validation/crossval/20_msl_phase_referee.py and
+# validation/crossval/21_coax_two_port_referee.py already paid for -- .omx/
+# and docs/research_notes/vessl_logs/ are both gitignored and therefore
+# unreadable by any reviewer outside the machine that ran the job).
+# ---------------------------------------------------------------------------
+_TUT_C0 = 2.998e8  # m/s -- matches the coax/notch precedent's own constant
+# (20_msl_phase_referee.py's _C0), deliberately NOT this module's own C0
+# (2.99792458e8) -- kept separate so this cross-check stays bit-comparable
+# to cv20's independent recomputation, not to this case's own Sheen-board
+# physics.
+
+# Tutorial geometry (RO4350B) -- the SAME openEMS MSL_NotchFilter.py
+# tutorial validation/crossval/20_msl_phase_referee.py's own Stage A
+# already reproduces (identical declared geometry: run_openems_tutorial()'s
+# own MSL_length/MSL_width/sub_t/sub_epr/stub below). Recomputed
+# independently here (not copy-pasted) as a regression lock on THIS
+# script's own reproduce-gate oracle -- issue #971.
+_TUT_STUB_LEN_M = 12e-3
+_TUT_W_TRACE_M = 600e-6
+_TUT_H_SUB_M = 254e-6
+_TUT_EPS_R = 3.66
+_TUT_U = _TUT_W_TRACE_M / _TUT_H_SUB_M
+_TUT_EPS_EFF = (_TUT_EPS_R + 1.0) / 2.0 + (_TUT_EPS_R - 1.0) / 2.0 * (1.0 + 12.0 / _TUT_U) ** -0.5
+# NAMED for the quantity it is: the tutorial's DECLARED geometry (600um
+# trace over 254um substrate) -- NOT validation/crossval/
+# 06b_msl_notch_filter_uniform.py's F_NOTCH_AN (~3.678954 GHz, eps_eff
+# 2.882252). That is a DIFFERENT quantity: cv06b's own as-built rfx
+# board's LATTICE-REALIZED electrical trace width (635um, its own
+# n_rows*DX convention, issue #723), not this tutorial's declared one.
+# Both compute Hammerstad-Jensen eps_eff on "the same substrate/trace/
+# stub" in prose, but they are not interchangeable -- confirmed by direct
+# re-derivation 2026-09-10: 3.678954 GHz (cv06b, realized 635um) vs
+# 3.687193 GHz (this constant, same value as cv20's F_NOTCH_AN_HZ,
+# declared 600um), -0.223%, both computing correctly, just not the same
+# input. Do not substitute cv06b's constant for this one, or vice versa.
+F_NOTCH_TUTORIAL_DECLARED_HZ = _TUT_C0 / (4.0 * _TUT_STUB_LEN_M * np.sqrt(_TUT_EPS_EFF))
+
+REPRODUCE_GATE_RECORD: dict = {
+    "stage": "tutorial-reproduce",
+    "tutorial": {
+        "repo": "thliebig/openEMS",
+        "path": "python/Tutorials/MSL_NotchFilter.py",
+        "verified_present_on": "2026-08-04",
+        "verified_via": "gh api repos/thliebig/openEMS/contents/python/Tutorials/MSL_NotchFilter.py",
+        "submodule_pin_note": (
+            "Same tutorial validation/crossval/20_msl_phase_referee.py's "
+            "Stage A already reproduces (that record's own tutorial "
+            "sub-record carries the same verification). AddMSLPort is a "
+            "long-standing openEMS primitive; no submodule-pin caveat "
+            "applies."
+        ),
+    },
+    "do_not_repeat": (
+        "07_sheen_lpf.py's own run_openems_tutorial(), pre-#971: the "
+        "docstring and its print both claimed 'known-good ... S21 notch "
+        "~3.43 GHz (repo fixture: openEMS 3.4286 GHz)' -- that number was "
+        "never this function's own measurement, it was cv06b's realized-"
+        "board reading, later shown to be an outlier by an independent "
+        "Palace-FEM referee (scripts/diagnostics/palace_notch_referee/). "
+        "Do not cite a sibling case's number as this function's own "
+        "known-good without running THIS function and checking the "
+        "result against F_NOTCH_TUTORIAL_DECLARED_HZ."
+    ),
+    "geometry": (
+        "open-stub microstrip notch filter, RO4350B eps_r=3.66, "
+        "h_sub=254um, MSL_width=600um, MSL_length=50mm (each side of "
+        "centre), stub_length=12mm, f_max=7GHz, boundary "
+        "['PML_8','PML_8','MUR','MUR','PEC','MUR'] -- identical to "
+        "validation/crossval/20_msl_phase_referee.py's Stage A geometry "
+        "(same tutorial, ported independently here)."
+    ),
+    "documented_check": (
+        "Quarter-wave open-stub notch: F_NOTCH = c0/(4*stub_len*"
+        "sqrt(eps_eff_HJ)), the SAME closed form validation/crossval/"
+        "06b_msl_notch_filter_uniform.py and validation/crossval/"
+        "20_msl_phase_referee.py both use, independently recomputed here "
+        "as F_NOTCH_TUTORIAL_DECLARED_HZ on the tutorial's OWN declared "
+        "geometry (NOT cv06b's realized-board convention -- see the "
+        "constant's own comment above)."
+    ),
+    "expected_f_notch_tutorial_declared_hz": float(F_NOTCH_TUTORIAL_DECLARED_HZ),
+    "gate": {
+        # Same one-sided-low-biased band validation/crossval/
+        # 20_msl_phase_referee.py's Stage A uses, same rationale
+        # (docs/agent-memory/rfx-known-issues.md: openEMS reading ~7% low
+        # on a different line-length/domain combination of this same
+        # substrate/trace/stub). This is a physical argument about
+        # openEMS's behavior on this substrate family, not about cv20's
+        # specific run, so reusing the band is not reusing cv20's RUN --
+        # this case still needs its own reproduction (see do_not_repeat
+        # and status below).
+        "f_notch_lo_hz": 0.80 * float(F_NOTCH_TUTORIAL_DECLARED_HZ),
+        "f_notch_hi_hz": 1.05 * float(F_NOTCH_TUTORIAL_DECLARED_HZ),
+    },
+    "status": "UNRUN",
+    "reproduced_f_notch_hz": None,
+    "reproduced_f_notch_dev_pct": None,
+    "log_path": None,
+    "vessl_run_id": None,
+    "verified_on": None,
+}
+
+
 def run_openems_tutorial():
-    """Comparator-first: canonical openEMS MSL_NotchFilter tutorial.
-    Known-good: Z0 ~ 50 ohm, S21 notch ~3.43 GHz (repo fixture: openEMS 3.4286 GHz)."""
+    """Comparator-first reproduce-gate: canonical openEMS MSL_NotchFilter
+    tutorial (see REPRODUCE_GATE_RECORD above for the full citation).
+    Known-good: Re(Z0) ~= 50 ohm; S21 notch ~= F_NOTCH_TUTORIAL_DECLARED_HZ.
+    Issue #971: the previous docstring/print here said 'known-good ...
+    S21 notch ~3.43 GHz (repo fixture: openEMS 3.4286 GHz)' -- that number
+    was never this function's own measurement (it was cv06b's realized-
+    board reading, since shown to be an outlier by an independent Palace
+    FEM referee); see REPRODUCE_GATE_RECORD['do_not_repeat']."""
     import os
     import tempfile
     FDTD, CSX = _openems_common_setup(7e9)
@@ -1007,22 +1120,82 @@ def run_openems_tutorial():
     s21 = port[1].uf_ref / port[0].uf_inc
     band = (f > 1e9) & (f < 3e9)
     s21db = 20 * np.log10(np.abs(s21) + 1e-30)
-    i = int(np.argmin(s21db))
+    # Restrict the notch search to a window around the analytic estimate --
+    # same technique validation/crossval/20_msl_phase_referee.py's Stage A
+    # uses, same reason: an unrestricted argmin over the full 1MHz-7GHz
+    # sweep can lock onto a different minimum than the quarter-wave notch
+    # this function is actually checking. (Issue #971's wrong "3.4286 GHz"
+    # citation was never this function's own measurement at all -- see
+    # REPRODUCE_GATE_RECORD['do_not_repeat'] -- so this restriction is
+    # precautionary, not a fix to a demonstrated argmin defect.)
+    search_lo = 0.5 * F_NOTCH_TUTORIAL_DECLARED_HZ
+    search_hi = 1.5 * F_NOTCH_TUTORIAL_DECLARED_HZ
+    search_mask = (f >= search_lo) & (f <= search_hi)
+    if not np.any(search_mask):
+        search_mask = np.ones_like(f, dtype=bool)
+    i_local = int(np.argmin(s21db[search_mask]))
+    i = int(np.flatnonzero(search_mask)[i_local])
+    f_notch = float(f[i])
+    dev_pct = (abs(f_notch - F_NOTCH_TUTORIAL_DECLARED_HZ)
+               / F_NOTCH_TUTORIAL_DECLARED_HZ * 100.0)
+    gate = REPRODUCE_GATE_RECORD["gate"]
+    f_notch_ok = bool(gate["f_notch_lo_hz"] <= f_notch <= gate["f_notch_hi_hz"])
     print("=" * 72)
     print("COMPARATOR-FIRST: openEMS canonical tutorial (MSL_NotchFilter.py)")
     print("=" * 72)
     print(f"  Re(Z0) median 1-3 GHz = {np.median(z0[band]):.2f} ohm   "
           f"(known-good ~50 ohm)")
-    print(f"  S21 notch = {f[i] / 1e9:.4f} GHz @ {s21db[i]:.1f} dB   "
-          f"(repo fixture openEMS: 3.4286 GHz)")
+    print(f"  S21 notch = {f_notch / 1e9:.4f} GHz @ {s21db[i]:.1f} dB   "
+          f"expected={F_NOTCH_TUTORIAL_DECLARED_HZ / 1e9:.4f} GHz "
+          f"dev={dev_pct:.2f}%")
+    print(f"  gate band {gate['f_notch_lo_hz'] / 1e9:.4f}-"
+          f"{gate['f_notch_hi_hz'] / 1e9:.4f} GHz -- reproduce-gate: "
+          f"{'PASS' if f_notch_ok else 'FAIL'}")
     esum = np.abs(s11) ** 2 + np.abs(s21) ** 2
     print(f"  max |S11|^2+|S21|^2 = {np.max(esum):.4f} (passivity)")
+    return {
+        "f_notch_hz": f_notch,
+        "f_notch_expected_hz": float(F_NOTCH_TUTORIAL_DECLARED_HZ),
+        "f_notch_dev_pct": dev_pct,
+        "f_notch_ok": f_notch_ok,
+        "re_z0_median_1_3ghz_ohm": float(np.median(z0[band])),
+        "max_passivity": float(np.max(esum)),
+    }
 
 
 def run_openems(f_max):
     import os
     import tempfile
     import time
+    # Reproduce-gate refusal (docs/agent-memory/task_recipes/
+    # external_solver_comparator.md step 2, same gating cv20/cv21 apply
+    # before touching their own target geometry): refuse to build/solve
+    # the Sheen board's own openEMS comparator leg until
+    # run_openems_tutorial()'s reproduction has been checked and the
+    # committed record says so.
+    #
+    # BLIND SPOT, documented rather than hidden: this check fires only
+    # when someone regenerates THIS leg by hand or on VESSL. compare()
+    # -- the CI-gated path every crossval run actually takes -- reads the
+    # already-committed _07_sheen_results/openems.json and never calls
+    # this function, so it cannot re-verify the gate on every run; the
+    # guarantee is only as good as the discipline of whoever last
+    # regenerated this leg. This is a "once, not per run" gate, unlike
+    # cv20's (Stage A reruns inside the same script invocation as Stage B
+    # every time, because both stages are VESSL-only and CI never runs
+    # either).
+    if REPRODUCE_GATE_RECORD["status"] != "RUN":
+        print("!" * 72, file=sys.stderr)
+        print("!! REFUSING to build the openEMS comparator leg: "
+              f"REPRODUCE_GATE_RECORD['status'] is "
+              f"{REPRODUCE_GATE_RECORD['status']!r}, not 'RUN'.",
+              file=sys.stderr)
+        print("!!   run_openems_tutorial() (mode=tutorial) has not been "
+              "run and its result recorded in REPRODUCE_GATE_RECORD -- see "
+              "docs/agent-memory/task_recipes/external_solver_comparator.md "
+              "and issue #971.", file=sys.stderr)
+        print("!" * 72, file=sys.stderr)
+        raise SystemExit(3)
     FDTD, CSX = _openems_common_setup(f_max)
     print("=" * 72)
     print("openEMS side")
@@ -1091,6 +1264,7 @@ def run_openems(f_max):
         freqs_hz=f.tolist(),
         s11_mag=np.abs(s11).tolist(), s21_mag=np.abs(s21).tolist(),
         re_z0=z0.tolist(), energy_sum=esum.tolist(),
+        reproduce_gate_record=REPRODUCE_GATE_RECORD,
     )
     with open(os.path.join(RES_DIR, "openems.json"), "w") as fp:
         json.dump(out, fp, indent=2)
@@ -1159,8 +1333,72 @@ def _column_power(d):
     return np.array(d["s11_mag"]) ** 2 + np.array(d["s21_mag"]) ** 2
 
 
+def _refuse_unless_reproduce_gate_passed(openems_leg: dict) -> None:
+    """Reproduce-gate refusal, CONSUME side (docs/agent-memory/task_recipes/
+    external_solver_comparator.md step 2; team-lead ruling 2026-09-10):
+    compare() must not evaluate cv07's own gates against an openEMS leg
+    whose comparator-first sanity was never checked. run_openems() (see
+    its own refusal + comment, above) is the PRODUCE side -- refuses to
+    *generate* a leg while REPRODUCE_GATE_RECORD['status'] != 'RUN'. This
+    function is the other half: refuses to *consume* one. Neither
+    substitutes for the other -- a leg produced before this gate existed,
+    or hand-copied in from elsewhere, is only caught here.
+
+    The record is read from the LEG ITSELF (``openems_leg.get(
+    "reproduce_gate_record")``), not this module's live
+    REPRODUCE_GATE_RECORD -- what matters is whether the LEG BEING
+    CONSUMED was produced under a passing gate, not what the current
+    module state happens to say.
+
+    BLIND SPOT, still real and still written down: the record is
+    verified ONCE, when the leg was produced, not per compare() run -- an
+    openEMS version change or a rebuilt image between that run and this
+    compare() invocation is not noticed here.
+
+    Exit 2 (inconclusive), matching _load_legs()'s own convention for a
+    reference leg that cannot yet support a PASS -- this is not a physics
+    gate failure.
+    """
+    record = openems_leg.get("reproduce_gate_record")
+    if record is None:
+        print("!" * 72)
+        print("!! CROSSVAL 07 SKIPPED -- the committed openEMS leg carries "
+              "no reproduce_gate_record.")
+        print("!!   It predates this gate (issue #971) or was produced by "
+              "a script version that did not embed one. Regenerate it: "
+              "run_openems_tutorial() (mode=tutorial) must pass and "
+              "REPRODUCE_GATE_RECORD must be filled to status='RUN' "
+              "before `python 07_sheen_lpf.py openems` will build a new "
+              "leg. Exiting 2 (inconclusive).")
+        print("!" * 72)
+        raise SystemExit(2)
+    if record.get("status") != "RUN":
+        print("!" * 72)
+        print(f"!! CROSSVAL 07 SKIPPED -- the committed openEMS leg's "
+              f"reproduce_gate_record status is {record.get('status')!r}, "
+              f"not 'RUN'. Exiting 2 (inconclusive).")
+        print("!" * 72)
+        raise SystemExit(2)
+    gate = record.get("gate") or {}
+    f_notch = record.get("reproduced_f_notch_hz")
+    lo, hi = gate.get("f_notch_lo_hz"), gate.get("f_notch_hi_hz")
+    ok = f_notch is not None and lo is not None and hi is not None and lo <= f_notch <= hi
+    if not ok:
+        print("!" * 72)
+        print(f"!! CROSSVAL 07 SKIPPED -- the committed leg's "
+              f"reproduce_gate_record claims status='RUN' but its own "
+              f"reproduced_f_notch_hz ({f_notch}) does not satisfy its own "
+              f"gate band [{lo}, {hi}]. Exiting 2 (inconclusive).")
+        print("!" * 72)
+        raise SystemExit(2)
+    print(f"  reproduce-gate (embedded in the openEMS leg): PASS "
+          f"({f_notch / 1e9:.4f} GHz vs gate {lo / 1e9:.4f}-"
+          f"{hi / 1e9:.4f} GHz)")
+
+
 def compare(null_lo, null_hi, pass_lo, pass_hi, paper_null_ghz):
     R, O = _load_legs()
+    _refuse_unless_reproduce_gate_passed(O)
     fr, s21r = np.array(R["freqs_hz"]), np.array(R["s21_mag"])
     fo, s21o = np.array(O["freqs_hz"]), np.array(O["s21_mag"])
     s11r, s11o = np.array(R["s11_mag"]), np.array(O["s11_mag"])

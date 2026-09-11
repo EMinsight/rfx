@@ -62,6 +62,125 @@ from rfx.boundaries.spec import BoundarySpec
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 C0 = 2.998e8
 
+# ---------------------------------------------------------------------------
+# Reproduce-gate record -- audit artifact (docs/agent-memory/task_recipes/
+# external_solver_comparator.md step 2). Committed UNRUN; a VESSL run fills
+# these fields AND must supply a log path under a git-TRACKED prefix (same
+# PR #548 lesson validation/crossval/20_msl_phase_referee.py and
+# validation/crossval/21_coax_two_port_referee.py already paid for).
+#
+# UNLIKE cv20's Stage A or cv21's own reproduce-gate, this one does NOT check
+# against a published number -- Meep's own docs page for this example
+# (doc/docs/Python_Tutorials/Basics.md, "Transmittance Spectrum of a
+# Waveguide Bend") ends in plt.show(): a plot (doc/docs/images/
+# Tut-bend-flux.png), not a printed transmittance value. Verified directly
+# against the raw upstream markdown (fetched via `gh api repos/NanoComp/
+# meep/contents/doc/docs/Python_Tutorials/Basics.md`) and the plot image
+# itself, 2026-09-10 -- there is no number anywhere in that section's text.
+#
+# So this reproduce-gate anchors on OUR OWN recorded run of upstream's own,
+# UNMODIFIED script (validation/crossval/_01_waveguide_bend_upstream/
+# bend-flux.py, vendored verbatim -- see that directory's PROVENANCE.md and
+# scripts/diagnostics/waveguide_bend_tutorial_meep.py, the producer), not on
+# an external ground truth. That is a WEAKER anchor than cv20's/cv21's, and
+# this fact belongs in the record, not just in a design note: it records
+# "this Meep, on this exact upstream script, produced this", which makes
+# future drift attributable, but does not validate against a published
+# result. The producer's checks (also weaker than a numeric match, for the
+# same reason -- see that script's own docstring) are PASSIVITY (R>=0, T>=0,
+# R+T<=1 at every frequency -- the real, non-tautological form; asserting
+# R+T+loss==1 literally would be a tautology, since loss is DEFINED as
+# 1-R-T, never independently measured) and a weak qualitative shape check
+# (T has an interior local minimum; R stays within a generous,
+# eyeballed-off-the-published-plot range).
+#
+# Do NOT reuse this record's own single number for anything cv01's EXISTING
+# Meep comparator leg (below, :187-200) reports -- that leg is a hand-port
+# with SIX of ten parameters diverging from this tutorial (cell size,
+# waveguide-center placement, source position, nfreq, flux-region width,
+# normalization algorithm) and answers a different question (rfx-vs-that-
+# specific-Meep-setup), not "did Meep reproduce its own tutorial".
+# ---------------------------------------------------------------------------
+REPRODUCE_GATE_RECORD: dict = {
+    "stage": "tutorial-reproduce",
+    "tutorial": {
+        "repo": "NanoComp/meep",
+        "path": "python/examples/bend-flux.py",
+        "verified_present_on": "2026-09-10",
+        "verified_via": "gh api repos/NanoComp/meep/contents/python/examples/bend-flux.py",
+        "submodule_pin_note": (
+            "Vendored verbatim at validation/crossval/"
+            "_01_waveguide_bend_upstream/bend-flux.py, git blob sha "
+            "f56ab6492a3cc55ebc1fc0c682c4981508c51955 (matches `git "
+            "hash-object` on the vendored copy -- byte-identical, not "
+            "transcribed). No submodule-pin caveat applies; this is a "
+            "standalone example script, not a library entry point."
+        ),
+    },
+    "do_not_repeat": (
+        "01_waveguide_bend.py's own Meep comparator leg (:187-200) was "
+        "treated as if it were a faithful reproduction of Meep's "
+        "bend-flux.py tutorial. It is a hand-port and diverges from the "
+        "tutorial in six of ten parameters (cell size/aspect ratio "
+        "18x18 vs 16x32, waveguide-center placement, source position, "
+        "nfreq 200 vs 100, flux-region width full-domain-cross-section vs "
+        "2*w aperture-sized, and the normalization algorithm -- single-run "
+        "ratio-of-ratios vs the tutorial's two-run flux-data subtraction). "
+        "Do not treat that leg's agreement or disagreement with rfx as "
+        "evidence about whether Meep's OWN tutorial was reproduced -- it "
+        "was never a port of it in the first place, by its own docstring "
+        "('Meep Basics EQUIVALENT'). Separately: issue #973 (filed "
+        "2026-09-10) found that this leg and rfx's own flux monitors "
+        "SHARE the same full-domain-cross-section measurement aperture, "
+        "where the tutorial's own flux planes are sized to the waveguide. "
+        "Their mutual agreement/disagreement does not validate that "
+        "aperture choice -- two implementations agreeing on a measurement "
+        "choice they share is not independent validation, and this "
+        "anchor does not close #973."
+    ),
+    "geometry": (
+        "90-degree dielectric waveguide bend transmittance spectrum, "
+        "eps=12 (frequency-independent), waveguide width w=1um, "
+        "resolution=10 px/um, cell 16x32um (sx=16, sy=32), PML "
+        "thickness dpml=1.0um, padding pad=4um between waveguide and "
+        "cell edge, GaussianSource fcen=0.15 df=0.1, nfreq=100, "
+        "two-run (straight then bend) flux-data-subtraction "
+        "normalization -- exactly as published, no changes."
+    ),
+    "documented_check": (
+        "NONE PUBLISHED. Meep's own docs page for this example "
+        "(doc/docs/Python_Tutorials/Basics.md, section 'Transmittance "
+        "Spectrum of a Waveguide Bend') ends in plt.show() -- a plot, "
+        "doc/docs/images/Tut-bend-flux.png, not a printed number. That "
+        "makes this reproduce-gate WEAKER than validation/crossval/"
+        "20_msl_phase_referee.py's Stage A or validation/crossval/"
+        "21_coax_two_port_referee.py's own reproduce-gate: both of those "
+        "check against a number their own tutorial DOES publish; this "
+        "one anchors on our own recorded run of upstream's own script "
+        "instead, which makes future drift attributable but does not "
+        "validate against a published result. "
+        "Gated here: PASSIVITY -- R(f)>=0, T(f)>=0, R(f)+T(f)<=1 at "
+        "every frequency. NOT energy conservation: the tutorial's own "
+        "script computes loss as `1 - Rs - Ts` inline, for its plot "
+        "only, and never measures loss independently, so asserting "
+        "R+T+loss==1 would be an IDENTITY -- true of any input, "
+        "including a broken run -- not a check. Passivity is not an "
+        "identity; a wrong flux normalization, a sign error, or PML "
+        "leakage into a flux plane can all violate it. Also gated: a "
+        "WEAK qualitative shape check (T has an interior local minimum; "
+        "R stays within a generous +-0.20 range eyeballed off the "
+        "published plot) -- stated plainly here as a bound against a "
+        "grossly wrong run, not a pin."
+    ),
+    "status": "UNRUN",
+    "reproduced_passivity_ok": None,
+    "reproduced_shape_ok": None,
+    "reproduced_meep_version": None,
+    "log_path": None,
+    "vessl_run_id": None,
+    "verified_on": None,
+}
+
 # =============================================================================
 # Parameters
 # =============================================================================
