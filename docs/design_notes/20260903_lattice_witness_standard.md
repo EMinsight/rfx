@@ -425,40 +425,107 @@ identification of §5.2 is therefore CONFIRMED, not merely asserted: the part of
 `|rfx − lattice|` that fell by 61× with the record was truncation, and the part
 that stayed is the lattice.
 
-### 5.3 cv04 — the witness is REPORTED, not gated, and the derivation says why
+### 5.3 cv04 — the witness was REPORTED, not gated; the derivation said why, and the settling-extension fix (2026-09-10) closed it
 
-cv04 runs one rung (dx = 1 mm, nx 600, 719 steps). `--lattice-witness` writes
+**UPDATE 2026-09-10, read this first.** Section 8.3 below declined to give
+cv04 its own settled record ("no new physics"); the PI overrode that call --
+a case that cannot settle its own spectra cannot gate its own case, and the
+un-extendable legacy record was the defect this campaign exists to fix, not a
+constraint to protect. cv04 now runs the SAME settling-extension mechanism
+cv22/cv23 already had (grow `nx_interior` by 200 until both tails clear the
+family's −40 dB bar), reaching
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.n_steps = 990`
+at `nx_interior = 800` (one grow attempt from the declared 600), tails
+0.0004 / 0.0001 of the incident peak (was 0.036 / 0.051). The witness is now
+GATED (`gated_here = true`):
+
+| quantity (cv04 AS COMMITTED, POST-FIX, 990 steps) | value |
+|---|---|
+| `W_witness,R` gated mean | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_W_witness_R_gated = 0.000635` |
+| `W_witness,T` gated mean | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_W_witness_T_gated = 0.000291` |
+| `\|rfx − lattice\|` gated mean, R | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_dR_lattice_gated = 2.01e-05` |
+| `\|rfx − lattice\|` gated mean, T | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_dT_lattice_gated = 9.52e-05` |
+| worst per-bin ratio, R / T | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.worst_ratio_R = 0.081` / `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.worst_ratio_T = 0.551` |
+| a-priori ceiling, R | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_W_ceiling_R_gated = 0.0149` |
+| Γ, source (ringdown rate) | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.budget.rate_ringdown_1_s = 1.647e10` |
+
+Both pass with margin; T's margin (0.551) is far tighter than R's (0.081) even
+though T's absolute residual also shrank ~66×, because T's window shrank
+further still (~611×) -- the window, not the residual, is now T's binding
+constraint. The ceiling and Γ are geometry-derived, not record-length-derived,
+so the fix barely moves them: Γ is bit-identical (16467783920.44 s⁻¹ both
+sides) and the ceiling moves only in its 6th significant digit (0.0148608
+pre-fix, 0.0148604 post-fix; both round to 0.0149) -- cited live above
+against the current artifact rather than repeated as plain numbers below.
+
+The wrong-model and 1 % ε′ falsifiers WERE re-run against this settled rung,
+and both now discriminate strongly where they previously did not:
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.falsifiers.continuum.separation_over_window_R = 8.35`
+(F2; was 0.099 pre-fix, 0 of 115 bins over window) and
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.falsifiers.eps_x1p01.separation_over_window_R = 6.87`
+(F3; was 0.082 pre-fix, 0 of 115 bins over window); both now clear 111 of 115
+gated bins in R (§7's F2/F3 tables carry the added rows). Both separations
+above are R-channel (`separation_over_window_R`), so the relevant shrink is
+R's own W_witness window, ~84× (N2, PR #974 round 2: mean_W_witness_R_gated
+0.0535 -> 0.000635; T's window shrank further still, ~611×, but that number
+belongs with T's own separation, not this one). It is that ~84× window
+shrink from settling that turns the same physical model-mismatch and 1 %
+ε′-perturbation terms from invisible into strongly discriminating -- nothing
+about the perturbations themselves changed.
+
+The rest of this section (below) describes the PRE-FIX 719-step record as
+committed 2026-07-13 through 2026-09-10 -- kept for the physical reasoning
+(the settling-rate derivation via Γ, Λ still applies) and as the historical
+record the fix superseded, not as a claim about the artifact today. Most
+numbers below are stated plainly, without a live citation, because
+`lattice_witness.json` no longer holds them -- `W_witness,R/T` and the
+worst-bin ratios have no other committed home; retrieve them at the pinned
+pre-fix commit, `git show e079b0b5:validation/crossval/_04_fresnel_results/lattice_witness.json`.
+The two `|rfx − lattice|` gated-mean numbers (R, T) are the exception: they
+are live-cited below against the immutable r1 revision of `envelope.json`,
+which archived them before the fix and does not change when the producer is
+re-run.
+
+cv04 ran one rung (dx = 1 mm, nx 600, 719 steps). `--lattice-witness` wrote
 `validation/crossval/_04_fresnel_results/lattice_witness.json` with
-`gated_here = false`. The reason is derived, not measured: cv04's own tail
-witness reads **0.036 / 0.051** of the incident peak (`04_multilayer_fresnel.py`,
+`gated_here = false`. The reason was derived, not measured: cv04's own tail
+witness read **0.036 / 0.051** of the incident peak (`04_multilayer_fresnel.py`,
 the issue-#341 comment block, committed config 2026-07-13) against the family's
-−40 dB bar of 1e-2 — cv04's record does not settle, by design (`TAIL_LIMIT =
-0.10` there bounds "gross non-settling", and the residual is the documented
+−40 dB bar of 1e-2 — cv04's record did not settle, by design (`TAIL_LIMIT =
+0.10` there bounds "gross non-settling", and the residual was the documented
 order-2 etalon echo still in flight). Put those levels through §3 with the
 lossless etalon rate `Γ = 1.65e10 s⁻¹` (ρ = |r|² = 1/9 per round trip, t_rt =
-2·2·d/c) and Λ = 48.323, and the run confirms the derivation:
+2·2·d/c) and Λ = 48.323, and the run confirmed the derivation:
 
-| quantity (cv04 AS COMMITTED, 719 steps, 115 gated bins) | value |
+| quantity (cv04 AS COMMITTED PRE-FIX, 719 steps, 115 gated bins — historical, superseded 2026-09-10) | value |
 |---|---|
-| `W_witness,R` gated mean | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_W_witness_R_gated = 0.0535` |
-| `W_witness,T` gated mean | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_W_witness_T_gated = 0.178` |
-| a-priori ceiling, R | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_W_ceiling_R_gated = 0.0149` |
-| `\|rfx − lattice\|` gated mean, R | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_dR_lattice_gated = 0.00168` |
-| `\|rfx − lattice\|` gated mean, T | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_dT_lattice_gated = 0.00625` |
-| worst per-bin ratio, R / T | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.worst_ratio_R = 0.095` / `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.worst_ratio_T = 0.056` |
-| Γ, source | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.budget.rate_ringdown_1_s = 1.647e10` (derived) |
+| `W_witness,R` gated mean | 0.0535 (retrieval above: `lattice_witness.json` at `e079b0b5`) |
+| `W_witness,T` gated mean | 0.178 (same retrieval) |
+| `\|rfx − lattice\|` gated mean, R | `validation/crossval/_04_fresnel_results/envelope.json::revisions.r1.lattice_identification.rfx_vs_lattice_mean_dR_gated.value = 0.00168` |
+| `\|rfx − lattice\|` gated mean, T | `validation/crossval/_04_fresnel_results/envelope.json::revisions.r1.lattice_identification.rfx_vs_lattice_mean_dT_gated.value = 0.00625` |
+| worst per-bin ratio, R / T | 0.095 / 0.056 (same retrieval) |
 
-which is looser than cv04's own band-mean windows, and 3.6× looser than its own
-a-priori ceiling because the measured tails are 3.6× and 5.1× the declared bar.
-The wrong-model falsifier F2 does not fire there (separation 0.099 of the
-window, 0 of 115 gated bins), nor does F3 (0.082, 0 of 115). A gate that cannot
-reject the continuum model is not a gate; it is reported.
+(The a-priori ceiling and Γ are omitted from this table on purpose: both are
+geometry-derived, not record-length-derived, and are cited live in the
+POST-FIX table above at values unchanged to displayed precision -- repeating
+them here as plain pre-fix numbers would suggest they moved with the fix,
+which they did not.)
+
+which was looser than cv04's own band-mean windows, and 3.6× looser than its own
+a-priori ceiling because the measured tails were 3.6× and 5.1× the declared bar.
+The wrong-model falsifier F2 did not fire there (separation 0.099 of the
+window, 0 of 115 gated bins), nor did F3 (0.082, 0 of 115). A gate that cannot
+reject the continuum model is not a gate; it is reported -- which was the
+state this section's title described, before the fix above.
 
 **These are the run's numbers, not a reconstruction.** The note's first draft
 carried derived values for this table that were 3–15 % off — 5.2e-2 for a
 measured 5.35e-2, 1.7e-1 for 1.78e-1, and F1 / F2 / F3 separations of
 1.50 / 0.45, 0.10 and 0.08 for a measured 1.45 / 0.43, 0.099 and 0.082. Every
-number above is now a key of the committed artifact the VESSL run wrote (§9.1).
+number above WAS a key of the committed artifact that original VESSL run
+wrote (§9.1) -- retrievable today at the pinned pre-fix commit, `git show
+e079b0b5:validation/crossval/_04_fresnel_results/lattice_witness.json`, not
+at the current one, which the 2026-09-10 settling fix superseded.
 
 **cv04's material does have a claims-bearing lattice rung today, at zero cost.**
 cv23's `tand0p1_sigma_zero` falsifier arm is cv04's slab exactly — ε′ = 4,
@@ -500,29 +567,47 @@ number in the two observables — 0.00727 over cv04's own mask (3.032–11.867 G
 `A ≡ 0` and `|R_lat − R_TMM| = |T_lat − T_TMM|` bin by bin. cv04's committed
 envelopes are not the same number:
 
-| observable | committed envelope | lattice term over the same mask | lattice / envelope | `\|rfx − lattice\|`, gated mean |
+| observable (PRE-FIX, 719 steps, historical) | committed envelope | lattice term over the same mask | lattice / envelope | `\|rfx − lattice\|`, gated mean |
 |---|---|---|---|---|
-| `\|ΔR\|` | `tests/fixtures/golden_workflows/multilayer_fresnel.json::expected_metrics[0].observed_baseline = 0.0066` | 0.00727 | **1.10** | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_dR_lattice_gated = 0.00168` |
-| `\|ΔT\|` | `tests/fixtures/golden_workflows/multilayer_fresnel.json::expected_metrics[1].observed_baseline = 0.011` | 0.00727 | **0.66** | `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.mean_dT_lattice_gated = 0.00625` |
+| `\|ΔR\|` | `tests/fixtures/golden_workflows/multilayer_fresnel.json::expected_metrics[0].observed_baseline = 0.0066` | 0.00727 | **1.10** | `validation/crossval/_04_fresnel_results/envelope.json::revisions.r1.lattice_identification.rfx_vs_lattice_mean_dR_gated.value = 0.00168` |
+| `\|ΔT\|` | `tests/fixtures/golden_workflows/multilayer_fresnel.json::expected_metrics[1].observed_baseline = 0.011` | 0.00727 | **0.66** | `validation/crossval/_04_fresnel_results/envelope.json::revisions.r1.lattice_identification.rfx_vs_lattice_mean_dT_gated.value = 0.00625` |
 
-In R the lattice accounts for the whole envelope (1.10×, i.e. the identification
-is complete to within the residual the last column measures). In T it accounts
-for two thirds, and the residual against the lattice at cv04's own rung is
-**0.00625** — **more than half of the 0.011 envelope is this record's TRUNCATION,
-not a discretisation term.** Over the full mask the same comparison is starker:
-`|rfx − lattice|` in T is 0.0106 of a 0.0110 envelope, because the un-gated band
-edges are where the un-settled tail lands.
+(The last column is live-cited against the immutable r1 revision of
+`envelope.json`, not against `lattice_witness.json` -- the settling fix
+regenerated `lattice_witness.json` in place, so it no longer holds the
+PRE-FIX 719-step reading, but r1 archived these two numbers before the fix
+and does not move when the producer is re-run. See the 2026-09-10 update at
+the top of this section for the current, settled values,
+`mean_dR_lattice_gated = 2.01e-05` and `mean_dT_lattice_gated = 9.52e-05`.)
+
+In R the lattice accounted for the whole PRE-FIX envelope (1.10×, i.e. the
+identification was complete to within the residual the last column measured).
+In T it accounted for two thirds, and the residual against the lattice at
+cv04's own PRE-FIX rung was **0.00625** — **more than half of the 0.011
+envelope was that record's TRUNCATION, not a discretisation term.** The
+settled (POST-FIX) record confirms this reading directly rather than by
+extrapolation: at 990 steps `\|rfx − lattice\|` in T fell to 9.52e-05, 0.87%
+of the same 0.011 envelope. Read as CONSISTENT with the truncation
+diagnosis, not as its own new answer to "what fraction of a properly re-derived
+T envelope is the lattice term" -- the T envelope itself (0.011) is a PRE-FIX
+number too (`envelope.json` r1, §5.3's own update), and re-deriving it (r2,
+issue #928) is a separate, not-yet-done step.
 
 **Consequence for the family's windows, stated rather than implied.**
-`W_mean,R = 0.010 = gate_from_envelope(0.0066, quantum=1000)` is derived from a
-number this note shows to be a discretisation term. `W_mean,T = 0.017 =
-gate_from_envelope(0.011, quantum=1000)` is **not**: it is derived from a
-truncation-dominated number, and `W_MEAN_T` must not be described anywhere as a
-discretisation number. Nothing about cv04's gates changes and no window moves;
-what changes is what may be said about them. Anyone tightening `W_mean,R` must
-refine the mesh, not the tolerance; anyone tightening `W_mean,T` must first
-lengthen cv04's record, because most of what that window covers is a record
-length, not a mesh.
+`W_mean,R = 0.010 = gate_from_envelope(0.0066, quantum=1000)` was derived from a
+PRE-FIX number this note showed to be a discretisation term (and the 2026-09-10
+settled record confirms directly, not just by inference from cv23's sibling
+arm). `W_mean,T = 0.017 = gate_from_envelope(0.011, quantum=1000)` was **not**:
+it was derived from a truncation-dominated PRE-FIX number, and `W_MEAN_T` must
+not be described anywhere as a discretisation number -- that conclusion still
+stands, though the T envelope it was derived from is itself now a candidate for
+re-derivation (issue #928) rather than the last word. Nothing about cv04's
+gates changed with the settling fix and no window moved; what changed is that
+cv04 can now confirm this section's claims on its own record instead of
+borrowing cv23's. Anyone tightening `W_mean,R` must refine the mesh, not the
+tolerance; anyone tightening `W_mean,T` should look at whether the settled
+record changes the mesh-vs-record-length balance the old advice ("lengthen
+cv04's record") assumed, now that lengthening it is exactly what happened.
 
 ### 5.4 The consequence §5.3 states the premise of, and does not draw (added after the 2026-09-03 review)
 
@@ -586,26 +671,37 @@ re-derivation`.** Its content: (a) re-derive `W_mean,R` and `W_mean,T` from
 un-settled envelope, with the lattice term carried as a separate, per-rung,
 per-mesh term instead of being folded into a constant; (b) run the refined rungs
 each arm then needs — from the table above that is the dx rungs of cv22 Debye
-and Lorentz and of cv23 `tand0p1`, `tand1` and `tand3`; (c) re-run cv04 itself on
-a settled record so its envelope stops being the family's datum while being the
-one measurement in the family that does not settle. Cost: five to seven arms
-plus one cv04 leg, order a minute of pod time; the expensive part is the
-decision in (a), not the compute. Nothing in THIS lane depends on it, and this
-lane's gates are unaffected either way.
+and Lorentz and of cv23 `tand0p1`, `tand1` and `tand3`; (c) re-run cv04 itself
+on a settled record so its envelope stops being the family's datum while being
+the one measurement in the family that does not settle.
+**(c) is SUPERSEDED 2026-09-10** (N7, PR #974 round 2): the settling-extension
+fix did this -- cv04 now runs on a settled 990-step record (§5.3's top
+UPDATE). Its ENVELOPE (`envelope.json` r1, mean |dR|/|dT| = 0.0066/0.011) is
+still the pre-fix, un-settled measurement, though; re-deriving the envelope
+itself from the settled record is r2 (issue #928, drafted, held for its own
+PR), a narrower and now-separate task from what (c) originally proposed.
+(a) and (b) remain open. Cost: five to seven arms, order a minute of pod
+time; the expensive part is the decision in (a), not the compute. Nothing in
+THIS lane depends on it, and this lane's gates are unaffected either way.
 
 ## 6. What is NOT changed
 
 - No continuum window, per-bin or band-mean, on any case.
 - No settling bar, purity bar or passivity ceiling is loosened; the rig raises on
   an attempt to loosen the settling bar.
-- No case's exit code depends on the lattice gate in this commit: `--lattice-witness`
-  is a separate post-processing invocation with its own exit code (0 = every rung
-  passed), exactly like `--meep-ladder-summary`. Wiring the lattice verdict into
-  the cases' own `verdict.exit_code` is a follow-up the PI can call for once the
-  VESSL run has confirmed the numbers on a fresh tree; the run has now done so
-  (§9.1, 12 of 12 rungs green, worst ratio 0.30), so the precondition is met and
-  the wiring is a PI call — it is still NOT done here, and that is stated rather
-  than implied.
+- **SUPERSEDED, 2026-09-10.** This bullet described the 2026-09-03 state only:
+  no case's exit code depended on the lattice gate, `--lattice-witness` was a
+  separate post-processing invocation with its own exit code, and wiring it
+  into a case's own verdict was left as a PI call. That call was made twice
+  since: issue #970 wired cv23's `main()` (`GL_witness` folds into `e2_ok`,
+  live on this run's own freshly-computed R/T, `23_lossy_slab_fresnel.py`),
+  and PR #974 round 2 (B1) wired cv04's `main()` the same way -- the witness
+  now EVALUATES on every cv04 run, not only under `--lattice-witness` (the
+  flag now controls only whether the artifact is rewritten), and folds into
+  `rfx_self_ok`. cv22 is the one case where this bullet is still literally
+  true: its own `witness_ok`-type value is computed and never read by
+  `main()` (the #970 PR body's bounded pattern grep names it; left untouched
+  there, a separate decision).
 - No committed rung of any case is added, removed or re-run. §8.1's remedy rung
   is a NEW rung and lives in `_22_dispersive_diag/`, outside every case's
   `rungs_from_results` glob, precisely so that this bullet stays true.
@@ -642,7 +738,8 @@ requires at least 40 bins over the window on R or T at each.
 | cv23 tand3 (= dx2) | **0.94** | **174.4** | 113 / 229 / 74 |
 | cv23 tand3_dx4 | 0.54 | 93.7 | 101 / 229 / 46 |
 | cv04 material (settled) | 14.1 | 17.4 | 228 / 227 / 0 |
-| cv04 as committed | 1.45 | 0.43 | 89 / 24 / 0 |
+| cv04 as committed, PRE-FIX (719 steps, superseded 2026-09-10) | 1.45 | 0.43 | 89 / 24 / 0 |
+| cv04 as committed, POST-FIX (990 steps) | 121.74 | 265.47 | 115 / 115 / 0 |
 
 (The `thickness_minus_cell` twin is within 15 % of each row and also fires
 everywhere; both are recorded in the artifact.)
@@ -674,19 +771,23 @@ separation falls at order 2.
 | cv22 debye | dx | **0.13** | **never** — see §5.2 | — |
 | cv22 debye @ 3e-4 (§8.1) | dx | **6.68** | **dx** (229 of 229 bins in R) | — |
 | cv04 material (settled) | dx | 0.96 | **dx** (91 bins) | — |
-| cv04 as committed | dx | 0.099 | **never** — see §5.3 | — |
+| cv04 as committed, PRE-FIX (719 steps, superseded 2026-09-10) | dx | 0.099 | **never** (0 of 115 bins) | — |
+| cv04 as committed, POST-FIX (990 steps) | dx | 8.35 | **dx** (111 of 115 bins) | — |
 
 **Answer to "compute which rung F2 fires at":** F2 fires at the COARSEST rung of
 every ladder that runs one — dx for cv23's tand0p1 and tand1 and for cv22's
 Lorentz and Drude, dx/2 for cv23's tand3 (its coarsest committed rung) — and it
 goes silent at **dx/4 on tand0p1** (0 of 229 bins; on tand1 the T observable
-still catches it there). It never fires on cv22's Debye arm AT ITS COMMITTED RUNG, nor on cv04's
-committed configuration, in both cases because the truncation term of the window
-exceeds the lattice term at that record; both are §5.2/§5.3's declared
-non-discriminating rungs, and both are named in the manifest and the public rows
-rather than left to be discovered. **On the Debye arm that is now a statement
-about the RUNG and not about the arm: at §8.1's 3e-4 rung, which the VESSL run
-took, F2 fires at 6.68× on 229 of 229 gated bins in R** — the row above.
+still catches it there). It never fired on cv22's Debye arm AT ITS COMMITTED
+RUNG, nor on cv04's PRE-FIX committed configuration (719 steps, superseded
+2026-09-10), in both cases because the truncation term of the window exceeded
+the lattice term at that record; both were §5.2/§5.3's declared
+non-discriminating rungs, named in the manifest and the public rows rather
+than left to be discovered. **Both are now statements about the RUNG, not the
+arm or case, and both are closed (§10(4)): at §8.1's 3e-4 rung, which the
+VESSL run took, F2 fires at 6.68× on 229 of 229 gated bins in R; on cv04's
+POST-FIX (990-step) committed configuration, F2 fires at 8.35× on 111 of 115
+gated bins in R** — both rows above.
 
 ### F3 — a 1 % ε′ perturbation
 
@@ -703,11 +804,13 @@ cv04/cv23, ε∞ for cv22) 1 % high.
 | cv23 tand1 / _dx2 / _dx4 | 0.78 / 0.87 / 1.12 | 76 / 110 / 160 in R, 216 / 219 / 229 in T | yes |
 | cv23 tand3 / _dx4 | 0.52 / 0.57 | 94 / 95 in R, 229 / 229 in T | yes |
 | cv04 material (settled) | 0.79 | 123 / 128 / 0 | yes |
-| cv04 as committed | 0.082 | 0 / 0 / 0 | **no** (§5.3) |
+| cv04 as committed, PRE-FIX (719 steps, superseded 2026-09-10) | 0.082 | 0 / 0 / 0 | **no** (§5.3, historical) |
+| cv04 as committed, POST-FIX (990 steps) | 6.87 | 111 / 113 / 0 | **yes** (§10(4), closed 2026-09-10) |
 
-F3 fires on every rung except the two declared non-discriminating ones — and on
+F3 fired on every rung except the two declared non-discriminating ones — and on
 the Debye arm it fires as soon as the record is long enough (1.07× at §8.1's
-rung), so that "no" is the rung's, not the arm's. On
+rung), so that pre-fix "no" was the rung's, not the arm's; cv04's own rung now
+fires too, by the same logic (§10(4)). On
 several arms it is carried by the per-bin gate (GL1), not the band mean — the 1 %
 perturbation moves the fringe positions more than the fringe-averaged level, and
 GL1 is what sees that.
@@ -899,11 +1002,17 @@ lane as well as on the committed artifact.
   rigorous statement at that rung, and F2's convergence reading is supplied by
   cv23's ladder on the same rig. If the PI wants cv22's ladder, it is
   `--dx-div 2|4 --tag <arm>_dx<K>` and about 30 s of pod time.
-- **A cv04 rung at the settled recipe with cv04's own script.** cv04 has no
-  record derivation and no `--nx-interior`; adding one would re-engineer a
-  committed legacy configuration for no new physics (cv23's `sigma_zero` arm
-  already measures that material at that recipe on that rig). Recorded as a
-  deliberate non-change.
+- **A cv04 rung at the settled recipe with cv04's own script.**
+  **SUPERSEDED 2026-09-10** -- see §5.3's top UPDATE. The PI overrode this
+  call: cv04 now has its own record derivation (the settling-extension loop,
+  `slab_family.NX_GROW_CELLS`) and a settled rung, on its own script, not
+  borrowed from cv23. Kept below, struck through in spirit, because the
+  reasoning explains why this bullet existed before the override, not
+  because it still describes the current state.
+  ~~cv04 has no record derivation and no `--nx-interior`; adding one would
+  re-engineer a committed legacy configuration for no new physics (cv23's
+  `sigma_zero` arm already measures that material at that recipe on that
+  rig). Recorded as a deliberate non-change.~~
 
 ## 9. Artifacts and keys
 
@@ -927,9 +1036,12 @@ lane as well as on the committed artifact.
   document, and it is what closes §5.2's stated limitation.
 - `validation/crossval/_04_fresnel_results/lattice_witness.json` — one rung,
   written by `python validation/crossval/04_multilayer_fresnel.py
-  --lattice-witness`, with `gated_here = false` and `gated_here_reason`.
-  **Committed** as of the VESSL run below; cv04's `artifact_paths` now lists it
-  and §5.3's cv04 numbers are READ from it rather than derived.
+  --lattice-witness`. Originally committed 2026-09-03 with `gated_here =
+  false` (719-step record, did not settle); regenerated by the 2026-09-10
+  settling-extension fix and now carries `gated_here = true` (990-step
+  settled record) -- see §9.1's second run entry below. cv04's
+  `artifact_paths` lists it and §5.3's cv04 numbers are READ from it rather
+  than derived.
 
 All three committed witness JSONs are rebuilt from the committed `rfx*.json`
 rungs by `test_committed_witness_artifact_rebuilds_from_the_committed_rungs`
@@ -968,14 +1080,45 @@ rungs passed on the cluster, worst `|rfx − lattice| / W_witness` = 0.30**
   `R+T` mean deviation 0.0091 (all against 0.05), `max|R+T−1|` 0.0487 ≤ 0.06,
   both tail witnesses and the tail purity `ok`, and `rfx accuracy: PASS` — and
   the lattice witness wrote its record and reported `witness_ok = true`.
-- **The committed copies were written before §7's F4 existed** and therefore
-  carry `falsifiers.{thickness_plus_cell, thickness_minus_cell, continuum,
-  eps_x1p01}` only. F4 (`eps_continuum`) is analytic post-processing of the same
-  committed rungs; its verdict at every rung is tabulated in §7 and asserted by
-  `test_falsifiers_fire_exactly_where_the_note_says_they_do`, which computes it
-  from the rungs rather than reading it from the artifact. The next
-  `--lattice-witness` invocation will add the block; the addition is purely
-  additive and changes no gate.
+- **cv22/cv23's committed copies were written before §7's F4 existed** and
+  therefore still carry `falsifiers.{thickness_plus_cell, thickness_minus_cell,
+  continuum, eps_x1p01}` only. F4 (`eps_continuum`) is analytic post-processing
+  of the same committed rungs; its verdict at every rung is tabulated in §7 and
+  asserted by `test_falsifiers_fire_exactly_where_the_note_says_they_do`, which
+  computes it from the rungs rather than reading it from the artifact. Their
+  next `--lattice-witness` invocation will add the block; the addition is
+  purely additive and changes no gate. **cv04's re-run (below) already carries
+  it**, because F4 existed in the script by the time that run wrote its
+  artifact.
+
+**2026-09-10 run: cv04's settling-extension fix (VESSL `369367260232`).**
+The settling-extension mechanism (§5.3's 2026-09-10 UPDATE) required a
+fresh cv04 run: VESSL run `369367260232`, branch commit `0c66b8c1`
+(`0c66b8c1d4713ac791a919876606e9b63f2e6c75`), `cv04.rc = 2` (S5, PR #974
+round 2: the case's own docstring is explicit that exit 2 is "inconclusive
+crossval, NOT a pass" -- rfx's self-check against the analytic reference
+passed, but Meep, the secondary cross-check, was unavailable; not a failure
+either), `fringe_evidence.rc = 0`. The
+run's raw output is tracked, not only referenced: `commit.txt`, `run_id.txt`,
+`cv04.log`, `cv04.rc`, `cv04_settled_summary.json`, `fringe_evidence.log`,
+`fringe_evidence.rc` and the VESSL stdout capture are all committed at
+`validation/crossval/_04_fresnel_logs/`, byte-identical to the run's own
+copies (`sha256sum` on each pair, source vs. tracked copy, matches on all
+eight files -- e.g. `cv04.log` both `6a819810bc5ae4b7...`,
+`rfx-cv04-settling-fix_369367260232_completed.log` both
+`49001ce7a4035412...`; full list in the PR body). This run wrote the current
+`_04_fresnel_results/lattice_witness.json` (990 steps, `gated_here = true`)
+and `fringe_gate_geometry.json`. `envelope.json` is untouched by it -- still
+r1 only; a candidate r2 is drafted and held for its own PR, per the
+calibration-envelope-ownership guard in `test_calibration_envelope_ownership.py`.
+N6 (PR #974 round 2): r1 itself did not change, but three of its own
+`lattice_identification.*.source` pointers (`rfx_vs_lattice_mean_dR_gated`,
+`rfx_vs_lattice_mean_dT_gated`, `witness_gated_here`) point INTO this
+mutable `lattice_witness.json`, which this run regenerated in place -- so
+those three pointers now resolve to different values than when r1 was
+written (0.00168 -> 2.01e-05, 0.00625 -> 9.52e-05, false -> true; full list
+in the PR body). This is disclosed, not fixed, here and gets a top-level
+note in the r2 PR.
 
 ## 10. Dead ends and things I could not close
 
@@ -1002,14 +1145,19 @@ Recorded because the record is the point.
 3. **Γ needs a decay assumption.** §3. There is no way to bound the un-recorded
    tail without one. The passive-slab argument plus the fitted-rate witness is
    what stands behind it.
-4. **cv04's committed rung does not discriminate; cv22's Debye rung did not
-   either, and no longer is the last word.** §5.3 and §7 for cv04, which stands
-   open — its remedy is a settled record and cv23's `sigma_zero` arm supplies the
-   claims-bearing measurement meanwhile. For Debye, §8.1's remedy rung ran on the
-   VESSL run and F2 fires there at 6.68× on every gated bin, so the limitation is
-   a property of the committed RUNG and is closed by a committed diagnostic;
-   §5.2 records both. No claim in the manifest or the public rows rests on either
-   non-discriminating rung.
+4. **cv04's committed rung did not discriminate; cv22's Debye rung did not
+   either.** CLOSED for both, 2026-09-10, by two different routes. For cv04:
+   the settling-extension fix (§5.3's 2026-09-10 UPDATE, §9.1) gave it its own
+   settled 990-step record, and the wrong-model falsifier F2 now fires there
+   at 8.35× on 111 of 115 gated bins
+   (`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.falsifiers.continuum.separation_over_window_R
+   = 8.35`) — cv23's `sigma_zero` arm is no longer load-bearing for this
+   claim, though it remains a cheap corroborating cross-check on the same
+   material. For Debye, §8.1's remedy rung ran on the VESSL run and F2 fires
+   there at 6.68× on every gated bin, so that limitation is a property of the
+   committed RUNG and is closed by a committed diagnostic; §5.2 records both.
+   No claim in the manifest or the public rows rests on a non-discriminating
+   rung any more.
 5. **`docs/design_notes/20260903_e4_all_solver_classes_plan.md` is not on
    `origin/main`.** It lives on `origin/agent/e4-all-solvers-plan` at `eb78254`
    and was read from there (§1). Its lane L1 is the consumer of this rig; nothing
