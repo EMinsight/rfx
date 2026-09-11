@@ -22,7 +22,12 @@ is the incidental behaviour #931 replaced. The fix — exclude the trace-plane
 edge — is unchanged; only its justification stops being an accident.
 
 #507 — ``S[j, d] = b_j / a_d`` is the d-th column of the true S only when
-``a_j = 0`` at every passive port. Measured ``|a_passive/a_driven| = 0.07-0.51``.
+``a_j = 0`` at every passive port. It is not: ``|a_passive/a_driven|`` is
+0.243-0.248 at the shipped R = 50 Ω and 0.19-0.93 across terminations,
+re-measured on current main 2026-08-30 (#524). The 0.07-0.51 range this
+docstring quoted is the July pre-#511/#516 figure; the planted gammas in
+``test_multi_drive_solve_recovers_the_planted_s`` keep spanning it because
+they are a synthetic sweep, not a measurement.
 """
 
 import json
@@ -172,8 +177,11 @@ def _waves_from(S, gamma_passive):
 
 @pytest.mark.parametrize("gamma", [0.0, 0.07, 0.2, 0.51])
 def test_multi_drive_solve_recovers_the_planted_s(gamma):
-    """Exact recovery at every passive-port reflection, including the
-    0.07-0.51 range measured on real fixtures."""
+    """Exact recovery at every passive-port reflection.
+
+    The planted values span the July 0.07-0.51 range AND the current-main
+    0.24-0.25 reading (#524, 2026-08-30); they are a synthetic sweep of the
+    solve's algebra, so no measured number pins them."""
     S = _planted_s()
     wave_a, wave_b = _waves_from(S, gamma)
     with enable_x64():

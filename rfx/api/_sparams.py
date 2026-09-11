@@ -174,7 +174,10 @@ def msl_solve_s_from_waves(wave_a, wave_b):
 
     Issue #507: the superseded rule ``S[j, d] = b_j / a_d`` is the ``d``-th
     column of this only when ``a_j = 0`` at every passive port.  It is not —
-    measured ``|a_passive/a_driven| = 0.07-0.51`` across three fixtures — and
+    ``|a_passive/a_driven| = 0.243-0.248`` at the shipped R = 50 Ω and
+    0.19-0.93 across terminations, re-measured on current main 2026-08-30
+    (#524, VESSL 369367257265, PR #799; the July pre-#511/#516 figure was
+    0.07-0.51 and is superseded) — and
     the exact algebra ``b_1/a_1 = S11 + S12·(a_2/a_1)`` holds to machine
     precision, so the far port's echo was reported as the structure's own
     reflection.
@@ -1638,18 +1641,40 @@ def _assemble_mixed_power_wave_s(
 
     .. warning::
 
-       KNOWN #507 RESIDUE, deliberately not half-fixed here (issue #517).
-       This assembly still forms ``S[i, j] = b_i / a_j`` per drive — the
+       SINGLE-RATIO ASSEMBLY, deliberately not changed here (issue #517).
+       This assembly forms ``S[i, j] = b_i / a_j`` per drive — the
        single-ratio rule the pure-MSL lane replaced with the multi-drive
-       solve ``S = B·A⁻¹`` — so a passive port's echo is reported as the
-       driven port's own response whenever ``a_passive != 0`` (measured
-       0.07-0.51 on the pure-MSL fixtures). The driven-MSL diagonal is
-       exactly that contaminated quantity, and it feeds the DEFAULT flux
-       channel via ``P_inc = P_net / (1 - |S_jj|^2)``, so the residue
-       propagates into the flux magnitudes too; it is a live candidate for
-       this lane's 9% reciprocity residual (#488/#498). Extending the solve
-       needs the Kurokawa cross-family ``sqrt(Z)`` composition worked out
-       first — see #517 for the measurement-first plan. Lane remains fenced
+       solve ``S = B·A⁻¹``. That much is still true of the code below.
+
+       What is NOT true is the leak this block used to allege. It claimed
+       the driven-MSL diagonal was #507-contaminated by the passive port's
+       echo and that the contamination propagated into the DEFAULT flux
+       channel via ``P_inc = P_net / (1 - |S_jj|^2)``. That claim was
+       measured in #517 step 1 (PR #543, 2026-08-03, evidence committed as
+       ``scripts/diagnostics/i517_mixed_solve_vs_ratio_measurement.py`` +
+       JSON) and REFUTED for this lane. The mixed lane's passive side is a
+       lumped/wire port CELL, and that cell is structurally one-phasor: its
+       ``b/a`` is the resistor-law constant ``s1 = -0.60000`` (to 5.8e-4 at
+       ``n_live = 4``), and both shipped extraction candidates are the same
+       identity paired oppositely, so no non-degenerate ``(a, b)`` pair
+       exists at the port cell under any shipped formula. The apparent
+       MSL-diagonal jump under the solve (0.03 -> 0.72) is the #507 echo
+       correction ``-S10·γ`` applied at a passive port where it does not
+       belong, acting on two already-#313/#507-polluted quantities
+       (``|S10·γ|/|S11m|`` = 19.0-38.1×; closed form matches the solve to
+       1.8e-7). Substituting the solved diagonal makes the flux channel
+       WORSE, not better: reciprocity 10.53 % shipped -> 23.29 % solved
+       (2026-08-03 measurement), and assembling the whole mixed lane by the
+       solve moves the shipped flux witness 9.80 % -> 9.85 % — no physical
+       gain. Extending the solve here is therefore inert, not blocked.
+
+       The lane's reciprocity residual (9-10 %) is real and remains OPEN,
+       but its adjudication lives in #498, not here: neither mixed-lane
+       diagonal has an independent same-run check on main, and the declared
+       next measurement is reference-plane-split waves
+       (``rfx/probes/refplane.py``, ``add_port(reference_plane_cells=N)``)
+       — a different measurement LOCATION, where ``a_passive != 0``
+       genuinely — not another port-cell derivation. Lane remains fenced
        experimental with a running reciprocity witness.
 
     Wave conventions (each mirrored line-for-line from the validated
@@ -3666,8 +3691,11 @@ class _SparamMixin:
 
         For each registered MSL port, runs one FDTD simulation with that
         port driven and the others passive.  The passive ports are NOT
-        assumed matched — measured ``|a_passive/a_driven| = 0.07-0.51``
-        across three fixtures, so the S-matrix is recovered by solving the
+        assumed matched — ``|a_passive/a_driven| = 0.243-0.248`` at the
+        shipped R = 50 Ω (0.19-0.93 across terminations), re-measured on
+        current main 2026-08-30 (#524, VESSL 369367257265, PR #799; the
+        July figure quoted here before was 0.07-0.51) — so the S-matrix is
+        recovered by solving the
         full wave system ``S = B·A⁻¹`` over all drives rather than by the
         per-column ratio ``b_j/a_d`` (issue #507; the ratio reported the far
         port's echo as the structure's own reflection).  At each port
@@ -4430,9 +4458,12 @@ class _SparamMixin:
                 #
                 # RETAINED as the fallback only. This single-ratio rule is
                 # exact only when a_j = 0 at every passive port, and it is
-                # not: measured |a_passive/a_driven| = 0.07-0.51 across
-                # three fixtures, so the far port's echo is reported as the
-                # structure's own reflection (issue #507). The wave
+                # not: |a_passive/a_driven| = 0.243-0.248 at the shipped
+                # R = 50 ohm (0.19-0.93 across terminations), re-measured
+                # on current main 2026-08-30 (#524, VESSL 369367257265,
+                # PR #799; the July figure here before was 0.07-0.51), so
+                # the far port's echo is reported as the structure's own
+                # reflection (issue #507). The wave
                 # amplitudes recorded below feed the multi-drive solve that
                 # replaces this after the drive loop.
                 for j in range(n_ports):
@@ -5611,15 +5642,32 @@ class _SparamMixin:
             # changed. The beta-branch instability above is separate and
             # still stands.
             #
-            # Issue #524 remains open for its other two items (the
-            # passive port's ~30 ohm termination reading and the
-            # 0.194-vs-0.073 drive asymmetry, both orphaned from #507);
-            # see #524.
+            # Issue #524 now carries ONE open item, not two. The
+            # 2026-08-30 re-measurement on current main (VESSL
+            # 369367257265, PR #799, driver
+            # scripts/diagnostics/msl_passive_port_reflection.py) closed
+            # the drive asymmetry: the two ports read |Gamma| 0.1799 and
+            # 0.1759 on the shipped R = 50 ohm fixture, and the
+            # cell-aligned and +/-y-rotated variants reproduce that to 4
+            # decimals, so the July 0.194-vs-0.073 split does not exist on
+            # this tree. The same battery WITHDREW the "~30 ohm
+            # termination" inference: it was built on a July line Zc of
+            # 38.75 ohm, while the fitted Zc here is 41.9 ohm against the
+            # Hammerstad-Jensen 47.9 ohm -- a dx bias (#487 class), not a
+            # termination error. What stays open on #524 is the passive
+            # port's reflection itself: |Gamma_passive| = 0.176-0.180 at
+            # R = 50 ohm with no mechanism named. Both single-reflector
+            # models were falsified over a 25 / Zc / 50 / open R sweep
+            # (shunt Zc/(2R+Zc) misses by up to 0.119, end |R-Zc|/(R+Zc)
+            # by 0.242; implied k runs 1.91 -> 1.03, so the shape does not
+            # follow 1/(2R+Zc)); reported and stopped there, no two-
+            # parameter fit.
             #
             # The fit is still computed and EXPOSED (return_diagnostics)
-            # because it is the only handle on the open 30-vs-48 ohm
-            # question, but it never feeds a shipped number, and its
-            # magnitude is reported without a sign claim.
+            # because it is the only handle on the measured-vs-analytic Zc
+            # gap (41.9 ohm fitted vs 47.9 ohm Hammerstad-Jensen on this
+            # mesh, 2026-08-30; #487), but it never feeds a shipped
+            # number, and its magnitude is reported without a sign claim.
             from rfx.probes.msl_wave_decomp import extract_msl_nprobe
             z0_msl_fit = np.full((n_msl, n_freqs_used), np.nan)
             beta_railed_msl = np.zeros((n_msl, n_freqs_used), dtype=bool)
