@@ -7,7 +7,7 @@ sidebar:
 This guide helps users coming from **Meep** or **OpenEMS** translate their
 workflows into rfx. rfx follows the same Yee-cell FDTD physics, so the core
 concepts are familiar -- the API is different. Before translating a production
-model, check the [Recommended Configuration](/rfx/validation/reference-lane/)
+model, check the [Recommended Configuration](/rfx/validation/recommended-configuration/)
 and [Support Boundaries](/rfx/api/support-boundaries/) for the exact mesh,
 boundary, source or port, and observable restrictions.
 
@@ -233,12 +233,5 @@ mesh restrictions.
 
 ## Further Reading
 
-- [Quick Start](/rfx/guide/quickstart/) -- first simulation in 15 minutes
-- [Simulation API](/rfx/guide/api-reference/) -- current builder reference
-- [Recommended Configuration](/rfx/validation/reference-lane/) -- starting
-  configuration and calculator selection
-- [Support Boundaries](/rfx/api/support-boundaries/) -- exact supported,
-  limited, unsupported, and undocumented combinations
-- [Sources & Ports](/rfx/guide/sources-ports/) -- source vs. port workflows
-- [Autodiff and Adjoint Background](/rfx/guide/autodiff-adjoint/) -- Meep-informed gradient concepts
-- [Inverse Design](/rfx/guide/inverse-design/) -- gradient-based optimization
+[Quick Start](/rfx/guide/quickstart/) runs the first simulation with the current
+high-level API.
