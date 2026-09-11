@@ -545,6 +545,10 @@ CLASSIFICATION: dict[str, str] = {
     # `::` spans are test ids); the numbers are replayed from the lane's results
     # JSON by its own replay test.
     "docs/design_notes/20260907_nu_exp3_interface_eps_rule_predeclaration.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-11 (nu lane, PR #960): no `path.json::key` span (parses empty; any
+    # `::` spans are test ids); the numbers are replayed from the lane's results
+    # JSON by its own replay test.
+    "docs/design_notes/20260907_nu_exp1_band_law_sweep_predeclaration.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-11 (nu accuracy/AD lane, PR #957): the note carries no `::`
     # span at all (parses and others both empty); its A1-A3 / AD1-AD5 numbers
     # are replayed from validation/research/multiband_nu/results/w7_accuracy_ad.json
