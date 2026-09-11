@@ -24,7 +24,7 @@ boundary, source or port, and observable restrictions.
 | Resonance finding | `harminv(...)` | Manual FFT | `result.find_resonances()` |
 | Auto-stop | `stop_when_fields_decayed` | `EndCriteria` | `run(until_decay=1e-3)` on the uniform and non-uniform CPML/UPML runners; use fixed `n_steps` for a closed PEC cavity |
 | Materials | `Medium(epsilon=...)` | `AddMaterial` | `sim.add(shape, material="fr4")` or `sim.add_material(...)` |
-| PEC | `PerfectElectricalConductor` | `AddMetal` | `material="pec"` |
+| PEC | `PerfectElectricalConductor` | `AddMetal` | `sim.add(shape, material="pec")` for a **volume**; `sim.add_thin_conductor(...)` (or a zero-thickness `Box`) for a **sheet** — openEMS `AddMetal` on a zero-thickness primitive is a sheet, on a solid it is a volume |
 | PML / ABC | `PML(thickness)` | `AddPML` | `boundary="cpml"` |
 | Dispersive media | `LorentzianSusceptibility` | `AddLorentzMaterial` | `DebyePole`, `LorentzPole`, `drude_pole()` |
 | Differentiable | adjoint-solver workflows for selected design-region objectives | not native | `jax.grad(loss_fn)(params)` on supported JAX-traced workflows |

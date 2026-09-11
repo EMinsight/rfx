@@ -48,11 +48,9 @@ value-level (a uniform ``_dz_profile``, a one-port ``_msl_ports``) and are
 indistinguishable from a legitimate design.  Export from user-level code,
 before or after the driver call.
 
-A second time dependence: with ``dx=None`` the auto-mesh runs inside ``run()``
-and writes back ``_dx``, ``_dz_profile`` and ``_domain``.  Exporting before a
-run therefore yields ``"dx": null`` and no ``dz_profile``, and exporting after
-the same run yields the resolved mesh.  Both are faithful; they describe
-different design states of the same script.
+Mesh reads resolve auto-configuration from the current static declaration.
+Export therefore records the same resolved dx/profile/domain before or after
+run or preflight. The resolution cache is derived state, never serialized.
 
 Relationship to the other rfx setup serialisers
 -----------------------------------------------
@@ -152,7 +150,7 @@ __all__ = [
     "simulation_from_design",
 ]
 
-DESIGN_SCHEMA_VERSION = "rfx-design-ir/v1"
+DESIGN_SCHEMA_VERSION = "rfx-design-ir/v2"
 
 
 # ---------------------------------------------------------------------------
@@ -484,10 +482,10 @@ def _ivec(n: int) -> _F:
 _GEOMETRY_FIELDS: dict[str, _F] = {
     "shape": _SHAPE,
     "material_name": _STR,
-    # issue #706: the opt-in two-plane realization is part of the physical
-    # design (which electrical model a one-cell slab means), so it round-trips.
-    # False is the historical default and loads bit-identically.
-    "two_plane": _BOOL,
+    # #931 (IR v2): the #706 per-entry realization flag is gone. Realization is
+    # decided by the contract from the shape alone (a zero-thickness PEC
+    # Box is a sheet, everything else a volume), so nothing per entry is
+    # left to record.
 }
 
 # ``_PortEntry`` holds two physically different objects, discriminated only by
@@ -814,6 +812,7 @@ EXPORTED_SIMULATION_ATTRS: tuple[str, ...] = (
 #: as empty run-time bookkeeping); they matter only inside a
 #: preflight/driver pass, which is exactly why they are not design state.
 EXCLUDED_SIMULATION_ATTRS: tuple[str, ...] = (
+    "_mesh_resolution",
     "_ntff_min_steps_hint",
     # crop rectangles for the internal MSL DFT planes; exists only while
     # compute_msl_s_matrix runs and is removed on exit (never a design input)
@@ -1313,7 +1312,7 @@ def design_to_dict(sim: Any) -> dict[str, Any]:
     Returns
     -------
     dict
-        A ``rfx-design-ir/v1`` document.  Every value is a JSON scalar, list
+        A ``rfx-design-ir/v2`` document.  Every value is a JSON scalar, list
         or mapping; ``json.dump(document, allow_nan=False)`` succeeds without
         ``default=``.
 
@@ -1378,8 +1377,8 @@ def design_to_dict(sim: Any) -> dict[str, Any]:
             "mode": check_text(sim._mode, what="_mode"),
         },
         "mesh": {
-            # dx is None on the auto-mesh path: "let rfx choose" is itself the
-            # design decision, and it round-trips as null.
+            # Record resolved inputs so export matches the solver before or
+            # after preflight/run. Empty geometry may still leave dx unset.
             "dx": None if sim._dx is None else check_number(sim._dx, what="_dx"),
             "dx_profile": (
                 None
@@ -1571,7 +1570,7 @@ def _verify_material_library(payload: Any, materials: dict) -> None:
 
 
 def simulation_from_design(document: Any) -> Any:
-    """Rebuild a :class:`~rfx.api.Simulation` from a ``rfx-design-ir/v1`` document.
+    """Rebuild a :class:`~rfx.api.Simulation` from a ``rfx-design-ir/v2`` document.
 
     The rebuild goes through the public ``add_*`` builders, so every builder
     fence applies unchanged — an imported design is not a way around a
@@ -1602,9 +1601,19 @@ def simulation_from_design(document: Any) -> Any:
 
     schema = check_text(document["schema"], what="schema")
     if schema != DESIGN_SCHEMA_VERSION:
+        legacy = ""
+        if schema == "rfx-design-ir/v1":
+            legacy = (
+                "; v1 geometry entries carried the #706 per-entry 'two-plane' "
+                "realization flag, which the lattice ownership contract (#931) "
+                "removed — a "
+                "one-cell PEC Box is a volume with both faces now, and a "
+                "zero-thickness Box is a sheet. Re-export the design from "
+                "rfx (no per-entry realization flag exists)"
+            )
         raise _refuse(
             f"schema {schema!r} is not {DESIGN_SCHEMA_VERSION!r}; this reader "
-            f"does not translate between schema versions"
+            f"does not translate between schema versions{legacy}"
         )
     check_text(document["rfx_version"], what="rfx_version")
     if not isinstance(document["non_portable"], list):

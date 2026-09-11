@@ -40,7 +40,9 @@ def _fake_run(*args, **kwargs):
     )
 
 
-def test_runner_uniform_resolves_run_after_patch_window_closes(monkeypatch):
+def test_runner_uniform_resolves_run_after_patch_window_closes(
+    monkeypatch, evict_from_sys_modules
+):
     """Direct mechanism test: simulate the import-inside-patch-window
     sequence explicitly, without relying on pytest's collection order.
 
@@ -53,9 +55,18 @@ def test_runner_uniform_resolves_run_after_patch_window_closes(monkeypatch):
     uniform runner), then closes the window and asserts the runner still
     resolves the CURRENT ``rfx.simulation.run`` rather than a frozen
     reference to the fake.
+
+    ``evict_from_sys_modules`` (see ``conftest.py`` at the repo root)
+    restores the ORIGINAL ``rfx.runners`` / ``rfx.runners.uniform`` module
+    objects once this test ends -- a bare ``sys.modules.pop`` here used to
+    leave the fresh ``rfx.runners`` object permanently missing its
+    ``.nonuniform`` / ``.subgridded`` / ``.distributed`` submodule
+    attributes (those were never popped, so CPython's import machinery
+    never re-bound them onto the new package object), which broke any
+    later test in the same process that resolved a string target through
+    ``rfx.runners.<sub>``.
     """
-    for mod_name in ("rfx.runners.uniform", "rfx.runners"):
-        sys.modules.pop(mod_name, None)
+    evict_from_sys_modules("rfx.runners.uniform", "rfx.runners")
 
     real_run = _simulation_mod.run
 

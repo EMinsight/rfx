@@ -548,7 +548,7 @@ def resolve_cut_x_hi(r_ohm: float, variant: str) -> tuple[float, dict]:
         x_hi = x_feed + frac * (x_next - x_feed)
         sim, _ = build_fixture(variant, r_ohm, cut_x_hi=x_hi)
         grid = sim._build_grid()
-        pec = np.asarray(sim._assemble_materials(grid)[3])
+        pec = np.asarray(sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])[3])
         at_feed = bool(pec[i_feed, j_c, k_tr:k_tr + N_CELLS_TRACE].any())
         at_next = bool(pec[i_feed + 1, j_c, k_tr:k_tr + N_CELLS_TRACE].any())
         checks.append({"x_hi_m": x_hi, "pec_at_feed_column": at_feed,
@@ -585,7 +585,7 @@ def realized_termination_witness(sim, grid) -> list[dict]:
         msl_port_from_entry,
         setup_msl_port,
     )
-    materials = sim._assemble_materials(grid)[0]
+    materials = sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])[0]
     rows = []
     for pe in sim._msl_ports:
         mp = msl_port_from_entry(pe)
@@ -693,7 +693,7 @@ def analyze_dump(npz_path: Path, sim, grid, res, band_lo: float, band_hi: float)
     band = (freqs >= band_lo) & (freqs <= band_hi)
     n_ports = raw_v.shape[1]
     pdefs = meta["port_definitions"]
-    materials = sim._assemble_materials(grid)[0]
+    materials = sim._assemble_materials(grid, pec_sheets=[], pec_wires=[])[0]
 
     ports = []
     for p, (pe, pd) in enumerate(zip(sim._msl_ports, pdefs)):

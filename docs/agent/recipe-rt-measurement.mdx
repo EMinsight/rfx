@@ -138,11 +138,20 @@ material `Box` must span the full y/z extent including the CPML padding. Any
 cell outside the material mask breaks the plane-wave assumption. Use oversized
 corners: `Box((x_lo, -1, -1), (x_hi, 1, 1))`.
 
-### (d) Cell-alignment nudge for slab thickness
+### (d) Draw the slab at its corners, on the lattice
 
-`Box` uses inclusive bounds (`coords >= lo and coords <= hi`), so a physically
-`d`-thick slab can map to `d + dx` cells. Nudge the upper x-corner down by
-`dx/2` to hit the last interior cell: `slab_x_hi = center + d/2 - dx/2`.
+A dielectric `Box` is sampled at NODE coordinates, half-open `[lo, hi)`: a
+slab drawn `lo = i*dx` to `hi = k*dx` owns nodes `i .. k-1` and realizes
+exactly `hi - lo`. No nudge is needed or wanted.
+
+What DOES bite is the float route to the corner. `center + d/2` can land one
+ulp above the node that `hi` is meant to be, the half-open test then keeps
+that node, and the slab realizes one cell too many against an oracle
+evaluated at `d`. Spell on-lattice corners in lattice arithmetic —
+`i_lo = round((center - d/2)/dx)`, `x_lo = i_lo*dx`,
+`x_hi = (i_lo + round(d/dx))*dx` — and assert the realized extent from
+`sim.fidelity_report()` before quoting anything against a Fresnel oracle.
+`examples/tutorials/slab_rt_flux_monitor.py` does both.
 
 ### (e) dtype-truncation warnings are expected, not errors
 
