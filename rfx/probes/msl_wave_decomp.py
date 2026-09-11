@@ -298,7 +298,7 @@ def register_msl_plane_probes(
     span = msl_cross_section_span(grid, mp)
     j_centre = span["w_centre"]
     j_lo, j_hi = span["w_lo"], span["w_hi"]     # trace-conductor width span
-    k_lo, k_top = span["n_lo"], span["n_hi"]     # ground .. substrate-top proxy
+    k_lo = span["n_lo"]                          # ground plane proxy
 
     # Per-axis cell-size arrays (uniform mesh only — see the NU refusal above).
     def _profile(axis: str, n: int) -> np.ndarray:
@@ -311,30 +311,24 @@ def register_msl_plane_probes(
     dy_arr = _profile("y", grid.ny)
     dz_arr = _profile("z", grid.nz)
 
-    # Trace-PEC search — IDENTICAL to compute_msl_s_matrix's
-    # trace_k_per_port (rfx/api/_sparams.py:3008-3072): walk UP the
-    # substrate-normal axis from the substrate top, at the feed column and
-    # trace centre, and find the PEC run. This is what anchors k_hi on the
-    # rasterized trace node instead of the round(h_sub/dx) proxy.
-    _msl_assembled = sim._assemble_materials(grid)
-    _pec_mask = (
-        None if _msl_assembled[3] is None else np.asarray(_msl_assembled[3])
-    )
-    _sel = [0, 0, 0]
-    _sel[span["prop_idx"]] = span["i_feed"]
-    _sel[span["width_idx"]] = j_centre
-    _sel[span["normal_idx"]] = slice(k_top, None)
-    col = None if _pec_mask is None else _pec_mask[tuple(_sel)]
-    k_pec = np.array([], dtype=int) if col is None else np.where(col)[0]
-    if k_pec.size == 0:
+    # Trace search — IDENTICAL to compute_msl_s_matrix's trace_k_per_port
+    # (rfx/api/_sparams.py): walk UP the substrate-normal axis from the
+    # substrate top, at the feed column and trace centre, and find the
+    # realized PEC WALL PLANES. #931 §1.9: this used to scan the pec_mask
+    # CELL column, which finds a volume trace one plane low and misses a
+    # sheet-declared trace entirely (a sheet owns no cell). The V span
+    # (ground wall plane -> trace plane) and the Ampere loop legs now
+    # anchor on the same realized planes.
+    k_trace_lo, k_trace_hi = _realized_trace_planes(sim, grid, span, j_centre)
+    if k_trace_lo is None:
         raise RuntimeError(
-            "register_msl_plane_probes: no PEC trace conductor found above "
-            f"the substrate top for MSL port {port_index} ({pe.name!r}); "
-            "the closed Ampere-loop current needs the trace PEC. Add the "
-            "microstrip trace as a Box(material='pec')."
+            "register_msl_plane_probes: no realized PEC trace conductor "
+            "found above the substrate top for MSL port "
+            f"{port_index} ({pe.name!r}); the closed Ampere-loop current "
+            "needs the trace. Declare the microstrip trace as a "
+            "Box(material='pec') (a volume) or as a zero-thickness Box / "
+            "add_thin_conductor (a sheet)."
         )
-    k_trace_lo = int(k_top + int(k_pec.min()))
-    k_trace_hi = int(k_top + int(k_pec.max()))
 
     delta = float(abs(pxs[1] - pxs[0]))
 
@@ -381,6 +375,51 @@ def register_msl_plane_probes(
         hs_phase=hs_phase,
         delta=delta,
     )
+
+
+def realized_trace_planes_on_column(pec_edge_masks, normal_idx, ij, k_from,
+                                    periodic=(False, False, False)):
+    """Lowest and highest realized PEC wall plane on one column, at or
+    above ``k_from`` along ``normal_idx`` (#931 §1.9).
+
+    Replaces the ``pec_mask`` CELL scan every MSL trace detector used.  A
+    volume trace answers with its LOWER wall plane and its far face; a
+    sheet trace answers with its single plane.  ``(None, None)`` when the
+    column carries no realized PEC above ``k_from``.  ``periodic`` is the
+    run's #689 flags, forwarded so a column on the seam node of a periodic
+    in-plane axis finds its backward incident edge.
+    """
+    from rfx.boundaries.pec import realized_wall_planes
+    if pec_edge_masks is None:
+        return None, None
+    planes = [k for k in realized_wall_planes(
+        pec_edge_masks, normal_idx, ij=ij, periodic=periodic)
+        if k >= int(k_from)]
+    if not planes:
+        return None, None
+    return int(min(planes)), int(max(planes))
+
+
+def _realized_trace_planes(sim, grid, span, j_centre):
+    """``realized_trace_planes_on_column`` for the uniform diagnostic path."""
+    from rfx.boundaries.pec import realized_pec_edge_masks
+    _pec_sheets: list = []
+    _pec_wires: list = []
+    _assembled = sim._assemble_materials(
+        grid, pec_sheets=_pec_sheets, pec_wires=_pec_wires)
+    _pec_mask = _assembled[3]
+    if _pec_mask is None and not _pec_sheets and not _pec_wires:
+        return None, None
+    _periodic = sim._periodic_flags()
+    masks = realized_pec_edge_masks(
+        _pec_mask, sheets=tuple(_pec_sheets), wires=tuple(_pec_wires),
+        periodic=_periodic)
+    ij = tuple(
+        span["i_feed"] if c == span["prop_idx"] else int(j_centre)
+        for c in range(3) if c != span["normal_idx"]
+    )
+    return realized_trace_planes_on_column(
+        masks, span["normal_idx"], ij, span["n_hi"], periodic=_periodic)
 
 
 def _v_from_plane(fr, plane_name: str, p: MSLPlaneProbeSet) -> jnp.ndarray:

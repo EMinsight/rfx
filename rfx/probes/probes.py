@@ -866,28 +866,28 @@ def _warn_if_flux_subnormal_flush(mon: FluxMonitor, flux) -> None:
 # Wire port voltage / current extraction
 # ---------------------------------------------------------------------------
 
-def _wire_port_live_mid(grid, port, pec_mask=None):
+def _wire_port_live_mid(grid, port, pec_edge_masks=None):
     """Midpoint cell of the LIVE wire run (issue #764).
 
     A dead extent cell (inside PEC, issue #318) carries essentially no port
     current (measured |I_dead|/|I_mid| = 0.003-0.03 on the #313 thru), so an
     all-extent midpoint landing on a dead cell read a quenched Ampere loop
-    as the port current. With ``pec_mask=None`` — or no dead cells — this is
+    as the port current. With ``pec_edge_masks=None`` — or no dead cells — this is
     bit-identical to the historical all-extent midpoint.
     """
     from rfx.sources.sources import _wire_port_live_cells
 
-    cells, live_flags, _ = _wire_port_live_cells(grid, port, pec_mask)
+    cells, live_flags, _ = _wire_port_live_cells(grid, port, pec_edge_masks)
     live = [c for c, l in zip(cells, live_flags) if l]
     return live[len(live) // 2]
 
 
-def wire_port_voltage(state, grid, port, pec_mask=None) -> jnp.ndarray:
+def wire_port_voltage(state, grid, port, pec_edge_masks=None) -> jnp.ndarray:
     """Voltage at the WirePort LIVE-run midpoint cell.
 
     Uses a single-cell measurement at the live-run midpoint (same location
     as wire_port_current) for balanced V/I wave decomposition. The midpoint
-    is that of the LIVE run (issue #764; ``pec_mask=None`` or no dead cells
+    is that of the LIVE run (issue #764; ``pec_edge_masks=None`` or no dead cells
     is bit-identical to the historical all-extent midpoint).
 
     Parameters
@@ -895,18 +895,18 @@ def wire_port_voltage(state, grid, port, pec_mask=None) -> jnp.ndarray:
     state : FDTDState
     grid : Grid
     port : WirePort
-    pec_mask : optional assembled-geometry PEC mask (issue #318 live split)
+    pec_edge_masks : realized PEC edge masks (Mx, My, Mz) for the #318 live split
 
     Returns
     -------
     float scalar
     """
-    mid = _wire_port_live_mid(grid, port, pec_mask)
+    mid = _wire_port_live_mid(grid, port, pec_edge_masks)
     field = getattr(state, port.component)
     return -field[mid[0], mid[1], mid[2]] * grid.dx
 
 
-def wire_port_gap_voltage(state, grid, port, pec_mask=None) -> jnp.ndarray:
+def wire_port_gap_voltage(state, grid, port, pec_edge_masks=None) -> jnp.ndarray:
     """Whole-port gap voltage: V_port = sum over LIVE cells of -E_c*dx.
 
     The discrete line integral of E across the whole gap (issue #764). Only
@@ -920,7 +920,7 @@ def wire_port_gap_voltage(state, grid, port, pec_mask=None) -> jnp.ndarray:
     """
     from rfx.sources.sources import _wire_port_live_cells
 
-    cells, live_flags, _ = _wire_port_live_cells(grid, port, pec_mask)
+    cells, live_flags, _ = _wire_port_live_cells(grid, port, pec_edge_masks)
     field = getattr(state, port.component)
     v_port = 0.0
     for cell, live in zip(cells, live_flags):
@@ -932,7 +932,7 @@ def wire_port_gap_voltage(state, grid, port, pec_mask=None) -> jnp.ndarray:
 
 def wire_port_current(state, grid, port,
                       periodic=(False, False, False),
-                      pec_mask=None) -> jnp.ndarray:
+                      pec_edge_masks=None) -> jnp.ndarray:
     """Current through a WirePort via Ampere's law at the LIVE-run midpoint.
 
     Uses the H-field loop integral at the center cell of the LIVE wire run
@@ -948,13 +948,13 @@ def wire_port_current(state, grid, port,
     port : WirePort
     periodic : (bool, bool, bool)
         Per-axis periodic flags for the run; default non-periodic.
-    pec_mask : optional assembled-geometry PEC mask (issue #318 live split)
+    pec_edge_masks : realized PEC edge masks (Mx, My, Mz) for the #318 live split
 
     Returns
     -------
     float scalar
     """
-    mid = _wire_port_live_mid(grid, port, pec_mask)
+    mid = _wire_port_live_mid(grid, port, pec_edge_masks)
     dx = grid.dx
 
     return _ampere_loop(state, tuple(mid), port.component, dx, periodic)
@@ -971,14 +971,14 @@ def init_wire_sparam_probe(
     dft_total_steps: int = 0,
     dft_window: str = "rect",
     dft_window_alpha: float = 0.25,
-    pec_mask=None,
+    pec_edge_masks=None,
 ) -> SParamProbe:
     """Create a zeroed SParamProbe for a WirePort.
 
     The port_index is set to the midpoint cell of the LIVE wire run
     (issue #764; identical to the all-extent midpoint with no dead cells).
     """
-    mid_idx = tuple(_wire_port_live_mid(grid, port, pec_mask))
+    mid_idx = tuple(_wire_port_live_mid(grid, port, pec_edge_masks))
     n = len(freqs)
     zeros = jnp.zeros(n, dtype=jnp.complex64)
     return SParamProbe(
@@ -1003,7 +1003,7 @@ def update_wire_sparam_probe(
     port,
     dt: float,
     n_live: int | None = None,
-    pec_mask=None,
+    pec_edge_masks=None,
 ) -> SParamProbe:
     """Accumulate one timestep of V, I, V_inc, and V_port for a WirePort.
 
@@ -1034,9 +1034,9 @@ def update_wire_sparam_probe(
     if n_live is None:
         n_live = max(len(_wire_port_cells(grid, port)), 1)
 
-    v = wire_port_voltage(state, grid, port, pec_mask=pec_mask)
-    i_val = wire_port_current(state, grid, port, pec_mask=pec_mask)
-    v_port = wire_port_gap_voltage(state, grid, port, pec_mask=pec_mask)
+    v = wire_port_voltage(state, grid, port, pec_edge_masks=pec_edge_masks)
+    i_val = wire_port_current(state, grid, port, pec_edge_masks=pec_edge_masks)
+    v_port = wire_port_gap_voltage(state, grid, port, pec_edge_masks=pec_edge_masks)
     v_inc = port.excitation(t) / n_live
 
     phase = jnp.exp(-1j * 2.0 * jnp.pi * probe.freqs * t)
@@ -1061,7 +1061,7 @@ def update_wire_drive_ref_probe(
     grid,
     port,
     dt: float,
-    pec_mask=None,
+    pec_edge_masks=None,
 ) -> SParamProbe:
     """Accumulate one timestep of the PRE-injection drive-sample reference.
 
@@ -1076,7 +1076,7 @@ def update_wire_drive_ref_probe(
     ``update_wire_sparam_probe``.
     """
     t = state.step * dt
-    v_ref = wire_port_voltage(state, grid, port, pec_mask=pec_mask)
+    v_ref = wire_port_voltage(state, grid, port, pec_edge_masks=pec_edge_masks)
     phase = jnp.exp(-1j * 2.0 * jnp.pi * probe.freqs * t)
     weight = _dft_window_weight(state.step, probe.total_steps, probe.window,
                                 probe.window_alpha)
@@ -1391,7 +1391,7 @@ def extract_s_matrix(
     cpml_axes: str = "xyz",
     debye_spec: tuple[list, list[jnp.ndarray]] | None = None,
     lorentz_spec: tuple[list, list[jnp.ndarray]] | None = None,
-    pec_mask: object | None = None,
+    pec_edge_masks: object | None = None,
     return_vi_dump: bool = False,
 ) -> jnp.ndarray | PortVIReplayBundle:
     """Extract full N-port S-parameter matrix.
@@ -1510,15 +1510,13 @@ def extract_s_matrix(
             # toward 0 dB across the band, producing a 9–10 dB
             # train/eval disconnect identical in shape to the prior
             # time-gating-heuristic bug (issue #72).
-            if pec_mask is not None:
-                from rfx.boundaries.pec import apply_pec_mask
-                # #689: default (non-periodic) is correct — preflight
-                # `_validate_run_sparameter_request` (rfx/api/_preflight.py)
-                # refuses lumped/wire S-params under periodic axes (#206,
-                # NotImplementedError), and
-                # this eager re-run is non-periodic by construction.
-                # 2-D safety comes from the length-1-axis guard.
-                state = apply_pec_mask(state, pec_mask)
+            if pec_edge_masks is not None:
+                from rfx.boundaries.pec import apply_pec_edges
+                # #931 §1.7: the realized (Mx, My, Mz) of the caller's
+                # geometry, sheets included — a sheet-declared ground
+                # plane owns no cell and used to vanish from this eager
+                # re-run entirely.
+                state = apply_pec_edges(state, pec_edge_masks)
 
             # Record V / I at all ports BEFORE source injection so that
             # the sampled voltage reflects only the load/cavity response
@@ -1712,7 +1710,7 @@ def extract_s_matrix_wire(
     cpml_axes: str = "xyz",
     debye_spec: tuple[list, list[jnp.ndarray]] | None = None,
     lorentz_spec: tuple[list, list[jnp.ndarray]] | None = None,
-    pec_mask: object | None = None,
+    pec_edge_masks: object | None = None,
     return_vi_dump: bool = False,
 ) -> jnp.ndarray | WirePortVIReplayBundle:
     """Extract full N-port S-parameter matrix for WirePort objects.
@@ -1773,7 +1771,7 @@ def extract_s_matrix_wire(
     # sigma distribution, injection, and normalization counts below).
     mats = materials
     for p in ports:
-        mats = setup_wire_port(grid, p, mats, pec_mask=pec_mask)
+        mats = setup_wire_port(grid, p, mats, pec_edge_masks=pec_edge_masks)
 
     debye = None
     if debye_spec is not None:
@@ -1806,7 +1804,7 @@ def extract_s_matrix_wire(
     # selection relies on that identity).  With no dead cells this is the
     # historical all-cells count.
     port_n_live = [
-        _wire_port_live_cells(grid, p, pec_mask)[2] for p in ports
+        _wire_port_live_cells(grid, p, pec_edge_masks)[2] for p in ports
     ]
     port_cell_counts = np.asarray(port_n_live, dtype=np.int64)
 
@@ -1814,7 +1812,7 @@ def extract_s_matrix_wire(
         state = init_state(grid.shape)
         sprobes = [
             init_wire_sparam_probe(grid, p, freqs, dft_total_steps=n_steps,
-                                   pec_mask=pec_mask)
+                                   pec_edge_masks=pec_edge_masks)
             for p in ports
         ]
         cpml_state = cpml_state_init if use_cpml else None
@@ -1844,15 +1842,13 @@ def extract_s_matrix_wire(
                     materials=mats)
             state = apply_pec(state)
 
-            if pec_mask is not None:
-                from rfx.boundaries.pec import apply_pec_mask
-                # #689: default (non-periodic) is correct — preflight
-                # `_validate_run_sparameter_request` (rfx/api/_preflight.py)
-                # refuses lumped/wire S-params under periodic axes (#206,
-                # NotImplementedError), and
-                # this eager re-run is non-periodic by construction.
-                # 2-D safety comes from the length-1-axis guard.
-                state = apply_pec_mask(state, pec_mask)
+            if pec_edge_masks is not None:
+                from rfx.boundaries.pec import apply_pec_edges
+                # #931 §1.7: the realized (Mx, My, Mz) of the caller's
+                # geometry, sheets included — a sheet-declared ground
+                # plane owns no cell and used to vanish from this eager
+                # re-run entirely.
+                state = apply_pec_edges(state, pec_edge_masks)
 
             # Record the PRE-injection drive-sample REFERENCE channel at
             # the historical (#72) slot — the #308/#313 off-diagonal
@@ -1862,11 +1858,11 @@ def extract_s_matrix_wire(
             for i in range(n_ports):
                 sprobes[i] = update_wire_drive_ref_probe(
                     sprobes[i], state, grid, ports[i], dt,
-                    pec_mask=pec_mask)
+                    pec_edge_masks=pec_edge_masks)
 
             # Excite only port j (live cells only, issue #318)
             state = apply_wire_port(state, grid, ports[j], t, mats,
-                                    pec_mask=pec_mask)
+                                    pec_edge_masks=pec_edge_masks)
 
             # Record the PHYSICAL V / I / V_port channels at all ports
             # AFTER source injection (issue #683, decided by measurement
@@ -1884,7 +1880,7 @@ def extract_s_matrix_wire(
             for i in range(n_ports):
                 sprobes[i] = update_wire_sparam_probe(
                     sprobes[i], state, grid, ports[i], dt,
-                    n_live=port_n_live[i], pec_mask=pec_mask)
+                    n_live=port_n_live[i], pec_edge_masks=pec_edge_masks)
 
         # Collect per-(drive j, receive i) midpoint V/I DFT phasors for the
         # shared wire wave decomposer (``decompose_wire_s_matrix``) — single

@@ -42,7 +42,10 @@ from rfx.core.yee import (
     _shift_bwd,
 )
 from rfx.core.jax_utils import is_tracer  # noqa: F401  (Phase 2C reuse target)
-from rfx.boundaries.pec import tangential_edge_masks
+from rfx.boundaries.pec import (
+    realized_pec_edge_masks,
+    _volume_occupancy_masks,
+)
 from rfx.runners._distributed_common import (
     cpml_coeff_e_vacuum,
     cpml_coeff_h_vacuum,
@@ -457,9 +460,9 @@ def shard_pec_occupancy_x_slab(global_occupancy, sharded_grid: ShardedNUGrid):
     analogue of :func:`shard_pec_mask_x_slab` and mirrors its slab layout
     convention exactly: each rank owns the cells in its real-cell range, and
     the ghost cells at the slab seam carry the neighbour rank's occupancy so
-    that the per-component tangential occupancy (built via
-    ``occ * jnp.maximum(roll(occ, +1), roll(occ, -1))``) sees the correct
-    neighbour at the first / last real cell.
+    that the per-component occupancy (the §1.6 noisy-OR of the four
+    incident cells, from the shared helper) sees the correct neighbour at
+    the first / last real cell.
 
     Parameters
     ----------
@@ -477,13 +480,11 @@ def shard_pec_occupancy_x_slab(global_occupancy, sharded_grid: ShardedNUGrid):
     Notes
     -----
     Ghost cells at physical domain boundaries are padded with ``0.0``
-    (no occupancy).  This differs from :func:`shard_pec_mask_x_slab`,
-    which pads with ``True`` so :func:`apply_pec_mask`'s tangential rule
-    still recognises the boundary face as PEC.  For the occupancy
-    primitive, the boundary face is enforced separately by
-    :func:`_apply_pec_face_nu_shmap`, so the soft-PEC ghost padding stays
-    at ``0.0`` to avoid biasing the soft-occupancy contribution at the
-    domain edge.
+    (no occupancy) — the #689/#931 zero pad.  Since #931
+    :func:`shard_pec_mask_x_slab` pads with ``False`` for the same reason,
+    so the hard and soft twins agree at the domain edge as the contract
+    requires.  The boundary face's own PEC is enforced separately by
+    :func:`_apply_pec_face_nu_shmap`.
     """
     if global_occupancy is None:
         return None
@@ -577,10 +578,16 @@ def shard_pec_mask_x_slab(global_mask, sharded_grid: ShardedNUGrid):
     )
 
     # Build per-device slabs with ghost cells.  Ghost cells at the
-    # physical boundary are PEC=True (matches the high-x pad and is
-    # consistent with apply_pec on the domain face); interior ghosts
-    # carry the neighbour's PEC status so apply_pec_mask sees a
-    # correct neighbour-set when computing tangential masks.
+    # PHYSICAL boundary are False — the #689/#931 zero pad, "no conductor
+    # outside the domain", the same convention the single-device lane and
+    # ``shard_pec_occupancy_x_slab`` use.  They were True until #931,
+    # which was inert under the old neighbour rule (a vacuum cell was
+    # never zeroed however its neighbour read) but under the volume rule
+    # would put a spurious PEC wall on the whole x_lo / x_hi node plane of
+    # the outer ranks, shorting a CPML face.  The domain face's own PEC is
+    # applied by ``_apply_pec_face_nu_shmap``, not by this mask.  INTERIOR
+    # ghosts still carry the neighbour rank's PEC status, which is what
+    # makes the first/last real cell see its true x neighbour.
     slabs = jnp.zeros((n_devices, nx_local, ny, nz), dtype=jnp.bool_)
     for d in range(n_devices):
         lo = d * nx_per
@@ -588,14 +595,10 @@ def shard_pec_mask_x_slab(global_mask, sharded_grid: ShardedNUGrid):
         slabs = slabs.at[d, ghost:ghost + nx_per, :, :].set(global_mask[lo:hi])
         if d > 0:
             slabs = slabs.at[d, 0, :, :].set(global_mask[lo - 1])
-        else:
-            # Domain boundary at x_lo: ghost is PEC=True (matches apply_pec)
-            slabs = slabs.at[d, 0, :, :].set(True)
+        # else: domain boundary at x_lo — ghost stays False (zero pad)
         if d < n_devices - 1:
             slabs = slabs.at[d, -1, :, :].set(global_mask[hi])
-        else:
-            # Domain boundary at x_hi: ghost is PEC=True
-            slabs = slabs.at[d, -1, :, :].set(True)
+        # else: domain boundary at x_hi — ghost stays False (zero pad)
 
     # Reshape to sharded layout: (n_devices * nx_local, ny, nz)
     return slabs.reshape(n_devices * nx_local, ny, nz)
@@ -619,6 +622,15 @@ def _exchange_h_ghosts_nu(state: FDTDState, mesh, n_devices: int) -> FDTDState:
 
 
 def _exchange_e_ghosts_nu(state: FDTDState, mesh, n_devices: int) -> FDTDState:
+    """Refill the E ghost rows from the neighbour ranks' real rows.
+
+    Placement contract: this is the LAST stage of the E half-step in
+    :func:`run_nonuniform_distributed_pec` — after sources and after every
+    PEC stage — so a ghost row is a copy of the owner's FINISHED real row.
+    The H update at a rank's last real cell reads ``Ey``/``Ez`` on the
+    right ghost plane; a copy taken before the owner zeroed its PEC edges
+    there is stale (#931 seam-cell divergence).
+    """
     return state._replace(
         ex=_exchange_component_nu_shmap(state.ex, mesh, n_devices),
         ey=_exchange_component_nu_shmap(state.ey, mesh, n_devices),
@@ -771,18 +783,27 @@ def _apply_pec_mask_nu_shmap(state: FDTDState, sharded_pec_mask, mesh,
     seam ghost cells must not be acted on.
 
     The implementation:
-      * computes the per-component tangential mask on the local slab
+      * computes the per-component edge masks on the local slab
         including ghost cells by CALLING
-        ``rfx.boundaries.pec.tangential_edge_masks`` — the same function
-        ``apply_pec_mask`` calls, so the two lanes cannot drift apart
-        again (they did: this site kept an inlined ``jnp.roll`` copy of
-        the rule through #689 and wrapped at the y and z domain faces
-        after the single-device lane stopped);
+        ``rfx.boundaries.pec.realized_pec_edge_masks`` — the same
+        function every single-device lane calls (#931 §1.7), so the two
+        lanes cannot drift apart again (they did twice: an inlined
+        ``jnp.roll`` copy through #689, then the pre-#931 sheet rule
+        after the single-device lanes moved to the volume rule);
       * gates the mask so ghost-cell rows are forced to ``False`` before
         zeroing the field — interior real cells use their slab-local
         neighbour computation, and the **first/last real cells** see the
         ghost neighbour (which carries the seam-neighbour's PEC status
         because ``shard_pec_mask_x_slab`` populated it).
+
+    The ghost rows are therefore NOT zeroed here.  They are refilled from
+    the owner rank's (already zeroed) real row by the E ghost exchange,
+    which the scan body runs AFTER this step (stage 9).  That order is
+    load-bearing: the next H update at a rank's last real cell reads
+    ``Ey``/``Ez`` on its right ghost plane, and when a body's cell is the
+    neighbour's first real cell those edges are PEC only in the
+    neighbour's copy.  Exchanging first handed this rank the un-zeroed
+    value (#931 seam-cell divergence, 2.107e-01 final-step error).
     """
     if sharded_pec_mask is None:
         return state
@@ -814,8 +835,8 @@ def _apply_pec_mask_nu_shmap(state: FDTDState, sharded_pec_mask, mesh,
         # y and z have no ghosts and no periodic BC on this lane (the NU
         # runners install none), so they take the same zero-pad convention
         # ``rfx/nonuniform.py``'s ``apply_pec_mask(st, pec_mask)`` takes.
-        mask_ex, mask_ey, mask_ez = tangential_edge_masks(
-            mask, (True, False, False))
+        mask_ex, mask_ey, mask_ez = realized_pec_edge_masks(
+            mask, periodic=(True, False, False))
 
         # Force ghost rows to False so we never touch a neighbour rank's
         # cells.  Real cells span [ghost, nx_local - ghost).
@@ -854,9 +875,11 @@ def _apply_pec_occupancy_nu_shmap(state: FDTDState, sharded_pec_occupancy,
 
     The occupancy at the first / last real cell sees the seam-neighbour's
     occupancy via the ghost row populated by
-    :func:`shard_pec_occupancy_x_slab`, which keeps the
-    ``jnp.maximum(roll(+1), roll(-1))`` neighbour rule consistent with
-    the single-device path.
+    :func:`shard_pec_occupancy_x_slab`, which keeps the shared §1.6
+    noisy-OR rule consistent with the single-device path.  As for the
+    hard mask, the ghost E rows are not touched here; the E ghost
+    exchange that follows this step (scan body stage 9) copies the
+    owner's soft-zeroed real row into them.
     """
     if sharded_pec_occupancy is None:
         return state
@@ -871,12 +894,14 @@ def _apply_pec_occupancy_nu_shmap(state: FDTDState, sharded_pec_occupancy,
     def _pec_occ(ex, ey, ez, occ):
         occ = jnp.clip(occ.astype(ex.dtype), 0.0, 1.0)
 
-        occ_ex = occ * jnp.maximum(
-            jnp.roll(occ, 1, axis=0), jnp.roll(occ, -1, axis=0))
-        occ_ey = occ * jnp.maximum(
-            jnp.roll(occ, 1, axis=1), jnp.roll(occ, -1, axis=1))
-        occ_ez = occ * jnp.maximum(
-            jnp.roll(occ, 1, axis=2), jnp.roll(occ, -1, axis=2))
+        # ONE soft rule for both lanes (#931 §1.6): the noisy-OR of the
+        # four incident cells, from the shared helper.  The inlined
+        # ``occ * max(roll(+1), roll(-1))`` copy that stood here was a
+        # different rule altogether — a per-axis two-neighbour product,
+        # not the incident four — so this lane's soft PEC did not match
+        # its own hard PEC, let alone the single-device soft lane.
+        occ_ex, occ_ey, occ_ez = _volume_occupancy_masks(
+            occ, (True, False, False))
 
         # Force ghost rows to 0.0 so seam cells in another rank's slab are
         # not double-applied; real cells span [ghost, nx_local - ghost).
@@ -1952,11 +1977,33 @@ def run_nonuniform_distributed_pec(
             (uses snapshotted ex_old/ey_old/ez_old, not post-exchange E)
         5. apply_cpml_e (Phase 2C, NU + slab-aware)  via shard_map  [if CPML]
         6. Source injection (rank-conditional)       via shard_map
-        7. Ghost exchange of E                       via lax.ppermute
-        8. apply_pec on physical domain faces        via shard_map
-        9. apply_pec_mask (geometry + override)      via shard_map
-        9b. apply_pec_occupancy (soft PEC)           via shard_map  [if occupancy]
+        7. apply_pec on physical domain faces        via shard_map
+        8. apply_pec_mask (geometry + override)      via shard_map
+        8b. apply_pec_occupancy (soft PEC)           via shard_map  [if occupancy]
+        9. Ghost exchange of E                       via lax.ppermute
        10. Probe accumulation (rank-conditional sum) via lax.psum
+
+    The E ghost exchange is the LAST E-half-step stage, after every
+    operator that writes E on real cells (sources, the domain-face PEC,
+    the PEC mask, the soft occupancy) — the same placement the H half
+    gives the PMC face (stage 2b before the H exchange, "so the zero
+    propagates to neighbours via the exchange").  A rank acts only on
+    its real cells; a ghost row is a copy of the owner's real row, and
+    that copy is only faithful if it is taken after the owner is done.
+    Measured on the #931 seam fixtures (16x8x8, 2 ranks, 30 steps, one
+    PEC cell at ``(nx_per_rank, ny//2, nz//2)`` = rank 1's first real
+    cell): with the exchange BEFORE the PEC stages, rank 0's right ghost
+    kept the un-zeroed ``Ey``/``Ez`` on the seam plane that rank 1 zeroed
+    a stage later, rank 0's next H update at its last real cell read that
+    stale plane, and the Class B final-step error was 2.107e-01 against a
+    5e-5 gate (hard mask and soft occupancy alike).  With the exchange
+    after the PEC stages the seam row reads 7.8e-08 at the final step and
+    the whole probe series agrees to 3 float32 ulp (max |diff| 1.5 on a
+    4.0e6 peak) — the same rounding-level residual the away-from-seam
+    bodies show before and after.  A body whose seam-plane edges
+    are owned by the LEFT rank (or a body straddling the seam) was never
+    visibly wrong, because the corrupted H then sat inside the body and
+    fed only PEC edges — which is why the old three-cell fixtures passed.
 
     ADE Ordering Contract (Phase 2D — V3 plan lines 679-698)
     -------------------------------------------------------
@@ -1979,8 +2026,9 @@ def run_nonuniform_distributed_pec(
          ``_update_e_nu_dispersive`` receives the snapshotted
          ``e_old`` tuple via the ``e_old=`` keyword — NOT
          ``state.ex/ey/ez`` (which would be post-exchange E from the
-         previous step's seventh stage).
-      4. Continue with CPML-E, sources, E ghost exchange, PEC.
+         previous step's ninth stage).
+      4. Continue with CPML-E, sources, PEC, and LAST the E ghost
+         exchange (see the ordering note above).
 
     The snapshot lives only as a Python local within ``step_fn``; it
     costs nothing to carry (just three ``jnp.array`` references), and
@@ -2800,7 +2848,7 @@ def run_nonuniform_distributed_pec(
         #    - no dispersion: standard NU E update (Phase 2B path)
         #    - Debye-only / Lorentz-only / mixed: dispersive NU ADE
         #      with the snapshotted ex_old/ey_old/ez_old (NEVER the
-        #      post-ghost-exchange E from the previous step's stage 7).
+        #      post-ghost-exchange E from the previous step's stage 9).
         if use_dispersion:
             st, db_st, lr_st = _update_e_dispersive_shmap(
                 st, sharded_materials, db_st, lr_st,
@@ -2816,28 +2864,35 @@ def run_nonuniform_distributed_pec(
         # 6. Source injection (rank-conditional via shard_map)
         st = _inject_sources_shmap(st, src_vals)
 
-        # 7. Ghost exchange of E so the next step's H update sees the
-        #    neighbour rank's E at the seam.
-        st = _exchange_e_ghosts_nu(st, mesh, n_devices)
-
-        # 8. PEC on physical domain faces (X-faces are rank-conditional).
+        # 7. PEC on physical domain faces (X-faces are rank-conditional).
         st = _apply_pec_face_nu_shmap(st, mesh, n_devices, nx_local, pad_x=pad_x)
 
-        # 9. PEC mask zeroing (geometry + override union).  No-op when
+        # 8. PEC mask zeroing (geometry + override union).  No-op when
         #    sharded_pec_mask is None.
         if sharded_pec_mask is not None:
             st = _apply_pec_mask_nu_shmap(
                 st, sharded_pec_mask, mesh, n_devices, nx_local)
 
-        # 9b. Phase 2E: soft-PEC occupancy (differentiable analogue of the
+        # 8b. Phase 2E: soft-PEC occupancy (differentiable analogue of the
         #     hard mask).  Mirrors single-device ordering in
         #     ``rfx.nonuniform.run_nonuniform``: applied after the hard
         #     mask and before probe accumulation.  Seam ghost rows are
-        #     zeroed inside the helper so a seam cell is applied exactly
-        #     once.
+        #     left alone inside the helper so a seam cell is applied
+        #     exactly once, by its owner.
         if sharded_pec_occupancy is not None:
             st = _apply_pec_occupancy_nu_shmap(
                 st, sharded_pec_occupancy, mesh, n_devices, nx_local)
+
+        # 9. Ghost exchange of E so the next step's H update sees the
+        #    neighbour rank's E at the seam.  LAST in the E half-step, after
+        #    the PEC stages: the H update at a rank's last real cell reads
+        #    Ey/Ez on its right ghost plane, and that plane's PEC edges are
+        #    zeroed by the OWNER rank (stages 8/8b act on real cells only).
+        #    Exchanging before the PEC stages handed the ghost the
+        #    un-zeroed value — the #931 seam-cell divergence (2.107e-01
+        #    final-step error on a one-cell body at rank 1's first real
+        #    cell; see the docstring).
+        st = _exchange_e_ghosts_nu(st, mesh, n_devices)
 
         # 10. Probe accumulation (rank-conditional sample + lax.psum).
         #     Phase 2F emit_time_series=False: skip the probe-sample
