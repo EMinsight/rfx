@@ -383,7 +383,33 @@ REQUIRED_SITES: dict[tuple[str, str], int] = {
     # found reconstructed numbers in; its floor is the point of opting the note in.
     (LATTICE_NOTE, "5.1 cv23 \u2014 nine committed entries, eight distinct meshes, all green"): 4,
     (LATTICE_NOTE, "5.2 cv22 \u2014 three rungs, all green; the pole lattice predicts the residual a priori"): 8,
-    (LATTICE_NOTE, "5.3 cv04 \u2014 the witness is REPORTED, not gated, and the derivation says why"): 16,
+    # 2026-09-10: cv04's settling-extension fix landed (PI override of this
+    # section's own 8.3, "no new physics" -- see the commit message). Two
+    # passes, both reproduced with this file's own parser rather than
+    # asserted:
+    #   Pass 1 (c9b86b5e): PRE-FIX the section carried 16 live citations.
+    #   `lattice_witness.json` was regenerated in place and no longer holds
+    #   the pre-fix 719-step values under those keys, so 10 were demoted to
+    #   plain historical text (6 stayed live, unaffected keys -- that 6 is
+    #   already inside the 16 - 10, not an addition to it) and 7 new live
+    #   citations to the POST-FIX 990-step record were added:
+    #   16 - 10 + 7 = 13 (the 6 that stayed live are the 16 - 10).
+    #   Pass 2 (PR #974 adversarial review): re-checked the 10 demotions and
+    #   found only 4 were forced -- W_witness,R/T and the worst-per-bin
+    #   ratios R/T have no other committed home, so they stay plain text
+    #   with a `git show e079b0b5:...` retrieval note. The other 6 were
+    #   re-lived by pointing them at sources the fix does not change: the
+    #   a-priori ceiling and \u0393 (ringdown rate) are geometry-derived and
+    #   numerically unchanged, so they now cite the CURRENT artifact (+2);
+    #   the four |rfx-lattice| gated-mean citations (dR, dT, each appearing
+    #   twice) now cite the IMMUTABLE r1 revision of `envelope.json`, which
+    #   archived them before the fix and does not move when the producer is
+    #   re-run (+4, previously plain text under the same keys). The section
+    #   also gained 2 live citations to the re-run F2/F3 falsifier
+    #   separations at the settled rung, which now discriminate where they
+    #   previously did not: 13 + 2 + 4 + 2 = 21.
+    # Floor set to the reproduced count (21), not a round number.
+    (LATTICE_NOTE, "5.3 cv04 \u2014 the witness was REPORTED, not gated; the derivation said why, and the settling-extension fix (2026-09-10) closed it"): 21,
     (LATTICE_NOTE, "8.1 cv22 Debye at a 3e-4 settling bar (the only rung a claim requires)"): 3,
     # 2026-09-03 (#884): the cv19 witness note's two load-bearing sections. §6.2
     # cites the committed unitarity that U3's floor is compared against; §6.3

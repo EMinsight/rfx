@@ -1035,9 +1035,9 @@ class Simulation(
                contract**: multiply your waveform amplitude by the cell
                volume ``dV`` and pass ``amplitude_kind='current'`` —
                algebra ``Cb*(w*dV)/dV == Cb*w``, exact up to one float
-               multiply/divide pair (not bit-identical). From 1.8
-               ``amplitude_kind`` is required; from 1.9 the default
-               becomes ``'current'``.
+               multiply/divide pair (not bit-identical).
+               ``amplitude_kind`` becomes required in 1.9 (and
+               ``'current'`` the default in 2.0).
 
             Route note (pre-existing, unchanged): the ``forward()``
             uniform route uses the ``Cb``-normalized helper regardless of

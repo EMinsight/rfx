@@ -443,8 +443,6 @@ def test_cv04_committed_evidence_json_is_reproducible():
     This is the numeric-provenance leg: cv04's comments and design note point at
     keys in this file instead of restating digits, so a number that drifts from
     the code that produced it fails here rather than surviving in prose."""
-    import json
-
     assert CV04_EVIDENCE_JSON.exists(), (
         f"missing {CV04_EVIDENCE_JSON}; regenerate with "
         "python validation/crossval/comparators/emit_cv04_fringe_gate_evidence.py"
@@ -561,14 +559,20 @@ def test_cv04_evidence_config_still_matches_the_script_it_cites():
     assert emitter.NFFT == int(2 ** math.ceil(math.log2(emitter.N_STEPS))
                                * slab_family.NFFT_OVERSAMPLE)
     assert emitter.DF_BIN_HZ == 1.0 / (emitter.NFFT * emitter.DT_S)
-    # and the two run-measured constants are the committed artifact's, keyed by
-    # name rather than by line: an artifact regeneration that moves either one
-    # invalidates the emitter here.
-    witness = json.loads(
-        (CROSSVAL_DIR / "_04_fresnel_results" / "lattice_witness.json").read_text()
-    )["rungs"]["slab_eps4"]
-    assert emitter.DT_S == witness["dt_s"]
-    assert emitter.N_STEPS == witness["n_steps"]
+    # N8 (PR #974 round 2): this used to assert emitter.DT_S/N_STEPS against
+    # the committed lattice_witness.json's own dt_s/n_steps -- and, since the
+    # settling-extension fix (2026-09-10), the emitter's N_STEPS/DT_S ARE
+    # read from that exact file and key (_committed_run_length(), above),
+    # so the comparison had become tautological: two reads of the same
+    # value, unable to fail no matter what the artifact says. The comment
+    # that used to sit here ("an artifact regeneration that moves either one
+    # invalidates the emitter") was also false under the new reader -- an
+    # artifact regeneration moves the emitter's own constants WITH it, by
+    # construction. The real risk this used to guard -- a regenerated
+    # artifact whose evidence output goes stale -- is covered by
+    # test_cv04_committed_evidence_json_is_reproducible (above), which
+    # rebuilds the evidence from a fresh emitter and diffs it against the
+    # committed fringe_gate_geometry.json.
     # the producer itself reads the same declaration (no fourth home)
     script = (CROSSVAL_DIR / "04_multilayer_fresnel.py").read_text(encoding="utf-8")
     for line in ("eps_slab = slab_family.EPS_SLAB",
