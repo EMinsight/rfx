@@ -29,16 +29,17 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from tests._gate_policy import gate_from_envelope
+from tests._gate_policy import ENVELOPE_GATE_MULTIPLIER
 
 _REPO = Path(__file__).resolve().parents[2]
 _RESULTS = _REPO / "validation/crossval/_23_lossy_results"
-_GOLDEN_CV04 = _REPO / "tests/fixtures/golden_workflows/multilayer_fresnel.json"
+_ENVELOPE = _REPO / "validation/crossval/_04_fresnel_results/envelope.json"
 
 
 def _load(name: str, rel: str):
@@ -81,18 +82,48 @@ def _rfx_bins():
 # 1. Artifact-free witnesses
 # ---------------------------------------------------------------------------
 
-def test_windows_are_cv22s_plus_the_triangle_sums_for_absorption():
-    golden = json.loads(_GOLDEN_CV04.read_text())
-    baseline = {m["id"]: m["observed_baseline"] for m in golden["expected_metrics"]}
-    assert L.W_BIN == G.W_BIN == 0.074 and L.W_MEAN_R == G.W_MEAN_R == 0.010 and L.W_MEAN_T == G.W_MEAN_T == 0.017
+def _round_up(value: float, multiplier: float, quantum: float) -> float:
+    """The envelope->gate arithmetic, written out again rather than imported:
+    ``gate_from_envelope`` is one side of the comparison, so it cannot be both."""
+    return math.ceil(value * multiplier * quantum) / quantum
+
+
+def test_windows_are_rederived_from_the_producer_artifact_outside_the_consumer():
+    """cv23's windows, re-derived from cv04's own artifact.
+
+    The closure envelope used to be copied into this module from the STUDIO UI
+    fixture and pinned equal to it here (#928). Both ends are gone: the module
+    reads the producer's `_04_fresnel_results/envelope.json` through its own
+    adoption record, and this test re-derives from that artifact with the
+    arithmetic written out locally.
+    """
+    doc = json.loads(_ENVELOPE.read_text())
+    adoption = L.CV04_ADOPTION
+    rev = doc["revisions"][adoption["adopted_revision"]]
+    assert rev["status"] == "active"
+    assert ENVELOPE_GATE_MULTIPLIER == adoption["gate_policy"]["multiplier"], (
+        "the shared multiplier moved since cv23 adopted its envelope")
+    mult, quantum = adoption["gate_policy"]["multiplier"], adoption["gate_policy"]["quantum"]
+    values = rev["values"]
+
+    # cv22's three, re-exported here: same revision, same derivation.
+    assert L.W_BIN == G.W_BIN == _round_up(values["per_bin_max_RT_closure"], mult, quantum)
+    assert L.W_MEAN_R == G.W_MEAN_R == _round_up(values["mean_dR"], mult, quantum)
+    assert L.W_MEAN_T == G.W_MEAN_T == _round_up(values["mean_dT"], mult, quantum)
+    assert L.CV04_ADOPTION["adopted_revision"] == G.CV04_ADOPTION["adopted_revision"]
+    assert L.CV04_ADOPTION["revision_sha256"] == G.CV04_ADOPTION["revision_sha256"]
+    # the declared A windows: triangle sums of the above, not new evidence
     assert L.W_BIN_A == 2 * G.W_BIN == pytest.approx(0.148)
     assert L.W_MEAN_A == G.W_MEAN_R + G.W_MEAN_T == pytest.approx(0.027)
-    # the tighter A window is DERIVABLE from cv04's closure (reported, not gated)
-    assert L.CV04_MEAN_CLOSURE == baseline["mean_energy_closure_error"] == 0.0091
-    assert L.W_BIN_A_TIGHT == gate_from_envelope(0.0487, quantum=1000) == 0.074
-    assert L.W_MEAN_A_TIGHT == gate_from_envelope(0.0091, quantum=1000) == 0.014
+    # the tighter A windows: derived from the SAME artifact's closure values
+    assert L.CV04_MEAN_CLOSURE == values["mean_closure"]
+    assert L.W_BIN_A_TIGHT == _round_up(values["per_bin_max_RT_closure"], mult, quantum)
+    assert L.W_MEAN_A_TIGHT == _round_up(values["mean_closure"], mult, quantum)
     assert L.W_BIN_A_TIGHT < L.W_BIN_A and L.W_MEAN_A_TIGHT < L.W_MEAN_A
     assert L.MEEP_PRIMARY_RESOLUTION == 40 and L.MEEP_EPS_AVERAGING is False
+    print(f"cv23 calibration: adopted {L.CV04_ADOPTED['revision']} "
+          f"(latest {L.CV04_ADOPTED['latest_revision']}, newer available: "
+          f"{L.CV04_ADOPTED['newer_revisions'] or 'none'})")
 
 
 @pytest.mark.parametrize("arm", L.ARM_ORDER)
@@ -260,6 +291,47 @@ def test_add_material_path_assembles_the_direct_arrays_bit_for_bit(arm):
     assert bool(jnp.array_equal(mats.mu_r, direct.mu_r))
     assert pec is None or not bool(jnp.any(pec))
     assert int((mats.sigma[:, 0, 0] > 0).sum()) == 10
+
+
+@pytest.mark.parametrize("arm", L.ARM_ORDER[:1])
+def test_a_one_cell_lossy_body_still_owns_exactly_one_cell(arm):
+    """#931 regression guard: the contract changes EDGES, not cells.
+
+    This is the sharpest pin in the crossval suite on the conductor /
+    dielectric boundary, so it gets the case that used to be special. A
+    one-cell lossy body is where ``resample_sheet_node_materials`` (#702)
+    acted: it gave a node-thin conductor's own cell the material its live
+    edge sat in, which is the one mechanism that could put a THIRD material
+    value on a one-node body (measured on the canonical patch: 18590 cells on
+    one z plane went 1.000 -> 3.380, and the resonance moved 9.32 -> 8.16 GHz).
+    That function is deleted by the contract, and a lossy dielectric must not
+    fall through the PEC sigma threshold either.
+
+    So: exactly one cell carries sigma, its value is the declared one, and
+    ``pec_mask`` stays empty. The ten-cell sibling above says the same thing
+    about a thick body; this says it where the old code was clever.
+    """
+    import jax.numpy as jnp
+    from rfx import Box, Simulation
+    from rfx.geometry.csg import _grid_coords
+    from rfx.grid import Grid
+    p = L.ARMS[arm]["params"]
+    domain = (G.NX_INTERIOR_R3 * G.DX_M, 0.004, G.DX_M)
+    grid = Grid(freq_max=20e9, domain=domain, dx=G.DX_M, cpml_layers=G.N_CPML,
+                mode="2d_tmz")
+    lo = G.rig_cells(G.NX_INTERIOR_R3)["slab_lo"]
+    sim = Simulation(freq_max=20e9, domain=domain, dx=G.DX_M,
+                     cpml_layers=G.N_CPML, mode="2d_tmz")
+    sim.add_material(L.API_MATERIAL_NAME, eps_r=p["eps_inf"], sigma=p["sigma"])
+    xs, _, _ = _grid_coords(grid)
+    sim.add(Box((float(xs[lo]), -1.0, -1.0), (float(xs[lo + 1]), 1.0, 1.0)),
+            material=L.API_MATERIAL_NAME)
+    mats, _, _, pec, *_ = sim._assemble_materials(sim._build_grid())
+    assert int((mats.sigma[:, 0, 0] > 0).sum()) == 1
+    assert float(mats.sigma[lo, 0, 0]) == pytest.approx(p["sigma"])
+    assert float(mats.eps_r[lo, 0, 0]) == pytest.approx(p["eps_inf"])
+    assert pec is None or not bool(jnp.any(pec)), (
+        "a lossy dielectric fell through the PEC sigma threshold")
 
 
 @pytest.mark.parametrize("name", sorted(L.FALSIFIERS))

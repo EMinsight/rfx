@@ -36,6 +36,7 @@ import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jax.experimental.shard_map import shard_map
 
+from rfx.core.jax_utils import is_tracer
 from rfx.core.yee import (
     FDTDState,
     MaterialArrays,
@@ -637,19 +638,61 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         or getattr(sim, "_dx_profile", None) is not None
         or getattr(sim, "_dy_profile", None) is not None
     )
+    # PRE-EXISTING GAP, not a #931 regression (verified 2026-09-07): this
+    # lane assembles ``pec_mask`` and never applies it. Its step body only
+    # calls the DOMAIN-FACE PEC (``_apply_pec_shmap``); no geometry PEC —
+    # volume, sheet or wire — reaches the field update here. #931 did not
+    # introduce this and does not fix it; threading sheets in would only
+    # make the drop harder to see.
+    #
+    # What #931 DID introduce was a refusal that named "redraw it as a
+    # volume" as the remedy — advice that on this lane produces a run with
+    # the metal still missing and no sign of it (measured: a two-device run
+    # probing inside a declared PEC Box returns a trace bit-identical to
+    # the same model with the Box deleted). Since the drop is the same for
+    # all three kinds, the refusal is the same for all three: a declared
+    # PEC volume is refused here too rather than solved away.
+    _d_pec_sheets: list = []
+    _d_pec_wires: list = []
     if is_nu:
         # dz-profile synthesis happens locally inside
         # _build_nonuniform_grid() — no sim-state mutation here.
         grid = sim._build_nonuniform_grid()
         base_materials, debye_spec, lorentz_spec, pec_mask = (
-            sim._assemble_materials_nu(grid)
+            sim._assemble_materials_nu(grid, pec_sheets=_d_pec_sheets,
+                                       pec_wires=_d_pec_wires)
         )
         pec_shapes = None
     else:
         grid = sim._build_grid()
         base_materials, debye_spec, lorentz_spec, pec_mask, pec_shapes, *_ = (
-            sim._assemble_materials(grid)
+            sim._assemble_materials(grid, pec_sheets=_d_pec_sheets,
+                                    pec_wires=_d_pec_wires)
         )
+    _d_pec_volume = (pec_mask is not None
+                     and not is_tracer(pec_mask)
+                     and bool(jnp.any(pec_mask)))
+    if _d_pec_sheets or _d_pec_wires or _d_pec_volume:
+        _d_declared = []
+        if _d_pec_sheets:
+            _d_declared.append(f"{len(_d_pec_sheets)} PEC sheet(s)")
+        if _d_pec_wires:
+            _d_declared.append(f"{len(_d_pec_wires)} sub-cell wire(s)")
+        if _d_pec_volume:
+            _d_declared.append(
+                f"a PEC volume of {int(jnp.sum(pec_mask))} cell(s)")
+        raise NotImplementedError(
+            "run_distributed_v2() does not realize declared PEC geometry of "
+            "ANY kind (#931): this lane carries geometry PEC only as a cell "
+            "mask, its step body applies domain-face PEC alone, and a sheet "
+            "or a wire owns no cell to begin with. Declared here: "
+            f"{', '.join(_d_declared)} — all of it would be absent from "
+            "every rank with no sign of it. Redrawing a sheet as a volume "
+            "does NOT help on this lane (measured: a probe inside a declared "
+            "PEC Box reads a trace bit-identical to empty geometry). Use "
+            "sim.run() without devices=, which realizes all three, or model "
+            "the conductor as a sigma fill, which rides in the material "
+            "arrays this lane does shard.")
     materials = base_materials
 
     nx, ny, nz = grid.shape

@@ -2,10 +2,14 @@
 (FDTD, narrow fine band), pre-declared in
 docs/design_notes/20260907_nu_band_profile_predeclaration.md §3.
 
-F7: exact discrete scattering (``chain_model.scattering``) on the OLD
+F7: exact discrete scattering on the OLD
 (main d990e18c ``_make_dz_profile``) and NEW auto-z PCB profiles embedded
 in W2-count runways (140 lead cells of the profile's first cell, 150 tail
-cells of its last). Gates: F7a ``|R|^2 <= 1.5 (sum_steps |R_step|)^2`` on
+cells of its last). The whole-profile |R|, |T| come from
+``chain_model.scattering``; the per-step |R_step| and the F7b cap come from
+``chain_model.step_reflection``, the closed form of that same solve for a
+single step (the dense float64 solve of a step carries ~1e-5 relative
+noise on a 1e-7 reflection, and its last bits vary with the LAPACK build). Gates: F7a ``|R|^2 <= 1.5 (sum_steps |R_step|)^2`` on
 the NEW profile; F7b max non-thirds step ``<= |R_single(r=1.4, d=max P)|``.
 The OLD profile is regenerated from the committed source of d990e18c
 (``git show``), never retyped.
@@ -21,7 +25,9 @@ Gate: the n_b = 4 row, window ``|R_meas - R_model| <= 0.20 R_model + 3e-5``
 Usage (declared in the note):
     PYTHONPATH=. python -m validation.research.multiband_nu.w6_band_builder \
         --widths 2,4,8,16 --out validation/research/multiband_nu/results/w6_band_builder.json
-    add ``--f7-only`` to skip the FDTD rows.
+    add ``--f7-only`` to skip the FDTD rows; ``--f7-only --carry-f8``
+    recomputes F7 in place and keeps the committed F8 block (whose rows
+    hold FDTD measurements) with the provenance it was written under.
 
 E1 (resolution x ratio sweep of the F8 witness, pre-declared in
 docs/design_notes/20260907_nu_exp1_band_law_sweep_predeclaration.md):
@@ -48,7 +54,7 @@ from rfx.auto_config import _make_dz_profile
 from rfx.nonuniform import make_band_profile, make_nonuniform_grid, run_nonuniform
 
 from . import fixtures as fx
-from .chain_model import bloch_kz, s0_sy, scattering
+from .chain_model import bloch_kz, s0_sy, scattering, step_reflection
 from .harness import build_pec_fixture
 from .w2_w3_reflection import (
     F0, SIGMA_T, T0, FS2_FLOOR, dft_at, gaussian_sine, te10_sources, vg_of,
@@ -127,18 +133,20 @@ def f7_profile_report(name: str, profile: np.ndarray, dt: float, dy: float,
         d0, d1 = float(profile[k]), float(profile[k + 1])
         if d0 == d1:
             continue
-        Rk, _ = scattering(np.array([d0] * F7_LEAD + [d1] * F7_TAIL), F7_LEAD,
-                           F7_TAIL, F0, dt, dy, b)
+        # closed form, not scattering() on a [d0]*lead + [d1]*tail runway:
+        # same model, but the float64 dense solve of that runway carries
+        # ~1e-5 relative noise on a 1e-7 reflection and its last bits are
+        # LAPACK-build dependent (chain_model.step_reflection docstring).
+        Rk = step_reflection(d0, d1, F0, dt, dy, b)
         steps.append({"index": k, "d_from_um": d0 * 1e6, "d_to_um": d1 * 1e6,
-                      "ratio": max(d0 / d1, d1 / d0), "R_step": abs(Rk),
+                      "ratio": max(d0 / d1, d1 / d0), "R_step": Rk,
                       "thirds_pair": k in ex})
     non_thirds = [s for s in steps if not s["thirds_pair"]]
     thirds = [s for s in steps if s["thirds_pair"]]
     sum_amp = sum(s["R_step"] for s in steps)
     sum_pow = sum(s["R_step"] ** 2 for s in steps)
     dmax = float(np.max(profile))
-    R1, _ = scattering(np.array([dmax / F7_CAP_REF] * F7_LEAD + [dmax] * F7_TAIL),
-                       F7_LEAD, F7_TAIL, F0, dt, dy, b)
+    R1 = step_reflection(dmax / F7_CAP_REF, dmax, F0, dt, dy, b)
     max_nt = max(s["R_step"] for s in non_thirds) if non_thirds else 0.0
     max_th = max(s["R_step"] for s in thirds) if thirds else 0.0
     rr = profile[1:] / profile[:-1]
@@ -152,10 +160,10 @@ def f7_profile_report(name: str, profile: np.ndarray, dt: float, dy: float,
         "n_steps": len(steps), "sum_abs_R_step": sum_amp,
         "sum_abs_R_step_sq": sum_amp ** 2, "sum_R_step_sq": sum_pow,
         "max_nonthirds_step": max_nt, "max_thirds_step": max_th,
-        "R_single_cap_at_dmax": abs(R1),
+        "R_single_cap_at_dmax": R1,
         "f7a_window": 1.5 * sum_amp ** 2,
         "f7a_fired": bool(abs(R) ** 2 > 1.5 * sum_amp ** 2),
-        "f7b_fired": bool(max_nt > abs(R1) * (1 + 1e-9)),
+        "f7b_fired": bool(max_nt > R1 * (1 + 1e-9)),
         "steps": steps, "cells_um": (profile * 1e6).tolist(),
     }
 
@@ -737,6 +745,10 @@ def main(argv=None):
     ap.add_argument("--widths", default="2,4,8,16")
     ap.add_argument("--out", default="validation/research/multiband_nu/results/w6_band_builder.json")
     ap.add_argument("--f7-only", action="store_true")
+    ap.add_argument("--carry-f8", action="store_true",
+                    help="with --f7-only: keep the f8 block already in --out "
+                         "(its FDTD rows cannot be recomputed without re-running "
+                         "the runs) and record the provenance it was written with")
     ap.add_argument("--sweep", action="store_true",
                     help="E1: resolution x ratio sweep of the F8 witness (no F7)")
     ap.add_argument("--fine-cells-per-lambda", default="30",
@@ -755,9 +767,25 @@ def main(argv=None):
     results = {"rfx_file": rfx.__file__, "argv": sys.argv[1:],
                "git_sha": _git_sha(), "git_dirty": _git_dirty(),
                "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0))}
+    carried = None
+    if args.carry_f8:
+        if not args.f7_only:
+            ap.error("--carry-f8 only makes sense with --f7-only")
+        with open(args.out) as fh:
+            carried = json.load(fh)
     results["f7"] = run_f7()
     if not args.f7_only:
         results["f8"] = run_f8(widths)
+    elif carried is not None:
+        results["f8"] = carried["f8"]
+        # The F8 rows belong to the run that MEASURED them. On a file that
+        # already carries an f8_provenance, that run is the one it names --
+        # not this file's top-level keys, which a previous F7-only recompute
+        # already replaced. Rebuilding from the top level here would hand
+        # F8's FDTD runs to whichever tree last recomputed F7.
+        results["f8_provenance"] = carried.get("f8_provenance") or {
+            k: carried[k] for k in ("rfx_file", "argv", "git_sha", "git_dirty",
+                                    "started_utc", "wallclock_s") if k in carried}
     results["wallclock_s"] = time.time() - t0
     with open(args.out, "w") as fh:
         json.dump(results, fh, indent=1)

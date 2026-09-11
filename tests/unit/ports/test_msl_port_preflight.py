@@ -45,9 +45,14 @@ def _build_sim(*, dx: float, ly: float, port_x: float = 2e-3,
     sim.add_material("ro4350b", eps_r=EPS_R)
     sim.add(Box((0, 0, 0), (LX, ly, H_SUB)), material="ro4350b")
     y_c = ly / 2.0
+    # 35 um foil -> a SHEET on the laminate face (#931 §1.3). The meshes
+    # in this file are DELIBERATELY off-lattice: the substrate-resolution
+    # and mixed-cell advisories are what it tests, and a sheet declared at
+    # H_SUB on a bisecting mesh lands on the nearest node, which is the
+    # offset those advisories exist to report.
     sim.add(
         Box((0, y_c - W_TRACE / 2, H_SUB),
-            (LX, y_c + W_TRACE / 2, H_SUB + dx)),
+            (LX, y_c + W_TRACE / 2, H_SUB)),
         material="pec",
     )
     sim.add_msl_port(position=(port_x, y_c, 0),
@@ -164,7 +169,7 @@ def test_substrate_walk_starts_at_the_ports_own_ground_plane():
     sim.add(Box((0, 0, z_gnd), (LX, ly, z_gnd + H_SUB)), material="ro4350b")
     y_c = ly / 2.0
     sim.add(Box((0, y_c - W_TRACE / 2, z_gnd + H_SUB),
-                (LX, y_c + W_TRACE / 2, z_gnd + H_SUB + dx)), material="pec")
+                (LX, y_c + W_TRACE / 2, z_gnd + H_SUB)), material="pec")
     sim.add_msl_port(position=(2e-3, y_c, z_gnd), width=W_TRACE, height=H_SUB,
                      direction="+x", impedance=50.0)
     msgs = _msl_warnings(sim)
@@ -449,11 +454,16 @@ def _build_sim_with_stub(*, dx: float, l_line_mm: float, l_stub_mm: float = 8.63
     y_trace = (2 * H_SUB + 8 * dx) + W_TRACE / 2
     trace_y_lo = y_trace - W_TRACE / 2
     trace_y_hi = y_trace + W_TRACE / 2
-    sim.add(Box((0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + dx)),
+    # Through-trace and branch stub: both foil, both SHEETS on the same
+    # laminate face (#931 §1.3). Declared on ONE plane their footprints are
+    # UNIONED before the edge rule is applied, so the T is galvanically
+    # continuous -- per-sheet application would leave the shared edge live,
+    # a slit. Asserted in test_open_stub_is_galvanically_joined_to_the_trace.
+    sim.add(Box((0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB)),
             material="pec")
     stub_xc = LX / 2
     sim.add(Box((stub_xc - W_TRACE / 2, trace_y_hi, H_SUB),
-                (stub_xc + W_TRACE / 2, trace_y_hi + L_STUB, H_SUB + dx)),
+                (stub_xc + W_TRACE / 2, trace_y_hi + L_STUB, H_SUB)),
             material="pec")
     sim.add_msl_port(position=(PORT_MARGIN, y_trace, 0),
                      width=W_TRACE, height=H_SUB,
@@ -522,7 +532,7 @@ def test_reflector_clearance_silent_without_reflector():
     sim.add(Box((0, 0, 0), (LX, LY, H_SUB)), material="ro4350b")
     y_trace = (2 * H_SUB + 8 * dx) + W_TRACE / 2
     sim.add(Box((0, y_trace - W_TRACE / 2, H_SUB),
-                (LX, y_trace + W_TRACE / 2, H_SUB + dx)),
+                (LX, y_trace + W_TRACE / 2, H_SUB)),
             material="pec")
     sim.add_msl_port(position=(PORT_MARGIN, y_trace, 0),
                      width=W_TRACE, height=H_SUB,
@@ -572,7 +582,7 @@ def _two_port_sim(*, lx: float, msl1_x: float,
     sim.add(Box((0, 0, 0), (lx, ly, H_SUB)), material="ro4350b")
     y_c = ly / 2.0
     sim.add(
-        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB + dx)),
+        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB)),
         material="pec",
     )
     sim.add_msl_port(position=(2.40e-3, y_c, 0), width=W_TRACE, height=H_SUB,
@@ -866,7 +876,7 @@ def test_issue510_feed_crossing_names_lumped_port_cleanly():
     sim.add(Box((0, 0, 0), (lx, ly, H_SUB)), material="ro4350b")
     y_c = ly / 2.0
     sim.add(
-        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB + dx)),
+        Box((0, y_c - W_TRACE / 2, H_SUB), (lx, y_c + W_TRACE / 2, H_SUB)),
         material="pec",
     )
     sim.add_msl_port(position=(2.40e-3, y_c, 0), width=W_TRACE, height=H_SUB,
@@ -1040,3 +1050,42 @@ def test_realized_thickness_advisory_does_not_double_report():
             f"dx={dx*1e6:.0f}µm: exactly one check may report the realized "
             f"board, got {len(disclosed)}: {disclosed}"
         )
+
+def test_open_stub_is_galvanically_joined_to_the_trace():
+    """Build-time witness (no solve): two abutting sheets are ONE conductor.
+
+    The through-trace and the branch stub are separate declarations that
+    share an edge at ``y = trace_y_hi``. §1.3 unions every footprint on a
+    plane BEFORE applying the edge rule, precisely so the shared row does
+    not come out live -- a slit across a T-junction. Nothing checked this
+    before #931: the old in-plane rule dropped each Box's hi row, so
+    whether the two touched at all depended on which face met which.
+
+    Asserted on the realized edge set, on the stub's own centre column:
+    every Ey edge from the trace's far row into the stub is PEC, so there
+    is a conducting path across the junction.
+    """
+    import numpy as _np
+
+    from tests._realized_geometry import realized
+
+    dx = 80e-6
+    sim = _build_sim_with_stub(dx=dx, l_line_mm=20.0)
+    rz = realized(sim)
+    plane = rz.sheet_planes[2][0]
+    fp = _np.zeros(tuple(rz.grid.shape), dtype=bool)
+    for sp in rz.sheets:
+        fp |= _np.asarray(sp.footprint, dtype=bool)
+    assert fp.any(), "the two sheets must union into one footprint"
+
+    ey = _np.asarray(rz.edge_masks[1], dtype=bool)[:, :, plane]
+    cols = _np.flatnonzero(fp[:, :, plane].sum(axis=1) > 4)
+    assert cols.size, "no column carries both the trace and the stub"
+    i = int(cols[cols.size // 2])          # a column through the stub
+    rows = _np.flatnonzero(fp[i, :, plane])
+    span = ey[i, rows[0]:rows[-1]]
+    assert span.all(), (
+        "the trace and the stub share a plane, so their union must be one "
+        "conductor: every Ey edge between the first and last footprint row "
+        f"of column {i} has to be PEC; got {span.sum()}/{span.size}")
+

@@ -850,11 +850,48 @@ carries about 1e-8 relative noise on R; this is the solver's conditioning,
 not a physics change. Every digit quoted in the F7 table above is
 reproduced.
 
-| rule | measured (5bf9d16b) | window (frozen) | verdict |
+| rule | measured (F7 recompute, 2026-09-11) | window (frozen) | verdict |
 |---|---|---|---|
-| F7a `|R|^2 <= 1.5 (sum|R_step|)^2` on NEW | 3.1427430e-9 | <= 1.6841407e-8 | **HELD** |
-| F7b max non-thirds step <= R_single(1.4, d_max) (1 + 1e-9) on NEW | 2.4625977e-5 | <= 3.0330235e-5 | **HELD** |
+| F7a `|R|^2 <= 1.5 (sum|R_step|)^2` on NEW | 3.1427428e-9 | <= 1.6841469e-8 | **HELD** |
+| F7b max non-thirds step <= R_single(1.4, d_max) (1 + 1e-9) on NEW | 2.4625978e-5 | <= 3.0330239e-5 | **HELD** |
 | reported: OLD total / NEW total | 9.7561e-6 / 5.6060e-5 | — | lambda/450 caveat as above |
+
+**F7 recomputed, 2026-09-11 (per-step reflections in closed form).** The
+paragraph above blames the solver's conditioning for a 1e-8 wobble on
+R_total. It is right about the mechanism and three orders low on the
+size, and the first CI run of the replay test found it: on GitHub's
+ubuntu runners every per-step R_step disagreed with this macOS-written
+JSON by a median 2.9e-5 and up to 3.4e-4 relative, and the 46-step sum by
+4.3e-6, past the replay's declared 1e-6. A single cell-size step has
+exactly one non-uniform recurrence row, so its reflection is a 1e-7
+residue that a dense float64 solve produces by cancelling 1e10-scale
+terms — the last bits belong to the LAPACK build, not to the model.
+
+That junction has a closed form, derived in the docstring of
+`chain_model.py::step_reflection`: |R| = gam (d1^2 - d0^2)/4 divided by
+(sqrt(1 - gam d0^2/4) + sqrt(1 - gam d1^2/4))^2, an admittance mismatch
+with no subtraction of nearly equal numbers. Against a 60-decimal-digit
+Gaussian elimination on the same rows the dense solve builds, it agrees
+to 5e-51 relative: it is the exact value of the solved system, and the
+macOS and linux float64 solves straddle it. The F7 block of the results
+JSON was recomputed on it (F8 carried unchanged, its FDTD provenance kept
+in a new `f8_provenance` key). Cells, dt, nz, the step count, max_ratio
+and the over-1.4 pair count are bit-identical; no rule changed verdict;
+every five-figure value in the F7 table earlier in this section is
+reproduced. What moved is the eighth figure of the two rule rows above,
+and the R_total / T_total pair by the linux-vs-macOS solve difference
+alone (4.5e-7 OLD, 4.0e-8 NEW, 2.8e-12 T).
+
+Open, for the lead: R_total and T_total still come from the dense solve,
+and the OLD row's 4.5e-7 cross-platform spread uses 45 % of the replay's
+1e-6 budget — flipping one cell of the OLD profile by a single ulp moves
+R_total by up to 3.2e-7, so that budget is about one ulp-flip wide. A
+stable form is plausible: each junction's exact reflection is the
+admittance mismatch above, so a Riccati cascade over the uniform runs is
+the candidate. It is not a drop-in — a throwaway prototype of that cascade
+missed both rows by about 20 %, so the node/cell bookkeeping between
+adjacent interfaces has to be derived, not guessed. Left out of a CI fix
+on purpose.
 
 **F8 (FDTD, narrow fine band).** dt(A) = dt(B) = 2.402764937e-12 s, gates
 t_r 1.047 / gate_end 2.091 ns (870 steps) as declared; the builder emitted

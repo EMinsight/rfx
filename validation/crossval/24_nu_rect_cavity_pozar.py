@@ -56,6 +56,8 @@ import nu_cavity_gates as G  # noqa: E402
 from rfx.api import Simulation  # noqa: E402
 from rfx.harminv import harminv  # noqa: E402
 
+import realized_conductors as RC  # noqa: E402  (comparators/ on sys.path)
+
 RESULTS_DIR = os.path.join(SCRIPT_DIR, G.RESULTS_DIRNAME)
 SMOKE_RECORD_DIVISOR = 8
 HARMINV_DECIMATE = False      # declared before the run (note section 12)
@@ -96,6 +98,21 @@ def build_cavity(lane: str, dxy: float, dz_profile) -> Simulation:
         sim.add_source(pos, component=comp)
     for comp in G.CHANNELS:
         sim.add_probe(G.PROBE, comp)
+    # Build-time (no solve) control for the lattice ownership contract
+    # (#931): this cavity's walls are the DOMAIN BOUNDARY, which §1.8
+    # fences off from body PEC and does not move. cv24 is therefore one of
+    # the cases whose committed artifacts must come back bit-identical
+    # after the contract; asserting that it realizes no conductor BODY is
+    # what makes that claim checkable rather than assumed.
+    #
+    # cv24 is also the internal precedent the contract generalizes: the
+    # boundary path has always realized Dirichlet walls at BOTH bounding
+    # node planes (nu_cavity_gates.operator_matrix assumes exactly that and
+    # is independently validated against a dense 3-D assembly). Before
+    # #931 a conductor BODY did not — one rule for a wall you declare with
+    # `boundary=`, another for the same wall drawn as a Box. The contract
+    # is the boundary rule, applied to bodies.
+    RC.assert_no_conductor(sim, label=f"cv24 cavity ({lane})")
     return sim
 
 
