@@ -9,6 +9,30 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 The #931 artifact-to-carrier sweep, complete field ledger, and named unresolved
 fixture findings are recorded in the [docs-truth audit](docs/design_notes/20260908_docs_truth_audit.md).
 
+### Fixed — MSL sources distinguish bounding nodes from driven edges (#729)
+
+- Microstrip source and load support now excludes the normal edge above
+  the substrate's upper bounding node. Mode normalization uses that cell
+  count, and port clearing preserves normal PEC edges inside a volume trace.
+- The uniform forward path uses the shared port-frame conversion for both
+  x- and y-directed feeds, matching the run path's physical source position.
+- MSL ports reject missing or displaced conductor planes and metal crossing
+  the source interval before stepping, including when preflight is skipped.
+  Plane rounding follows the conductor rule; Kottke runs check their actual
+  frozen edges. Forward density reservation includes every source-edge owner.
+- Direct coax-to-MSL setup preserves registered junction materials at and
+  above the junction node and refuses unsupported lossy sheets. Its MSL
+  reader shares the registered centre and bounding planes with other paths.
+
+### Fixed — GPU passivity projection honors its reconstruction precision (#729)
+
+- The concrete S-matrix projection now factors and reconstructs its small
+  matrices with host double-precision LAPACK. GPU multiplication and SVD
+  factor errors could exceed the clipping margin, return an active matrix,
+  and amplify small differences between rotated MSL fixtures. The clipping
+  rule, returned dtype and device placement, raw measurement retention, and
+  AD-path exclusion are preserved; nonfinite bins still reach their audit.
+
 ### Fixed — resonance extraction preserves finite-record modal content (#872)
 
 - Harminv excludes FIR boundary transients during automatic decimation and

@@ -1489,6 +1489,7 @@ class _ExecuteMixin:
             pec_edge_masks_local = _rpem_fwd(
                 pec_mask, sheets=pec_sheets, wires=pec_wires,
                 periodic=periodic_bool)
+        _msl_geometry_edges = pec_edge_masks_local  # before ANY port clearing
         lumped_port_sparam_specs: list = []
         wire_port_sparam_specs: list = []
         wire_refplane_specs: list = []
@@ -1606,7 +1607,7 @@ class _ExecuteMixin:
                 if _s11_freqs_arr is not None and wp_cells:
                     _live_764 = tuple(
                         (int(c[0]), int(c[1]), int(c[2]))
-                        for c, l in zip(wp_cells, wp_live_flags) if l)
+                        for c, live in zip(wp_cells, wp_live_flags) if live)
                     mid_cell = _live_764[len(_live_764) // 2]
                     wire_port_sparam_specs.append(WirePortSParamSpec(
                         mid_i=int(mid_cell[0]),
@@ -1744,11 +1745,13 @@ class _ExecuteMixin:
         # DFT plane probes (no JIT accumulator wiring needed here).
         if self._msl_ports:
             from rfx.sources.msl_port import (
-                MSLPort,
                 _msl_yz_cells,
                 msl_normal_component as _msl_normal_component,
                 compute_msl_mode_profile,
                 make_msl_port_sources,
+                msl_cell,
+                msl_cross_section_span,
+                msl_port_from_entry,
                 setup_msl_port,
             )
             # Issue #483: static eps for the launch fixture, assembled ONCE
@@ -1766,17 +1769,14 @@ class _ExecuteMixin:
                 _static_eps_483 = self._assemble_materials(
                     grid, pec_sheets=[], pec_wires=[])[0].eps_r
             for pe in self._msl_ports:
-                x_feed, y_centre, z_lo = pe.position
-                mp = MSLPort(
-                    feed_x=float(x_feed),
-                    y_lo=float(y_centre - pe.width / 2),
-                    y_hi=float(y_centre + pe.width / 2),
-                    z_lo=float(z_lo),
-                    z_hi=float(z_lo + pe.height),
-                    direction=pe.direction,
-                    impedance=pe.impedance,
-                    excitation=pe.waveform,
-                )
+                # Use the same physical-to-port frame as run(). In a y-fed
+                # port feed_x names physical y, and y_lo/y_hi name width x.
+                mp = msl_port_from_entry(pe)
+                from rfx.sources.msl_port import validate_msl_port_geometry
+                validate_msl_port_geometry(
+                    grid, mp, pec_edge_masks=_msl_geometry_edges,
+                    sheet_impedance=sheet_impedance, periodic=periodic_bool,
+                    pec_faces=self._boundary_spec.pec_faces(), name=pe.name)
                 # Honour `pe.mode` so the source distribution matches
                 # the imperative `run_uniform_path` (Phase 3 of gap #2/#4
                 # closure, 2026-05-07).  ``laplace`` is the default for
@@ -1788,12 +1788,13 @@ class _ExecuteMixin:
                 port_mode = getattr(pe, "mode", "uniform")
                 mode_profile = None
                 if port_mode == "laplace":
-                    cells = _msl_yz_cells(grid, mp)
-                    j_set = sorted({c[1] for c in cells})
-                    k_set = sorted({c[2] for c in cells})
-                    j_centre = (j_set[0] + j_set[-1]) // 2
-                    k_mid = (k_set[0] + k_set[-1]) // 2
-                    i_feed = cells[0][0]
+                    span = msl_cross_section_span(grid, mp)
+                    # Keep the declared midpoint sample when the source edge
+                    # list becomes half-open (#729); it is not the midpoint
+                    # of the list's last E-edge index. Match run() on all axes.
+                    k_mid = (span["n_lo"] + span["n_hi"]) // 2
+                    eps_cell = msl_cell(pe.direction, span["i_feed"],
+                                        span["w_centre"], k_mid)
                     if pe.eps_r_sub is not None:
                         eps_r_sub = float(pe.eps_r_sub)
                     else:
@@ -1815,7 +1816,7 @@ class _ExecuteMixin:
                         # for every caller (forward, topology,
                         # sparam_driver) without threading a handle.
                         eps_r_sub = float(np.asarray(
-                            _static_eps_483[i_feed, j_centre, k_mid]
+                            _static_eps_483[eps_cell]
                         ))
                     mode_profile = compute_msl_mode_profile(grid, mp, eps_r_sub)
                 elif port_mode == "eigenmode":
@@ -1848,9 +1849,29 @@ class _ExecuteMixin:
                 for cell in _msl_cells:
                     if pec_mask_local is not None:
                         pec_mask_local = pec_mask_local.at[cell[0], cell[1], cell[2]].set(False)
-                    if pec_occupancy_local is not None:
-                        pec_occupancy_local = pec_occupancy_local.at[cell[0], cell[1], cell[2]].set(0.0)
-                    _port_cleared_cells.append((int(cell[0]), int(cell[1]), int(cell[2])))
+                # The Laplace source AND termination extend beyond the
+                # trace footprint. Reserve that actual modal support from
+                # density edits, including its fringe and Kottke neighbours.
+                _msl_density_cells = (mode_profile["cell_indices"]
+                                      if mode_profile is not None else _msl_cells)
+                _port_cleared_cells.extend(tuple(map(int, c)) for c in _msl_density_cells)
+                if pec_occupancy_local is not None and _msl_density_cells:
+                    # Ez[i,j,k] is owned by four primal cells (#931 §1.2),
+                    # including (i-1,j-1,k). The existing six-face Kottke
+                    # guard below cannot reserve that diagonal owner.
+                    # Reserve only this fixed port region; keep the traced
+                    # design density and its derivatives elsewhere intact.
+                    reserved = set()
+                    for i, j, k in _msl_density_cells:
+                        for di, dj in ((0, 0), (-1, 0), (0, -1), (-1, -1)):
+                            idx = [i + di, j + dj, k]
+                            for axis in (0, 1):
+                                if periodic_bool[axis] or grid.shape[axis] == 1:
+                                    idx[axis] %= grid.shape[axis]
+                            if all(0 <= idx[a] < grid.shape[a] for a in range(3)):
+                                reserved.add(tuple(idx))
+                    indices = tuple(np.asarray(sorted(reserved), dtype=int).T)
+                    pec_occupancy_local = pec_occupancy_local.at[indices].set(0.0)
 
         for pe in self._probes:
             probes.append(make_probe(grid, pe.position, pe.component))
