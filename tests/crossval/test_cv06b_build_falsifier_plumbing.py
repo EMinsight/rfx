@@ -80,13 +80,39 @@ def test_the_three_legs_differ_only_in_one_geometric_input():
     assert 'setattr(cv, "W_STUB", 5 * cv.DX)' in src
 
 
-def test_committed_gpu_summary_records_criterion_a_and_the_fired_falsifier():
-    """The committed own-board summary (VESSL 369367257702, #812 round 2) is
-    the evidence for cv06b's criterion (A) and for BOTH build-level (B) legs.
-    Pin what it says so a regenerated file cannot silently flip a verdict:
-    (A) passes; the narrow stub fires G2 while the depth witness stays blind;
-    the one-cell stub falsifier FIRED (refined shift below half the predicted
-    shift) and is recorded as such, not softened."""
+def test_committed_gpu_summary_records_criterion_a_and_the_falsifier_lane():
+    """The committed own-board summary is the evidence for cv06b's criterion
+    (A) and for BOTH build-level (B) legs. Pin what it says so a regenerated
+    file cannot silently flip a verdict.
+
+    REGENERATED 2026-09-07 on the #931 sheet board (VESSL 369367259191). The
+    previous state was VESSL 369367257702 (#812 round 2), measured when the
+    trace and stub were one-cell PEC Boxes. Two verdicts flipped, both toward
+    MORE falsifier sensitivity, and both are pinned below in their new
+    direction rather than relaxed:
+
+      stub_1cell   visible False -> True. Against a true stub-length shift of
+                   0.5320 % the refined estimator read 0.1447 % on the Box
+                   board (27 % of it -- it could not see a sub-bin change) and
+                   reads 0.8228 % on the sheet board: it sees the shift now,
+                   and overshoots it by 55 %. The bare bin argmin went
+                   0.0 -> 1.6949 %, so it is the quantised estimator that is
+                   furthest off, which is the point of the lane.
+                   verdict.criterion_B_sub_bin_visible and verdict.all_ok both
+                   False -> True.
+      stub_narrow  G1 "notch freq vs analytic" True -> False (err_pct
+                   0.208 -> 6.439). The deliberately-narrow stub is now caught
+                   by G1 as well as G2. The arm exists to show that G2 fires
+                   where the depth witness stays blind; a second gate also
+                   firing is extra coverage, so what is pinned is that G2
+                   fires, the depth witness stays blind, and at least one gate
+                   fires -- not that G1 in particular stays silent.
+
+    NO cv06b gate window moved. G1 is still < 4.0 %, G2 still (0.80, 1.20),
+    G3 still < 1.0 bin, G4 still (40, 65) ohm. The measurement, its falsified
+    pre-declarations and the width-convention finding are in
+    validation/crossval/_06b_msl_notch_results/RECOMPUTE.md.
+    """
     import json
     from pathlib import Path
     path = (Path(__file__).resolve().parents[2]
@@ -95,14 +121,25 @@ def test_committed_gpu_summary_records_criterion_a_and_the_fired_falsifier():
     a = s["criterion_A_baseline"]
     assert a["all_pass"] is True and all(a["gates"].values())
     assert a["err_pct"] < 4.0 and 0.80 < a["bw_ratio"] < 1.20 and a["witness_bins"] < 1.0
+
     n = s["stub_narrow"]
     assert n["G2_fired"] is True and n["depth_witness_still_passes"] is True
-    assert n["gates"]["G1 notch freq vs analytic"] is True
+    assert not all(n["gates"].values()), (
+        "the narrow-stub arm is the deliberately-broken one: some gate must "
+        "fire on it")
+
     c = s["stub_1cell"]
-    assert c["bin_argmin_delta_pct"] == 0.0
-    assert 0.0 < abs(c["refined_delta_pct"]) < 0.5 * abs(c["true_shift_pct"])
-    assert c["visible"] is False
+    true_pct = abs(c["true_shift_pct"])
+    refined_pct = abs(c["refined_delta_pct"])
+    bin_pct = abs(c["bin_argmin_delta_pct"])
+    assert c["visible"] is True
+    assert 0.0 < true_pct < 1.0, "the arm only means something sub-bin"
+    # The refined estimator must land nearer the true shift than the bare
+    # bin argmin does -- that comparison, not either number alone, is what
+    # the sub-bin lane claims.
+    assert abs(refined_pct - true_pct) < abs(bin_pct - true_pct)
+
     assert s["verdict"]["criterion_A"] is True
     assert s["verdict"]["criterion_B_G2_fires_on_narrow_stub"] is True
-    assert s["verdict"]["criterion_B_sub_bin_visible"] is False
-    assert s["verdict"]["all_ok"] is False
+    assert s["verdict"]["criterion_B_sub_bin_visible"] is True
+    assert s["verdict"]["all_ok"] is True

@@ -1097,10 +1097,6 @@ class MaterialSpec:
 class _GeometryEntry:
     shape: Shape
     material_name: str
-    # Issue #706: opt-in two-plane realization for a PEC body that fills
-    # exactly one cell along its normal axis. Default False = the
-    # load-bearing one-plane behaviour (#677-validated).
-    two_plane: bool = False
 
 
 @dataclass(frozen=True)

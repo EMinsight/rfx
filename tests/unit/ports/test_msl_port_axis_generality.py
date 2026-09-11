@@ -75,7 +75,13 @@ from rfx.sources.msl_port import (
 )
 
 EPS_R, H_SUB, W_TRACE = 3.66, 254e-6, 600e-6
-L_LINE, PORT_MARGIN, DX, F_MAX = 10e-3, 2e-3, 80e-6, 5e9
+# ON-LATTICE board (#931 §1.3): h_sub / dx = 3 exactly, so the laminate
+# face is a node line and the foil sheet lands on it. The module ran at
+# dx = 80 um (h_sub/dx = 3.175); that mesh is now used only by the
+# substrate-resolution advisory test, which is ABOUT the off-lattice
+# board and passes it explicitly.
+DX_BISECTING = 80e-6
+L_LINE, PORT_MARGIN, DX, F_MAX = 10e-3, 2e-3, H_SUB / 3.0, 5e9
 L_PROP = L_LINE + 2 * PORT_MARGIN
 L_LAT = W_TRACE + 2 * (2 * H_SUB + 8 * DX)
 LZ = H_SUB + 1.5e-3
@@ -423,12 +429,15 @@ def _board(domain, direction, feed, lat_c, *, trace_len_axis, dx=DX):
     sim.add_material("ro4350b", eps_r=EPS_R)
     sim.add(Box((0.0, 0.0, 0.0), (domain[0], domain[1], H_SUB)),
             material="ro4350b")
+    # 35 um foil -> a SHEET on the laminate face (#931 §1.3), declared by
+    # a zero-thickness Box. One cell thick it is a VOLUME: walls at both z
+    # faces and the Ez edge between them shorted.
     if trace_len_axis == "x":
         lo = (0.0, lat_c - W_TRACE / 2, H_SUB)
-        hi = (domain[0], lat_c + W_TRACE / 2, H_SUB + dx)
+        hi = (domain[0], lat_c + W_TRACE / 2, H_SUB)
     else:
         lo = (lat_c - W_TRACE / 2, 0.0, H_SUB)
-        hi = (lat_c + W_TRACE / 2, domain[1], H_SUB + dx)
+        hi = (lat_c + W_TRACE / 2, domain[1], H_SUB)
     sim.add(Box(lo, hi), material="pec")
     sim.add_msl_port(
         position=msl_physical_point(direction, feed, lat_c, 0.0),
@@ -493,7 +502,8 @@ def test_h_sub_alignment_checks_fire_for_every_direction(direction):
 
     Issue #752 / #766: the checks now count the substrate cells the RUN
     GRID has, read off the assembled permittivity under the port. At
-    dx = 80 um the 254 um substrate REALIZES 4 cells (320 um), so check 2
+    dx = 80 um (the bisecting mesh, passed explicitly below) the 254 um
+    substrate REALIZES 4 cells (320 um), so check 2
     ("< 4 cells") is correctly silent there and only check 2b fires (the
     declared top sits 0.175 of a cell above a node). The genuine < 4-cell
     case is dx = 100 um (3 cells, 300 um). Both are exercised, on every
@@ -505,9 +515,11 @@ def test_h_sub_alignment_checks_fire_for_every_direction(direction):
     domain[{"x": 0, "y": 1}[prop]] = L_PROP
     domain[{"x": 0, "y": 1}[width]] = L_LAT
 
-    # dx = 80 um: 2b fires, 2 must not (the run grid has 4 substrate cells).
+    # dx = 80 um: 2b fires, 2 must not (the run grid has 4 substrate
+    # cells). Passed explicitly since #931 moved the module default onto
+    # the lattice -- this test is ABOUT the bisecting mesh.
     sim80 = _board(tuple(domain), direction, PORT_MARGIN, L_LAT / 2.0,
-                   trace_len_axis=prop)
+                   trace_len_axis=prop, dx=DX_BISECTING)
     msgs80 = _msl_warnings(sim80)
     cells80 = [m for m in msgs80 if "substrate cell(s) in z" in m]
     frac80 = [m for m in msgs80 if "mixed-cell danger zone" in m]
@@ -536,7 +548,7 @@ def test_probe_span_absorber_check_fires_on_the_propagation_axis():
     sim.add_material("ro4350b", eps_r=EPS_R)
     sim.add(Box((0.0, 0.0, 0.0), (L_LAT, L_PROP, H_SUB)), material="ro4350b")
     sim.add(Box((L_LAT / 2 - W_TRACE / 2, 0.0, H_SUB),
-                (L_LAT / 2 + W_TRACE / 2, L_PROP, H_SUB + DX)), material="pec")
+                (L_LAT / 2 + W_TRACE / 2, L_PROP, H_SUB)), material="pec")
     # Ladder deliberately long enough to run off the far y edge.
     sim.add_msl_port(position=(L_LAT / 2, L_PROP - 1e-3, 0.0), width=W_TRACE,
                      height=H_SUB, direction="+y", impedance=50.0,
@@ -557,14 +569,14 @@ def _thru(axis, n_freqs, num_periods):
         domain, sub = (L_PROP, L_LAT, LZ), (L_PROP, L_LAT, H_SUB)
         lat_c = L_LAT / 2.0
         tlo = (0.0, lat_c - W_TRACE / 2, H_SUB)
-        thi = (L_PROP, lat_c + W_TRACE / 2, H_SUB + DX)
+        thi = (L_PROP, lat_c + W_TRACE / 2, H_SUB)
         p0, p1, d0, d1 = ((PORT_MARGIN, lat_c, 0.0),
                           (PORT_MARGIN + L_LINE, lat_c, 0.0), "+x", "-x")
     else:
         domain, sub = (L_LAT, L_PROP, LZ), (L_LAT, L_PROP, H_SUB)
         lat_c = L_LAT / 2.0
         tlo = (lat_c - W_TRACE / 2, 0.0, H_SUB)
-        thi = (lat_c + W_TRACE / 2, L_PROP, H_SUB + DX)
+        thi = (lat_c + W_TRACE / 2, L_PROP, H_SUB)
         p0, p1, d0, d1 = ((lat_c, PORT_MARGIN, 0.0),
                           (lat_c, PORT_MARGIN + L_LINE, 0.0), "+y", "-y")
     sim = Simulation(freq_max=F_MAX, domain=domain, dx=DX, cpml_layers=8,
@@ -706,7 +718,7 @@ def test_equivalence_harness_can_move():
     sim.add_material("ro4350b", eps_r=EPS_R)
     sim.add(Box((0.0, 0.0, 0.0), (L_LAT, L_PROP, H_SUB)), material="ro4350b")
     sim.add(Box((lat_c - w_bad / 2, 0.0, H_SUB),
-                (lat_c + w_bad / 2, L_PROP, H_SUB + DX)), material="pec")
+                (lat_c + w_bad / 2, L_PROP, H_SUB)), material="pec")
     sim.add_msl_port(position=(lat_c, PORT_MARGIN, 0.0), width=w_bad,
                      height=H_SUB, direction="+y", impedance=50.0)
     sim.add_msl_port(position=(lat_c, PORT_MARGIN + L_LINE, 0.0), width=w_bad,

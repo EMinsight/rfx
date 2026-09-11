@@ -38,6 +38,7 @@ import pytest
 from rfx import Simulation
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
+from rfx.simulation import _suggest_checkpoint_segments
 
 # ---------------------------------------------------------------------------
 # Tiny MSL thru-line geometry (CPU-fast for AD diagnosis)
@@ -78,10 +79,24 @@ def _build_msl_sim() -> Simulation:
     y_centre = ly / 2.0
     trace_y_lo = y_centre - _MSL_W_TRACE / 2.0
     trace_y_hi = y_centre + _MSL_W_TRACE / 2.0
-    sim.add(
-        Box((0.0, trace_y_lo, _MSL_H_SUB), (lx, trace_y_hi, _MSL_H_SUB + _MSL_DX)),
-        material="pec",
-    )
+    # #931 migration rule 1: a foil drawn as a one-cell PEC Box is a SHEET,
+    # declared with the SAME physical corners. Under the volume rule the same
+    # Box would gain a second wall at the node BELOW the substrate top
+    # (measured on this board: walls on z-planes 3 and 4 instead of 4 alone),
+    # which moves the realized trace height and every de-embedded number with
+    # it. add_thin_conductor puts the sheet on the node plane nearest the
+    # drawn mid-plane — 320 um here, tie to the lower plane — which is the
+    # plane this board has always realized, so the committed goldens stay
+    # valid. The board itself is off-lattice (h_sub 254 um on an 80 um mesh,
+    # 3.175 cells); §1.3 says to redraw it ON-LATTICE, and its constants live
+    # in tests/unit/sparams/test_msl_port_integration.py, so that redraw
+    # belongs with the MSL fixture family, not here.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        sim.add_thin_conductor(
+            Box((0.0, trace_y_lo, _MSL_H_SUB), (lx, trace_y_hi, _MSL_H_SUB + _MSL_DX)),
+            sigma_bulk=5.8e7, thickness=35e-6,
+        )
 
     sim.add_msl_port(
         position=(_MSL_PORT_MARGIN, y_centre, 0.0),
@@ -148,8 +163,8 @@ def _build_wg_sim() -> Simulation:
 # Tests
 # ---------------------------------------------------------------------------
 
-# MSL AD over ~3934 steps: the un-checkpointed reverse tape OOMs even a 48 GB A6000
-# (VESSL run 369367241162). checkpoint_segments=14 (below) caps the peak to a few GB,
+# MSL AD over thousands of steps: the un-checkpointed reverse tape OOMs even a 48 GB A6000
+# (VESSL run 369367241162). Segmented checkpointing caps the peak to a few GB,
 # so this runs on the CPU CI again (was @pytest.mark.gpu in #119 before checkpointing;
 # #123). ~4 min on the shard.
 def test_msl_s_matrix_ad_end_to_end():
@@ -164,7 +179,13 @@ def test_msl_s_matrix_ad_end_to_end():
     4. WI-1 replay golden is unaffected (tested separately).
     """
     sim = _build_msl_sim()
-    grid = sim._build_grid()
+    grid = sim._build_realized_grid()
+    # Derive the segmentation from the same realized-grid step budget as
+    # forward(). A mesh edit must not require changing a magic divisor or
+    # padding the DFT record to make checkpointing work.
+    num_periods = 3
+    n_steps = grid.num_timesteps(num_periods=num_periods)
+    checkpoint_segments = _suggest_checkpoint_segments(n_steps)
     eps_base = jnp.ones(grid.shape, dtype=jnp.float32)
 
     def objective(alpha: jnp.ndarray) -> jnp.ndarray:
@@ -172,9 +193,10 @@ def test_msl_s_matrix_ad_end_to_end():
             warnings.simplefilter("ignore")
             result = sim.compute_msl_s_matrix(
                 n_freqs=8,
-                num_periods=3,
+                n_steps=n_steps,
+                num_periods=num_periods,
                 eps_override=eps_base * alpha,
-                checkpoint_segments=14,  # cap the reverse-AD tape peak (else OOM, even on 48 GB); 14 | n_steps=3934 (= 2·7·281), ≈ √n_steps memory
+                checkpoint_segments=checkpoint_segments,
             )
         S = result.S
         k0 = S.shape[-1] // 2
@@ -187,7 +209,8 @@ def test_msl_s_matrix_ad_end_to_end():
         warnings.simplefilter("ignore")
         fwd_result = sim.compute_msl_s_matrix(
             n_freqs=8,
-            num_periods=3,
+            n_steps=n_steps,
+            num_periods=num_periods,
             eps_override=eps_base * alpha0,
         )
     S_fwd = np.asarray(fwd_result.S)
@@ -371,3 +394,23 @@ def test_forward_eps_override_is_differentiable_waveguide():
 
     g = float(jax.grad(loss)(alpha0))
     assert np.isfinite(g), f"forward() gradient is not finite: {g}"
+
+
+def _assert_trace_sheet_realized(sim_sim):
+    """Build-time check (no solve): the migrated trace realizes on the node
+    plane its declaration names — 320 um on this board, the plane the
+    pre-#931 rule realized — and it owns no cell (#931 §1.3).
+
+    Every migrated conductor on this branch owes this assertion; the shared
+    spelling is tests/_realized_geometry.py, so a fixture never re-derives
+    the rule it is checking.
+    """
+    from tests._realized_geometry import assert_sheet_planes, realized
+    rz = realized(sim_sim)
+    assert rz.pec_mask is None, "a sheet owns no cell"
+    assert len(rz.sheets) == 1
+    return assert_sheet_planes(sim_sim, 2, [4.0 * _MSL_DX], what="MSL trace")
+
+
+def test_migrated_trace_is_a_sheet_on_the_declared_plane():
+    _assert_trace_sheet_realized(_build_msl_sim())

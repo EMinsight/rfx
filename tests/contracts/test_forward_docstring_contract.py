@@ -86,8 +86,23 @@ def test_all_is_curated_subset():
     # trips this gate again and must re-justify itself. Re-specced again
     # 210 -> 213 for the #579 `rfx.observables` factories (`dft_field`,
     # `field_energy`, `field_softmax`) — a genuinely new differentiable
-    # surface, not incidental growth.
-    assert len(names) < 213, f"rfx.__all__ too large to be curated: {len(names)}"
+    # surface, not incidental growth. Re-specced 213 -> 214 for the #931
+    # lattice ownership contract's read side (`realized_pec_edge_masks`,
+    # `realized_wall_planes`, `edge_is_pec`): that is the ONE function that
+    # turns conductor geometry into PEC edges plus its two helpers, and
+    # every consumer outside the package — oracles, crossval realized-stack
+    # assertions, external comparators — has to reach it by name rather
+    # than re-deriving the rule. Its two declaration records (`SheetSpec`,
+    # `WireSpec`) were deliberately left OFF the star surface.
+    # Re-specced 214 -> 215 for `make_band_profile` (nu band-profile lane):
+    # ONE name, the axis-agnostic builder that turns declared band edges and
+    # cell sizes into an explicit profile with every interface on a node
+    # plane and the ratio law exact. A caller writing a `dz_profile` by hand
+    # is the case the multi-band support-matrix row is about, and the
+    # alternative is each caller re-deriving ramp lengths and seam
+    # refinement. Its segment record (`_BandSeg`) and engine
+    # (`_build_band_profile`) stay private. Ratio 215/335 = 0.64, unchanged.
+    assert len(names) < 216, f"rfx.__all__ too large to be curated: {len(names)}"
     missing = [n for n in names if not hasattr(rfx, n)]
     assert not missing, f"rfx.__all__ lists names not on the package: {missing}"
 

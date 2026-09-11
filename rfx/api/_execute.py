@@ -95,32 +95,38 @@ def _reject_removed_forward_kwargs(removed_kwargs: dict) -> None:
     )
 
 
-def _refplane_conductor_mask(pec_mask, sheet_ctx):
+def _refplane_conductor_mask(pec_mask, sheet_ctx, pec_sheets=()):
     """Full conductor footprint for the reference-plane trace scan (#695).
 
-    ``pec_mask | (sheet cells)``. The f0 sheet contributes NOTHING to
-    ``pec_mask`` or ``materials.sigma`` since #677, so the bare
-    ``pec_mask`` this used to pass made a sheet-traced transmission line
-    look like an empty cross-section. ``sheet_ctx.sigma_sheet`` is
-    ``> 0`` exactly on the sheet cells, so the footprint is available
-    without re-assembling materials.
+    ``pec_mask | (sheet footprints)`` — #931 §1.9: the footprint is the
+    cells of the PEC VOLUMES union the footprints of the SHEETS.  Neither
+    an f0 sheet (#677) nor a PEC sheet (#931) contributes to ``pec_mask``
+    or to ``materials.sigma``, so the bare ``pec_mask`` this used to pass
+    made a sheet-traced transmission line look like an empty
+    cross-section.  ``sheet_ctx.sigma_sheet`` is ``> 0`` exactly on the f0
+    sheet cells; PEC sheets arrive as ``SheetSpec``s.
 
-    Returns ``pec_mask`` unchanged when there is no sheet ctx, or when
-    either input is traced — this caller already requires concrete values
-    and a traced OR would only relocate the failure.
+    Returns ``pec_mask`` unchanged when there is nothing to add, or when
+    an input is traced — this caller already requires concrete values and
+    a traced OR would only relocate the failure.
     """
     from rfx.core.jax_utils import is_tracer
     from rfx.materials.thin_conductor import conductor_footprint
 
-    if sheet_ctx is None:
+    masks = []
+    if pec_mask is not None and is_tracer(pec_mask):
         return pec_mask
-    sig = getattr(sheet_ctx, "sigma_sheet", None)
-    if sig is None or is_tracer(sig) or (pec_mask is not None and is_tracer(pec_mask)):
+    if sheet_ctx is not None:
+        sig = getattr(sheet_ctx, "sigma_sheet", None)
+        if sig is not None:
+            if is_tracer(sig):
+                return pec_mask
+            masks.append(jnp.asarray(sig) > 0.0)
+    for sp in (pec_sheets or ()):
+        masks.append(jnp.asarray(sp.footprint))
+    if not masks:
         return pec_mask
-    return conductor_footprint(
-        pec_mask=pec_mask,
-        sheet_masks=[jnp.asarray(sig) > 0.0],
-    )
+    return conductor_footprint(pec_mask=pec_mask, sheet_masks=masks)
 
 
 def _refplane_reject_msl_ladder_in_plane_zone(
@@ -393,7 +399,6 @@ class _ExecuteMixin:
         s_param_n_steps=None,
     ):
         """Run simulation using SBP-SAT subgridding (JIT-compiled)."""
-        self._refuse_two_plane("subgridded (SBP-SAT)")  # #706
         self._reject_refplane_ports_off_uniform_lane("subgridded (SBP-SAT)",
                                                      compute_s_params)
         from rfx.runners.subgridded import run_subgridded_path
@@ -986,14 +991,8 @@ class _ExecuteMixin:
 
         return [pe for pe in self._ports if pe.impedance > 0.0]
 
-    def _auto_configure_mesh(self) -> None:
-        """P1: Auto-detect features and set dx/dz_profile when dx=None.
-
-        Uses the existing auto_configure() infrastructure to derive cell size
-        from geometry dimensions and material properties.  Runs only once per
-        simulation — subsequent calls are no-ops.
-        """
-        import warnings as _w
+    def _auto_configure_mesh(self):
+        """Compute the host-side auto-mesh proposal; _resolve_mesh owns it."""
         from rfx.auto_config import auto_configure
 
         geometry_pairs = [
@@ -1032,25 +1031,12 @@ class _ExecuteMixin:
             freq_range=(self._freq_max / 10, self._freq_max),
             materials=materials_dict,
             boundary=self._boundary,
+            # #931 §1.9: a sheet's PLANE is a z feature even though its zero
+            # thickness is not — the profile must leave a mesh line there.
+            thin_conductors=self._thin_conductors,
         )
 
-        self._dx = config.dx
-        if config.dz_profile is not None and self._dz_profile is None:
-            self._dz_profile = config.dz_profile
-            # Update domain z from dz_profile
-            dz_total = float(np.sum(config.dz_profile))
-            self._domain = (self._domain[0], self._domain[1], dz_total)
-
-        _w.warn(
-            f"Auto mesh: dx={config.dx*1e3:.3f}mm "
-            f"({config.cells_per_wavelength:.0f} cells/λ)"
-            + (f", non-uniform z ({len(config.dz_profile)} cells)"
-               if config.dz_profile is not None else "")
-            + ". Set dx= explicitly to suppress.",
-            stacklevel=3,
-        )
-        for w in config.warnings:
-            _w.warn(w, stacklevel=3)
+        return config
 
     def _reject_upml_on_nonuniform(self, lane: str) -> None:
         """Refuse ``boundary='upml'`` on a non-uniform lane (#680).
@@ -1148,13 +1134,38 @@ class _ExecuteMixin:
         *,
         n_steps: int,
         pec_mask: jnp.ndarray | None = None,
+        pec_sheets: object = (),
+        pec_wires: object = (),
         return_state: bool = True,
     ):
-        """Run the integrated ADI solver path (2D TMz or 3D)."""
-        self._refuse_two_plane("ADI")  # #706
+        """Run the integrated ADI solver path (2D TMz or 3D).
+
+        #931 §1.7: the ADI lane takes the SAME realized PEC edge masks as
+        every other lane instead of zeroing E at the occupied cell
+        indices.  In 2-D it applies the ``Mz`` plane to Ez; in 3-D the
+        three masks componentwise.
+        """
         import copy
 
         self._validate_adi_configuration(materials, debye_spec, lorentz_spec)
+
+        from rfx.boundaries.pec import realized_pec_edge_masks as _rpem_adi
+        from rfx.simulation import resolve_periodic as _resolve_periodic_adi
+        pec_sheets = tuple(pec_sheets or ())
+        pec_wires = tuple(pec_wires or ())
+        _adi_periodic = _resolve_periodic_adi(
+            grid,
+            tuple(a in self._periodic_axes for a in "xyz")
+            if self._periodic_axes else None)
+        pec_edge_masks = None
+        if pec_mask is not None or pec_sheets or pec_wires:
+            pec_edge_masks = _rpem_adi(
+                pec_mask, sheets=pec_sheets, wires=pec_wires,
+                periodic=_adi_periodic)
+
+        # Refuse after realization: a sheet/wire must reach this lane even
+        # though it owns no volume cell. This is independent of preflight.
+        self._validate_adi_interior_pec(pec_edge_masks)
 
         dt = float(grid.dt * self._adi_cfl_factor)
         times = jnp.arange(n_steps, dtype=jnp.float32) * dt
@@ -1195,7 +1206,7 @@ class _ExecuteMixin:
                 n_steps,
                 sources=sources_3d,
                 probes=probes_3d,
-                pec_mask=pec_mask,
+                pec_edge_masks=pec_edge_masks,
             )
             if probe_data is None:
                 probe_data = jnp.zeros((n_steps, 0), dtype=jnp.float32)
@@ -1242,9 +1253,11 @@ class _ExecuteMixin:
                 nx_2d, ny_2d, self._cpml_layers, grid.dx)
             sigma_2d = sigma_2d + absorb_sigma
 
-        pec_mask_2d = None
-        if pec_mask is not None:
-            pec_mask_2d = pec_mask[:, :, 0]
+        # The 2-D TMz lane carries only Ez, so its realized PEC mask is
+        # the Mz plane (#931 §1.7).
+        ez_pec_mask_2d = None
+        if pec_edge_masks is not None:
+            ez_pec_mask_2d = pec_edge_masks[2][:, :, 0]
         ez0 = jnp.zeros_like(eps_r_2d)
         hx0 = jnp.zeros_like(eps_r_2d)
         hy0 = jnp.zeros_like(eps_r_2d)
@@ -1260,7 +1273,7 @@ class _ExecuteMixin:
             n_steps,
             sources=sources,
             probes=probes,
-            pec_mask=pec_mask_2d,
+            ez_pec_mask=ez_pec_mask_2d,
         )
         if probe_data is None:
             probe_data = jnp.zeros((n_steps, 0), dtype=ez_f.dtype)
@@ -1300,6 +1313,8 @@ class _ExecuteMixin:
         checkpoint: bool = True,
         checkpoint_segments: int | None = None,
         pec_mask: jnp.ndarray | None = None,
+        pec_sheets: object = (),
+        pec_wires: object = (),
         pec_occupancy: jnp.ndarray | None = None,
         kerr_chi3: jnp.ndarray | None = None,
         port_s11_freqs: object | None = None,
@@ -1334,6 +1349,17 @@ class _ExecuteMixin:
         if self._solver == "adi":
             from rfx.materials.thin_conductor import refuse_f0_sheets
             refuse_f0_sheets(self._thin_conductors, "ADI forward")
+            if pec_occupancy is not None:
+                raise ValueError(
+                    "solver='adi' does not support pec_occupancy_override; "
+                    "use solver='yee' to retain the declared conductor.")
+            # #931 §1.9: a sheet and a wire own no cell, so ``pec_mask``
+            # alone carries neither.  ``run()``'s ADI branch threads them;
+            # this one did not, and a declared PEC sheet came out of
+            # ``forward()`` bit-identical to empty geometry.  The lane
+            # itself realizes them correctly — ``_run_adi_from_materials``
+            # calls ``realized_pec_edge_masks`` — so the whole defect was
+            # the two arguments missing here.
             return self._run_adi_from_materials(
                 grid,
                 materials,
@@ -1341,6 +1367,8 @@ class _ExecuteMixin:
                 lorentz_spec,
                 n_steps=n_steps,
                 pec_mask=pec_mask,
+                pec_sheets=tuple(pec_sheets or ()),
+                pec_wires=tuple(pec_wires or ()),
                 return_state=False,
             )
 
@@ -1385,13 +1413,82 @@ class _ExecuteMixin:
 
         sources = []
         probes = []
+        # ── Effective boundary flags, resolved BEFORE the PEC realization ──
+        # #931 §1.7: the realized PEC edge masks (Mx, My, Mz) are only
+        # correct under the periodic flags the step function will use, and
+        # the port setup below reads those masks, so the flag resolution
+        # moves ahead of it.  The Floquet SOURCE injection stays where it
+        # was, so the source list order is unchanged.
+        periodic_bool = self._periodic_flags()
+
+        # Forward cpml_axes from the grid — when waveguide ports are
+        # present the grid restricts CPML to the non-propagation axes.
+        # The default _run cpml_axes="xyz" builds CPML state for axes
+        # that have no padding, producing shape-broadcast errors like
+        # (8,1,1) vs (nx,ny,nz) during the scan (issue #29). The run()
+        # path forwards these explicitly (see Simulation.run in _execute.py),
+        # so does the waveguide compute path (see _sparams.py).
+        cpml_axes_run = grid.cpml_axes
+        pec_axes_run = "".join(a for a in "xyz" if a not in cpml_axes_run)
+
+        # Differentiable TFSF plane-wave (#404): build the 2D/1D-aux TFSF cfg and
+        # force its boundary (transverse-periodic + CPML on the propagation axis),
+        # mirroring rfx/runners/uniform.py. The shared scan (_build_step_setup ->
+        # make_core_step) injects it and auto-activates the complex Bloch path for
+        # oblique (field_dtype -> complex64, per-axis roll phase). Gradients flow
+        # w.r.t. the scatterer materials through the same validated kernel as run().
+        tfsf_run = None
+        if self._tfsf is not None:
+            from rfx.sources.tfsf import init_tfsf as _init_tfsf_fwd
+            tfsf_run = _init_tfsf_fwd(
+                grid.nx, grid.dx, grid.dt,
+                cpml_layers=grid.cpml_layers,
+                tfsf_margin=self._tfsf.margin,
+                f0=self._tfsf.f0 if self._tfsf.f0 is not None else self._freq_max / 2,
+                bandwidth=self._tfsf.bandwidth,
+                amplitude=self._tfsf.amplitude,
+                polarization=self._tfsf.polarization,
+                direction=self._tfsf.direction,
+                angle_deg=self._tfsf.angle_deg,
+                ny=grid.ny,
+                nz=grid.nz,
+                waveform=getattr(self._tfsf, "waveform", "differentiated_gaussian"),
+                method=getattr(self._tfsf, "method", "bloch"),
+            )
+            # NOTE: the TFSF vacuum-boundary check runs at forward() entry via
+            # _auto_preflight on the concrete config; it is NOT re-run here because
+            # `materials` may be a jax tracer under jax.grad (eps_override), and the
+            # check concretizes.
+            # Open-domain oblique Method B forces OPEN transverse y (CPML) with
+            # thin-periodic z; all other TFSF keep the historical open-x/periodic-yz.
+            from rfx.sources.tfsf import is_tfsf_methodB as _is_methodB_fwd
+            if _is_methodB_fwd(tfsf_run[0]):
+                periodic_bool = (False, False, True)
+                cpml_axes_run = "xy"
+                pec_axes_run = ""
+            else:
+                periodic_bool = (False, True, True)
+                cpml_axes_run = "x"
+                pec_axes_run = ""
+
+
+        # #931 §1.7: realize (Mx, My, Mz) ONCE, here, from the volume cells
+        # plus the declared sheets/wires.  Port clearing, wire-port liveness
+        # and the reference-plane footprint all read THIS object from here
+        # on; a sheet owns no cell, so it exists nowhere else.
+        from rfx.boundaries.pec import (
+            clear_edges as _clear_edges,
+            realized_pec_edge_masks as _rpem_fwd,
+        )
+        pec_sheets = tuple(pec_sheets or ())
+        pec_wires = tuple(pec_wires or ())
         pec_mask_local = pec_mask
-        # #706: opt-in two-plane slab mask (None when nothing is flagged).
-        # Same grid as pec_mask; the rule intersects with the live mask
-        # inside apply_pec_mask, so later .at[].set(False) clearing is
-        # honoured automatically.
-        pec_two_plane_mask = self._two_plane_cell_mask(grid)
         pec_occupancy_local = pec_occupancy
+        pec_edge_masks_local = None
+        if pec_mask is not None or pec_sheets or pec_wires:
+            pec_edge_masks_local = _rpem_fwd(
+                pec_mask, sheets=pec_sheets, wires=pec_wires,
+                periodic=periodic_bool)
         lumped_port_sparam_specs: list = []
         wire_port_sparam_specs: list = []
         wire_refplane_specs: list = []
@@ -1466,12 +1563,13 @@ class _ExecuteMixin:
                 # assembled-geometry state for THIS port's cells (its own
                 # clearing happens just below), which is exactly the
                 # "live" definition.
-                materials = setup_wire_port(grid, wp, materials,
-                                            pec_mask=pec_mask_local)
+                materials = setup_wire_port(
+                    grid, wp, materials,
+                    pec_edge_masks=pec_edge_masks_local)
                 if _drive_this_port:
                     sources.extend(make_wire_port_sources(
                         grid, wp, materials, n_steps,
-                        pec_mask=pec_mask_local))
+                        pec_edge_masks=pec_edge_masks_local))
                 wp_cells = _wire_port_cells(grid, wp)
                 # Clear PEC mask/occupancy at LIVE wire cells only (issue
                 # #318 commit 2). Dead extent cells stay PEC — the old
@@ -1481,10 +1579,16 @@ class _ExecuteMixin:
                 # ``_port_cleared_cells`` and is scoped the same way.
                 from rfx.sources.sources import _wire_port_live_cells
                 _, wp_live_flags, _ = _wire_port_live_cells(
-                    grid, wp, pec_mask_local)
-                for cell, _live in zip(wp_cells, wp_live_flags):
-                    if not _live:
-                        continue
+                    grid, wp, pec_edge_masks_local)
+                _wp_live_cells = [c for c, _l in zip(wp_cells, wp_live_flags)
+                                  if _l]
+                # No edge clearing (#931 §1.9, corrected): a cell is LIVE
+                # exactly when the port component's own edge is not PEC, so
+                # releasing that component is a no-op, and releasing the two
+                # tangential edges would open the conductor the port foot
+                # stands on.  The CELL clearing below stays: it is the
+                # volume/occupancy carrier the Kottke guard keys off.
+                for cell in _wp_live_cells:
                     if pec_mask_local is not None:
                         pec_mask_local = pec_mask_local.at[cell[0], cell[1], cell[2]].set(False)
                     if pec_occupancy_local is not None:
@@ -1587,7 +1691,7 @@ class _ExecuteMixin:
                         # comment above), and a traced OR would only move
                         # the failure.
                         pec_mask=_refplane_conductor_mask(
-                            pec_mask, sheet_impedance),
+                            pec_mask, sheet_impedance, pec_sheets),
                     )
                     # Both planes must lie INSIDE the declared domain
                     # and clear of the absorber — a distinct message
@@ -1611,6 +1715,12 @@ class _ExecuteMixin:
             if _drive_this_port:
                 sources.append(make_port_source(grid, lp, materials, n_steps))
             idx = grid.position_to_index(pe.position)
+            if pec_edge_masks_local is not None:
+                # ONE edge: the port's own component at its own cell
+                # (#931 §1.9, corrected).
+                pec_edge_masks_local = _clear_edges(
+                    pec_edge_masks_local, [(idx[0], idx[1], idx[2])],
+                    component=pe.component)
             if pec_mask_local is not None:
                 pec_mask_local = pec_mask_local.at[idx[0], idx[1], idx[2]].set(False)
             if pec_occupancy_local is not None:
@@ -1636,6 +1746,7 @@ class _ExecuteMixin:
             from rfx.sources.msl_port import (
                 MSLPort,
                 _msl_yz_cells,
+                msl_normal_component as _msl_normal_component,
                 compute_msl_mode_profile,
                 make_msl_port_sources,
                 setup_msl_port,
@@ -1647,7 +1758,13 @@ class _ExecuteMixin:
             _static_eps_483 = None
             if any(pe.eps_r_sub is None and getattr(pe, "mode", "uniform") == "laplace"
                    for pe in self._msl_ports):
-                _static_eps_483 = self._assemble_materials(grid)[0].eps_r
+                # Dielectric read: the launch fixture samples eps_r at ONE
+                # substrate cell to learn eps_r_sub. Conductors play no
+                # part, so the #931 collectors are passed and dropped —
+                # the sheets this run realizes are collected and applied
+                # by the assembly that drives the scan, not here.
+                _static_eps_483 = self._assemble_materials(
+                    grid, pec_sheets=[], pec_wires=[])[0].eps_r
             for pe in self._msl_ports:
                 x_feed, y_centre, z_lo = pe.position
                 mp = MSLPort(
@@ -1721,7 +1838,14 @@ class _ExecuteMixin:
                     ))
                 # Clear PEC mask over the cross-section so the source/σ cells
                 # are not zeroed by the PEC update.
-                for cell in _msl_yz_cells(grid, mp):
+                _msl_cells = list(_msl_yz_cells(grid, mp))
+                if pec_edge_masks_local is not None and _msl_cells:
+                    # Only the SUBSTRATE-NORMAL component — the edge the
+                    # modal source drives (#931 §1.9, corrected).
+                    pec_edge_masks_local = _clear_edges(
+                        pec_edge_masks_local, _msl_cells,
+                        component=_msl_normal_component(mp))
+                for cell in _msl_cells:
                     if pec_mask_local is not None:
                         pec_mask_local = pec_mask_local.at[cell[0], cell[1], cell[2]].set(False)
                     if pec_occupancy_local is not None:
@@ -1808,10 +1932,6 @@ class _ExecuteMixin:
                     self._build_waveguide_port_config(pe, grid, wg_freqs, n_steps))
 
         # Floquet ports — inject soft source, same as run_uniform.py:274-327
-        periodic = None
-        if self._periodic_axes:
-            periodic = tuple(axis in self._periodic_axes for axis in "xyz")
-
         if self._floquet_ports:
             axis_map_str = {"x": 0, "y": 1, "z": 2}
             for fpe in self._floquet_ports:
@@ -1827,61 +1947,6 @@ class _ExecuteMixin:
                     comp = {"z": "ey", "x": "ez", "y": "ez"}[fpe.axis]
                 from rfx.simulation import make_source as _make_src
                 sources.append(_make_src(grid, tuple(center), comp, wf, n_steps))
-            if periodic is None:
-                periodic = (True, True, False)  # default x-y periodic for Floquet
-
-        periodic_bool = periodic if periodic is not None else (False, False, False)
-
-        # Forward cpml_axes from the grid — when waveguide ports are
-        # present the grid restricts CPML to the non-propagation axes.
-        # The default _run cpml_axes="xyz" builds CPML state for axes
-        # that have no padding, producing shape-broadcast errors like
-        # (8,1,1) vs (nx,ny,nz) during the scan (issue #29). The run()
-        # path forwards these explicitly (see Simulation.run in _execute.py),
-        # so does the waveguide compute path (see _sparams.py).
-        cpml_axes_run = grid.cpml_axes
-        pec_axes_run = "".join(a for a in "xyz" if a not in cpml_axes_run)
-
-        # Differentiable TFSF plane-wave (#404): build the 2D/1D-aux TFSF cfg and
-        # force its boundary (transverse-periodic + CPML on the propagation axis),
-        # mirroring rfx/runners/uniform.py. The shared scan (_build_step_setup ->
-        # make_core_step) injects it and auto-activates the complex Bloch path for
-        # oblique (field_dtype -> complex64, per-axis roll phase). Gradients flow
-        # w.r.t. the scatterer materials through the same validated kernel as run().
-        tfsf_run = None
-        if self._tfsf is not None:
-            from rfx.sources.tfsf import init_tfsf as _init_tfsf_fwd
-            tfsf_run = _init_tfsf_fwd(
-                grid.nx, grid.dx, grid.dt,
-                cpml_layers=grid.cpml_layers,
-                tfsf_margin=self._tfsf.margin,
-                f0=self._tfsf.f0 if self._tfsf.f0 is not None else self._freq_max / 2,
-                bandwidth=self._tfsf.bandwidth,
-                amplitude=self._tfsf.amplitude,
-                polarization=self._tfsf.polarization,
-                direction=self._tfsf.direction,
-                angle_deg=self._tfsf.angle_deg,
-                ny=grid.ny,
-                nz=grid.nz,
-                waveform=getattr(self._tfsf, "waveform", "differentiated_gaussian"),
-                method=getattr(self._tfsf, "method", "bloch"),
-            )
-            # NOTE: the TFSF vacuum-boundary check runs at forward() entry via
-            # _auto_preflight on the concrete config; it is NOT re-run here because
-            # `materials` may be a jax tracer under jax.grad (eps_override), and the
-            # check concretizes.
-            # Open-domain oblique Method B forces OPEN transverse y (CPML) with
-            # thin-periodic z; all other TFSF keep the historical open-x/periodic-yz.
-            from rfx.sources.tfsf import is_tfsf_methodB as _is_methodB_fwd
-            if _is_methodB_fwd(tfsf_run[0]):
-                periodic_bool = (False, False, True)
-                cpml_axes_run = "xy"
-                pec_axes_run = ""
-            else:
-                periodic_bool = (False, True, True)
-                cpml_axes_run = "x"
-                pec_axes_run = ""
-
         # Stage 2 Kottke for AD-traceable PEC density (opt-in via env
         # ``RFX_PEC_OCC_KOTTKE=1``).  When enabled and
         # ── Port-aware Kottke dilation guard (issue #82) ──────────
@@ -1971,7 +2036,9 @@ class _ExecuteMixin:
             checkpoint=checkpoint,
             checkpoint_segments=checkpoint_segments,
             pec_mask=pec_mask_local,
-            pec_two_plane_mask=pec_two_plane_mask,
+            pec_edge_masks=pec_edge_masks_local,
+            pec_sheets=pec_sheets,
+            pec_wires=pec_wires,
             pec_occupancy=pec_occupancy_for_run,
             aniso_inv_eps=aniso_inv_eps_run,
             aniso_inv_eps_smooth=(aniso_inv_eps_run is not None),
@@ -2265,8 +2332,6 @@ class _ExecuteMixin:
         # Defense-in-depth: the distributed-NU runner does not honour
         # stencil_order (both distributed and non-uniform are unsupported).
         self._check_stencil_order_supported(distributed=True)
-        # #706: the sharded PEC kernel does not thread the two-plane mask.
-        self._refuse_two_plane("distributed non-uniform")
         if self._flux_monitors:
             raise NotImplementedError(
                 "add_flux_monitor() is not supported on the distributed "
@@ -2419,9 +2484,25 @@ class _ExecuteMixin:
                 )
 
         # ---- Assemble full-domain materials ----
+        _dnu_pec_sheets: list = []
+        _dnu_pec_wires: list = []
         materials, debye_spec, lorentz_spec, pec_mask = (
-            self._assemble_materials_nu(grid)
+            self._assemble_materials_nu(
+                grid, pec_sheets=_dnu_pec_sheets, pec_wires=_dnu_pec_wires)
         )
+        if _dnu_pec_sheets or _dnu_pec_wires:
+            # #931: this lane shards a CELL mask along x and realizes it
+            # per slab.  A sheet and a sub-cell wire own no cell, so they
+            # have no sharded carrier here yet and would be silently
+            # absent from every rank.  Refuse instead of running the wrong
+            # geometry.
+            raise NotImplementedError(
+                "distributed=True on the non-uniform forward lane does not "
+                "realize PEC sheets or sub-cell wires (#931): the lane "
+                "shards a primal-cell mask along x and a sheet owns no "
+                "cell, so a declared sheet would vanish on every rank. "
+                "Draw the conductor as a volume (a Box at least one cell "
+                "thick) or run the single-device non-uniform lane.")
 
         # ``eps_override`` / ``sigma_override`` may be JAX tracers (the
         # caller is differentiating w.r.t. eps/sigma).  Keep the original
@@ -2672,11 +2753,13 @@ class _ExecuteMixin:
         step count comes from a throwaway grid) and ``None`` for lanes that
         build-and-reuse a grid (the caller resolves it there).
         """
-        is_nonuniform = (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        )
+        # Constructor checks cover explicit profiles only. Geometry can make
+        # auto mesh non-uniform later, so validate the declared solver against
+        # the completed mesh before ANY Yee lane (including distributed) wins
+        # dispatch. This is execution legality, independent of preflight.
+        if self._solver == "adi":
+            self._require_uniform_mesh("solver='adi'")
+        is_nonuniform = self._uses_nonuniform_mesh
 
         def _reject_lane_precision(lane: str) -> None:
             # Issue #630 follow-up: field_dtype is threaded ONLY on the
@@ -3250,8 +3333,11 @@ class _ExecuteMixin:
         n_steps = plan.n_steps
         grid = self._build_grid()
         _fwd_sheet_specs: list = []
+        _fwd_pec_sheets: list = []
+        _fwd_pec_wires: list = []
         materials, debye_spec, lorentz_spec, pec_mask, _, _, kerr_chi3 = self._assemble_materials(
-            grid, sheet_specs=_fwd_sheet_specs)
+            grid, sheet_specs=_fwd_sheet_specs,
+            pec_sheets=_fwd_pec_sheets, pec_wires=_fwd_pec_wires)
 
         if eps_override is not None or sigma_override is not None or mu_r_override is not None:
             materials = MaterialArrays(
@@ -3266,11 +3352,34 @@ class _ExecuteMixin:
         if n_steps is None:
             n_steps = grid.num_timesteps(num_periods=num_periods)
 
-        # #677: node-thin sheet ctx against the final forward pec_mask
-        # (PEC wins on overlapping edges).
+        # #677: node-thin sheet ctx against the realized PEC edges of this
+        # forward run (PEC wins on overlapping edges).  #931: the PEC
+        # sheets AND WIRES belong in that realization too — they own no
+        # cell, so the "is there any PEC?" question cannot be asked of
+        # ``pec_mask`` and the sheet list alone.  A model whose only
+        # conductor is a filament used to reach the lossy operator with
+        # ``pec_edge_masks=None``, and the operator then wrote field back
+        # onto the wire's own PEC edge.
+        #
+        # ``periodic=`` on the OUTER call is the same #689 requirement:
+        # the builder realizes the f0 footprint's own edges, and on a
+        # periodic axis the seam edge (node n-1 to node 0) is in the sheet.
+        # Without the flags it is zero-padded away, so the seam carries no
+        # loss — measured on an x-periodic f0 sheet at dx = 2 mm, 35 loaded
+        # Ex edges through run() against 30 through forward().
+        # ``self._periodic_flags()`` is the single spelling (#931 §1.7).
         from rfx.materials.thin_conductor import build_sheet_impedance_ctx
+        from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+        _fwd_periodic = self._periodic_flags()
         _fwd_sheet_ctx = build_sheet_impedance_ctx(
-            _fwd_sheet_specs, pec_mask=pec_mask)
+            _fwd_sheet_specs,
+            pec_edge_masks=(
+                None if (pec_mask is None and not _fwd_pec_sheets
+                         and not _fwd_pec_wires)
+                else _rpem(pec_mask, sheets=tuple(_fwd_pec_sheets),
+                           wires=tuple(_fwd_pec_wires),
+                           periodic=_fwd_periodic)),
+            periodic=_fwd_periodic)
         # #679: the same UPML refusal run_uniform carries. forward() reaches
         # the solver by its own route (it never enters run_uniform), so
         # WITHOUT this the eps_override / forward() channel silently ran the
@@ -3304,6 +3413,8 @@ class _ExecuteMixin:
             checkpoint=checkpoint,
             checkpoint_segments=checkpoint_segments,
             pec_mask=pec_mask,
+            pec_sheets=tuple(_fwd_pec_sheets),
+            pec_wires=tuple(_fwd_pec_wires),
             pec_occupancy=pec_occupancy_override,
             kerr_chi3=kerr_chi3,
             port_s11_freqs=port_s11_freqs,
@@ -3486,10 +3597,6 @@ class _ExecuteMixin:
             decay_max_steps=decay_max_steps,
         )
 
-        # ---- P1: Auto mesh when dx not specified and geometry exists ----
-        if self._dx is None and (self._geometry or self._thin_conductors):
-            self._auto_configure_mesh()
-
         # ---- Stage 1 conformal PEC auto-routing ----
         # When the user passes ``conformal_pec=None`` (default), derive
         # it from ``BoundarySpec.conformal_faces()``: any axis declared
@@ -3657,8 +3764,11 @@ class _ExecuteMixin:
 
         grid = self._build_grid()
         _run_sheet_specs: list = []
+        _run_pec_sheets: list = []
+        _run_pec_wires: list = []
         base_materials, debye_spec, lorentz_spec, pec_mask, pec_shapes, _, kerr_chi3 = self._assemble_materials(
-            grid, sheet_specs=_run_sheet_specs)
+            grid, sheet_specs=_run_sheet_specs,
+            pec_sheets=_run_pec_sheets, pec_wires=_run_pec_wires)
 
         if plan.lane == "run_adi":
             from rfx.materials.thin_conductor import refuse_f0_sheets
@@ -3679,6 +3789,8 @@ class _ExecuteMixin:
                 lorentz_spec,
                 n_steps=n_steps,
                 pec_mask=pec_mask,
+                pec_sheets=tuple(_run_pec_sheets),
+                pec_wires=tuple(_run_pec_wires),
                 return_state=True,
             )
             _res = self._attach_run_settling_witness(_res, n_steps=n_steps)
@@ -3709,6 +3821,15 @@ class _ExecuteMixin:
                 subgrid_n_steps = grid.num_timesteps(num_periods=num_periods) * int(
                     self._refinement["ratio"]
                 )
+            if _run_pec_sheets or _run_pec_wires:
+                raise NotImplementedError(
+                    "solver='subgridded' (SBP-SAT) does not realize PEC "
+                    "sheets or wires (#931): the coarse/fine SBP-SAT "
+                    "operators apply PEC from a cell mask on two grids "
+                    "and a sheet owns no cell, so a declared sheet would "
+                    "be silently absent. Draw the conductor as a volume "
+                    "(a Box at least one cell thick) or use the uniform "
+                    "or non-uniform lane.")
             _res = self._run_subgridded(
                 grid, base_materials, pec_mask,
                 n_steps=subgrid_n_steps,
@@ -3759,6 +3880,8 @@ class _ExecuteMixin:
             debye_spec=debye_spec,
             lorentz_spec=lorentz_spec,
             pec_mask=pec_mask,
+            pec_sheets=tuple(_run_pec_sheets),
+            pec_wires=tuple(_run_pec_wires),
             kerr_chi3=kerr_chi3,
             field_dtype=_field_dtype,
             sheet_specs=_run_sheet_specs,

@@ -116,9 +116,10 @@ def msl_modal_voltage(ez_plane, *, j_centre: int, k_lo: int, k_hi: int,
     Issue #511: before this helper existed the span was
     ``range(k_lo, k_hi + 1)`` with the rounding proxy — on aligned meshes
     that is ``n+1`` edges for an ``n``-cell substrate, and the extra edge
-    lies inside the one-cell PEC trace, where
-    :func:`rfx.boundaries.pec.apply_pec_mask` deliberately preserves the
-    NORMAL E component as surface charge (``rfx/boundaries/pec.py:90-93``)
+    lies inside the one-cell PEC trace, where the realization leaves the
+    NORMAL E component live (#931 §1.2: an E component is PEC iff its own
+    location is inside the closed conductor region, so the normal edge of
+    a SHEET stays live and the normal edge INSIDE a volume is shorted)
     — a correct boundary condition that is wrong to sum into a
     ground-to-trace potential difference.  It contributed roughly −12% at
     ``∠ ≈ 180°``, so every quantity derived from ``V`` (``Z0``, ``S11``,
@@ -1451,15 +1452,19 @@ def _waveguide_s21_phase_residual(s_params, freqs, reference_planes, cfgs,
     return rms, meta
 
 
-def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
+def _warn_junction_probe_clearance(
+    grid, cfgs, device_sigma, ref_sigmas, freqs, *,
+    device_pec_edges=None, ref_pec_edges=None,
+):
     """Advisory: probe-plane clearance from a junction (pure NumPy, no FDTD).
 
     For each driven port, the junction is where the device materials differ
-    from that port's straight-guide reference. We reduce the PEC-folded
-    ``sigma`` difference over the two transverse axes to a 1-D profile along
-    the port normal axis, find the nearest differing cell to the port's probe
-    plane, and compare that clearance to evanescent decay lengths of the next
-    higher mode (TE20, cutoff ``fc2 = C0 / a``). ``alpha = 2*pi*sqrt(fc2^2 -
+    from that port's straight-guide reference. We reduce the ``sigma`` and
+    componentwise realized PEC edge differences over the two transverse axes
+    to a 1-D profile along the port normal axis, find the nearest difference
+    to the port's probe plane, and compare that clearance to evanescent decay
+    lengths of the next higher mode (TE20, cutoff ``fc2 = C0 / a``).
+    ``alpha = 2*pi*sqrt(fc2^2 -
     f^2)/C0`` is evaluated at the band-CENTRE frequency — the validated
     far-port campaign sized its arms in mid-band decay lengths, and a band-max
     evaluation diverges (L -> inf) as the band edge approaches ``fc2``, which
@@ -1471,6 +1476,7 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
     ``warnings.warn`` per under-clearance port; does not raise.
     """
     import warnings
+    from rfx.api._preflight import PreflightWarning
 
     axis_idx = {"x": 0, "y": 1, "z": 2}
     dev = np.asarray(device_sigma)
@@ -1487,6 +1493,19 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
         ax = axis_idx[cfg.normal_axis]
         other_axes = tuple(j for j in range(3) if j != ax)
         diff_profile = np.any(np.asarray(ref_sigmas[i]) != dev, axis=other_axes)
+        # #931 moved PEC out of sigma into the solver's realized E edges.
+        # Reading sigma alone therefore sees identical vacuum in a PEC
+        # junction and its straight references. Compare each component:
+        # unioning the three masks first would hide differently oriented
+        # sheets that occupy the same node plane.
+        ref_edges = None if ref_pec_edges is None else ref_pec_edges[i]
+        if device_pec_edges is not None or ref_edges is not None:
+            for component in range(3):
+                dev_edge = (False if device_pec_edges is None else
+                            np.asarray(device_pec_edges[component], dtype=bool))
+                ref_edge = (False if ref_edges is None else
+                            np.asarray(ref_edges[component], dtype=bool))
+                diff_profile |= np.any(dev_edge != ref_edge, axis=other_axes)
         differing = np.nonzero(diff_profile)[0]
         if differing.size == 0:
             continue
@@ -1499,7 +1518,7 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
         minimum_m = 3.0 / alpha       # validated-envelope floor (fires below)
         recommended_m = 5.0 / alpha   # recommendation in the message
         if clearance_m < minimum_m:
-            warnings.warn(
+            warnings.warn(PreflightWarning(
                 f"port_reference_sims: port index {i} ({cfg.normal_axis}-normal) "
                 f"probe plane is only {clearance_m * 1e3:.1f} mm from the "
                 f"junction — below {minimum_m * 1e3:.1f} mm (3 mid-band "
@@ -1509,7 +1528,9 @@ def _warn_junction_probe_clearance(grid, cfgs, device_sigma, ref_sigmas, freqs):
                 f"port-to-junction clearance left residual max|S|~3.9 in the "
                 f"2026-07-06 verification (necessary-but-not-sufficient) — move "
                 f"the probe plane farther from the junction.",
-                UserWarning,
+                code="port_junction_probe_clearance",
+                loc=f"port:{i}", source="_warn_junction_probe_clearance",
+            ),
                 stacklevel=2,
             )
 
@@ -2982,38 +3003,52 @@ class _SparamMixin:
 
         grid = self._build_grid()
         _wg_sheet_specs: list = []
+        _wg_pec_sheets: list = []
+        _wg_pec_wires: list = []
         base_materials, debye_spec, lorentz_spec, pec_mask_wg, pec_shapes, boundary_pec_shapes, _ = self._assemble_materials(
-            grid, sheet_specs=_wg_sheet_specs)
-        # #677: node-thin sheet ctx for the DEVICE runs of this lane. The
-        # PEC here is folded to sigma=1e10 below rather than run as a
-        # mask, but the edge exclusion still uses the assembled pec_mask
-        # so sheet and PEC never contend for one edge; the vacuum
-        # REFERENCE runs never receive the ctx (explicit strip at the
-        # extractor call sites).
+            grid, sheet_specs=_wg_sheet_specs, pec_sheets=_wg_pec_sheets,
+            pec_wires=_wg_pec_wires)
+        _wg_pec_sheets = tuple(_wg_pec_sheets)
+        _wg_pec_wires = tuple(_wg_pec_wires)
+        # #931 §1.7: the realized PEC edges of this device — volumes,
+        # sheets and wires — built ONCE and handed to every device run of
+        # the extractors below.  This replaces the sigma=1e10 CELL fold
+        # this lane used to do (see the note at the old fold site).
+        from rfx.boundaries.pec import realized_pec_edge_masks as _rpem
+        _wg_pec_edge_masks = None
+        if pec_mask_wg is not None or _wg_pec_sheets or _wg_pec_wires:
+            _wg_pec_edge_masks = _rpem(
+                pec_mask_wg, sheets=_wg_pec_sheets, wires=_wg_pec_wires,
+                periodic=self._periodic_flags())
+        # The junction geometry census also needs these edges when Kottke
+        # below encodes PEC in inverse permittivity and clears solver masks.
+        _wg_geometry_pec_edges = _wg_pec_edge_masks
+        # #677: node-thin sheet ctx for the DEVICE runs of this lane; the
+        # edge exclusion uses the same realized edges so sheet and PEC
+        # never contend for one edge.  The vacuum REFERENCE runs never
+        # receive the ctx (explicit strip at the extractor call sites).
         from rfx.materials.thin_conductor import build_sheet_impedance_ctx as _build_sheet_ctx
-        _wg_sheet_ctx = _build_sheet_ctx(_wg_sheet_specs, pec_mask=pec_mask_wg)
+        _wg_sheet_ctx = _build_sheet_ctx(
+            _wg_sheet_specs, pec_edge_masks=_wg_pec_edge_masks)
         if _wg_sheet_ctx is not None and subpixel_smoothing:
             raise ValueError(
                 "surface-impedance (surface_impedance_f0) sheets are not "
                 "supported with subpixel_smoothing / conformal on the "
                 "waveguide S-matrix lane (#677 v1): the sheet operator "
                 "assumes the plain isotropic E update at its edges.")
-        # Waveguide S-matrix runner doesn't support pec_mask yet.
-        # Fold PEC mask back into high sigma for compatibility.
-        # **Stage 2 caveat**: when ``subpixel_smoothing="kottke_pec"`` is
-        # active (use_kottke_pec, computed below), the inverse-eps
-        # tensor encodes the PEC zero directly (inv = 0 freezes the
-        # field). Folding pec_mask to sigma=1e10 then would conflict
-        # with the Yee-stagger offsets in inv_xx/yy/zz: pec_mask is
-        # per-cell-center, but inv_xx is at Ex(i+0.5, j, k) offsets,
-        # so PEC boundary cells can have sigma=1e10 AND a fractional
-        # inv > 0 — that combo blows up Ca ≈ -1 and field NaNs.
-        # Skipped for Stage 2; the Kottke union (inv=0 inside PEC,
-        # fractional at boundary) is the single source of truth.
+        # #931 §1.7: the interior PEC of this lane is the realized edge
+        # set, applied per step by the shared ``apply_pec_edges``.  The
+        # sigma=1e10 CELL fold that stood here was a fourth realization of
+        # the same geometry and damped only the components indexed by the
+        # occupied cell, so a one-cell iris or wall got its lower face and
+        # never its far one.
+        # **Stage 2 caveat, unchanged**: under ``subpixel_smoothing=
+        # "kottke_pec"`` the inverse-eps tensor already encodes the PEC
+        # zero (inv = 0 freezes the field) and is the single source of
+        # truth; that lane takes no edge masks.
         _use_kottke_pec_early = (subpixel_smoothing == "kottke_pec")
-        if pec_mask_wg is not None and not _use_kottke_pec_early:
-            base_materials = base_materials._replace(
-                sigma=jnp.where(pec_mask_wg, 1e10, base_materials.sigma))
+        if _use_kottke_pec_early:
+            _wg_pec_edge_masks = None
         materials = base_materials
         # G-AD-WIRE-WG2: public eps_override / sigma_override channel.
         # Mirror the MSL pattern: replace eps_r / sigma on the assembled
@@ -3025,12 +3060,14 @@ class _SparamMixin:
 
         # Per-port straight-guide reference materials for interior-PEC
         # junctions. Each reference sim is a geometry carrier: assemble its
-        # materials on a grid that must match the device grid, then fold its
-        # interior PEC into sigma IDENTICALLY to the device path above (only
-        # the plain path — no subpixel/conformal handling for references).
+        # materials on a grid that must match the device grid, and realize
+        # its PEC edges identically to the device path above (only the
+        # plain path — no subpixel/conformal handling for references).
         ref_materials_per_port = None
+        ref_pec_edge_masks_per_port = None
         if port_reference_sims is not None:
             ref_materials_per_port = []
+            ref_pec_edge_masks_per_port = []
             for _i, _ref_sim in enumerate(port_reference_sims):
                 _ref_grid = _ref_sim._build_grid()
                 if _ref_grid.shape != grid.shape or float(_ref_grid.dx) != float(grid.dx):
@@ -3040,11 +3077,19 @@ class _SparamMixin:
                         f"match the device grid (shape={grid.shape}, "
                         f"dx={grid.dx})"
                     )
-                _ref_base, _, _, _ref_pec_mask, _, _, _ = _ref_sim._assemble_materials(_ref_grid)
-                if _ref_pec_mask is not None:
-                    _ref_base = _ref_base._replace(
-                        sigma=jnp.where(_ref_pec_mask, 1e10, _ref_base.sigma))
+                _ref_pec_sheets: list = []
+                _ref_pec_wires: list = []
+                _ref_base, _, _, _ref_pec_mask, _, _, _ = _ref_sim._assemble_materials(
+                    _ref_grid, pec_sheets=_ref_pec_sheets,
+                    pec_wires=_ref_pec_wires)
                 ref_materials_per_port.append(_ref_base)
+                _ref_edges_i = None
+                if (_ref_pec_mask is not None or _ref_pec_sheets
+                        or _ref_pec_wires):
+                    _ref_edges_i = _rpem(
+                        _ref_pec_mask, sheets=tuple(_ref_pec_sheets),
+                        wires=tuple(_ref_pec_wires))
+                ref_pec_edge_masks_per_port.append(_ref_edges_i)
 
         if n_steps is None:
             n_steps = grid.num_timesteps(num_periods=num_periods)
@@ -3270,6 +3315,7 @@ class _SparamMixin:
                     aniso_eps=aniso_eps,
                     conformal_weights=conformal_weights,
                     aniso_inv_eps=aniso_inv_eps,
+                    pec_edge_masks=_wg_pec_edge_masks,
                 )
             elif normalize:
                 # The two-run normalized extractor divides each receiving
@@ -3302,6 +3348,7 @@ class _SparamMixin:
                     aniso_eps=aniso_eps,
                     conformal_weights=conformal_weights,
                     aniso_inv_eps=aniso_inv_eps,
+                    pec_edge_masks=_wg_pec_edge_masks,
                 )
             # Report the ABSOLUTE de-embed target plane (matches the single-mode + coax paths and
             # the WaveguideSMatrixResult schema), NOT the relative shift ref_shifts_mm — that is the
@@ -3338,6 +3385,8 @@ class _SparamMixin:
             _warn_junction_probe_clearance(
                 grid, cfgs, materials.sigma,
                 [m.sigma for m in ref_materials_per_port], freqs,
+                device_pec_edges=_wg_geometry_pec_edges,
+                ref_pec_edges=ref_pec_edge_masks_per_port,
             )
             _warn_junction_cpml_thickness(
                 grid, cfgs, freqs, self._cpml_layers,
@@ -3441,6 +3490,8 @@ class _SparamMixin:
                 aniso_inv_eps=aniso_inv_eps,
                 ref_aniso_inv_eps=ref_aniso_inv_eps,
                 ref_materials_per_port=ref_materials_per_port,
+                pec_edge_masks=_wg_pec_edge_masks,
+                ref_pec_edge_masks_per_port=ref_pec_edge_masks_per_port,
                 checkpoint_segments=checkpoint_segments,
                 return_settling=True,
                 sheet_impedance=_wg_sheet_ctx,
@@ -3468,6 +3519,7 @@ class _SparamMixin:
                 conformal_weights=conformal_weights,
                 aniso_inv_eps=aniso_inv_eps,
                 ref_aniso_inv_eps=ref_aniso_inv_eps,
+                pec_edge_masks=_wg_pec_edge_masks,
                 checkpoint_segments=checkpoint_segments,
                 return_settling=True,
                 sheet_impedance=_wg_sheet_ctx,
@@ -3488,6 +3540,7 @@ class _SparamMixin:
                 aniso_eps=aniso_eps,
                 conformal_weights=conformal_weights,
                 aniso_inv_eps=aniso_inv_eps,
+                pec_edge_masks=_wg_pec_edge_masks,
                 checkpoint_segments=checkpoint_segments,
                 return_settling=True,
                 sheet_impedance=_wg_sheet_ctx,
@@ -3599,9 +3652,10 @@ class _SparamMixin:
         ``subpixel_smoothing`` / ``conformal_pec`` are ``run()``-only
         keywords, so that combination is unreachable on the ``eps_override``
         channel rather than refused there.
-        The TRACE must remain PEC: an f0 sheet never enters
-        ``pec_mask``, and the closed Ampere-loop current and the V span
-        anchor on PEC trace nodes. The Hammerstad-Jensen beta/Z0 anchors
+        The TRACE must remain PEC: an f0 sheet realizes no PEC edge, and
+        the closed Ampere-loop current and the V span anchor on the
+        realized PEC wall planes (#931 §1.9 — a PEC trace may be a volume
+        Box or a sheet; both are found). The Hammerstad-Jensen beta/Z0 anchors
         and the real-beta N-probe fit assume a lossless line, so a sheet
         lying INSIDE a probed span adds per-length loss the fit cannot
         represent — reported ``Z0``/``q`` shift (the Z0 honesty guard may
@@ -3758,37 +3812,11 @@ class _SparamMixin:
         entries = list(self._msl_ports)
         n_ports = len(entries)
 
-        # Build the grid used for probe placement + the eps anchor. On the
-        # non-uniform lane this MUST be the SAME grid run_nonuniform_path
-        # builds (so probe_xs, port cells, dy/dz arrays and the eps anchor
-        # align with the run's field planes). build_nonuniform_grid needs a
-        # concrete dz_profile — synthesise from dx when absent into a LOCAL.
-        # self._dz_profile is mutated only INSIDE the run try/finally below (so
-        # the restore always runs even if probe placement / the trace-PEC scan
-        # raises) — the subsequent self.run() then reads the same dz and builds
-        # a byte-matching grid.
-        _dz_profile_saved = self._dz_profile
-        _dz_for_grid = self._dz_profile
-        if is_nonuniform:
-            from rfx.runners.nonuniform import build_nonuniform_grid
-            if _dz_for_grid is None:
-                _nz_syn = int(round(float(self._domain[2]) / float(self._dx)))
-                _dz_for_grid = np.full(max(_nz_syn, 1), float(self._dx))
-            grid = build_nonuniform_grid(
-                self._freq_max, self._domain, self._dx, self._cpml_layers,
-                _dz_for_grid,
-                dx_profile=self._dx_profile, dy_profile=self._dy_profile,
-                pec_faces=self._boundary_spec.pec_faces()
-                    if self._boundary_spec is not None else None,
-                pmc_faces=self._boundary_spec.pmc_faces()
-                    if self._boundary_spec is not None else None,
-                cpml_axes="".join(
-                    ax for ax in "xyz"
-                    if ax not in (self._periodic_axes or "")
-                ),
-            )
-        else:
-            grid = self._build_grid()
+        # Probe placement, material assembly and each run share the resolved
+        # mesh. Missing z profiles are synthesized locally by the grid builder;
+        # writing a derived profile into the declaration would freeze auto-mesh
+        # state and change the resolved domain during the driver.
+        grid = self._build_realized_grid()
 
         if freqs is None:
             freqs_arr = np.asarray(jnp.linspace(self._freq_max / 10, self._freq_max, n_freqs))
@@ -3899,15 +3927,31 @@ class _SparamMixin:
         # an f0 sheet carries no eps and never enters pec_mask. This lane
         # has NO vacuum reference run, so there is no strip_sheet_impedance
         # analogue.
+        _msl_pec_sheets: list = []
+        _msl_pec_wires: list = []
         _msl_assembled = (
-            self._assemble_materials_nu(grid) if is_nonuniform
-            else self._assemble_materials(grid)
+            self._assemble_materials_nu(
+                grid, pec_sheets=_msl_pec_sheets, pec_wires=_msl_pec_wires)
+            if is_nonuniform
+            else self._assemble_materials(
+                grid, pec_sheets=_msl_pec_sheets, pec_wires=_msl_pec_wires)
         )
         _msl_materials = _msl_assembled[0]
-        _msl_pec_mask = (
-            None if _msl_assembled[3] is None
-            else np.asarray(_msl_assembled[3])
+        # #931 §1.9: the trace is located by its REALIZED wall planes, not
+        # by a pec_mask cell scan — a sheet-declared trace owns no cell.
+        from rfx.boundaries.pec import (
+            realized_pec_edge_masks as _rpem_msl,
         )
+        from rfx.probes.msl_wave_decomp import (
+            realized_trace_planes_on_column as _trace_planes,
+        )
+        _msl_pec_edge_masks = None
+        if (_msl_assembled[3] is not None or _msl_pec_sheets
+                or _msl_pec_wires):
+            _msl_pec_edge_masks = _rpem_msl(
+                _msl_assembled[3], sheets=tuple(_msl_pec_sheets),
+                wires=tuple(_msl_pec_wires),
+                periodic=self._periodic_flags())
         beta0_per_port: list[np.ndarray] = []
         z0_hj_per_port: list[float] = []
         for p_idx, pe in enumerate(entries):
@@ -3938,32 +3982,28 @@ class _SparamMixin:
             # Walk UP the substrate-normal axis (always z) from the
             # substrate top, at the feed cell on the propagation axis and
             # the trace centre on the width axis (issue #661).
-            _sel = [0, 0, 0]
-            _sel[meta["prop_idx"]] = meta["i_feed"]
-            _sel[meta["width_idx"]] = meta["j_centre"]
-            _sel[meta["normal_idx"]] = slice(meta["k_top"], None)
-            col = (
-                None if _msl_pec_mask is None
-                else _msl_pec_mask[tuple(_sel)]
+            _ij = tuple(
+                meta["i_feed"] if c == meta["prop_idx"] else meta["j_centre"]
+                for c in range(3) if c != meta["normal_idx"]
             )
-            k_pec = np.array([], dtype=int) if col is None else np.where(col)[0]
-            if k_pec.size == 0:
+            _k_lo_tr, _k_hi_tr = _trace_planes(
+                _msl_pec_edge_masks, meta["normal_idx"], _ij, meta["k_top"],
+                periodic=self._periodic_flags())
+            if _k_lo_tr is None:
                 raise RuntimeError(
-                    "compute_msl_s_matrix: no PEC trace conductor found "
-                    "above the substrate top for MSL port "
+                    "compute_msl_s_matrix: no realized PEC trace conductor "
+                    "found above the substrate top for MSL port "
                     f"{entries[p_idx].name!r}; the closed Ampere-loop "
-                    "current (issue #80 stage S1) needs the trace PEC. "
-                    "Add the microstrip trace as a Box(material='pec'). "
-                    "A surface_impedance_f0 thin conductor is NOT a trace "
-                    "conductor here — it never enters pec_mask, and the "
-                    "Ampere-loop current and V span anchor on PEC trace "
-                    "nodes. Keep the trace PEC and use f0 sheets for "
-                    "auxiliary lossy metal only."
+                    "current (issue #80 stage S1) needs the trace. Declare "
+                    "the microstrip trace as a Box(material='pec') (a "
+                    "volume) or as a zero-thickness Box / add_thin_conductor "
+                    "(a sheet, #931). A surface_impedance_f0 thin conductor "
+                    "is NOT a trace conductor here — it realizes no PEC "
+                    "edge, and the Ampere-loop current and V span anchor on "
+                    "realized PEC wall planes. Keep the trace PEC and use f0 "
+                    "sheets for auxiliary lossy metal only."
                 )
-            trace_k_per_port.append((
-                int(meta["k_top"] + int(k_pec.min())),
-                int(meta["k_top"] + int(k_pec.max())),
-            ))
+            trace_k_per_port.append((_k_lo_tr, _k_hi_tr))
 
         # Stash existing add_dft_plane_probe registrations and restore on exit.
         saved_dft = list(self._dft_planes)
@@ -3974,11 +4014,6 @@ class _SparamMixin:
         saved_probes = list(self._probes)
         saved_internal_probes = set(self._internal_probe_indices)
         try:
-            # Mutate self._dz_profile to the (possibly synthesised) grid dz only
-            # now — inside the try — so the finally always restores it and the
-            # subsequent self.run() builds a grid matching the one above.
-            if is_nonuniform:
-                self._dz_profile = _dz_for_grid
             _complex_dtype = jnp.complex128 if jax.config.x64_enabled else jnp.complex64
             S = jnp.zeros((n_ports, n_ports, n_freqs_used), dtype=_complex_dtype)
             Z0_per_run = jnp.zeros((n_ports, n_freqs_used), dtype=_complex_dtype)
@@ -4800,7 +4835,6 @@ class _SparamMixin:
             self._ports = saved_ports
             self._probes = saved_probes
             self._internal_probe_indices = saved_internal_probes
-            self._dz_profile = _dz_profile_saved
 
     def compute_mixed_s_matrix(
         self,
@@ -5138,9 +5172,24 @@ class _SparamMixin:
         # drive run (materials do not depend on excite flags).
         from rfx.materials.thin_conductor import refuse_f0_sheets as _refuse_f0_hj
         _refuse_f0_hj(self._thin_conductors, "MSL junction S-parameter")
+        _mx_pec_sheets: list = []
+        _mx_pec_wires: list = []
         materials, debye_spec, lorentz_spec, pec_mask, _, _, _ = \
-            self._assemble_materials(grid)
-        pec_mask_np = None if pec_mask is None else np.asarray(pec_mask)
+            self._assemble_materials(
+                grid, pec_sheets=_mx_pec_sheets, pec_wires=_mx_pec_wires)
+        # #931 §1.9: realized wall planes locate the trace, not cells.
+        from rfx.boundaries.pec import (
+            realized_pec_edge_masks as _rpem_mx,
+        )
+        from rfx.probes.msl_wave_decomp import (
+            realized_trace_planes_on_column as _trace_planes_mx,
+        )
+        _mx_pec_edge_masks = None
+        if pec_mask is not None or _mx_pec_sheets or _mx_pec_wires:
+            _mx_pec_edge_masks = _rpem_mx(
+                pec_mask, sheets=tuple(_mx_pec_sheets),
+                wires=tuple(_mx_pec_wires),
+                periodic=self._periodic_flags())
 
         # Analytic Hammerstad-Jensen anchor per MSL port (eps precedence
         # mirrors compute_msl_s_matrix: explicit eps_r_sub > rasterised
@@ -5174,23 +5223,20 @@ class _SparamMixin:
         for p_idx in range(n_msl):
             meta = port_idx_meta[p_idx]
             i_feed_p = _msl_yz_cells(grid, msl_ports[p_idx])[0][0]
-            col = (
-                None if pec_mask_np is None
-                else pec_mask_np[i_feed_p, meta["j_centre"], meta["k_top"]:]
-            )
-            k_pec = np.array([], dtype=int) if col is None else np.where(col)[0]
-            if k_pec.size == 0:
+            _k_lo_tr, _k_hi_tr = _trace_planes_mx(
+                _mx_pec_edge_masks, 2, (i_feed_p, meta["j_centre"]),
+                meta["k_top"], periodic=self._periodic_flags())
+            if _k_lo_tr is None:
                 raise RuntimeError(
-                    "compute_mixed_s_matrix: no PEC trace conductor found "
-                    "above the substrate top for MSL port "
+                    "compute_mixed_s_matrix: no realized PEC trace "
+                    "conductor found above the substrate top for MSL port "
                     f"{entries[p_idx].name!r}; the closed Ampere-loop "
-                    "current needs the trace PEC. Add the microstrip trace "
-                    "as a Box(material='pec')."
+                    "current needs the trace. Declare the microstrip trace "
+                    "as a Box(material='pec') (a volume) or as a "
+                    "zero-thickness Box / add_thin_conductor (a sheet, "
+                    "#931)."
                 )
-            trace_k_per_port.append((
-                int(meta["k_top"] + int(k_pec.min())),
-                int(meta["k_top"] + int(k_pec.max())),
-            ))
+            trace_k_per_port.append((_k_lo_tr, _k_hi_tr))
 
         # Wire live-cell counts for the per-cell impedance normalization
         # (mirrors compute_lumped_wire_s_matrix_via_scan, issue #318).
@@ -5206,7 +5252,8 @@ class _SparamMixin:
                     component=pe.component, impedance=pe.impedance,
                     excitation=pe.waveform,
                 )
-                n_live_lw[idx] = _wire_port_live_cells(grid, wp, pec_mask)[2]
+                n_live_lw[idx] = _wire_port_live_cells(
+                    grid, wp, _mx_pec_edge_masks)[2]
 
         if not skip_preflight:
             # One preflight for the full registration (run() would fire it
@@ -5402,6 +5449,8 @@ class _SparamMixin:
                 raw = self._forward_from_materials(
                     grid, materials, debye_spec, lorentz_spec,
                     n_steps=n_steps, checkpoint=False, pec_mask=pec_mask,
+                    pec_sheets=tuple(_mx_pec_sheets),
+                    pec_wires=tuple(_mx_pec_wires),
                     port_s11_freqs=freqs_arr,
                     _return_raw_port_sparams=True,
                 )
@@ -6244,11 +6293,12 @@ class _SparamMixin:
                 "compute_coaxial_line_reflection() creates its own TEM TFSF "
                 "source and does not accept an existing TFSF source."
             )
-        if (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        ):
+        # This driver owns its geometry. Validate caller-supplied profiles
+        # before planning a mesh from registrations that it will reject below.
+        declared_mesh = self._declared_mesh
+        if any(declared_mesh[name] is not None for name in (
+            "_dx_profile", "_dy_profile", "_dz_profile"
+        )):
             raise ValueError(
                 "compute_coaxial_line_reflection() supports only a uniform Yee "
                 "grid; dx_profile, dy_profile, and dz_profile are not supported."
@@ -6727,11 +6777,12 @@ class _SparamMixin:
                 "compute_coaxial_two_port() creates its own TEM TFSF "
                 "sources and does not accept an existing TFSF source."
             )
-        if (
-            self._dz_profile is not None
-            or self._dx_profile is not None
-            or self._dy_profile is not None
-        ):
+        # This driver owns its geometry. Validate caller-supplied profiles
+        # before planning a mesh from registrations that it will reject below.
+        declared_mesh = self._declared_mesh
+        if any(declared_mesh[name] is not None for name in (
+            "_dx_profile", "_dy_profile", "_dz_profile"
+        )):
             raise ValueError(
                 "compute_coaxial_two_port() supports only a uniform Yee "
                 "grid; dx_profile, dy_profile, and dz_profile are not "
@@ -7517,8 +7568,20 @@ class _SparamMixin:
                 "layer; check both registrations reference the SAME "
                 "physical ground plane."
             )
+        _cx_pec_sheets: list = []
+        _cx_pec_wires: list = []
         materials, debye_spec, lorentz_spec, pec_mask, _, _, _ = \
-            self._assemble_materials(grid)
+            self._assemble_materials(
+                grid, pec_sheets=_cx_pec_sheets, pec_wires=_cx_pec_wires)
+        from rfx.boundaries.pec import (
+            realized_pec_edge_masks as _rpem_cx,
+        )
+        _cx_pec_edge_masks = None
+        if pec_mask is not None or _cx_pec_sheets or _cx_pec_wires:
+            _cx_pec_edge_masks = _rpem_cx(
+                pec_mask, sheets=tuple(_cx_pec_sheets),
+                wires=tuple(_cx_pec_wires),
+                periodic=self._periodic_flags())
 
         if freqs is None:
             freqs_arr = np.asarray(
@@ -7754,7 +7817,6 @@ class _SparamMixin:
                 stacklevel=2,
             )
 
-        pec_mask_np = None if pec_mask is None else np.asarray(pec_mask)
         cells = _msl_yz_cells(grid, msl_port_base)
         j_set = sorted({c[1] for c in cells})
         k_set = sorted({c[2] for c in cells})
@@ -7762,22 +7824,21 @@ class _SparamMixin:
         k_lo_msl, k_hi_msl = k_set[0], k_set[-1]
         j_centre_msl = (j_lo_msl + j_hi_msl) // 2
         i_feed_msl = cells[0][0]
-        if pec_mask_np is None:
+        # #931 §1.9: realized wall planes locate the trace, not cells.
+        from rfx.probes.msl_wave_decomp import (
+            realized_trace_planes_on_column as _trace_planes_cx,
+        )
+        k_trace_lo, _ = _trace_planes_cx(
+            _cx_pec_edge_masks, 2, (i_feed_msl, j_centre_msl), k_hi_msl,
+            periodic=self._periodic_flags())
+        if k_trace_lo is None:
             raise RuntimeError(
-                "compute_coax_msl_transition(): no PEC geometry registered "
-                "— the MSL trace conductor must be a registered PEC Box "
-                "(pec_mask came back None)."
+                "compute_coax_msl_transition(): no realized PEC trace "
+                "conductor found above the substrate top at the registered "
+                "MSL port's own feed plane; declare the microstrip trace as "
+                "a Box(material='pec') (a volume) or as a zero-thickness "
+                "Box / add_thin_conductor (a sheet, #931)."
             )
-        col = pec_mask_np[i_feed_msl, j_centre_msl, k_hi_msl:]
-        k_pec = np.where(col)[0]
-        if k_pec.size == 0:
-            raise RuntimeError(
-                "compute_coax_msl_transition(): no PEC trace conductor "
-                "found above the substrate top at the registered MSL "
-                "port's own feed plane; add the microstrip trace as a "
-                "Box(material='pec')."
-            )
-        k_trace_lo = int(k_hi_msl + int(k_pec.min()))
         dz_arr = _msl_cell_profile(grid, "z", grid.nz)
         _complex_dtype = jnp.complex128 if jax.config.x64_enabled else jnp.complex64
 
@@ -7846,7 +7907,8 @@ class _SparamMixin:
             result = _run(
                 grid, materials, int(n_steps), boundary="cpml", cpml_axes="xyz",
                 sources=sources, mag_sources=mag_sources, probes=witness_probes,
-                dft_planes=planes, pec_mask=pec_mask, return_state=False,
+                dft_planes=planes, pec_edge_masks=_cx_pec_edge_masks,
+                return_state=False,
                 **_flux_run_kwargs,
             )
             if result.dft_planes is None:
@@ -8048,15 +8110,6 @@ class _SparamMixin:
 
         n_ports = len(entries)
 
-        # ``_build_nonuniform_grid`` requires a concrete dz_profile.
-        # Synthesise one from the scalar dx when the user did not supply
-        # a dz_profile (same semantics as the uniform lane's implicit
-        # z-resolution). Restored in the ``finally`` below.
-        _dz_profile_saved = self._dz_profile
-        if self._dz_profile is None:
-            _nz = int(round(float(self._domain[2]) / float(self._dx)))
-            self._dz_profile = np.full(max(_nz, 1), float(self._dx))
-
         # Build the grid directly so we can restrict ``cpml_axes`` to
         # axes that are not fully PEC/PMC-bounded. The rasteriser (see
         # ``rfx/geometry/rasterize_grid.py::coords_from_nonuniform_grid``)
@@ -8080,19 +8133,17 @@ class _SparamMixin:
             if ax not in (self._periodic_axes or "")
             and not _axis_fully_closed(ax)
         )
-        try:
-            grid = build_nonuniform_grid(
-                self._freq_max, self._domain, self._dx, self._cpml_layers,
-                self._dz_profile,
-                dx_profile=self._dx_profile,
-                dy_profile=self._dy_profile,
-                pec_faces=pec_set or None,
-                pmc_faces=pmc_set or None,
-                cpml_axes=cpml_axes,
-            )
-        except Exception:
-            self._dz_profile = _dz_profile_saved
-            raise
+        # Missing z profiles are synthesized locally, preserving the declared
+        # auto mesh and its cached resolution throughout device/reference runs.
+        grid = build_nonuniform_grid(
+            self._freq_max, self._domain, self._dx, self._cpml_layers,
+            self._dz_profile,
+            dx_profile=self._dx_profile,
+            dy_profile=self._dy_profile,
+            pec_faces=pec_set or None,
+            pmc_faces=pmc_set or None,
+            cpml_axes=cpml_axes,
+        )
         if n_steps is None:
             # ``NonUniformGrid`` does not expose ``num_timesteps`` (known
             # asymmetry vs. ``Grid``); inline the same formula here.
@@ -8100,7 +8151,13 @@ class _SparamMixin:
 
         # Assemble device materials once to learn the full array shape;
         # vacuum reference is shape-matched onto that same array.
-        dev_materials_concrete, _, _, _ = assemble_materials_nu(self, grid)
+        # Shape probe only: the vacuum reference is ones_like/zeros_like of
+        # these arrays. Every drive run below goes through
+        # run_nonuniform_path, which assembles with its own collectors and
+        # realizes the sheets — so the #931 collectors here are passed and
+        # dropped (an explicit "cells only", not an omission).
+        dev_materials_concrete, _, _, _ = assemble_materials_nu(
+            self, grid, pec_sheets=[], pec_wires=[])
         vacuum_eps = jnp.ones_like(dev_materials_concrete.eps_r)
         vacuum_sigma = jnp.zeros_like(dev_materials_concrete.sigma)
 
@@ -8357,7 +8414,6 @@ class _SparamMixin:
                 s_columns.append(recv_col)
         finally:
             self._waveguide_ports = original_entries
-            self._dz_profile = _dz_profile_saved
 
         # Issue #827 (waveguide instance): the ring-down witness now reaches
         # the NU lane -- same aggregate truncation warning and settling_db

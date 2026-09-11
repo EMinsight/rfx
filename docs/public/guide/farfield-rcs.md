@@ -114,7 +114,13 @@ grid = Grid(
     cpml_layers=8,
 )
 
-# PEC plate: 4 cm square, one cell thick, centred and normal to x.
+# A conducting plate, 4 cm square and one cell thick, normal to x.
+# NOTE: this is a sigma FILL, not a declared PEC conductor. compute_rcs
+# takes MaterialArrays, so the plate is rasterized as sigma = 1e7 S/m and
+# damped by the ordinary update equation; no E edge is zeroed and the
+# volume/sheet/wire contract does not apply. See "How conductors land on
+# the lattice" in materials-geometry for the three paths and their
+# differences.
 c = 0.06
 plate = Box(
     corner_lo=(c - dx / 2, c - 0.02, c - 0.02),

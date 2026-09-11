@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
@@ -14,6 +16,7 @@ from rfx.api import Simulation
 from rfx.boundaries.spec import Boundary, BoundarySpec
 from rfx.geometry.csg import Box
 from rfx.probes.probes import DFTPlaneProbe
+from rfx.sources import GaussianPulse
 from tests._msl_ad_objective import msl_band_mean_s21_sq
 from tests.unit.sparams.test_msl_port_integration import (
     DX,
@@ -54,11 +57,11 @@ E2E_GOLDEN_PATH = (
 )
 
 
-def _build_thru_line_sim() -> Simulation:
+def _build_thru_line_sim(*, dx=DX, ly=LY) -> Simulation:
     sim = Simulation(
         freq_max=F_MAX,
-        domain=(LX, LY, LZ),
-        dx=DX,
+        domain=(LX, ly, LZ),
+        dx=dx,
         cpml_layers=8,
         boundary=BoundarySpec(
             x="cpml",
@@ -67,15 +70,22 @@ def _build_thru_line_sim() -> Simulation:
         ),
     )
     sim.add_material("ro4350b", eps_r=EPS_R)
-    sim.add(Box((0.0, 0.0, 0.0), (LX, LY, H_SUB)), material="ro4350b")
+    sim.add(Box((0.0, 0.0, 0.0), (LX, ly, H_SUB)), material="ro4350b")
 
-    y_centre = LY / 2.0
+    y_centre = ly / 2.0
     trace_y_lo = y_centre - W_TRACE / 2.0
     trace_y_hi = y_centre + W_TRACE / 2.0
-    sim.add(
-        Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + DX)),
-        material="pec",
-    )
+    # #931 §1.3: this one-cell foil declaration is a SHEET, not a volume.
+    # On the current dx = H_SUB/3 mesh its midpoint is at 3.5 cells:
+    # the exact half-cell tie resolves LOWER, onto the laminate face (3).
+    # The historical capture uses dx = 80 um: midpoint/dx = 3.675, so
+    # its nearest node is 4 (320 um). These are different replay geometries.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        sim.add_thin_conductor(
+            Box((0.0, trace_y_lo, H_SUB), (LX, trace_y_hi, H_SUB + dx)),
+            sigma_bulk=5.8e7, thickness=35e-6,
+        )
     sim.add_msl_port(
         position=(PORT_MARGIN, y_centre, 0.0),
         width=W_TRACE,
@@ -93,6 +103,76 @@ def _build_thru_line_sim() -> Simulation:
     return sim
 
 
+# The live coupon keeps the authorized 254 um laminate, 600 um etched
+# trace and 10 mm launch-plane separation. Fixed profiles give a graded Yee
+# grid: a scalar 84.667 um mesh cannot align its width. The 50 um CPML
+# boundary spacing matches every axis. Two 50 um and four 38.5 um cells
+# size the substrate exactly; the air ends in 16 uniform 50 um cells.
+# Fixed physical margins survive refinement; 35 um copper is idealized as
+# a PEC sheet, not a one-cell metal body. Profiles select the supported NU
+# runner, so the old uniform-field replay/AD fixture remains separate.
+E2E_SPACING = (50e-6, 50e-6, 50e-6)
+E2E_DZ_PROFILE = np.repeat(
+    np.asarray([100e-6] + [77e-6] * 14 + [100e-6] * 8) / 2, 2)
+E2E_DOMAIN = (14e-3, 3.4e-3, 1.978e-3)
+E2E_PERIODS = 12
+E2E_REPAIR_ID = "931-msl-254um-600um-aligned-v2"
+# The implicit f0=F_MAX/2 pulse falls below the API low-signal screen at
+# 4.5/5 GHz. This explicit drive covers the entire declared measurement band.
+E2E_WAVEFORM = GaussianPulse(f0=F_MAX, bandwidth=.8)
+
+
+def _build_aligned_e2e_sim(*, refinement=1) -> Simulation:
+    if refinement not in (1, 2):
+        raise ValueError("qualification uses the fixed drawing on 1x or 2x mesh")
+    spacing = tuple(d / refinement for d in E2E_SPACING)
+    profiles = {
+        f"d{axis}_profile": np.full(round(length / step), step)
+        for axis, length, step in zip("xyz", E2E_DOMAIN, spacing)
+    }
+    profiles["dz_profile"] = np.repeat(E2E_DZ_PROFILE / refinement, refinement)
+    sim = Simulation(
+        freq_max=F_MAX, domain=E2E_DOMAIN, dx=min(spacing),
+        cpml_layers=16 * refinement,
+        boundary=BoundarySpec(x="cpml", y="cpml",
+                              z=Boundary(lo="pec", hi="cpml")),
+        **profiles,
+    )
+    sim.add_material("ro4350b", eps_r=EPS_R)
+    sim.add(Box((0., 0., 0.), (E2E_DOMAIN[0], E2E_DOMAIN[1], H_SUB)),
+            material="ro4350b")
+    centre = E2E_DOMAIN[1] / 2
+    sim.add_thin_conductor(
+        Box((0., centre - W_TRACE / 2, H_SUB),
+            (E2E_DOMAIN[0], centre + W_TRACE / 2, H_SUB)),
+        sigma_bulk=5.8e7, thickness=35e-6,
+    )
+    for x, direction in ((PORT_MARGIN, "+x"),
+                         (PORT_MARGIN + L_LINE, "-x")):
+        sim.add_msl_port(position=(x, centre, 0.), width=W_TRACE,
+                         height=H_SUB, direction=direction, impedance=50.,
+                         waveform=E2E_WAVEFORM,
+                         n_probe_offset=60 * refinement,
+                         n_probe_spacing=20 * refinement, n_probes=5)
+    return sim
+
+
+def _build_historical_capture_sim() -> Simulation:
+    """Interpret the unchanged PR #516 captures on their original mesh.
+
+    The replay binaries predate #931's on-lattice redraw.
+    DX and LY imported from the live integration fixture now describe a
+    different grid; using them to index old DFT planes moves both the V span
+    and Ampere contour. Freeze the capture's 80 um mesh and lateral extent
+    here until the fields, geometry and goldens are recaptured together.
+    The declared foil remains a realized sheet under the current contract.
+    """
+    dx = 80e-6
+    return _build_thru_line_sim(
+        dx=dx, ly=W_TRACE + 2 * (2 * H_SUB + 8 * dx),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Replay helpers
 # ---------------------------------------------------------------------------
@@ -108,10 +188,16 @@ def _make_replay_fake_run(acc_data: dict, run_idx: int):
     """
     def fake_run(self, *, n_steps=None, num_periods=1.0, compute_s_params=False):
         del n_steps, num_periods, compute_s_params
+        grid = self._build_grid()
         planes = {}
         for key, arr in acc_data.items():
             if not key.startswith(f"run{run_idx}__"):
                 continue
+            assert arr.shape[1:] == (grid.ny, grid.nz), (
+                f"Replay plane {key} has transverse shape {arr.shape[1:]}, "
+                f"but the simulation grid has {(grid.ny, grid.nz)}; "
+                "captured fields and geometry must be updated together"
+            )
             plane_name = key[len(f"run{run_idx}__"):]
             planes[plane_name] = SimpleNamespace(accumulator=arr)
         return SimpleNamespace(dft_planes=planes)
@@ -140,7 +226,7 @@ def _run_assembly_with_replay(acc_data: dict, freqs_replay: np.ndarray, *,
     except ImportError:  # older JAX (< ~0.4.31)
         from tests._x64_compat import enable_x64
 
-    sim = _build_thru_line_sim()
+    sim = _build_historical_capture_sim()
     freqs_jnp = jnp.asarray(freqs_replay, dtype=jnp.float32)
 
     run_counter = [0]
@@ -179,7 +265,8 @@ def test_replay_float64_equivalence():
 
     Gate: atol=1e-5.  Both jnp-x64 and numpy assemble from the SAME captured
     complex64 FDTD accumulators upcast to complex128 — structural equivalence
-    must hold to near-machine-epsilon (observed ~1e-13).
+    must hold within the unchanged 1e-5 gate. Measured after binding #931's
+    replay to its capture geometry: max_abs_dev = 2.24e-8 on this pod.
 
     This test NEVER invokes the real FDTD scanner under x64.  sim.run is
     monkeypatched to return replayed plane data directly.  Only the post-run
@@ -244,6 +331,37 @@ def test_float32_deployment_delta_bounded():
         f"Unexpected precision regression."
     )
     print("[test_float32_deployment_delta_bounded] PASS")
+
+
+def test_replay_geometry_matches_the_captured_lattice():
+    """Frozen fields need their captured indices, not the live board's DX.
+
+    Independent witnesses: the stored plane dimensions, the realized trace
+    wall, and the ground-to-trace voltage / Ampere-loop indexing metadata.
+    """
+    from rfx.probes.msl_wave_decomp import register_msl_plane_probes
+    from tests._realized_geometry import (
+        assert_sheet_planes, assert_wall_planes, realized,
+    )
+
+    sim = _build_historical_capture_sim()
+    grid = sim._build_grid()
+    assert (grid.nx, grid.ny, grid.nz) == (192, 54, 31)
+    assert_sheet_planes(sim, 2, [320e-6], what="captured MSL trace")
+    assert_wall_planes(sim, 2, [320e-6], what="captured MSL trace")
+    rz = realized(sim)
+    assert rz.pec_mask is None
+    assert not np.any(rz.edge_masks[2]), "normal Ez through the sheet stays live"
+    acc_data, freqs = _load_replay_accumulators()
+    assert {arr.shape for arr in acc_data.values()} == {(len(freqs), 54, 31)}
+    probes = register_msl_plane_probes(sim, port_index=0, freqs=freqs)
+    assert (probes.j_centre, probes.k_lo, probes.k_hi) == (26, 0, 4)
+    assert (probes.j_lo, probes.j_hi, probes.k_trace_lo, probes.k_trace_hi) == (
+        22, 30, 4, 4,
+    )
+    # Fail at the replay boundary, before silently sampling a different mesh.
+    with pytest.raises(AssertionError, match="captured fields and geometry"):
+        _make_replay_fake_run(acc_data, 0)(_build_thru_line_sim())
 
 
 # ---------------------------------------------------------------------------
@@ -475,12 +593,42 @@ def test_compute_msl_s_matrix_ad_smoke_has_finite_gradient():
 
 
 # ---------------------------------------------------------------------------
-# Test D: slow end-to-end vs genuine pre-change S1 golden
+# Test D: physically qualified live coupon and secondary complex drift lock
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
 def test_compute_msl_s_matrix_end_to_end_matches_historical_base():
     """End-to-end drift lock: full FDTD + assembly vs the committed golden.
+
+    FIXTURE REPAIRED 2026-09-08 (#931): retain the PI-authorized 254 um
+    substrate, 600 um width and 10 mm launch-plane separation; align every declared face on
+    dx=dy=50 um and dz=(50,50,38.5,38.5,38.5,38.5) um through the
+    substrate, declare the foil at its actual interface, and hold domain/absorber thickness fixed under refinement.
+    An explicit f0=5 GHz / bandwidth=.8 differentiated Gaussian covers all
+    ten measurement bins; the former implicit 2.5 GHz pulse undersupplied
+    the final two bins. All four named runs qualify this repaired drive.
+    Raw physical qualification precedes the unchanged complex drift gate.
+
+    RE-PINNED 2026-09-09 (#931, T11 acceptance condition met): offline import
+    of base run 369367259636 S_projected, complex64 (2,2,10), from exact SHA
+    b36fc46cdf21d1c57f221e6a057654bcad60bae2. Confirmation 369367259638 is
+    array-identical; long 369367259637 differs by at most 5.331202e-7 projected
+    and 2.457562e-7 raw. Refinement 369367259648 halves every cell with fixed
+    geometry: all 40 raw entries differ by <=0.007206652 (budget 0.02),
+    projected <=0.007206839. Every physical screen passes, both drives settle
+    below -103 dB on base/refine, and refinement finishes with 11 pytest passes.
+    The old-pin gaps remain 0.2030584601 (base) and 0.1995657504 (refine).
+    This qualifies convergence within the declared mesh budget for a changed
+    board: the old 80 um lattice / 320 um trace plane was replaced by the
+    aligned graded mesh above / 254 um trace sheet. The persistent old-pin
+    gap is not numerical integration drift. The final live mesh is NOT the
+    intermediate scalar 254/3 um mesh. Historical 80 um replay binaries stay
+    frozen. No rfx/ code or physical/drift gate changes accompany this re-pin.
+    Full base values, source hashes, named reports/run IDs, per-entry
+    comparisons and offline base/confirmation verification are recorded in
+    tests/fixtures/msl_s_matrix_golden.json. The transfer uses
+    scripts/diagnostics/import_931_msl_golden.py; capture_msl_e2e_golden.py
+    --write-golden would run a new solve and was not used for this import.
 
     RE-BASELINED 2026-07-30 (PR #516; decision required by that PR's review,
     finding F4, and recorded here + in issue #509). The original golden was a
@@ -529,11 +677,16 @@ def test_compute_msl_s_matrix_end_to_end_matches_historical_base():
     2e-3 - 1.2e-4; the next deliberate re-baseline should quote this number
     as its starting point.
     """
+    from tests._msl_fixture_qualification import qualify_result
+
     golden = np.load(E2E_GOLDEN_PATH)
-    sim = _build_thru_line_sim()
+    sim = _build_aligned_e2e_sim()
+    _assert_trace_sheet_realized(sim)
+    _assert_e2e_preflight(sim)
     freqs = jnp.linspace(F_MAX / 10, F_MAX, golden.shape[-1], dtype=jnp.float32)
 
-    result = sim.compute_msl_s_matrix(freqs=freqs, num_periods=12)
+    result = sim.compute_msl_s_matrix(freqs=freqs, num_periods=E2E_PERIODS)
+    qualification = qualify_result(result)
     s_actual = np.asarray(result.S).astype(np.complex128)
 
     print("\n[WI-1 MSL end-to-end full S trace]")
@@ -547,8 +700,160 @@ def test_compute_msl_s_matrix_end_to_end_matches_historical_base():
             f"S11={vals[1, 1].real:+.12e}{vals[1, 1].imag:+.12e}j"
         )
 
+    raw = s_actual if result.S_raw is None else np.asarray(result.S_raw)
+    print("[WI-1 MSL raw full S, matrix axes port/drive/frequency]", raw.tolist())
+    print("[WI-1 MSL raw qualification]", qualification)
+    assert not qualification["failures"], qualification["failures"]
     max_dev = float(np.max(np.abs(s_actual - golden)))
-    print(f"[WI-1 MSL] max_abs_dev(new-f32-jnp vs pre-change S1 golden) = {max_dev:.3e}")
-    # f32 production delta for the S1 V·I de-embedding; precision-only (see
-    # test_replay_float64_equivalence for the exact f64 structural proof).
+    print(f"[WI-1 MSL] max_abs_dev(aligned live coupon vs committed drift golden) = {max_dev:.3e}")
+    # Unchanged drift tolerance against the qualified repaired-board base.
     np.testing.assert_allclose(s_actual, golden, rtol=5e-3, atol=2e-3)
+
+
+def _assert_trace_sheet_realized(sim_sim):
+    """Check the drawing, sheet footprint and dielectric interface, without FDTD."""
+    from tests._realized_geometry import realized, _node_line, node_index
+
+    rz = realized(sim_sim)
+    assert rz.pec_mask is None, "a sheet owns no cell"
+    assert len(rz.sheets) == 1
+    assert not np.any(rz.edge_masks[2]), "normal Ez through the sheet stays live"
+    lines = [_node_line(rz.grid, axis) for axis in range(3)]
+    sheet = rz.sheets[0]
+    assert int(sheet.normal_axis) == 2
+    np.testing.assert_allclose(lines[2][sheet.plane], H_SUB, atol=2e-9, rtol=0)
+    footprint = np.argwhere(np.asarray(sheet.footprint))
+    expected = ((0., E2E_DOMAIN[0]), (1.4e-3, 2.0e-3), (H_SUB, H_SUB))
+    for axis, bounds in enumerate(expected):
+        actual = lines[axis][[footprint[:, axis].min(), footprint[:, axis].max()]]
+        np.testing.assert_allclose(actual, bounds, atol=2e-9, rtol=0)
+    for axis, points in enumerate(((0., PORT_MARGIN, PORT_MARGIN + L_LINE,
+                                    E2E_DOMAIN[0]),
+                                   (0., 1.4e-3, 1.7e-3, 2.0e-3, E2E_DOMAIN[1]),
+                                   (0., H_SUB, E2E_DOMAIN[2]))):
+        for point in points:
+            np.testing.assert_allclose(lines[axis][node_index(rz.grid, axis, point)],
+                                       point, atol=2e-9, rtol=0)
+    mats = sim_sim._assemble_materials_nu(rz.grid, pec_sheets=[], pec_wires=[])[0]
+    i = node_index(rz.grid, 0, PORT_MARGIN)
+    j = node_index(rz.grid, 1, E2E_DOMAIN[1] / 2)
+    k0 = node_index(rz.grid, 2, 0.)
+    k1 = node_index(rz.grid, 2, H_SUB)
+    np.testing.assert_allclose(np.asarray(mats.eps_r)[i, j, k0:k1], EPS_R)
+    np.testing.assert_allclose(np.asarray(mats.eps_r)[i, j, k1], 1.)
+    from rfx.sources.msl_port import msl_port_from_entry, msl_probe_x_coords_n
+    from tests._msl_fixture_qualification import REFERENCE_PLANES_M
+    expected_planes = ([5e-3, 6e-3, 7e-3, 8e-3, 9e-3],
+                       [9e-3, 8e-3, 7e-3, 6e-3, 5e-3])
+    np.testing.assert_allclose(REFERENCE_PLANES_M,
+                               [planes[0] for planes in expected_planes], atol=1e-12, rtol=0)
+    for entry, expected_x in zip(sim_sim._msl_ports, expected_planes):
+        actual_x = msl_probe_x_coords_n(
+            rz.grid, msl_port_from_entry(entry), n_probes=entry.n_probes,
+            n_offset_cells=entry.n_probe_offset,
+            n_spacing_cells=entry.n_probe_spacing)
+        np.testing.assert_allclose(actual_x, expected_x, rtol=0, atol=2e-9)
+    return rz
+
+
+def _assert_e2e_preflight(sim):
+    """Prevent known invalid geometry/absorber setups before an expensive run.
+
+    Lossless-material Q advice does not condemn a transmission coupon. The
+    boundary-touching dielectric can produce an overlap warning at machine
+    roundoff; the exact domain/material-node checks above own that boundary.
+    All preflight messages remain recorded, including those benign notices.
+    """
+    report = sim.preflight()
+    failures = [issue.to_dict() for issue in report
+                if issue.severity == "error" or issue.code in
+                {"nu_grading_reaches_absorber", "msl_port_geometry",
+                 "nonuniform_cpml_thin"}]
+    assert not failures, failures
+    return report
+
+
+@pytest.mark.parametrize("refinement", [1, 2])
+def test_migrated_trace_is_a_sheet_on_the_declared_plane(refinement):
+    sim = _build_aligned_e2e_sim(refinement=refinement)
+    _assert_trace_sheet_realized(sim)
+    _assert_e2e_preflight(sim)
+
+
+def _ideal_qualification_result():
+    """An exactly matched lossless line is the physical limiting case."""
+    from tests._msl_fixture_qualification import quasi_static_line
+    freqs = np.linspace(.5e9, 5e9, 10)
+    z0, beta, transmission = quasi_static_line(freqs)
+    s = np.zeros((2, 2, len(freqs)), dtype=complex)
+    s[0, 1] = s[1, 0] = transmission
+    return SimpleNamespace(
+        freqs=freqs, S=s.copy(), S_raw=s.copy(),
+        Z0=np.full((2, len(freqs)), z0, dtype=complex), beta=beta,
+        assembly="multi_drive_solve", reliable=np.ones((2, len(freqs)), bool),
+        settling_db=np.array([-60., -60.]), cond_a=np.ones(len(freqs)),
+        beta_railed=np.zeros((2, len(freqs)), bool),
+    )
+
+
+def test_aligned_coupon_qualification_accepts_matched_line_limit():
+    from tests._msl_fixture_qualification import qualify_result
+    assert not qualify_result(_ideal_qualification_result())["failures"]
+
+
+@pytest.mark.parametrize("defect, expected", [
+    ("phase_conjugation", "electrical-length phase"),
+    ("zero_transmission", "transmission misses"),
+    ("excess_reflection", "reflection exceeds"),
+    ("projection_hides_gain", "singular value exceeds"),
+    ("unsettled", "ringdown exceeds"),
+    ("nonfinite", "non-finite raw S"),
+])
+def test_aligned_coupon_qualification_rejects_wrong_observables(defect, expected):
+    from tests._msl_fixture_qualification import qualify_result
+    result = _ideal_qualification_result()
+    if defect == "phase_conjugation":
+        result.S_raw = result.S_raw.conj()
+    elif defect == "zero_transmission":
+        result.S_raw[0, 1] = result.S_raw[1, 0] = 0.
+    elif defect == "excess_reflection":
+        result.S_raw[0, 0] = .5
+    elif defect == "projection_hides_gain":
+        result.S_raw *= 2.
+    elif defect == "unsettled":
+        result.settling_db[1] = -20.
+    elif defect == "nonfinite":
+        result.S_raw[0, 0, 7] = np.nan
+    failures = qualify_result(result)["failures"]
+    assert any(expected in failure for failure in failures), failures
+
+
+def test_aligned_coupon_drive_covers_the_declared_measurement_band():
+    """The actual sampled drive must clear the fixed low-signal screen.
+
+    This checks excitation before a solve, not the resulting S-matrix. It
+    cannot certify output reliability; that remains a live qualification.
+    """
+    sim = _build_aligned_e2e_sim()
+    grid = sim._build_nonuniform_grid()
+    times = np.arange(sim._nu_n_steps(E2E_PERIODS)) * grid.dt
+    freqs = np.linspace(F_MAX / 10, F_MAX, 10)
+    transform = np.exp(-2j * np.pi * freqs[:, None] * times[None, :])
+    for entry in sim._msl_ports:
+        assert entry.waveform is E2E_WAVEFORM
+        spectrum = np.abs(transform @ np.asarray(entry.waveform(times)))
+        # Predeclared 2.5x margin over the existing 10% reliability floor.
+        assert np.min(spectrum / np.median(spectrum)) > .25
+    old = np.abs(transform @ np.asarray(GaussianPulse(f0=F_MAX / 2, bandwidth=.8)(times)))
+    np.testing.assert_array_equal(old / np.median(old) < .1,
+                                   [False] * 8 + [True, True])
+
+
+def test_qualification_checks_the_float32_rounded_band_endpoint():
+    from tests._msl_fixture_qualification import qualify_result
+    result = _ideal_qualification_result()
+    result.freqs[8] = 4_500_000_256.  # actual float32 linspace endpoint
+    result.S_raw[0, 0, 8] = .3
+    report = qualify_result(result)
+    assert report["physics_band_indices"] == [5, 6, 7, 8]
+    assert any("reflection exceeds" in failure for failure in report["failures"])
