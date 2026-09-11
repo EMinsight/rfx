@@ -427,7 +427,9 @@ def test_baseline_artifact_replays_and_passes_e2_on_all_arms():
         assert ad["run"]["recipe"] == G.RECIPE_R3
         assert ad["run"]["dx_div"] == L.ARM_DX_DIV[arm], "note section 13: tand3 at dx/2, the others at dx"
         assert ad["run"]["dx_m"] == pytest.approx(G.DX_M / L.ARM_DX_DIV[arm])
-        # the exact-lattice witness (reported, not gated) must reproduce and the run must sit on it
+        # the exact-lattice witness must reproduce and the run must sit on it. It is GATED
+        # since #970 (GL_witness in main()); the committed rfx.json predates that and
+        # carries no GL_witness key, so this test checks the numbers, not the key.
         lat = ad["lattice"]
         Rl, Tl, Al = L.lattice_rta(np.asarray(ad["freqs_hz"]), ad["params"], ad["run"]["dx_m"], ad["dt_s"])
         assert np.allclose(Rl, lat["R_lattice"], atol=1e-12) and np.allclose(Tl, lat["T_lattice"], atol=1e-12)
