@@ -170,6 +170,14 @@ def test_f7_step_reflection_is_the_same_model_as_the_solve(w6_json):
     than the same one solved better. Both bounds sit ~20x above the
     measured worst so a macOS solve, which sits up to 3.4e-4 from the
     linux one on these same steps, cannot flake them.
+
+    The tight bound is measured on THIS profile's steps. The solve's
+    error goes as 1/|R|, so a much gentler step at the finest cell would
+    need it re-measured: swept over 200 (cell, ratio) combinations from
+    8 to 200 um and 1.02 to 2.0, the 20/20 worst is 3.96e-5, and every
+    case above 3e-5 is a ratio <= 1.05 step on an 8 um cell -- which this
+    profile does not contain (its gentlest is 1.27). If a regenerated
+    profile brings one in, re-measure rather than widen on a red.
     """
     f7 = w6_json["f7"]
     dt, dy, b = f7["dt_new_s"], f7["dy_m"], f7["b_m"]
