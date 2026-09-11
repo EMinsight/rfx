@@ -581,6 +581,11 @@ CLASSIFICATION: dict[str, Entry] = {
         "assembled NU eps column (sampled vs fill-fraction rule) and never "
         "solves it; every FDTD leg goes through the W6 harness "
         "(build_pec_fixture + run_nonuniform), the W2 two-run method"),
+    "validation/research/multiband_nu/e4_diff_stackup.py": Entry(
+        "no_simulation",
+        "E4 differentiable-stackup prototype (2026-09-07 lane, PR #962): "
+        "MaterialArrays built by hand on make_nonuniform_grid and driven "
+        "through run_nonuniform under jax.grad -- no Simulation"),
     "validation/research/multiband_nu/w7_accuracy_ad.py": Entry(
         "builder_fused_with_solve",
         "W7 accuracy + autodiff witness (2026-09-07 lane): the A1 ladder and "
