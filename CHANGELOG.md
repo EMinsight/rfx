@@ -421,6 +421,85 @@ that case's results directory and its commit, not here. Dielectric-only cases
 (cv04, cv17, cv22, cv23 and every example without a conductor body) must come
 back bit-identical, and that identity is the change's own falsifier.
 
+### Added — `make_band_profile`: interface-exact, ratio-law-exact band profiles on any axis
+
+`rfx.make_band_profile(edges, cell_sizes, *, max_ratio=1.4, protected=None,
+boundary_cell=None, min_cells=1)` (in `rfx.nonuniform`, exported on `rfx`)
+realizes a declared 1-D stack as a cell-size profile whose every interface
+lands on a node plane (to 1e-12 m), whose every adjacent-cell ratio is at
+most `max_ratio` — including the seam between two PROTECTED segments, where
+the coarser one is refined (more cells) because no ramp can sit between
+them — and whose sum equals the declared span exactly. Ramps are geometric,
+placed inside the coarser free segment on whichever side needs one, ascending
+and descending, and a free run's plateau is solved so the run fits its span
+without a rescale. `boundary_cell` pins both end cells bit-exactly, which is
+the `dx_profile` / `dy_profile` CPML contract, so the same function serves
+all three axes. Pre-declared falsifiers and measurements:
+`docs/design_notes/20260907_nu_band_profile_predeclaration.md`; pins in
+`tests/unit/nonuniform/test_band_profile_builder.py` (a 5-layer PCB stack,
+a seeded 400-stack fuzz, an in-plane round trip through `Simulation`).
+Measured on the PCB stack (core 0.8 | prepreg 0.1 | core | prepreg | core mm,
+dx 0.2 mm): the old auto-z smoothing left a core|prepreg seam at ratio
+8.000 (66.7 um beside 8.33 um, 25 ratios above 1.4); the builder realizes
+it at <= 1.4 everywhere (23-cell cores of 34.783 um beside 4-cell prepregs).
+
+Review pass (same lane, second pass): `boundary_cell` with an end segment
+whose span equals the pin now ramps the neighbour from the pin or raises
+(it returned a ratio-10 seam silently); `max_ratio` must be finite and
+`>= 1.0001` (NaN and inf were accepted; the plateau solve now uses
+closed-form ramp sums — 1.0001 on a 40-cell profile 8.5 s -> 0.03 s); two
+edges closer than 1e-12 m or a profile past 1,000,000 cells raise instead
+of looping (a 1e-9 m protected sliver between 1 mm blocks asks for 1.4e6
+cells); columns of tens of metres with a seam exactly on the ratio law no
+longer raise a false "cannot hold its ramps" (step-count slack 1e-12 ->
+1e-10). The refinement of a coarser protected block costs cells AND, when
+that block held the coarsest declared cell, a smaller minimum cell (dt):
+410 of 3000 seeded stacks realize below their declared minimum, worst
+0.31x (docstring, design note).
+
+### Changed — `make_z_profile` and the auto-configured z mesh now run on that engine
+
+- `make_z_profile` (same signature) is now what its docstring said:
+  fine -> coarse -> fine inside every segment, `dx_fine` at every feature
+  plane and at both domain ends. Measured on
+  `make_z_profile([1.0, 1.2, 2.5, 2.7] mm, 4 mm, 50 um, 200 um, 1.4)`: the
+  old loop emitted a 4.527 jump (226.4 -> 50 um) and ended on a 188 um cell;
+  now max ratio 1.352, both ends 50 um, all features on nodes. The public
+  guide no longer tells you to run `smooth_grading` on its output.
+  `grading <= 1` still means no grading (uniform `dx_fine`, as before); a
+  feature outside `[0, domain_z]` now raises (the old loop extended the
+  column past `domain_z`: sum 5 mm for a 4 mm domain) and features closer
+  than 1e-12 m are one plane (0.1 + 0.2 mm beside 0.3 mm used to become a
+  5e-20 m cell).
+- `auto_configure` z meshes, assembly step (defect present on main): an air
+  gap narrower than dx/2 between or around dielectric layers was DROPPED
+  from the column (two 0.8 mm cores 50 um apart at dx 0.2 mm gave a
+  3.95 mm column for a 4.0 mm domain, interfaces off by up to 50 um; dx
+  10 mm on a 4 mm domain gave a 0.8 mm column of 4 cells) and overlapping
+  z features — bounding boxes of any two non-PEC shapes — EXTENDED it. The
+  column is now partitioned at every distinct feature boundary, every gap
+  is an air run of whatever width, and a feature outside the column
+  raises. Stacks of disjoint layers with gaps wider than dx/2 realize as
+  before.
+- `auto_configure` z meshes (`_make_dz_profile`): the thirds rule is applied
+  exactly as before, then the band engine smooths at 1.3 with every
+  post-thirds block passed through verbatim, every air run ramped from the
+  block's actual edge cell and renormalized to its declared length, and —
+  new — a seam between two ADJACENT dielectric blocks refined to the cap.
+  The #763 locks hold unchanged (demo block bit-identical, dz_min 21.167 um,
+  column 1.754 mm). On the PCB stack: nz 45 -> 115, dz_min 8.333 um
+  unchanged (it is the prepreg's thirds sub-cell — an ownership question
+  handed to #931), every block seam 1.280. A float-ceil quirk that gave one
+  0.8 mm core 5 cells and its identical neighbours 4 is fixed (1e-9 relative
+  tolerance on the quotient).
+- Support matrix: the multi-band row now states the transition law (ratio,
+  local cells per wavelength, band width) instead of "up to 3 fine bands",
+  with a new witness (W6, `results/w6_band_builder.json`): fine bands of
+  2-64 cells between ratio-1.4 ramps, measured against the exact discrete
+  chain model, every row inside its pre-declared window (gate row, 4 cells:
+  1.0063e-2 vs 1.0141e-2). Bands narrower than 2 cells and in-plane grading
+  remain unwitnessed.
+
 ### Added — near-cutoff layout note, and the S21 phase residual on waveguide S-matrix results
 
 Two report-only additions from the same measurement campaign, one before the

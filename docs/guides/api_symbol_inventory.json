@@ -1287,6 +1287,17 @@
         "delta"
       ]
     },
+    "make_band_profile": {
+      "kind": "function",
+      "params": [
+        "edges",
+        "cell_sizes",
+        "max_ratio",
+        "protected",
+        "boundary_cell",
+        "min_cells"
+      ]
+    },
     "make_current_source": {
       "kind": "function",
       "params": [

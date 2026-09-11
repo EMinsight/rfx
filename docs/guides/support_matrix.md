@@ -97,7 +97,7 @@ result is accurate.
 | MSL S-matrix + nonuniform mesh | **experimental** | `mode="laplace"` and `mode="uniform"` have internal settled-S11 regression coverage only. There is no external nonuniform comparison. `mode="eigenmode"` raises. |
 | Coaxial port + nonuniform mesh | **unsupported** | The request must fail. |
 | Lumped RLC update + nonuniform mesh | **limited** | R/L/C ADE elements participate in the field update. Nonuniform S-parameters and component-value AD are not documented. |
-| Multi-band graded mesh (N fine bands along **z**, ratio <= 1.4) | **limited** | The MESH ITSELF is documented — not any observable computed on it — and only for grading along **z**. Explicit `dz_profile` vectors with **up to 3 fine bands / 4 transitions** (small-large-small-large included) and every adjacent cell ratio <= 1.4 are covered by the witness battery below — that is the widest profile any witness actually exercises. Read the scope statement in "Multi-band graded mesh" before quoting this row: in-plane (`dx_profile` / `dy_profile`) grading is UNCOVERED, absorber-adjacent grading is EXCLUDED, and `dt` is unchanged (global min-cell CFL). |
+| Multi-band graded mesh (N fine bands along **z**, ratio <= 1.4) | **limited** | The MESH ITSELF is documented — not any observable computed on it — and only for grading along **z**. Explicit `dz_profile` vectors with every adjacent cell ratio <= 1.4 are covered by the witness battery below. What the battery measures is the **transition law**, not a band count: each transition reflects at a level set by its ratio r, the local cells per wavelength and — for a band narrower than about a guide wavelength — the band width (the two ramp reflections of a narrow band add as a Fabry-Perot sum, bounded by twice the single-ramp value and oscillating with width; W6 row below), and transitions simply add. Widest witnessed fixture: 3 fine bands / 4 transitions (F-S4); narrowest witnessed band: 2 fine cells (W6). **Unwitnessed:** bands narrower than 2 cells, any other resolution than the two measured, and in-plane grading. `rfx.make_band_profile` builds such profiles with every interface on a node plane and the ratio law exact, seams between two protected bands included. Read the scope statement in "Multi-band graded mesh" before quoting this row: in-plane (`dx_profile` / `dy_profile`) grading is UNCOVERED, absorber-adjacent grading is EXCLUDED, and `dt` is unchanged (global min-cell CFL). |
 | Volumetric PEC scatterer + nonuniform waveguide | **experimental** | The device/reference handling is regression-tested, but no RF validation is documented for arbitrary iris, post, septum, branch, or T-junction geometries. The REALIZATION changed at 2.0 (#931): a PEC volume now realizes walls at both drawn faces and its drawn extent equals its realized extent, so the regression fixtures behind "regression-tested" are recomputed for the release and a fixture that has not been is not shipped. No accuracy claim moves with them, because this row makes none. |
 
 ### Multi-band graded mesh
@@ -106,12 +106,32 @@ result is accurate.
 fine bands along z, in any order — fine-coarse-fine-coarse-fine and other
 small-large-small-large patterns included — with **every adjacent cell
 ratio <= 1.4**, abrupt (a single step at the cap) or smoothly ramped.
-**Band count is witnessed only up to 3 fine bands / 4 transitions**, the
-widest profile in the battery (`fixtures.py`); more bands are expected to
-behave the same way — each transition is local and the per-transition
-reflection is what was measured — but they are not witnessed, and the
-expectation is an argument, not evidence.
+**What is witnessed is the transition law, and band count only sums.**
+Each transition reflects at a level set by its ratio r (F-S2), by the local
+cells per wavelength (the (dz/lambda)^2 law in that row), and — when the
+band between two transitions is narrower than about a guide wavelength —
+by the band width: W6 below measures fine bands of 2 to 64 cells between
+two ratio-1.4 ramps and finds the two ramp reflections adding as a
+Fabry-Perot sum, bounded by twice the single-ramp value and oscillating
+with width (near-maximum at about lambda_g/4, a null at about lambda_g/2).
+The widest fixture in the battery has 3 fine bands / 4 transitions
+(`fixtures.py`, F-S4); the narrowest witnessed band is 2 fine cells (W6).
+More bands or wider bands add transitions that each behave as measured —
+that is the law, not a per-count witness. **Not witnessed:** bands narrower
+than 2 cells, resolutions other than the two measured (fine 30 and coarse
+15.3 cells per free-space wavelength), and in-plane grading.
 Before this row, only a single fine band was documented.
+
+**Building such a profile.** `rfx.make_band_profile(edges, cell_sizes,
+max_ratio=1.4, protected=..., boundary_cell=...)` realizes a declared
+stack with every interface on a node plane (1e-12 m), every adjacent
+ratio <= the cap — a seam between two protected bands is served by refining
+the coarser band, since no ramp can sit between them — and the sum exact;
+`boundary_cell` pins both end cells for the in-plane CPML contract
+(`tests/unit/nonuniform/test_band_profile_builder.py`; design note
+`docs/design_notes/20260907_nu_band_profile_predeclaration.md`). The builder
+is a mesh guarantee, not an accuracy witness: it produces profiles inside
+this row's envelope, and the row's evidence is what covers them.
 
 **The z axis is the whole of it.** Every witness below grades z and holds
 the transverse mesh uniform — the witness harness takes a scalar transverse
@@ -144,6 +164,7 @@ in `validation/research/multiband_nu/`; regression packaging in
 | F-S4 convergence order (`results/w4r3_zdominant_cavity.json`) | Resonance error vs the ANALYTIC TE_{1,0,4} of an empty PEC cavity (60 x 3 x 64 mm), multi-band z profile at the cap ratio r=1.4 vs a uniform-fine control, four scales, on a fixture DESIGNED so the graded axis carries the error budget: an exact discrete-dispersion decomposition (`analytic_dispersion.py`, certified to reproduce every arm to 0.033 MHz) puts 89 % (uniform) to 92 % (multi-band) of the modelled error on the z axis, with 36 % of the multi-band total in the grading-specific term | p_multiband = 2.01, p_uniform = 2.02 — 2nd-order supraconvergence preserved at the cap ratio (Monk & Suli 1994; Li & Shields 2016). The multi-band mesh's extra error at matched scale is measured, not inferred: 28.4 MHz (2.9e-3 relative) at the coarsest scale falling to 0.44 MHz (4.6e-5) at the finest — about 1.56x the uniform-fine error amplitude at equal fine cell size, at the same ORDER |
 | F-S5 differentiability (`results/w5_ad.json`) | `jax.grad` of a multi-band profile observable vs central FD, dominant cells. **The only witness here that is not PEC-closed:** its grid is built with `cpml_layers = 4` on all six faces, and its profile's boundary runway is non-uniform, so this fixture draws the row's own `nu_grading_reaches_absorber` advisory. It is a gradient-consistency check, not an accuracy measurement — see the absorber exclusion | worst dominant-cell error 1.1e-4 relative (f32 path) and 1.7e-4 (x64 context), inside the existing NU AD convention (15 %) |
 | Revert-proof (`results/revert_proof.json`) | Two deliberate defect injections (one witness weight, one solver transition coefficient) | baseline f64 drift 2.1e-16; corrupted witness 5.8e-3, corrupted solver transition coefficient 7.9e-3 — the witness does fire on the defect family it guards. **Scope limit:** the witness builds its weights from the same `grid.inv_*` arrays the solver steps with (`remis_energy.energy_weights`), so a defect INSIDE those arrays — a wrong dual spacing computed by `make_nonuniform_grid` itself — would corrupt witness and solver identically and stay invisible here. It guards the update path against a correct metric, not the metric |
+| W6 narrow fine band (`results/w6_band_builder.json`; pre-declaration `docs/design_notes/20260907_nu_band_profile_predeclaration.md`) | The F-S2 method (2-run differencing, geometric time gating, 10 GHz, PEC-closed), incident from the COARSE side (1.96 mm cells, 15.3 cells/wavelength) onto a fine band of n_b = 2 / 4 / 8 / 16 / 32 / 64 cells of 1.0 mm (30 cells/wavelength) between two ratio-1.4 ramps (1.96 -> 1.4 -> 1.0 and back); every profile built by `make_band_profile` and asserted cell-for-cell against its declaration | gate row n_b = 4: measured 1.0063e-2 (-39.9 dB) vs 1.0141e-2 from the exact discrete chain model, inside the pre-declared window [8.0826e-3, 1.2199e-2]; the law rows n_b = 2 / 8 / 16 / 32 / 64 measured 7.4364e-3 / 1.1164e-2 / 1.2559e-3 / 1.4248e-3 / 6.4596e-3 vs modelled 7.4916e-3 / 1.1296e-2 / 1.2101e-3 / 1.5111e-3 / 6.5575e-3, every row inside its window. A single 1.96 -> 1.4 -> 1.0 ramp reflects 5.79e-3 (-44.7 dB) in the exact discrete chain model (a modelled value — W6 did not measure the single ramp on its own); a band of width L between two such ramps reflects about 2 x 5.79e-3 x abs(sin(k_g L_eff)) with L_eff = L + 1.87 mm (the two ramps' phase length, fitted on the chain model: the six W6 rows within 0.03-0.53 % (the two null rows 0.53 % and 0.42 %); with L alone the null rows are off by 2-3.5x) and the discrete k_g(1.0 mm) = 0.1816 /mm (lambda_g = 34.59 mm) — the chain model peaks at 7 / 24 / 41 / 59 / 76 cells (maximum 1.158e-2 = 2 x 5.79e-3 x 0.9999) and nulls at 15 / 33 / 50 / 67; 8 cells sits near the first maximum and 16 near the first null. Narrow is not worse: bounded by twice the single-transition value, oscillating with width. One resolution pair only — quote the law, not the dB |
 | Order-witness revert-proof (`results/w4r3_revert_proof.json`) | One transition coefficient of the multi-band arm deliberately corrupted (E-update dual metric replaced by the primal cell width at a single coarse->fine node — an error that is identically zero on a uniform mesh) | the resonance moves -47.3 / -24.0 / -12.0 / -6.0 MHz at the four scales (20-160x the fit floor) and the fitted order drops to 1.38, so the committed F-S4 judge FIRES. The order gate above can fail for a grading reason |
 
 **Exclusions — these are NOT covered by the row.**
@@ -191,7 +212,15 @@ in `validation/research/multiband_nu/`; regression packaging in
   in-plane and z grading simultaneously. `make_nonuniform_grid` accepts
   those profiles and they run; what does not exist is evidence. (The
   solver's per-axis code is structurally symmetric — an argument, not a
-  witness, and it is not offered as one.)
+  witness, and it is not offered as one.) `make_band_profile(...,
+  max_ratio=1.3, boundary_cell=dx)` produces an in-plane profile that
+  constructs and preflights without the ratio advisory
+  (`test_band_profile_builder.py`, F5) — a construction check, not an
+  accuracy observable, so in-plane grading stays uncovered. That profile
+  does draw `nu_grading_reaches_absorber` on every in-plane face: the
+  pinned cell is one cell, and the plateau beside it (0.9606 mm next to a
+  1.0 mm pin on the F5 fixture, deviation 0.039-0.041) is not the
+  `cpml_layers`-deep uniform runway the absorber exclusion asks for.
 
 **Honest scope — what the witnesses do and do NOT establish.** They are
 statements about the mesh and the solver on it, **for grading along z**:

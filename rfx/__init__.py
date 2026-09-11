@@ -170,7 +170,7 @@ except ImportError:
     WaveguideMode = _eigenmode_unavailable  # type: ignore[assignment]
     solve_waveguide_modes = _eigenmode_unavailable  # type: ignore[assignment]
 from rfx.lumped import LumpedRLCSpec, RLCState, RLCCellMeta
-from rfx.nonuniform import NonUniformGrid, make_nonuniform_grid, run_nonuniform, make_current_source
+from rfx.nonuniform import NonUniformGrid, make_nonuniform_grid, run_nonuniform, make_current_source, make_band_profile
 from rfx.auto_config import auto_configure, SimConfig, analyze_features, smooth_grading, apply_thirds_rule
 from rfx.mesh_planner import MeshPlan, plan_mesh, plan_simulation_mesh
 from rfx.harminv import harminv, harminv_from_probe, HarminvMode
@@ -241,6 +241,7 @@ from rfx.convergence import (
 __all__ = [
     # grid / core simulation entry points
     "Grid", "NonUniformGrid", "make_nonuniform_grid",
+    "make_band_profile",
     "Simulation", "run", "run_until_decay", "run_nonuniform",
     "make_source", "make_probe", "make_port_source", "make_current_source",
     "SimResult", "SnapshotSpec",

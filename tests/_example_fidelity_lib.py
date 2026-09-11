@@ -269,7 +269,7 @@ def _v_from(label: str, fn: Callable[[ModuleType], dict]) -> Variant:
 
 
 CLASSIFICATION: dict[str, Entry] = {
-    # ---- no_simulation (19): zero real Simulation() calls, AST-verified --
+    # ---- no_simulation (20): zero real Simulation() calls, AST-verified --
     "validation/crossval/16_pec_sphere_mie_ka_sweep.py": Entry(
         "no_simulation",
         "drives the functional rfx.rcs.compute_rcs entry point directly on "
@@ -493,6 +493,11 @@ CLASSIFICATION: dict[str, Entry] = {
         "no_simulation",
         "F-S5 jax.grad-vs-FD check over an explicit profile vector on "
         "the functional grid/kernel path -- no Simulation"),
+    "validation/research/multiband_nu/w6_band_builder.py": Entry(
+        "no_simulation",
+        "W6 narrow-band witness (2026-09-07 lane): make_band_profile "
+        "profiles driven through harness.build_pec_fixture + run_nonuniform, "
+        "the W2 two-run method -- no Simulation"),
 
     # ---- module_level_solve (6): solves at import time, no main guard ----
     "validation/crossval/01_waveguide_bend.py": Entry(
