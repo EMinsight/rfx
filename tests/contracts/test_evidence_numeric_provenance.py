@@ -515,6 +515,12 @@ CLASSIFICATION: dict[str, str] = {
     # stronger check than this gate performs. Same shape as
     # 20260910_cv05_crossval_disposition.md above.
     "docs/design_notes/20260907_nu_band_profile_predeclaration.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-11 (nu accuracy/AD lane, PR #957): the note carries no `::`
+    # span at all (parses and others both empty); its A1-A3 / AD1-AD5 numbers
+    # are replayed from validation/research/multiband_nu/results/w7_accuracy_ad.json
+    # by tests/unit/nonuniform/test_band_accuracy_ad_replay.py, cell for cell
+    # and rule for rule, which is the stronger check.
+    "docs/design_notes/20260907_nu_band_accuracy_ad_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_adi_interior_pec_guard.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_automesh_regressions.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-10 (#931 lattice-ownership merge): a single `::referee` span
