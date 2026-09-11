@@ -1166,6 +1166,12 @@ def plan_openems_projection(
             "Python bindings, so an rfx design that asks for a different working "
             "precision cannot be reproduced",
         )
+    if _get(solver, "interface_eps", "solver") != "sampled":
+        raise _refuse(
+            f"interface_eps={_get(solver, 'interface_eps', 'solver')!r}",
+            "openEMS samples materials on its own mesh; the rfx non-uniform "
+            "dual-cell-area interface rule (#949) has no counterpart",
+        )
 
     domain = _require_mapping(_get(document, "domain", "document"), "domain")
     mode = str(_get(domain, "mode", "domain"))

@@ -574,6 +574,13 @@ CLASSIFICATION: dict[str, Entry] = {
         "W6 narrow-band witness (2026-09-07 lane): make_band_profile "
         "profiles driven through harness.build_pec_fixture + run_nonuniform, "
         "the W2 two-run method -- no Simulation"),
+    "validation/research/multiband_nu/e2_thin_layer_subpixel.py": Entry(
+        "no_solve",
+        "E2 thin-layer witness (2026-09-07 lane, PR #961): `production_column` "
+        "builds a Simulation with a band-builder dz_profile only to read the "
+        "assembled NU eps column (sampled vs fill-fraction rule) and never "
+        "solves it; every FDTD leg goes through the W6 harness "
+        "(build_pec_fixture + run_nonuniform), the W2 two-run method"),
     "validation/research/multiband_nu/e4_diff_stackup.py": Entry(
         "no_simulation",
         "E4 differentiable-stackup prototype (2026-09-07 lane, PR #962): "
