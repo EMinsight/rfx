@@ -510,7 +510,7 @@ CLASSIFICATION: dict[str, str] = {
     "docs/public/index.mdx": NO_ARTIFACT_REFERENCE,
     "docs/public/validation/cross-solver.mdx": NO_ARTIFACT_REFERENCE,
     "docs/public/validation/index.mdx": NO_ARTIFACT_REFERENCE,
-    "docs/public/validation/reference-lane.mdx": NO_ARTIFACT_REFERENCE,
+    "docs/public/validation/recommended-configuration.mdx": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260829_spec01_multiband_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260830_issue786_convergence_floor.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260831_cv02_ring_judge_predeclaration.md": NO_ARTIFACT_REFERENCE,
