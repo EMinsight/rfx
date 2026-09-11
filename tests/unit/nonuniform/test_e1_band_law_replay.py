@@ -25,10 +25,18 @@ Replays ``validation/research/multiband_nu/results/e1_band_law_sweep.json``
   conjunctions. The test replays verdicts — it does not require them to be
   "held": a cell recorded as fired must replay as fired.
 
-Tolerances, declared before the first run of this file and never widened:
-replayed chain-model floats 1e-9 relative (profiles of 77-1100 cells of
-0.5-8 mm, well-conditioned direct solves; lane A's re-execution
-reproduced its rows to 3e-10); profile cells 1e-12 m (I1); ``c`` re-fits
+Tolerances, declared before the first run of this file:
+replayed chain-model floats 1e-8 relative -- RE-DECLARED 2026-09-11 from
+1e-9 on a measurement, not a preference: the same dense solve of the
+N60_r1.2 profile (n_b = 32, 1100 cells) returned 1.1831862931777621e-4 on
+one GitHub runner (PR #963's fast-suite (4)) and 1.1831862916448015e-4 on
+another (main's run 34572755776 at b7ad4e93, and this pod), 1.3e-9 apart
+-- above the 1e-9 the file first declared on lane A's 3e-10 re-execution,
+which was one machine reproducing itself. The declaration was falsified
+by a second runner, so the bound is now set 8x above the measured
+cross-runner spread (same class as the W6 F7 finding, PR #956, where the
+macOS/linux spread on a stiffer profile was 4e-6); every other tolerance
+below is unchanged; profile cells 1e-12 m (I1); ``c`` re-fits
 to 1e-9 m (the same deterministic scan on the same data); closed-form c
 within 5 % of ``c_model`` for r <= 1.4 and 12.5 % for r = 2.0 (Table L of
 the note: 0.1-4.5 % and 0.7-11.9 %); gate times 1e-9 relative; the
@@ -62,7 +70,7 @@ _MODEL_JSON = _RESULTS / "e1_band_law_sweep_model.json"
 _SWEEP_JSON = _RESULTS / "e1_band_law_sweep.json"
 _W6_JSON = _RESULTS / "w6_band_builder.json"
 
-REL = 1e-9
+REL = 1e-8   # re-declared 2026-09-11 from 1e-9, see the module docstring
 CELL_TOL = 1e-12
 C_TOL_M = 1e-9
 CLOSED_FORM_REL = {1.2: 0.05, 1.4: 0.05, 2.0: 0.125}
