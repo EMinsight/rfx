@@ -505,6 +505,16 @@ CLASSIFICATION: dict[str, str] = {
     "docs/design_notes/20260905_v18_close_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260906_issue928_ownership_decision.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260906_plan_realign_lattice_ownership.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-11 (nu band-profile lane, PR #956): three `::` spans, all of the
+    # form `rfx/auto_config.py::_make_dz_profile` -- module-symbol references,
+    # not artifact paths (no `.json`), so they land in `others` and never in
+    # `parses`. The note's F1-F8 numbers are not quoted out of a committed
+    # artifact by `path::key` at all; they are replayed from
+    # `validation/research/multiband_nu/results/w6_band_builder.json` by
+    # tests/unit/nonuniform/test_band_builder_chain_model.py, which is a
+    # stronger check than this gate performs. Same shape as
+    # 20260910_cv05_crossval_disposition.md above.
+    "docs/design_notes/20260907_nu_band_profile_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_adi_interior_pec_guard.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_automesh_regressions.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-10 (#931 lattice-ownership merge): a single `::referee` span
