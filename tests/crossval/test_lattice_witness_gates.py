@@ -35,6 +35,7 @@ _REPO = Path(__file__).resolve().parents[2]
 _R22 = _REPO / "validation/crossval/_22_dispersive_results"
 _R23 = _REPO / "validation/crossval/_23_lossy_results"
 _R22D = _REPO / "validation/crossval/_22_dispersive_diag"   # note section 8.1's remedy rung
+_R04 = _REPO / "validation/crossval/_04_fresnel_results"
 
 
 def _load(name: str, rel: str):
@@ -357,6 +358,7 @@ def test_committed_witness_artifact_rebuilds_from_the_committed_rungs(case_id, r
 @pytest.mark.parametrize("case,case_id,results", [
     ("cv22", "22_dispersive_slab_fresnel", _R22),
     ("cv23", "23_lossy_slab_fresnel", _R23),
+    ("cv04", "04_multilayer_fresnel", _R04),
 ])
 def test_every_committed_rung_passes_the_lattice_gate(case, case_id, results):
     """The claim the standard makes: at EVERY dx rung the case runs, the
@@ -399,6 +401,36 @@ def test_falsifiers_fire_exactly_where_the_note_says_they_do(case, case_id, resu
             assert fired == should_fire, (
                 case, name, kind, "fired" if fired else "silent",
                 fr["separation_over_window_R"], fr["n_bins_R_over_window"])
+
+
+def test_cv04_falsifiers_fire_exactly_where_the_note_says_they_do():
+    """cv04's own version of ``test_falsifiers_fire_exactly_where_the_note_says_
+    they_do``, above. cv04 commits no ``rfx.json`` (its single rung has none --
+    section 9 of the design note says so), so ``_rfx_rungs`` cannot rebuild an
+    arm_doc for it the way it does for cv22/cv23, and ``lattice_witness.json``
+    itself does not retain the raw R_rfx/T_rfx/freqs_hz/gated/inc_amp_rel
+    inputs ``evaluate_falsifier`` needs -- only the derived outputs. This
+    replays the falsifier verdicts the committed artifact's OWN ``falsifiers``
+    block already carries (computed once, at generation time, the same way
+    ``test_every_committed_rung_passes_the_lattice_gate`` reads gates
+    directly rather than recomputing them), against the settled 990-step
+    record (2026-09-10 fix; PR #974 section 10 item 4)."""
+    doc = _witness_doc(_R04, "04_multilayer_fresnel")
+    fs = doc["rungs"]["slab_eps4"]["falsifiers"]
+    expect_fires = {
+        "thickness_plus_cell": True, "thickness_minus_cell": True,
+        "continuum": True, "eps_x1p01": True,
+        # F4: sigma = 0, no pole -- 0 by construction (note section 7, F4).
+        "eps_continuum": False,
+    }
+    for kind, should_fire in expect_fires.items():
+        fr = fs[kind]
+        fired = not fr["witness_ok"]
+        assert fired == should_fire, (
+            "cv04", "slab_eps4", kind, "fired" if fired else "silent",
+            fr["separation_over_window_R"], fr["n_bins_R_over_window"])
+    print(f"lattice-witness-summary cv04 slab_eps4: falsifiers fired = "
+          f"{ {k: not fs[k]['witness_ok'] for k in expect_fires} }")
 
 
 def test_the_section_8_1_remedy_rung_closes_the_debye_limitation():
@@ -496,6 +528,21 @@ def test_f1_one_cell_thickness_fails_the_lattice_gate_at_every_rung(case, case_i
             assert not fr["witness_ok"], (case, name, kind)
             over = max(fr["n_bins_R_over_window"], fr["n_bins_T_over_window"])
             assert over >= 40, (case, name, kind, over, fr["n_bins_gated"])
+
+
+def test_cv04_f1_one_cell_thickness_fails_the_lattice_gate():
+    """cv04's own version of ``test_f1_one_cell_thickness_fails_the_lattice_
+    gate_at_every_rung``, above -- same reason as ``test_cv04_falsifiers_
+    fire_exactly_where_the_note_says_they_do``: no committed ``rfx.json``
+    means no arm_doc to feed ``LW.evaluate_falsifier`` for cv04, so this
+    reads the committed artifact's own precomputed F1 verdict instead."""
+    doc = _witness_doc(_R04, "04_multilayer_fresnel")
+    fs = doc["rungs"]["slab_eps4"]["falsifiers"]
+    for kind in ("thickness_plus_cell", "thickness_minus_cell"):
+        fr = fs[kind]
+        assert not fr["witness_ok"], ("cv04", "slab_eps4", kind)
+        over = max(fr["n_bins_R_over_window"], fr["n_bins_T_over_window"])
+        assert over >= 40, ("cv04", "slab_eps4", kind, over, fr["n_bins_gated"])
 
 
 def test_the_cv04_material_rung_is_the_committed_sigma_zero_arm():

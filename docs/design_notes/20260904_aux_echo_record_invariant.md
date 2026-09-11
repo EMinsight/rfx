@@ -212,10 +212,13 @@ and the reflector the phase slope located,
 `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_reflector_index = 838.88`.
 
 **The notes' 0.50–0.57 is confirmed, at the notes' own convention.** In the
-centre column the 13 rungs span **0.500 to 0.575** — `tand0p1` at 0.4998 is the
-0.50 the cv04 note reports, `lorentz` at 0.575 its 0.57 (the note's table used
-`v_g(f0)`, 0.3 % slower than the Courant speed used here, and reads 0.573
-there). At the gated convention, which subtracts the pulse's leading edge, the
+centre column the 13 rungs span **0.500 to 0.580** (N3, PR #974 round 2: was
+0.500 to 0.575 before cv04's 2026-09-10 settling fix; cv04 is now the rung
+that sets this column's upper bound too, `lorentz` at 0.575 held it before)
+— `tand0p1` at 0.4998 is the 0.50 the cv04 note reports, `lorentz` at 0.575
+close to its 0.57 (the note's table used `v_g(f0)`, 0.3 % slower than the
+Courant speed used here, and reads 0.573 there). At the gated convention,
+which subtracts the pulse's leading edge, the
 same rungs span **0.520 to 0.610** (was 0.520 to 0.601 before cv04's
 2026-09-10 settling fix; cv04 is the rung that sets the upper bound both
 before and after, `record/arrival` 0.601 -> 0.610 with its own record growing

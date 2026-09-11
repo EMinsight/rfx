@@ -143,15 +143,19 @@ ARM_ORDER = ("debye", "lorentz", "drude")
 #
 # 2026-09-10 disclosure (PR #974): the adopted r1 values are NOT measured on
 # cv04's settled record -- cv04 got its own settling-extension fix that day
-# (docs/design_notes/20260903_lattice_witness_standard.md, top UPDATE, and
-# its §5.3/§10(4) for the settled numbers), but r1 in `envelope.json` is
-# unchanged and this adoption is still pinned to it; r1's per-bin closure was
-# a truncation artefact of cv04's pre-fix record, the settled run measures
-# far tighter (same note, same sections -- not restated here, to keep this
-# file free of a second copy of the number). Whether to re-adopt a settled
-# revision, and whether W_BIN's own recipe should track it, is open under
-# issue #928 -- not decided here, and not something a producer re-run may do
-# to this file silently either way.
+# (docs/design_notes/20260903_lattice_witness_standard.md section 5.3's
+# 2026-09-10 UPDATE, and its section 10 item 4 for the settled numbers), but
+# r1 in `envelope.json` is unchanged and this adoption is still pinned to it;
+# r1's per-bin closure was a truncation artefact of cv04's pre-fix record,
+# the settled run measures far tighter (same note, same sections -- not
+# restated here, to keep this file free of a second copy of the number).
+# DIRECTION (S6, PR #974 round 2, not the literals): a re-adoption of the
+# settled revision would move the band-mean R residual UP slightly (widening
+# W_MEAN_R a little) while the band-mean T residual and the per-bin closure
+# both move DOWN (narrowing W_MEAN_T and W_BIN) -- not a uniform tightening.
+# Whether to re-adopt a settled revision, and whether W_BIN's own recipe
+# should track it, is open under issue #928 -- not decided here, and not
+# something a producer re-run may do to this file silently either way.
 # ---------------------------------------------------------------------------
 CV04_ADOPTION = {
     "envelope": slab_family.CV04_ENVELOPE_REL,

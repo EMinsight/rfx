@@ -718,3 +718,99 @@ def test_r3_meep_node_count_discriminators_against_the_predictions():
                      f"corr with TMM(d - a/40) {corr_minus:+.3f}; |dT| {e4['mean_dT_meep_tmm_gated']:.5f}")
     print("\n".join(lines))
 
+
+
+# ---------------------------------------------------------------------------
+# 6. GL_witness cannot silently vanish (S1, PR #974 round 2 review)
+# ---------------------------------------------------------------------------
+#
+# GL_witness appeared in no test before this: the four scenarios below drive
+# the REAL main() end to end (a monkeypatched run_rfx_arm returns the
+# committed tand3 arm, optionally with a one-cell-thickness defect added to
+# R/T and/or run["record"] = None -- the recipe=cv04 shape), to a tmp_path
+# --out-dir so the committed _23_lossy_results/ is never touched.
+
+def _cv23_main_module():
+    return _load("cv23_main_s1", "validation/crossval/23_lossy_slab_fresnel.py")
+
+
+def _cv23_run_with_fake_arm(monkeypatch, tmp_path, *, plant: bool, norecord: bool):
+    doc = _baseline()
+    arm = doc["arms"]["tand3"]
+    m = _cv23_main_module()
+
+    def fake(params, path, **kw):
+        a = json.loads(json.dumps(arm))  # deep copy via round-trip, cheap here
+        run = dict(a["run"])
+        run.update({"freqs_hz": a["freqs_hz"], "R_rfx": np.asarray(a["R_rfx"]),
+                    "T_rfx": np.asarray(a["T_rfx"]), "tail": a["tail"],
+                    "materials": a["materials"], "band_inc_ok": a["band_inc_ok"],
+                    "inc_amp_rel": a["inc_amp_rel"], "grow": False,
+                    "t_safe": run["record"]["t_safe_cpml_steps"]})
+        if plant:
+            f = np.asarray(a["freqs_hz"])
+            dx = float(run["dx_m"])
+            dt = float(a["dt_s"])
+            R0, T0, _ = m.LW.lattice_rta(f, "conductive", a["params"], dx, dt, d_slab_m=m.G.D_SLAB_M)
+            R1, T1, _ = m.LW.lattice_rta(f, "conductive", a["params"], dx, dt, d_slab_m=m.G.D_SLAB_M + dx)
+            run["R_rfx"] = run["R_rfx"] + (R1 - R0)
+            run["T_rfx"] = run["T_rfx"] + (T1 - T0)
+        if norecord:
+            run["record"] = None
+        run["record"] = None if run["record"] is None else \
+            {k: v for k, v in run["record"].items() if k != "nx_grows"}
+        return run
+
+    monkeypatch.setattr(m, "run_rfx_arm", fake)
+    out_dir = str(tmp_path)
+    rc = m.main(["--arms", "tand3", "--out-dir", out_dir, "--meep-dir", str(_RESULTS), "--no-plots"])
+    out = _read(Path(out_dir) / "rfx.json")["arms"]["tand3"]
+    return rc, out
+
+
+def test_clean_replay_passes_and_gates_the_witness(monkeypatch, tmp_path):
+    rc, out = _cv23_run_with_fake_arm(monkeypatch, tmp_path, plant=False, norecord=False)
+    assert rc == 0, (rc, out["gates"], out.get("incomplete_gates"))
+    assert out["gates"]["GL_witness"] is True
+    assert out["e2_ok"] is True
+    assert out["incomplete_gates"] == []
+    assert out["lattice"]["gated"] is True
+
+
+def test_planted_thickness_defect_fails_via_gl_witness(monkeypatch, tmp_path):
+    """The #970 closure evidence, as a real test: a one-cell-thickness defect
+    reaches main()'s own exit code through GL_witness, not just the print."""
+    rc, out = _cv23_run_with_fake_arm(monkeypatch, tmp_path, plant=True, norecord=False)
+    assert rc == 1, (rc, out["gates"], out.get("incomplete_gates"))
+    assert out["gates"]["GL_witness"] is False
+    assert out["e2_ok"] is False
+    assert out["lattice"]["gated"] is True
+
+
+def test_norecord_cannot_publish_a_witness_less_pass(monkeypatch, tmp_path):
+    """S1: recipe=cv04 (run["record"] = None) must fail require_complete, not
+    pass silently because GL_witness was never in the declared set."""
+    rc, out = _cv23_run_with_fake_arm(monkeypatch, tmp_path, plant=False, norecord=True)
+    assert rc != 0, (rc, out["gates"], out.get("incomplete_gates"))
+    assert "GL_witness" not in out["gates"]
+    assert out.get("incomplete_gates") == ["GL_witness"]
+    assert out["e2_ok"] is False
+    assert out["lattice"]["gated"] is False
+
+
+def test_planted_defect_with_no_record_still_fails(monkeypatch, tmp_path):
+    """S1's required regression: plant_norecord must not exit 0."""
+    rc, out = _cv23_run_with_fake_arm(monkeypatch, tmp_path, plant=True, norecord=True)
+    assert rc != 0, (rc, out["gates"], out.get("incomplete_gates"))
+    assert "GL_witness" not in out["gates"]
+    assert out.get("incomplete_gates") == ["GL_witness"]
+    assert out["e2_ok"] is False
+
+
+def test_recipe_cv04_without_tag_is_refused():
+    """--recipe cv04 has no adaptive settling record and must never be able to
+    write the committed baseline rfx.json (S1)."""
+    m = _cv23_main_module()
+    with pytest.raises(SystemExit) as exc:
+        m.main(["--recipe", "cv04", "--arms", "tand3"])
+    assert exc.value.code == 2

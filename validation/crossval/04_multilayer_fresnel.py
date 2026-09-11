@@ -336,18 +336,25 @@ while True:
     _run = _run_slab_fdtd(_nx_arm)
     if _run["tail_settled_to_family_bar"]:
         break
-    if _nx_arm > 4 * slab_family.NX_INTERIOR:
-        raise RuntimeError(
-            f"record never settled to the family's {slab_family.SETTLING_LIMIT:g} "
-            f"bar within 4x the declared box (last attempt: nx_interior={_nx_arm}, "
-            f"tail scat/trans={_run['tail_refl_rel']:.4f}/{_run['tail_trans_rel']:.4f})"
-        )
     _grows.append({"nx_interior": _nx_arm, "tail_refl_rel": _run["tail_refl_rel"],
                    "tail_trans_rel": _run["tail_trans_rel"]})
     print(f"  tail not settled to the family bar {slab_family.SETTLING_LIMIT:g} "
           f"(scat_refl={_run['tail_refl_rel']:.4f}, trans={_run['tail_trans_rel']:.4f}) "
           f"-- growing nx_interior {_nx_arm} -> {_nx_arm + slab_family.NX_GROW_CELLS}")
+    # N1 (PR #974 round 2): check the cap AFTER incrementing and BEFORE the
+    # next attempt, the way cv23's own loop does -- the earlier version
+    # checked the value already just tried, so the actual last attempt ran
+    # one grow step past the stated cap (2600 = 4.33x the declared 600, not
+    # "within 4x"). This way no attempt above the cap is ever run.
     _nx_arm += slab_family.NX_GROW_CELLS
+    if _nx_arm > 4 * slab_family.NX_INTERIOR:
+        raise RuntimeError(
+            f"record never settled to the family's {slab_family.SETTLING_LIMIT:g} "
+            f"bar within 4x the declared box (next attempt would be "
+            f"nx_interior={_nx_arm}, over the {4 * slab_family.NX_INTERIOR} cap; "
+            f"last tried nx_interior={_run['nx_interior']} at tail "
+            f"scat/trans={_run['tail_refl_rel']:.4f}/{_run['tail_trans_rel']:.4f})"
+        )
 
 nx_interior = _run["nx_interior"]  # the FINAL, grown value -- PART 3 (Meep) reads this
 grid = _run["grid"]
@@ -529,19 +536,15 @@ fringe_ok = bool(fringe_verdict.ok)
 print()
 print(fringe_gate.format_fringe_table(fringe_verdict, "rfx vs analytic"))
 
-rfx_self_ok = bool(
-    t_ok and r_ok and c_ok and cons_max_ok and tail_ok and fringe_ok
-)
-
 # -----------------------------------------------------------------------------
-# The exact-lattice witness (`--lattice-witness`; issue: lattice-witness
-# standardisation, docs/design_notes/20260903_lattice_witness_standard.md).
+# The exact-lattice witness (issue: lattice-witness standardisation,
+# docs/design_notes/20260903_lattice_witness_standard.md).
 #
-# The continuum gates above are UNCHANGED. This writes a second, pre-declared
-# record: |rfx - lattice(f; eps'=4, sigma=0, d, dx, dt)| against a W_witness
-# DERIVED from the lattice model's own error budget (record truncation, the
-# incident reference's truncation, float32), evaluated at the one dx rung this
-# case runs. Nothing here can change the exit code.
+# The continuum gates above are UNCHANGED. This is a second, pre-declared
+# measurement: |rfx - lattice(f; eps'=4, sigma=0, d, dx, dt)| against a
+# W_witness DERIVED from the lattice model's own error budget (record
+# truncation, the incident reference's truncation, float32), evaluated at
+# the one dx rung this case runs.
 #
 # UPDATE 2026-09-10 (settling-extension fix, PI override of the note's
 # earlier "no new physics" call, note section 5.3 top UPDATE): the loop above
@@ -549,108 +552,146 @@ rfx_self_ok = bool(
 # 1e-2 bar (slab_family.SETTLING_LIMIT), instead of running a fixed 719-step
 # record whose tails read 0.036 / 0.051 and did not settle. At the settled
 # record the gated-mean W_witness collapses (~85x in R) and the cv04 lattice
-# gate is no longer non-discriminating -- see gated_here below, which is
-# computed from THIS run's own tails, not restated here. cv23's sigma_zero
-# arm on the same material remains a cheap corroborating cross-check, not the
-# load-bearing rung it was before this fix.
+# gate is no longer non-discriminating.
+#
+# UPDATE 2026-09-10, round 2 (B1, PR #974 fresh-eyes review): this witness
+# now EVALUATES on every run and can FAIL the case -- `--lattice-witness`
+# controls ONLY whether the committed artifact is (re)written, not whether
+# the witness runs or counts. Before this fix `rfx_self_ok` never included
+# the witness at all (it was assembled above, before this block even ran),
+# and the artifact-writing branch only relabelled a bad witness "reported,
+# not gated" instead of failing -- so the DEFAULT scheduled invocation
+# (scripts/vessl_931/cv04.yaml, no flag) could never fail on it regardless
+# of the physics. Reviewer's regression: eps' x1.01 planted into the build,
+# `--lattice-witness` run, witness 59.6x over its window on 111 of 112 gated
+# bins, exit code still 2 (Meep absent) -- identical to a clean run.
 # -----------------------------------------------------------------------------
-if "--lattice-witness" in sys.argv:
-    _cmp = os.path.join(SCRIPT_DIR, "comparators")
-    if _cmp not in sys.path:
-        sys.path.insert(0, _cmp)
-    import json as _json
-    import lattice_witness as _LW
-    import slab_family as _SF
+_cmp = os.path.join(SCRIPT_DIR, "comparators")
+if _cmp not in sys.path:
+    sys.path.insert(0, _cmp)
+import lattice_witness as _LW  # noqa: E402
 
-    # #928: the producer imports the family LEAF and the witness emitter, and
-    # NOTHING that names a consumer -- directly or through them. `slab_family`
-    # declares the rig, the gated band, the ring-down rates, the cell
-    # bookkeeping, the auxiliary-echo geometry and `staged_commit`; cv22
-    # re-exports every one of them for its own importers.
-    # tests/crossval/test_producer_import_graph.py holds the property.
-    _params = {"eps_inf": eps_slab, "sigma": 0.0}
-    _rates = _SF.slab_ringdown_rates("conductive", _params)
-    _arm = {
-        "model": "conductive", "params": _params,
-        "freqs_hz": freqs[mask].tolist(),
-        "gated": _SF.gated_mask(freqs[mask]).tolist(),
-        "R_rfx": R_rfx.tolist(), "T_rfx": T_rfx.tolist(), "dt_s": float(dt),
-        "inc_amp_rel": (inc_power[mask] / inc_power.max()).tolist(),
-        "tail": {"scat_refl_rel": float(tail_refl_rel),
-                 "total_trans_rel": float(tail_trans_rel),
-                 "purity_inc_rel": float(tail_inc_rel), "ok": bool(tail_ok)},
-        # ``nx_interior`` and the cell bookkeeping are what the auxiliary-echo
-        # record invariant (#888) derives its arrival from; without them the
-        # rung would be unguarded, and the cross-check in
-        # ``lattice_witness.aux_echo_witness`` would have nothing to compare
-        # this rig's probes against.
-        "run": {"n_steps": int(n_steps), "dx_m": float(dx), "dx_div": 1,
-                "nx_interior": int(nx_interior),
-                "record": {"rate_ring_1_s": _rates["rate_ring_1_s"],
-                           "t_safe_cpml_steps": int(n_steps_safe),
-                           "nx_interior": int(nx_interior), "dx_div": 1,
-                           "nx": int(grid.nx), "n_cpml": int(n_cpml),
-                           "x_lo": int(x_lo), "probe_refl": int(probe_refl_x),
-                           "probe_trans": int(probe_trans_x),
-                           "v_cells": float(v_cells)}},
-    }
-    # Stamp the commit the way cv22 / cv23 do, so this artifact carries its own
-    # provenance instead of a null (review, 2026-09-03).
-    _doc = _LW.witness_document("04_multilayer_fresnel", {"slab_eps4": _arm},
-                                commit=_SF.staged_commit(os.path.dirname(os.path.dirname(SCRIPT_DIR)),
-                                                          cwd=SCRIPT_DIR),
-                                d_slab_m=d_slab)
-    # gated_here now reflects the settling-extension loop above, not a fixed
-    # 719-step record: this case has its own settled record (tail scat/trans
-    # below the family's -40 dB / 1e-2 bar, slab_family.SETTLING_LIMIT), not
-    # borrowed from cv23 (that path was tried and reverted -- see the commit
-    # message: the PI's ruling was that cv04 answers its own question with
-    # its own data). gated_here=True requires BOTH that this run's own tail
-    # cleared the family bar AND that the witness's own gates (GL1/GL2, the
-    # CPML/tail/aux-echo preconditions) all pass -- either failing alone must
-    # not leave a gated verdict standing.
-    _tail_settled_here = bool(
-        tail_window_clean
-        and tail_refl_rel < slab_family.SETTLING_LIMIT
-        and tail_trans_rel < slab_family.SETTLING_LIMIT
+# #928: the producer imports the family LEAF and the witness emitter, and
+# NOTHING that names a consumer -- directly or through them. `slab_family`
+# declares the rig, the gated band, the ring-down rates, the cell
+# bookkeeping, the auxiliary-echo geometry and `staged_commit`; cv22
+# re-exports every one of them for its own importers.
+# tests/crossval/test_producer_import_graph.py holds the property.
+_params = {"eps_inf": eps_slab, "sigma": 0.0}
+_rates = slab_family.slab_ringdown_rates("conductive", _params)
+_arm = {
+    "model": "conductive", "params": _params,
+    "freqs_hz": freqs[mask].tolist(),
+    "gated": slab_family.gated_mask(freqs[mask]).tolist(),
+    "R_rfx": R_rfx.tolist(), "T_rfx": T_rfx.tolist(), "dt_s": float(dt),
+    "inc_amp_rel": (inc_power[mask] / inc_power.max()).tolist(),
+    "tail": {"scat_refl_rel": float(tail_refl_rel),
+             "total_trans_rel": float(tail_trans_rel),
+             "purity_inc_rel": float(tail_inc_rel), "ok": bool(tail_ok)},
+    # ``nx_interior`` and the cell bookkeeping are what the auxiliary-echo
+    # record invariant (#888) derives its arrival from; without them the
+    # rung would be unguarded, and the cross-check in
+    # ``lattice_witness.aux_echo_witness`` would have nothing to compare
+    # this rig's probes against.
+    "run": {"n_steps": int(n_steps), "dx_m": float(dx), "dx_div": 1,
+            "nx_interior": int(nx_interior),
+            "record": {"rate_ring_1_s": _rates["rate_ring_1_s"],
+                       "t_safe_cpml_steps": int(n_steps_safe),
+                       "nx_interior": int(nx_interior), "dx_div": 1,
+                       "nx": int(grid.nx), "n_cpml": int(n_cpml),
+                       "x_lo": int(x_lo), "probe_refl": int(probe_refl_x),
+                       "probe_trans": int(probe_trans_x),
+                       "v_cells": float(v_cells)}},
+}
+# Stamp the commit the way cv22 / cv23 do, so this artifact carries its own
+# provenance instead of a null (review, 2026-09-03).
+_doc = _LW.witness_document("04_multilayer_fresnel", {"slab_eps4": _arm},
+                            commit=slab_family.staged_commit(os.path.dirname(os.path.dirname(SCRIPT_DIR)),
+                                                              cwd=SCRIPT_DIR),
+                            d_slab_m=d_slab)
+_rung = _doc["rungs"]["slab_eps4"]
+_gl = _rung["gates"]
+
+# gated_here = PRECONDITIONS only (this rung's own tails clear the family's
+# settling bar, plus the witness's own CPML/tail/aux-echo preconditions) --
+# it does NOT include the GL1/GL2 accuracy gates. The settling-extension
+# loop above already guarantees _tail_settled_here (it grows until settled
+# or raises at the cap), so this should always be True in practice; if it or
+# one of the witness's other three preconditions is ever False anyway, that
+# is a hard case failure below (see else branch), never a silent downgrade.
+_tail_settled_here = bool(
+    tail_window_clean
+    and tail_refl_rel < slab_family.SETTLING_LIMIT
+    and tail_trans_rel < slab_family.SETTLING_LIMIT
+)
+_preconditions_ok = bool(
+    _tail_settled_here
+    and _gl["precond_cpml_gate"]
+    and _gl["precond_tail_witness"]
+    and _gl["precond_aux_echo_record"]
+)
+_doc["gated_here"] = _preconditions_ok
+if _preconditions_ok:
+    # Preconditions hold: the GL1/GL2 accuracy gates now decide the witness,
+    # and they enter rfx_self_ok below -- a GL failure FAILS the case.
+    lattice_witness_ok = bool(
+        _gl["GL1_R"] and _gl["GL1_T"] and _gl["GL1_A"]
+        and _gl["GL2_R"] and _gl["GL2_T"] and _gl["GL2_A"]
     )
-    _doc["gated_here"] = bool(_tail_settled_here and _doc["verdict"]["all_rungs_ok"])
-    if _doc["gated_here"]:
-        _doc["gated_here_reason"] = (
-            f"this rung's own {n_steps}-step record (nx_interior={nx_interior}, "
-            f"{len(_grows)} grow attempt(s) from the declared "
-            f"{slab_family.NX_INTERIOR}) settles to tails "
-            f"{tail_refl_rel:.4f} / {tail_trans_rel:.4f} of the incident peak, "
-            f"under the family's {slab_family.SETTLING_LIMIT:g} (-40 dB) bar -- "
-            "gated on its OWN data, not cv23's sigma_zero arm (that borrowing "
-            "was tried and reverted; a case that cannot settle its own "
-            "spectra cannot gate its own case, so the fix was to settle it, "
-            "not to cite elsewhere)."
-        )
-    else:
-        _doc["gated_here_reason"] = (
-            f"this rung's own {n_steps}-step record (nx_interior={nx_interior}) "
-            f"has tails {tail_refl_rel:.4f} / {tail_trans_rel:.4f} against the "
-            f"family's {slab_family.SETTLING_LIMIT:g} bar (settled={_tail_settled_here}) "
-            f"and witness gates {_doc['verdict']}; REPORTED, not gated, until "
-            "both hold. See docs/design_notes/20260903_lattice_witness_standard.md "
-            "section 5.3 for the record this superseded (719 steps, tails "
-            "0.036/0.051, never settled)."
-        )
+    _doc["gated_here_reason"] = (
+        f"this rung's own {n_steps}-step record (nx_interior={nx_interior}, "
+        f"{len(_grows)} grow attempt(s) from the declared "
+        f"{slab_family.NX_INTERIOR}) settles to tails "
+        f"{tail_refl_rel:.4f} / {tail_trans_rel:.4f} of the incident peak, "
+        f"under the family's {slab_family.SETTLING_LIMIT:g} (-40 dB) bar -- "
+        "gated on its OWN data, not cv23's sigma_zero arm (that borrowing "
+        "was tried and reverted; a case that cannot settle its own "
+        "spectra cannot gate its own case, so the fix was to settle it, "
+        "not to cite elsewhere). GL1/GL2 enter rfx_self_ok directly: a "
+        "witness failure now fails this case (exit 1), never 'reported'."
+    )
+else:
+    # Preconditions did NOT hold. The settling-extension loop is supposed to
+    # make this branch unreachable (it grows until settled or raises at the
+    # cap), but if it or the witness's own CPML/aux-echo preconditions fail
+    # anyway, that is a hard failure -- never a silent "reported, not
+    # gated" pass-through the way it used to be.
+    lattice_witness_ok = False
+    _precond_detail = {k: _gl[k] for k in
+                       ("precond_cpml_gate", "precond_tail_witness",
+                        "precond_aux_echo_record")}
+    _doc["gated_here_reason"] = (
+        f"this rung's own {n_steps}-step record (nx_interior={nx_interior}) "
+        f"FAILED a precondition -- tail_settled_here={_tail_settled_here} "
+        f"(tails {tail_refl_rel:.4f} / {tail_trans_rel:.4f} against the "
+        f"family's {slab_family.SETTLING_LIMIT:g} bar), witness "
+        f"preconditions {_precond_detail}. This FAILS the case "
+        "(rfx_self_ok=False), not 'reported, not gated' -- the "
+        "settling-extension loop should make this unreachable; see "
+        "docs/design_notes/20260903_lattice_witness_standard.md section 5.3."
+    )
+
+if "--lattice-witness" in sys.argv:
+    import json as _json
     _out04 = os.path.join(SCRIPT_DIR, "_04_fresnel_results")
     os.makedirs(_out04, exist_ok=True)
     with open(os.path.join(_out04, _LW.witness_json_name()), "w") as _fh:
         _json.dump(_doc, _fh, indent=1)
-    _r = _doc["rungs"]["slab_eps4"]
-    _ae = _r["aux_echo"]
-    print(f"  cv04-aux-echo-invariant slab_eps4 (#888): record {_ae['record_steps']} steps / "
-          f"echo arrival {_ae['echo_arrival_steps']} = {_ae['record_over_echo_arrival']:.3f} "
-          f"(limit {_ae['limit']:.1f}); ok={_ae['ok']}")
-    print(f"  cv04-lattice-witness slab_eps4: |rfx-lattice| mean R "
-          f"{_r['mean_dR_lattice_gated']:.2e} vs W {_r['mean_W_witness_R_gated']:.2e} "
-          f"(ceiling {_r['mean_W_ceiling_R_gated']:.2e}); "
-          f"{'GATED' if _doc['gated_here'] else 'reported, not gated'}")
     print(f"  wrote {os.path.join(_out04, _LW.witness_json_name())}")
+
+_ae = _rung["aux_echo"]
+print(f"  cv04-aux-echo-invariant slab_eps4 (#888): record {_ae['record_steps']} steps / "
+      f"echo arrival {_ae['echo_arrival_steps']} = {_ae['record_over_echo_arrival']:.3f} "
+      f"(limit {_ae['limit']:.1f}); ok={_ae['ok']}")
+print(f"  cv04-lattice-witness slab_eps4: |rfx-lattice| mean R "
+      f"{_rung['mean_dR_lattice_gated']:.2e} vs W {_rung['mean_W_witness_R_gated']:.2e} "
+      f"(ceiling {_rung['mean_W_ceiling_R_gated']:.2e}); "
+      f"lattice witness: GATED -- {'PASS' if lattice_witness_ok else 'FAIL'}")
+
+rfx_self_ok = bool(
+    t_ok and r_ok and c_ok and cons_max_ok and tail_ok and fringe_ok
+    and lattice_witness_ok
+)
 
 # =============================================================================
 # PART 3: Meep simulation (OPTIONAL secondary cross-validation reference)

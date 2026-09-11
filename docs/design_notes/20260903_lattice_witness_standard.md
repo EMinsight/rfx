@@ -464,8 +464,12 @@ and both now discriminate strongly where they previously did not:
 (F2; was 0.099 pre-fix, 0 of 115 bins over window) and
 `validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.falsifiers.eps_x1p01.separation_over_window_R = 6.87`
 (F3; was 0.082 pre-fix, 0 of 115 bins over window); both now clear 111 of 115
-gated bins in R (§7's F2/F3 tables carry the added rows). The ~600× window
-shrink from settling is what turns the same physical model-mismatch and 1 %
+gated bins in R (§7's F2/F3 tables carry the added rows). Both separations
+above are R-channel (`separation_over_window_R`), so the relevant shrink is
+R's own W_witness window, ~84× (N2, PR #974 round 2: mean_W_witness_R_gated
+0.0535 -> 0.000635; T's window shrank further still, ~611×, but that number
+belongs with T's own separation, not this one). It is that ~84× window
+shrink from settling that turns the same physical model-mismatch and 1 %
 ε′-perturbation terms from invisible into strongly discriminating -- nothing
 about the perturbations themselves changed.
 
@@ -582,8 +586,8 @@ In T it accounted for two thirds, and the residual against the lattice at
 cv04's own PRE-FIX rung was **0.00625** — **more than half of the 0.011
 envelope was that record's TRUNCATION, not a discretisation term.** The
 settled (POST-FIX) record confirms this reading directly rather than by
-extrapolation: at 990 steps `\|rfx − lattice\|` in T fell to 9.52e-05, roughly
-2% of the same 0.011 envelope. Read as CONSISTENT with the truncation
+extrapolation: at 990 steps `\|rfx − lattice\|` in T fell to 9.52e-05, 0.87%
+of the same 0.011 envelope. Read as CONSISTENT with the truncation
 diagnosis, not as its own new answer to "what fraction of a properly re-derived
 T envelope is the lattice term" -- the T envelope itself (0.011) is a PRE-FIX
 number too (`envelope.json` r1, §5.3's own update), and re-deriving it (r2,
@@ -667,26 +671,37 @@ re-derivation`.** Its content: (a) re-derive `W_mean,R` and `W_mean,T` from
 un-settled envelope, with the lattice term carried as a separate, per-rung,
 per-mesh term instead of being folded into a constant; (b) run the refined rungs
 each arm then needs — from the table above that is the dx rungs of cv22 Debye
-and Lorentz and of cv23 `tand0p1`, `tand1` and `tand3`; (c) re-run cv04 itself on
-a settled record so its envelope stops being the family's datum while being the
-one measurement in the family that does not settle. Cost: five to seven arms
-plus one cv04 leg, order a minute of pod time; the expensive part is the
-decision in (a), not the compute. Nothing in THIS lane depends on it, and this
-lane's gates are unaffected either way.
+and Lorentz and of cv23 `tand0p1`, `tand1` and `tand3`; (c) re-run cv04 itself
+on a settled record so its envelope stops being the family's datum while being
+the one measurement in the family that does not settle.
+**(c) is SUPERSEDED 2026-09-10** (N7, PR #974 round 2): the settling-extension
+fix did this -- cv04 now runs on a settled 990-step record (§5.3's top
+UPDATE). Its ENVELOPE (`envelope.json` r1, mean |dR|/|dT| = 0.0066/0.011) is
+still the pre-fix, un-settled measurement, though; re-deriving the envelope
+itself from the settled record is r2 (issue #928, drafted, held for its own
+PR), a narrower and now-separate task from what (c) originally proposed.
+(a) and (b) remain open. Cost: five to seven arms, order a minute of pod
+time; the expensive part is the decision in (a), not the compute. Nothing in
+THIS lane depends on it, and this lane's gates are unaffected either way.
 
 ## 6. What is NOT changed
 
 - No continuum window, per-bin or band-mean, on any case.
 - No settling bar, purity bar or passivity ceiling is loosened; the rig raises on
   an attempt to loosen the settling bar.
-- No case's exit code depends on the lattice gate in this commit: `--lattice-witness`
-  is a separate post-processing invocation with its own exit code (0 = every rung
-  passed), exactly like `--meep-ladder-summary`. Wiring the lattice verdict into
-  the cases' own `verdict.exit_code` is a follow-up the PI can call for once the
-  VESSL run has confirmed the numbers on a fresh tree; the run has now done so
-  (§9.1, 12 of 12 rungs green, worst ratio 0.30), so the precondition is met and
-  the wiring is a PI call — it is still NOT done here, and that is stated rather
-  than implied.
+- **SUPERSEDED, 2026-09-10.** This bullet described the 2026-09-03 state only:
+  no case's exit code depended on the lattice gate, `--lattice-witness` was a
+  separate post-processing invocation with its own exit code, and wiring it
+  into a case's own verdict was left as a PI call. That call was made twice
+  since: issue #970 wired cv23's `main()` (`GL_witness` folds into `e2_ok`,
+  live on this run's own freshly-computed R/T, `23_lossy_slab_fresnel.py`),
+  and PR #974 round 2 (B1) wired cv04's `main()` the same way -- the witness
+  now EVALUATES on every cv04 run, not only under `--lattice-witness` (the
+  flag now controls only whether the artifact is rewritten), and folds into
+  `rfx_self_ok`. cv22 is the one case where this bullet is still literally
+  true: its own `witness_ok`-type value is computed and never read by
+  `main()` (the #970 PR body's bounded pattern grep names it; left untouched
+  there, a separate decision).
 - No committed rung of any case is added, removed or re-run. §8.1's remedy rung
   is a NEW rung and lives in `_22_dispersive_diag/`, outside every case's
   `rungs_from_results` glob, precisely so that this bullet stays true.
@@ -987,11 +1002,17 @@ lane as well as on the committed artifact.
   rigorous statement at that rung, and F2's convergence reading is supplied by
   cv23's ladder on the same rig. If the PI wants cv22's ladder, it is
   `--dx-div 2|4 --tag <arm>_dx<K>` and about 30 s of pod time.
-- **A cv04 rung at the settled recipe with cv04's own script.** cv04 has no
-  record derivation and no `--nx-interior`; adding one would re-engineer a
-  committed legacy configuration for no new physics (cv23's `sigma_zero` arm
-  already measures that material at that recipe on that rig). Recorded as a
-  deliberate non-change.
+- **A cv04 rung at the settled recipe with cv04's own script.**
+  **SUPERSEDED 2026-09-10** -- see §5.3's top UPDATE. The PI overrode this
+  call: cv04 now has its own record derivation (the settling-extension loop,
+  `slab_family.NX_GROW_CELLS`) and a settled rung, on its own script, not
+  borrowed from cv23. Kept below, struck through in spirit, because the
+  reasoning explains why this bullet existed before the override, not
+  because it still describes the current state.
+  ~~cv04 has no record derivation and no `--nx-interior`; adding one would
+  re-engineer a committed legacy configuration for no new physics (cv23's
+  `sigma_zero` arm already measures that material at that recipe on that
+  rig). Recorded as a deliberate non-change.~~
 
 ## 9. Artifacts and keys
 
@@ -1071,10 +1092,13 @@ rungs passed on the cluster, worst `|rfx − lattice| / W_witness` = 0.30**
   artifact.
 
 **2026-09-10 run: cv04's settling-extension fix (VESSL `369367260232`).**
-The settling-extension mechanism (this note's top UPDATE, §5.3) required a
+The settling-extension mechanism (§5.3's 2026-09-10 UPDATE) required a
 fresh cv04 run: VESSL run `369367260232`, branch commit `0c66b8c1`
-(`0c66b8c1d4713ac791a919876606e9b63f2e6c75`), `cv04.rc = 2` (the documented
-"Meep unavailable" PASS outcome, not a failure), `fringe_evidence.rc = 0`. The
+(`0c66b8c1d4713ac791a919876606e9b63f2e6c75`), `cv04.rc = 2` (S5, PR #974
+round 2: the case's own docstring is explicit that exit 2 is "inconclusive
+crossval, NOT a pass" -- rfx's self-check against the analytic reference
+passed, but Meep, the secondary cross-check, was unavailable; not a failure
+either), `fringe_evidence.rc = 0`. The
 run's raw output is tracked, not only referenced: `commit.txt`, `run_id.txt`,
 `cv04.log`, `cv04.rc`, `cv04_settled_summary.json`, `fringe_evidence.log`,
 `fringe_evidence.rc` and the VESSL stdout capture are all committed at
@@ -1087,6 +1111,14 @@ eight files -- e.g. `cv04.log` both `6a819810bc5ae4b7...`,
 and `fringe_gate_geometry.json`. `envelope.json` is untouched by it -- still
 r1 only; a candidate r2 is drafted and held for its own PR, per the
 calibration-envelope-ownership guard in `test_calibration_envelope_ownership.py`.
+N6 (PR #974 round 2): r1 itself did not change, but three of its own
+`lattice_identification.*.source` pointers (`rfx_vs_lattice_mean_dR_gated`,
+`rfx_vs_lattice_mean_dT_gated`, `witness_gated_here`) point INTO this
+mutable `lattice_witness.json`, which this run regenerated in place -- so
+those three pointers now resolve to different values than when r1 was
+written (0.00168 -> 2.01e-05, 0.00625 -> 9.52e-05, false -> true; full list
+in the PR body). This is disclosed, not fixed, here and gets a top-level
+note in the r2 PR.
 
 ## 10. Dead ends and things I could not close
 
@@ -1115,7 +1147,7 @@ Recorded because the record is the point.
    what stands behind it.
 4. **cv04's committed rung did not discriminate; cv22's Debye rung did not
    either.** CLOSED for both, 2026-09-10, by two different routes. For cv04:
-   the settling-extension fix (§5.3's top UPDATE, §9.1) gave it its own
+   the settling-extension fix (§5.3's 2026-09-10 UPDATE, §9.1) gave it its own
    settled 990-step record, and the wrong-model falsifier F2 now fires there
    at 8.35× on 111 of 115 gated bins
    (`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.falsifiers.continuum.separation_over_window_R
