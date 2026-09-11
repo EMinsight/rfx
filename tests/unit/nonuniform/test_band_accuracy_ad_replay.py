@@ -344,6 +344,19 @@ def test_replay_ad2(w7_json):
     assert row["fired"] is False
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "attempt 1 FIRED on y and z and is kept on record unchanged (note "
+        "second-pass finding 6): its declared central FD at h = 1e-3 put the "
+        "reference at 3-17 float32 quanta on the dominant cells, so the "
+        "0.5224 / 0.9924 rows measure the reference, not the gradient. The "
+        "live gate is test_replay_ad3_second_attempt (reference-resolved "
+        "dominant cells, jvp cross-check <= 3.1e-5), HELD on x, y, z. "
+        "Decision recorded in the note's 'Replay test' section, 2026-09-11; "
+        "strict so a JSON in which attempt 1 no longer fires is noticed."
+    ),
+)
 def test_replay_ad3(w7_json):
     if "ad3" not in w7_json:
         pytest.skip("AD3 not run yet")
