@@ -667,3 +667,18 @@ under 3.75 cells per free-space wavelength.
 pre-declaration (`a2cb6cf3`), the first attempt with its defect record
 and the fix (`b1cd9e63`), the aggregation fix (`ec008ead`); the results
 JSON and this section follow in one commit.
+
+### Replay tolerance re-declared (2026-09-11)
+
+`tests/unit/nonuniform/test_e1_band_law_replay.py` replayed chain-model
+floats to 1e-9 relative, on the strength of lane A reproducing its own rows
+to 3e-10 on one machine. A second machine falsified that: the dense solve
+of the N60_r1.2 profile (n_b = 32, 1100 cells) read 1.1831862931777621e-4
+on one GitHub runner (PR #963, fast-suite (4)) and 1.1831862916448015e-4 on
+another (main run 34572755776 at b7ad4e93) and on the lab pod -- 1.3e-9
+apart, from the LAPACK build, not the physics. The replay bound for
+chain-model floats is now 1e-8 (8x the measured spread); no window, gate
+or committed number moved. Same class as the W6 F7 finding (PR #956),
+whose remedy there was a closed form for the single junction; the full
+band profiles here have no closed form, so the bound carries the
+measurement instead.
