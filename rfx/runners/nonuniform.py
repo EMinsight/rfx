@@ -27,6 +27,70 @@ from rfx.nonuniform import (
 )
 
 
+INTERFACE_EPS_RULES = ("sampled", "dual_average")
+
+
+def _validate_interface_eps_nu(sim, *, subpixel_smoothing=False, eps_override=None):
+    """Refuse combinations that cannot consume the component eps rule."""
+    if getattr(sim, "_interface_eps", "sampled") == "sampled":
+        return
+    from rfx.core.jax_utils import is_tracer
+
+    if subpixel_smoothing or eps_override is not None:
+        raise ValueError("interface_eps='dual_average' cannot combine with subpixel_smoothing or eps_override")
+    if sim._thin_conductors or sim._lumped_rlc:
+        raise ValueError("interface_eps='dual_average' cannot combine with thin conductors or lumped RLC")
+    if any(is_tracer(getattr(sim, name, None))
+           for name in ("_dx_profile", "_dy_profile", "_dz_profile")):
+        raise ValueError("interface_eps='dual_average' requires concrete profiles, not traced profiles")
+
+
+def assemble_interface_eps_nu(sim, grid, materials):
+    """Cell-centre eps averaged over the four cells sharing each E edge.
+
+    Tangential weights are dual-face areas, with PEC cells excluded. Along
+    its own axis the edge stays in its own cell (no node-aligned interface
+    cuts that edge). End nodes are one-sided. All-PEC edges retain sampled
+    eps as a finite fallback; the existing PEC mask enforces their fields.
+    Scalar materials, conductivity and source normalization are untouched.
+    """
+    from rfx.geometry.rasterize_grid import GridCoords, coords_from_nonuniform_grid, rasterize_geometry
+
+    _validate_interface_eps_nu(sim)
+    nodes = coords_from_nonuniform_grid(grid)
+    widths = (grid.dx_arr_f64, grid.dy_arr_f64, grid.dz_f64)
+    if any(d is None for d in widths):
+        raise ValueError("interface_eps='dual_average' requires the exact float64 grid spine")
+    centres = [np.asarray(x) + np.asarray(d) / 2 for x, d in zip(nodes[:3], widths)]
+    # The bounding node has no outgoing real cell: copy the last centre.
+    for x in centres:
+        x[-1] = x[-2]
+    cell, debye, lorentz, pec, *_ = rasterize_geometry(
+        sim._geometry, sim._resolve_material, GridCoords(*centres, grid.shape),
+        pec_sigma_threshold=sim._PEC_SIGMA_THRESHOLD)
+    if debye is not None or lorentz is not None:
+        raise ValueError("interface_eps='dual_average' cannot combine with Debye/Lorentz materials")
+    eps = np.asarray(cell.eps_r, dtype=np.float64)
+    live = np.ones(grid.shape, dtype=np.float64) if pec is None else (~np.asarray(pec)).astype(np.float64)
+    components = []
+    for c in range(3):
+        num, den = eps * live, live
+        for a in range(3):
+            if a == c:
+                continue
+            shape = [1, 1, 1]
+            shape[a] = grid.shape[a]
+            d = np.asarray(widths[a]).reshape(shape)
+            num, den = num * d, den * d
+            lower = np.maximum(np.arange(grid.shape[a]) - 1, 0)
+            num = num + np.take(num, lower, axis=a)
+            den = den + np.take(den, lower, axis=a)
+        out = np.asarray(materials.eps_r, dtype=np.float64).copy()
+        np.divide(num, den, out=out, where=den > 0)
+        components.append(jnp.asarray(out, dtype=materials.eps_r.dtype))
+    return tuple(components)
+
+
 def build_nonuniform_grid(
     freq_max: float,
     domain: tuple,
@@ -726,6 +790,9 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     """
     from rfx.api import Result
 
+    _validate_interface_eps_nu(sim, subpixel_smoothing=subpixel_smoothing,
+                               eps_override=eps_override)
+
     # Flux monitors: the NU scan body accumulates Poynting-flux DFTs (parity
     # with the uniform path). Full-plane AND finite-region (``size=``)
     # monitors are supported; the finite-region tangential CELL window is
@@ -789,6 +856,9 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     materials, debye_spec, lorentz_spec, pec_mask = assemble_materials_nu(
         sim, grid, sheet_specs=_sheet_specs, pec_sheets=_pec_sheets,
         pec_wires=_pec_wires)
+    if getattr(sim, "_interface_eps", "sampled") == "dual_average" and (
+            debye_spec is not None or lorentz_spec is not None):
+        raise ValueError("interface_eps='dual_average' cannot combine with Debye/Lorentz materials")
     if strip_sheet_impedance:
         # #677 EXPLICIT reference strip: the surface-impedance sheet no
         # longer rides materials.sigma, so the two-run vacuum reference's
@@ -873,6 +943,9 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                 aniso_eps = compute_smoothed_eps_nonuniform(
                     grid, shape_eps_pairs, background_eps=1.0,
                 )
+
+    if getattr(sim, "_interface_eps", "sampled") == "dual_average":
+        aniso_eps = assemble_interface_eps_nu(sim, grid, materials)
 
     # Fold RLC R/C into materials before other port/source setup
     # (mirrors the uniform path).

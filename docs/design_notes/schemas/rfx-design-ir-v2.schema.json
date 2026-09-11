@@ -160,13 +160,14 @@
     },
     "solver": {
       "type": "object",
-      "description": "rfx-only solver controls (precision, solver, adi_cfl_factor, stencil_order). These round-trip in rfx and have no counterpart in openEMS/Meep/CST/HFSS; they appear in non_portable.",
+      "description": "rfx-only solver controls (precision, solver, adi_cfl_factor, stencil_order, interface_eps). These round-trip in rfx and have no counterpart in openEMS/Meep/CST/HFSS; they appear in non_portable.",
       "additionalProperties": false,
       "required": [
         "precision",
         "solver",
         "adi_cfl_factor",
-        "stencil_order"
+        "stencil_order",
+        "interface_eps"
       ],
       "properties": {
         "precision": {
@@ -182,6 +183,11 @@
         },
         "stencil_order": {
           "type": "integer"
+        },
+        "interface_eps": {
+          "type": "string",
+          "enum": ["sampled", "dual_average"],
+          "description": "#949: node permittivity rule at dielectric interfaces on the non-uniform lane. 'sampled' is the production default; 'dual_average' is the opt-in dual-cell-area average."
         }
       }
     },

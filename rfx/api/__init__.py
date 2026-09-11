@@ -403,8 +403,14 @@ class Simulation(
         solver: str = "yee",
         adi_cfl_factor: float = 5.0,
         stencil_order: int = 2,
+        interface_eps: str = "sampled",
     ):
         from rfx.boundaries.spec import normalize_boundary
+        from rfx.runners.nonuniform import INTERFACE_EPS_RULES
+
+        if interface_eps not in INTERFACE_EPS_RULES:
+            raise ValueError(f"interface_eps must be one of {INTERFACE_EPS_RULES}, got {interface_eps!r}")
+        self._interface_eps = interface_eps
 
         # T7-B: accept BoundarySpec directly or normalise a legacy scalar
         # boundary=<str>. A BoundarySpec provided here is authoritative;
