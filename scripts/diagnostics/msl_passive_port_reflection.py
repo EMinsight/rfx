@@ -13,10 +13,21 @@ Issue #524 carries two orphaned #507 loose ends whose every number is July
 = 0.07-0.51", the "0.194-vs-0.073" drive asymmetry, the "~30 ohm termination"
 inferred against a "38.75 ohm" line Zc that the committed #535 sweep has since
 superseded (44.108 ohm on the same mesh), and a "10.53 mm" reflector plane that
-lands on no geometric feature of today's grid. None of them has been measured
-on current main. This driver is the predeclared re-measurement
+lands on no geometric feature of today's grid. None of them had been measured
+on current main when this driver was written. This driver is the predeclared
+re-measurement
 (design: scratch ``524_design_dup.json``; adversarial review: ``524_review.json``,
 required changes 1-10 applied; see "REVIEW ITEMS" below).
+
+RESULT (2026-08-30, VESSL 369367257265, PR #799; artifacts under
+``_msl_passive_port_reflection_logs/20260830_vessl_369367257265/``): item 2
+CLOSED -- |Gamma| reads 0.1799 / 0.1759 at the two ports (SYM and ROTY
+reproduce it to 4 decimals), so the 0.194-vs-0.073 asymmetry does not exist
+on this tree. Item 1 REPORTED AND STOPPED -- both single-reflector models are
+falsified across the R sweep (implied k 1.91 -> 1.03), so no mechanism is
+named; the "~30 ohm termination" inference is withdrawn (fitted Zc 41.9 ohm
+vs HJ 47.9 ohm is the #487 dx bias). |a_passive/a_driven| on current main is
+0.243-0.248 at R = 50 and 0.19-0.93 across terminations.
 
 FIXTURE (design C0, VERBATIM)
 -----------------------------

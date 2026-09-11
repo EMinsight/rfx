@@ -84,7 +84,12 @@ MEEP_PRIMARY_RESOLUTION = 40   # §12: the converged Meep reference (first-order
 RING_W_MIN = slab_family.RING_W_MIN
 RING_F_MAX_HZ = slab_family.RING_F_MAX_HZ
 RECORD_EXTEND_STEPS = 100
-NX_GROW_CELLS = 200
+# Re-exported, not redeclared (moved to slab_family.py, cv04 settling-
+# extension fix 2026-09-10): cv04 is the envelope PRODUCER and needs this
+# same constant, and issue #928's producer-import-graph invariant forbids
+# the producer importing a module named after a consumer case, even for a
+# constant. Same pattern RING_W_MIN/RING_F_MAX_HZ already use.
+NX_GROW_CELLS = slab_family.NX_GROW_CELLS
 TAIL_ENVELOPE_STEPS = 300      # stored in the artifact so the decay can be fitted offline
 MEEP_LADDER_RESOLUTIONS = (10, 20, 40)
 
@@ -135,6 +140,22 @@ ARM_ORDER = ("debye", "lorentz", "drude")
 # does, and that edit is reviewed under the repo's no-silent-gate-loosening
 # rule. The windows below are the EXPECTATION, derived from the two and stated
 # nowhere else.
+#
+# 2026-09-10 disclosure (PR #974): the adopted r1 values are NOT measured on
+# cv04's settled record -- cv04 got its own settling-extension fix that day
+# (docs/design_notes/20260903_lattice_witness_standard.md section 5.3's
+# 2026-09-10 UPDATE, and its section 10 item 4 for the settled numbers), but
+# r1 in `envelope.json` is unchanged and this adoption is still pinned to it;
+# r1's per-bin closure was a truncation artefact of cv04's pre-fix record,
+# the settled run measures far tighter (same note, same sections -- not
+# restated here, to keep this file free of a second copy of the number).
+# DIRECTION (S6, PR #974 round 2, not the literals): a re-adoption of the
+# settled revision would move the band-mean R residual UP slightly (widening
+# W_MEAN_R a little) while the band-mean T residual and the per-bin closure
+# both move DOWN (narrowing W_MEAN_T and W_BIN) -- not a uniform tightening.
+# Whether to re-adopt a settled revision, and whether W_BIN's own recipe
+# should track it, is open under issue #928 -- not decided here, and not
+# something a producer re-run may do to this file silently either way.
 # ---------------------------------------------------------------------------
 CV04_ADOPTION = {
     "envelope": slab_family.CV04_ENVELOPE_REL,

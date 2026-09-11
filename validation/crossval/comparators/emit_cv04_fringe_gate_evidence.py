@@ -65,8 +65,40 @@ D_M = slab_family.D_SLAB_M
 N_INDEX = math.sqrt(EPS_R)
 DX_M = slab_family.DX_M
 C0 = slab_family.C0_SCRIPT
-N_STEPS = 719           # _04_fresnel_results/lattice_witness.json::rungs.slab_eps4.n_steps
-DT_S = 2.335067793382187e-12   # _04_fresnel_results/lattice_witness.json::rungs.slab_eps4.dt_s
+
+
+def _committed_run_length() -> tuple[int, float]:
+    """(n_steps, dt_s) of cv04's OWN committed run, READ from
+    lattice_witness.json rather than hand-copied.
+
+    Found stale (issue: cv04 settling-extension fix, 2026-09-10): this used
+    to be ``N_STEPS = 719`` / ``DT_S = 2.335067793382187e-12`` as literals,
+    each commented as citing this exact artifact -- a hand-synced copy, not
+    a read. n_steps changes with cv04's own settling-extension loop (719 on
+    the pre-fix legacy record; the fix grows it until the tail clears the
+    family's -40 dB bar), so a literal here goes stale exactly when the
+    thing it is supposed to track changes. dt_s does NOT depend on
+    n_steps/nx_interior (the Courant-limited per-cell timestep only depends
+    on dx), which is why the old hardcoded value happened to still be
+    correct after the settling fix -- a coincidence of this one transition,
+    not a property of hardcoding it, and the failure mode (a stale number
+    silently doing the wrong thing) does not announce itself when the
+    correct-by-luck case is the one that gets tested.
+    """
+    path = _HERE.parent / "_04_fresnel_results" / "lattice_witness.json"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} is missing -- run 04_multilayer_fresnel.py --lattice-witness "
+            "first (this evidence emitter reads that artifact's own n_steps/dt_s "
+            "rather than a hand-copied literal, issue: cv04 settling-extension fix)"
+        )
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    rung = doc["rungs"]["slab_eps4"]
+    return int(rung["n_steps"]), float(rung["dt_s"])
+
+
+N_STEPS, DT_S = _committed_run_length()
 
 
 def nfft_for(n_steps: int) -> int:
