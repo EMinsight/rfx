@@ -332,7 +332,12 @@ def main(argv=None):
         results["f8"] = run_f8(widths)
     elif carried is not None:
         results["f8"] = carried["f8"]
-        results["f8_provenance"] = {
+        # The F8 rows belong to the run that MEASURED them. On a file that
+        # already carries an f8_provenance, that run is the one it names --
+        # not this file's top-level keys, which a previous F7-only recompute
+        # already replaced. Rebuilding from the top level here would hand
+        # F8's FDTD runs to whichever tree last recomputed F7.
+        results["f8_provenance"] = carried.get("f8_provenance") or {
             k: carried[k] for k in ("rfx_file", "argv", "git_sha", "git_dirty",
                                     "started_utc", "wallclock_s") if k in carried}
     results["wallclock_s"] = time.time() - t0
