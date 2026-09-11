@@ -513,6 +513,7 @@ FANOUT: dict[str, str] = {
     "docs/design_notes/20260902_cv23_lossy_slab_predeclaration.md": ADOPTION_DECLARATION,
     "docs/design_notes/20260903_lattice_witness_standard.md": RESOLVING_REFERENCE,
     "docs/design_notes/20260903_test_reorg_tier3b_consolidation.md": DIFFERENT_QUANTITY,
+    "validation/research/multiband_nu/results/e3_battery_after.json": DIFFERENT_QUANTITY,
     "docs/design_notes/20260904_aux_echo_record_invariant.md": RESOLVING_REFERENCE,
     "docs/design_notes/20260905_post_merge_review_20_prs.md": HISTORICAL_PROSE,
     "docs/design_notes/20260906_issue928_ownership_decision.md": HISTORICAL_PROSE,
@@ -538,6 +539,7 @@ DIFFERENT_QUANTITY_REASON: dict[str, str] = {
     "tests/studio/test_interop_design_document.py": "a geometry centre coordinate that happens to read 0.011 m",
     "rfx/api/_preflight.py": "a docstring worked example of the ceil(domain/dx) rounding rule, whose grid coordinate reads 0.011 m; the file enters this scan at all only because a preflight helper is named _waveguide_with_dispersive_slab",
     "docs/design_notes/20260903_test_reorg_tier3b_consolidation.md": "a pytest node id containing a parametrized 0.011",
+    "validation/research/multiband_nu/results/e3_battery_after.json": "the runtime reciprocity warner's 0.011 bar (max|S_ij - S_ji| / max|S|) quoted in the e3 battery's captured warnings; the file names the slab family only because one battery board is the dispersive slab",
 }
 
 # Detection is by VALUE, never by spelling. The first version of this file

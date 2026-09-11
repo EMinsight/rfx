@@ -443,6 +443,8 @@ class _ExecuteMixin:
         self._check_stencil_order_supported()
         self._reject_refplane_ports_off_uniform_lane("non-uniform mesh",
                                                      compute_s_params)
+        if self._interface_eps == "dual_average" and subpixel_smoothing:
+            raise ValueError("interface_eps='dual_average' cannot combine with subpixel_smoothing")
         if subpixel_smoothing == "kottke_pec":
             raise NotImplementedError(
                 "subpixel_smoothing='kottke_pec' (Stage 2 unified PEC) "
@@ -2325,6 +2327,8 @@ class _ExecuteMixin:
 
         See :meth:`forward` for the public-facing kwarg semantics.
         """
+        if self._interface_eps == "dual_average":
+            raise ValueError("interface_eps='dual_average' is not supported on the distributed NU lane")
         # Defense-in-depth: the distributed-NU runner does not honour
         # stencil_order (both distributed and non-uniform are unsupported).
         self._check_stencil_order_supported(distributed=True)
@@ -3291,6 +3295,8 @@ class _ExecuteMixin:
                 f"the uniform single-device forward lane, not {plan.lane!r}."
             )
 
+        if plan.lane == "fwd_distributed_nu" and self._interface_eps == "dual_average":
+            raise ValueError("interface_eps='dual_average' cannot combine with forward eps_override or distributed NU")
         if plan.lane == "fwd_distributed_nu":
             from rfx.materials.thin_conductor import refuse_f0_sheets
             refuse_f0_sheets(self._thin_conductors,
@@ -3653,6 +3659,8 @@ class _ExecuteMixin:
         n_steps = plan.n_steps
 
         # ---- Distributed multi-device lane ----
+        if plan.lane == "run_distributed" and self._interface_eps == "dual_average":
+            raise ValueError("interface_eps='dual_average' is not supported on the distributed lane")
         if plan.lane == "run_distributed":
             if self._dft_planes:
                 raise NotImplementedError(
