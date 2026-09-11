@@ -574,6 +574,11 @@ CLASSIFICATION: dict[str, Entry] = {
         "W6 narrow-band witness (2026-09-07 lane): make_band_profile "
         "profiles driven through harness.build_pec_fixture + run_nonuniform, "
         "the W2 two-run method -- no Simulation"),
+    "validation/research/multiband_nu/e4_diff_stackup.py": Entry(
+        "no_simulation",
+        "E4 differentiable-stackup prototype (2026-09-07 lane, PR #962): "
+        "MaterialArrays built by hand on make_nonuniform_grid and driven "
+        "through run_nonuniform under jax.grad -- no Simulation"),
     "validation/research/multiband_nu/w7_accuracy_ad.py": Entry(
         "builder_fused_with_solve",
         "W7 accuracy + autodiff witness (2026-09-07 lane): the A1 ladder and "
