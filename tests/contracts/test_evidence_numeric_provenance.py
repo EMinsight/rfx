@@ -515,6 +515,10 @@ CLASSIFICATION: dict[str, str] = {
     # stronger check than this gate performs. Same shape as
     # 20260910_cv05_crossval_disposition.md above.
     "docs/design_notes/20260907_nu_band_profile_predeclaration.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-11 (nu lane, PR #963): no `path.json::key` span (parses empty; any
+    # `::` spans are test ids); the numbers are replayed from the lane's results
+    # JSON by its own replay test.
+    "docs/design_notes/20260907_nu_cost_reduction_plan.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_adi_interior_pec_guard.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/20260908_automesh_regressions.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-10 (#931 lattice-ownership merge): a single `::referee` span
