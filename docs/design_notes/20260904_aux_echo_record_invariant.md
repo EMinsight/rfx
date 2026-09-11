@@ -168,7 +168,7 @@ its committed record, and written into the artifact.
 
 | case | rung | K | `nx_interior` | record | arrival (gated) | **ratio** | arrival (centre) | ratio (centre) |
 |---|---|---|---|---|---|---|---|---|
-| cv04 | `slab_eps4` | 1 | 600 | 719 | 1196 | **0.601** | 1278 | 0.563 |
+| cv04 | `slab_eps4` | 1 | 800 | 990 | 1624 | **0.610** | 1707 | 0.580 |
 | cv22 | `debye` | 1 | 1000 | 1108 | 2053 | **0.540** | 2135 | 0.519 |
 | cv22 | `drude` | 1 | 1000 | 1168 | 2053 | **0.569** | 2135 | 0.547 |
 | cv22 | `lorentz` | 1 | 1000 | 1228 | 2053 | **0.598** | 2135 | 0.575 |
@@ -182,8 +182,14 @@ its committed record, and written into the artifact.
 | cv23 | `tand3_dx2` | 2 | 2000 | 2362 | 4043 | **0.584** | 4207 | 0.561 |
 | cv23 | `tand3_dx4` | 4 | 4000 | 4723 | 8022 | **0.589** | 8349 | 0.566 |
 
+cv04's row reflects the settling-extension fix (2026-09-10): `nx_interior`
+grew from the declared 600 to 800 (one grow attempt) so the record could
+reach the family's −40 dB settling bar, which is why cv04's own numbers here
+differ from an earlier reading of this table -- they are read fresh from
+the same artifact, not retyped by hand.
+
 Every value in the "ratio" column is read back from the artifact:
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_over_echo_arrival = 0.601`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_over_echo_arrival = 0.610`,
 `validation/crossval/_22_dispersive_results/lattice_witness.json::rungs.debye.aux_echo.record_over_echo_arrival = 0.540`,
 `validation/crossval/_22_dispersive_results/lattice_witness.json::rungs.drude.aux_echo.record_over_echo_arrival = 0.569`,
 `validation/crossval/_22_dispersive_results/lattice_witness.json::rungs.lorentz.aux_echo.record_over_echo_arrival = 0.598`,
@@ -198,20 +204,26 @@ Every value in the "ratio" column is read back from the artifact:
 `validation/crossval/_23_lossy_results/lattice_witness.json::rungs.tand3_dx4.aux_echo.record_over_echo_arrival = 0.589`.
 
 cv04's arrival and record, likewise:
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_steps = 1196`,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_steps = 719`,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_centre_steps = 1278`,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_n_1d = 652`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_steps = 1624`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.record_steps = 990`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.echo_arrival_centre_steps = 1707`,
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_n_1d = 852`,
 and the reflector the phase slope located,
-`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_reflector_index = 638.88`.
+`validation/crossval/_04_fresnel_results/lattice_witness.json::rungs.slab_eps4.aux_echo.aux_reflector_index = 838.88`.
 
 **The notes' 0.50–0.57 is confirmed, at the notes' own convention.** In the
-centre column the 13 rungs span **0.500 to 0.575** — `tand0p1` at 0.4998 is the
-0.50 the cv04 note reports, `lorentz` at 0.575 its 0.57 (the note's table used
-`v_g(f0)`, 0.3 % slower than the Courant speed used here, and reads 0.573
-there). At the gated convention, which subtracts the pulse's leading edge, the
-same rungs span **0.520 to 0.601**. Both columns are in the artifact so neither
-claim rests on a retyped number.
+centre column the 13 rungs span **0.500 to 0.580** (N3, PR #974 round 2: was
+0.500 to 0.575 before cv04's 2026-09-10 settling fix; cv04 is now the rung
+that sets this column's upper bound too, `lorentz` at 0.575 held it before)
+— `tand0p1` at 0.4998 is the 0.50 the cv04 note reports, `lorentz` at 0.575
+close to its 0.57 (the note's table used `v_g(f0)`, 0.3 % slower than the
+Courant speed used here, and reads 0.573 there). At the gated convention,
+which subtracts the pulse's leading edge, the
+same rungs span **0.520 to 0.610** (was 0.520 to 0.601 before cv04's
+2026-09-10 settling fix; cv04 is the rung that sets the upper bound both
+before and after, `record/arrival` 0.601 -> 0.610 with its own record growing
+719 -> 990 steps). Both columns are in the artifact so neither claim rests on
+a retyped number.
 
 ---
 
@@ -221,12 +233,16 @@ claim rests on a retyped number.
 
 cv04's rig, geometry untouched, only the record changed. The FDTD columns were
 measured here with a harness that reproduces `04_multilayer_fresnel.py` PART 1 + PART 2
-verbatim (it returns 0.0066 / 0.0487 at the committed 719, which is what
-licenses the rest):
+verbatim (it returns 0.0066 / 0.0487 at the then-committed 719, which is what
+licenses the rest). This sweep predates cv04's 2026-09-10 settling-extension
+fix and its rows are read as historical: the case's OWN committed record is
+990 steps now, not 719, and does not appear in this sweep (this harness was
+not re-run at 990; the case's own `--lattice-witness` output is the current
+source, §2 above):
 
 | record | ratio | guard | measured `mean\|ΔR\|` | measured `max\|R+T−1\|` |
 |---|---|---|---|---|
-| 719 (committed) | 0.601 | silent | 0.0066 | 0.0487 |
+| 719 (PRE-FIX, superseded 2026-09-10) | 0.601 | silent | 0.0066 | 0.0487 |
 | 1100 | 0.920 | silent | 0.0073 | 0.0004 |
 | 1195 | 0.999 | silent | 0.0073 | 0.0004 |
 | **1196** | **1.000** | **FIRES** | — | — |
@@ -252,7 +268,9 @@ Reproduce: the harness is in this note's §8; ~11 s per record locally.
 
 ### 4.2 The guard is silent at every committed rung
 
-All 13 rungs carry `precond_aux_echo_record: true` at ratios 0.520–0.601 (§3).
+All 13 rungs carry `precond_aux_echo_record: true` at ratios 0.520–0.610 (§3;
+was 0.520–0.601 before cv04's 2026-09-10 settling fix moved the rung that
+sets the upper bound).
 `test_no_committed_rung_is_anywhere_near_the_arrival` asserts the whole
 population, its size (13), and the band.
 
@@ -297,7 +315,8 @@ none.
    measurable only from ~1230 — 34 steps, 2.8 %, in which a clean record is
    rejected (§4.1: 1200 steps measures 0.0073 / 0.0004 and is refused). That is
    the correct direction for a guard and it costs nothing at any committed rung,
-   whose worst ratio is 0.601.
+   whose worst ratio is 0.610 (cv04, post-2026-09-10 settling fix; was 0.601 at
+   cv04's pre-fix 719-step record).
 
 5. **`reflector_depth_cells` is measured, at two geometries, not derived.**
    6.88 cells at `nx_interior = 600` and 1038.88 → 6.88 at `nx_interior = 1000`

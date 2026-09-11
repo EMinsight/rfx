@@ -223,6 +223,18 @@ PROBE_OFFSET_CELLS = 30
 SRC_T0_OVER_TAU = 3.0
 C0 = de.C0
 
+# The settling-extension loop's own box-growth step: grow the interior box
+# by this many cells when the CPML gate is reached before the tail clears
+# SETTLING_LIMIT (never clip). Declared HERE, not in cv22_dispersive_gates.py
+# (issue #928 producer-import-graph invariant, tests/crossval/
+# test_producer_import_graph.py): 04_multilayer_fresnel.py's own settling-
+# extension fix (cv04 settling-extension fix, 2026-09-10) needs this same
+# constant, and cv04 is the envelope PRODUCER -- it must not import a module
+# named after a CONSUMER case (cv22_dispersive_gates), even for a constant,
+# even transitively. cv22_dispersive_gates.py re-exports this rather than
+# redeclaring it, the same pattern RING_W_MIN/RING_F_MAX_HZ already use.
+NX_GROW_CELLS = 200
+
 
 def rig_cells(nx_interior: int, dx_div: int = 1):
     """Cell bookkeeping of the cv04 rig (Grid adds 2*n_cpml + 1 cells)."""

@@ -262,6 +262,14 @@ def main(argv=None) -> int:
         ap.error("--dx-div / --nx-interior arms are diagnostics and require --tag")
     if a.settling_bar is not None and not a.tag and not a.smoke:
         ap.error("--settling-bar arms are new rungs and require --tag")
+    if a.recipe == G.RECIPE_CV04 and not a.tag and not a.smoke:
+        # S1 (PR #974 round 2 review): recipe=cv04 (the legacy 719-step rule)
+        # produces run["record"] = None, so GL_witness cannot be computed --
+        # it must never be the recipe that writes the committed baseline
+        # rfx.json, only a --tag diagnostic.
+        ap.error("--recipe cv04 has no adaptive settling record (GL_witness "
+                 "cannot be computed) and must never publish the baseline "
+                 "rfx.json -- requires --tag")
 
     out_dir = a.out_dir or (tempfile.mkdtemp(prefix="cv23_smoke_") if a.smoke else RESULTS_DIR)
     os.makedirs(out_dir, exist_ok=True)
@@ -358,6 +366,56 @@ def main(argv=None) -> int:
                   f"tail scat/trans {run['tail']['scat_refl_rel']:.2e}/{run['tail']['total_trans_rel']:.2e} "
                   f"vs {G.SETTLING_LIMIT:g} -> {'ok' if run['tail']['ok'] else 'FAIL'}; fitted tail rate "
                   f"scat/trans {run['tail']['fitted_rate_scat_refl_1_s']:.3e}/{run['tail']['fitted_rate_total_trans_1_s']:.3e} /s")
+
+        # --- Lattice-witness gate, WIRED into the verdict (was print-only;
+        # docs/design_notes/20260903_lattice_witness_standard.md, issue #970).
+        # LW.evaluate() is a pure, in-memory, single-arm function -- no file
+        # I/O, no other rungs -- so this runs the SAME computation the
+        # standalone `--lattice-witness` mode and tests/crossval/
+        # test_lattice_witness_gates.py already trust, live on THIS run's own
+        # freshly-computed R/T, not a re-read of a committed artifact. `e2`
+        # already has every field LW.evaluate() needs (dt_s, model, params,
+        # gated, freqs_hz, R_rfx/T_rfx, inc_amp_rel, tail, run.record) --
+        # it is the identical shape a committed rfx.json's arms[name] block
+        # has, by construction (this dict IS what gets written there).
+        # Needs run["record"] (rate_ring_1_s, t_safe_cpml_steps): absent on
+        # a recipe with no adaptive settling derivation (cv04's legacy
+        # 719-step rule, --recipe cv04) -- not evaluated there; the missing
+        # declared GL_witness fails require_complete below.
+        if run.get("record") is not None:
+            witness = LW.evaluate(e2, params=params)
+            e2["lattice"]["witness_ok"] = witness["witness_ok"]
+            e2["lattice"]["witness_detail"] = witness
+            e2["lattice"]["gated"] = True   # N5: was a hardcoded False from evaluate_e2
+            e2["gates"]["GL_witness"] = witness["witness_ok"]
+        else:
+            # S1 fix (PR #974 round 2 review): GL_witness is DECLARED
+            # unconditionally below, even here where it cannot be computed --
+            # a witness-less run (recipe=cv04, no adaptive settling record)
+            # must not leave a PASS standing (#928), the same rule
+            # require_complete already enforces for every other declared
+            # gate. Before this fix GL_witness was omitted from `declared`
+            # on this path too, so aggregate_gates never saw it was missing:
+            # rc 0, e2_ok True, incomplete_gates []. --recipe cv04 now also
+            # requires --tag, so this branch can never write the committed
+            # baseline rfx.json (argparse check above).
+            e2["lattice"]["witness_ok"] = None
+            e2["lattice"]["gated"] = False   # N5: stays False here, correctly now
+            e2["lattice"]["witness_note"] = (
+                f"no adaptive settling record on this run (recipe={a.recipe!r}) -- "
+                "the live lattice-witness gate needs run['record'] "
+                "(rate_ring_1_s, t_safe_cpml_steps); not evaluated, and "
+                "GL_witness is declared but MISSING, which FAILS this run "
+                "under require_complete below, not a silent pass."
+            )
+        # GL_witness is part of the declared set on every path, record or
+        # not: a missing declared gate fails require_complete by
+        # construction, so a recipe that cannot produce a witness cannot
+        # publish a witness-less PASS.
+        e2.update(G.aggregate_gates(
+            e2["gates"], declared=L.DECLARED_GATES + ("GL_witness",),
+            require_complete=True))
+
         if not run["band_inc_ok"]:
             e2["gates"]["rig_incident_floor"] = False
             e2["e2_ok"] = False
@@ -369,10 +427,12 @@ def main(argv=None) -> int:
               f"max R+T (masked) = {1 + e2['max_RT_closure_masked']:.4f}")
         print(f"  E2 gates: {e2['gates']} -> {'PASS' if e2['e2_ok'] else 'FAIL'}")
         lat = e2["lattice"]
-        print(f"  lattice witness (reported, not gated): W_lat mean R/T/A {lat['mean_W_lat_R_gated']:.5f}/"
+        _witness_label = ("GATED (GL_witness)" if lat.get("witness_ok") is not None
+                          else "not evaluated, see witness_note")
+        print(f"  lattice witness ({_witness_label}): W_lat mean R/T/A {lat['mean_W_lat_R_gated']:.5f}/"
               f"{lat['mean_W_lat_T_gated']:.5f}/{lat['mean_W_lat_A_gated']:.5f}; |rfx - lattice| mean R/T/A "
               f"{lat['mean_dR_lattice_gated']:.2e}/{lat['mean_dT_lattice_gated']:.2e}/{lat['mean_dA_lattice_gated']:.2e} "
-              f"(max R {lat['max_dR_lattice_gated']:.2e})")
+              f"(max R {lat['max_dR_lattice_gated']:.2e}); witness_ok={lat.get('witness_ok')}")
         for fi in (4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0):
             i = int(np.argmin(np.abs(np.asarray(e2["freqs_hz"]) - fi * 1e9)))
             print(f"    {e2['freqs_hz'][i]/1e9:6.2f} GHz  R {e2['R_tmm'][i]:.4f}/{e2['R_rfx'][i]:.4f} | "
