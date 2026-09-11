@@ -758,6 +758,7 @@ EXPORTED_SIMULATION_ATTRS: tuple[str, ...] = (
     "_cpml_kappa_max",
     "_cpml_layers",
     "_dft_planes",
+    "_interface_eps",
     "_domain",
     "_dx",
     "_dx_profile",
@@ -1402,6 +1403,11 @@ def design_to_dict(sim: Any) -> dict[str, Any]:
             "solver": check_text(sim._solver, what="_solver"),
             "adi_cfl_factor": check_number(sim._adi_cfl_factor, what="_adi_cfl_factor"),
             "stencil_order": _integer(sim._stencil_order, what="_stencil_order"),
+            # #949: the node-eps rule at dielectric interfaces on the NU lane
+            # ("sampled" | "dual_average"). A design input: a rebuilt design
+            # that silently fell back to "sampled" would solve a different
+            # material column.
+            "interface_eps": check_text(sim._interface_eps, what="_interface_eps"),
         },
         "materials": _dump_materials(sim),
         "material_library": _dump_material_library(sim),
@@ -1633,7 +1639,7 @@ def simulation_from_design(document: Any) -> Any:
     solver = _section(document, "solver", what="design document")
     _require_exact_keys(
         solver,
-        {"precision", "solver", "adi_cfl_factor", "stencil_order"},
+        {"precision", "solver", "adi_cfl_factor", "stencil_order", "interface_eps"},
         what="solver",
     )
 
@@ -1678,6 +1684,7 @@ def simulation_from_design(document: Any) -> Any:
         solver=check_text(solver["solver"], what="solver.solver"),
         adi_cfl_factor=check_number(solver["adi_cfl_factor"], what="solver.adi_cfl_factor"),
         stencil_order=_integer(solver["stencil_order"], what="solver.stencil_order"),
+        interface_eps=check_text(solver["interface_eps"], what="solver.interface_eps"),
         **plan.kwargs,
     )
     if plan.set_periodic_axes is not None:
