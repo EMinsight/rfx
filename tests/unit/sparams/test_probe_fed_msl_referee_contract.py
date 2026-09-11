@@ -1,7 +1,12 @@
 """Contract tests for the #498 openEMS referee lane.
 
-openEMS is NOT installed on this pod, so everything here is either pure
-arithmetic or a subprocess of the script's own openEMS-free paths. The
+Everything here is either pure arithmetic or a subprocess of the script's
+own openEMS-free paths. Nothing in this file requires openEMS, and nothing
+in it may assume openEMS is ABSENT either (#955): the gate image
+``ghcr.io/bk-squared/rfx-openems`` ships it, a dev pod does not, and a test
+that reads the ambient environment instead of controlling it is green on one
+and red on the other. Where a test needs the solver to be unimportable it
+installs ``_solver_shadow`` on the child's ``PYTHONPATH``. The
 tests that matter:
 
   * the STAGE CONTRACT -- Stage 2 refuses to run unless Stage 1 ran and
@@ -11,7 +16,7 @@ tests that matter:
     body for the quoted red run);
   * the DE-EMBEDDING arithmetic, on planted data with a known answer;
   * the MESH/GEOMETRY self-check, pure numpy;
-  * that the module imports and ``--dry-run``s with no openEMS present.
+  * that the module imports and ``--dry-run``s without pulling in openEMS.
 
 Nothing here asserts a physics number. No lumped/wire diagonal value is
 pinned by any test in this file.
@@ -49,8 +54,11 @@ def _smoother():
     return _SMOOTHER_CACHE[0]
 
 
+_REFEREE_MODULE_NAME = "_probe_fed_msl_referee_under_test"
+
+
 def _load_referee():
-    spec = importlib.util.spec_from_file_location("_probe_fed_msl_referee_under_test", _SCRIPT)
+    spec = importlib.util.spec_from_file_location(_REFEREE_MODULE_NAME, _SCRIPT)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -62,15 +70,77 @@ def ref():
     return _load_referee()
 
 
+_SOLVER_ROOTS = ("openEMS", "CSXCAD")
+
+
+def _is_solver_module(name: str) -> bool:
+    return name.split(".")[0] in _SOLVER_ROOTS
+
+
+def _solver_shadow(tmp_path: Path) -> Path:
+    """Build a directory that makes openEMS and CSXCAD unimportable.
+
+    Placed first on a child process's ``PYTHONPATH`` it shadows any real
+    install (PYTHONPATH entries precede site-packages), so a test of the
+    script's "cannot import the solver" path walks that path on the openEMS
+    gate image exactly as it does on a pod without openEMS (#955).
+    ``_import_openems`` reaches CSXCAD first, then openEMS; both are shadowed
+    so it does not matter which one it tries.
+    """
+    shadow = tmp_path / "no_solver"
+    for package in _SOLVER_ROOTS:
+        pkg_dir = shadow / package
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "__init__.py").write_text(
+            f'raise ImportError("{package} is shadowed by '
+            'test_probe_fed_msl_referee_contract (#955)")\n')
+    return shadow
+
+
+def _env_without_solver(tmp_path: Path) -> dict:
+    """The current environment, with the solver shadow prepended to PYTHONPATH."""
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(_solver_shadow(tmp_path))] + ([existing] if existing else []))
+    return env
+
+
 # ---------------------------------------------------------------------------
 # Import-guarded structure
 # ---------------------------------------------------------------------------
-def test_module_imports_without_openems(ref):
-    """The referee must be importable (and therefore testable) on a pod
-    with no openEMS: the solver import is deferred into _import_openems."""
-    assert "openEMS" not in sys.modules
-    assert "CSXCAD" not in sys.modules
-    assert callable(ref._import_openems)
+def test_module_import_does_not_pull_in_the_solver():
+    """Importing the referee must not eagerly import the solver: it is
+    reached only through _import_openems, which is what keeps this file
+    testable on a pod with no openEMS.
+
+    Stated as the DELTA of ``sys.modules`` across this one import, not as the
+    global fact ``"openEMS" not in sys.modules`` (#955) — the latter is a
+    claim about the whole process that any sibling test, or an image that
+    ships openEMS, falsifies without the referee having misbehaved.
+    """
+    # Evict the referee module (it is loaded by path, so normally absent) and
+    # any solver module already imported, so a solver import performed by the
+    # exec_module below actually appears in the delta instead of being served
+    # from the module cache. Everything evicted is put back afterwards.
+    evicted = {name: mod for name, mod in sys.modules.items()
+               if _is_solver_module(name) or name == _REFEREE_MODULE_NAME}
+    for name in evicted:
+        del sys.modules[name]
+    try:
+        before = set(sys.modules)
+        mod = _load_referee()
+        added = sorted(n for n in set(sys.modules) - before
+                       if _is_solver_module(n))
+    finally:
+        for name in [n for n in sys.modules if _is_solver_module(n)]:
+            del sys.modules[name]
+        sys.modules.update(evicted)
+
+    assert not added, (
+        "importing the referee eagerly imported the solver: "
+        + ", ".join(added))
+    assert callable(mod._import_openems)
 
 
 def test_dry_run_prints_stage_plan_and_geometry_without_openems():
@@ -190,13 +260,19 @@ def test_cli_stage_2_with_a_failing_stage1_json_exits_4(tmp_path):
 
 
 def test_cli_stage_1_without_openems_exits_2_and_writes_no_number(tmp_path):
-    """On this pod openEMS is absent: Stage 1 must exit 2 with the
-    VESSL-only message and must NOT write an artifact carrying a
-    reproduced number it never measured."""
+    """With openEMS unimportable, Stage 1 must exit 2 with the VESSL-only
+    message and must NOT write an artifact carrying a reproduced number it
+    never measured.
+
+    The absence is imposed on the child process (#955), not read off the
+    host: on the gate image openEMS imports fine and Stage 1 would run its
+    self-check and exit 0.
+    """
     out = tmp_path / "referee.json"
     proc = subprocess.run(
         [sys.executable, str(_SCRIPT), "--stage", "1", "--output", str(out)],
-        capture_output=True, text=True, cwd=str(_REPO_ROOT))
+        capture_output=True, text=True, cwd=str(_REPO_ROOT),
+        env=_env_without_solver(tmp_path))
     assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
     assert "openEMS Python bindings not importable" in proc.stderr
     assert "vessl_probe_fed_msl_referee.yaml" in proc.stderr
@@ -204,10 +280,13 @@ def test_cli_stage_1_without_openems_exits_2_and_writes_no_number(tmp_path):
 
 
 def test_cli_stage_both_without_openems_never_reaches_stage_2(tmp_path):
+    # Same environment dependence as the Stage-1 test above (#955): the
+    # solver is shadowed for this child rather than assumed missing.
     out = tmp_path / "referee.json"
     proc = subprocess.run(
         [sys.executable, str(_SCRIPT), "--stage", "both", "--output", str(out)],
-        capture_output=True, text=True, cwd=str(_REPO_ROOT))
+        capture_output=True, text=True, cwd=str(_REPO_ROOT),
+        env=_env_without_solver(tmp_path))
     assert proc.returncode == 2
     assert "STAGE 2" not in proc.stdout.split(
         "--- STAGE 1: reproduce-gate (openEMS's own canonical examples) ---")[-1]
