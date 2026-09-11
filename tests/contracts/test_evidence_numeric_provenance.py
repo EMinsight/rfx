@@ -543,6 +543,14 @@ CLASSIFICATION: dict[str, str] = {
     # stronger check than this gate performs. Same shape as
     # 20260910_cv05_crossval_disposition.md above.
     "docs/design_notes/20260907_nu_band_profile_predeclaration.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-11 (nu lane, PR #963): no `path.json::key` span (parses empty; any
+    # `::` spans are test ids); the numbers are replayed from the lane's results
+    # JSON by its own replay test.
+    "docs/design_notes/20260910_cpml_localization_predeclaration.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-11 (nu lane, PR #963): no `path.json::key` span (parses empty; any
+    # `::` spans are test ids); the numbers are replayed from the lane's results
+    # JSON by its own replay test.
+    "docs/design_notes/20260907_nu_cost_reduction_plan.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-11 (nu lane, PR #962): no `path.json::key` span (parses empty; any
     # `::` spans are test ids); the numbers are replayed from the lane's results
     # JSON by its own replay test.
