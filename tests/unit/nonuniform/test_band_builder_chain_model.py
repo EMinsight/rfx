@@ -40,6 +40,30 @@ relative; the L_ramp law to 1e-2 relative on the six W6 rows (measured
 0.03 % to 0.53 % on 5bf9d16b — the reviewer note's "within 0.5 %" is
 0.53 % at n_b = 16; recorded in the design note, not rounded away here).
 
+What the F7 1e-6 budget now covers, and what it no longer has to. The
+first CI run of this file failed on ubuntu at sum_abs_R_step, 4.3e-6
+against a JSON written on macOS: every per-step |R_step| disagreed
+(median 2.9e-5, worst 3.4e-4) because a step's reflection is a 1e-7
+residue that a dense float64 solve extracts by cancelling 1e10-scale
+terms, so its last bits are the LAPACK build's. Those numbers come from
+``chain_model.step_reflection`` now — the closed form of the same
+junction, accurate to a few ulp and platform-independent (verified
+against a 60-digit solve of ``scattering``'s own rows, and against
+``scattering`` itself by
+``test_f7_step_reflection_is_the_same_model_as_the_solve`` below). The
+1e-6 budget is therefore spent only on R_total and T_total, which are
+genuine multi-cell solves. Their measured macOS-vs-Linux spread is
+4.5e-7 (OLD row R_total), 4.0e-8 (NEW row) and 2.8e-12 (T_total): the
+OLD row uses 45 % of the budget, so a third platform could still put it
+over. The stable form for those is a Riccati/transmission-line cascade
+over the uniform runs — this chain is exactly such a cascade, with
+admittance sin(q_j)/d_j per run — and it is deliberately NOT done here;
+it is written up for the lead instead of smuggled into a CI fix.
+
+STEP_ORACLE_REL below is a separate, looser number: it bounds how far
+the float64 dense solve of a step may sit from the exact closed form,
+which is the solve's noise, not a tolerance on any replayed value.
+
 Runtime: about 200 chain-model solves on <= 300-cell profiles (2 ms each)
 plus 80 builder calls — a fast-lane test.
 """
@@ -57,7 +81,9 @@ from rfx.nonuniform import make_nonuniform_grid
 
 from validation.research.multiband_nu import fixtures as fx
 from validation.research.multiband_nu import w6_band_builder as w6
-from validation.research.multiband_nu.chain_model import bloch_kz, scattering
+from validation.research.multiband_nu.chain_model import (
+    bloch_kz, scattering, step_reflection,
+)
 
 _REPO = pathlib.Path(__file__).resolve().parents[3]
 _JSON = _REPO / "validation/research/multiband_nu/results/w6_band_builder.json"
@@ -67,6 +93,7 @@ F7_REL = 1e-6         # F7 replayed floats (8 um cells; see the docstring)
 CELL_TOL = 1e-12      # m, I1
 QUOTED_REL = 1e-4     # five-figure values quoted in the note
 LAW_REL = 1e-2        # Fabry-Perot form with L_ramp on the six W6 rows
+STEP_ORACLE_REL = 5e-4  # dense float64 step solve vs the exact closed form
 
 R_SINGLE_RAMP = 5.7907e-3      # note, F8 law paragraph and W6 matrix row
 K_G_PER_MM = 0.18163           # discrete k_g(1.0 mm), reviewer notes
@@ -119,6 +146,38 @@ def test_f7_old_row_is_the_revert_proof(w6_json):
     assert old["nz"] == 45
     assert _rel_close(old["max_ratio"], 8.0, F7_REL)
     assert old["n_ratio_over_1p4"] == 25
+
+
+def test_f7_step_reflection_is_the_same_model_as_the_solve(w6_json):
+    """``step_reflection`` is ``scattering`` on a step, solved on paper.
+
+    The closed form is what the F7 per-step numbers are computed with, so
+    it needs an oracle that is not itself the closed form. That oracle is
+    the dense solve this file already trusts for R_total: for every
+    distinct step in the committed NEW profile, the two must agree inside
+    the dense solve's own accuracy on a 1e-7 residue (STEP_ORACLE_REL).
+    Two runway lengths are checked, because the closed form takes no
+    runway at all and the derivation says it must not matter — a
+    disagreement that grows with the runway would mean the closed form is
+    a different problem, not the same one solved better.
+    """
+    f7 = w6_json["f7"]
+    dt, dy, b = f7["dt_new_s"], f7["dy_m"], f7["b_m"]
+    cells = np.asarray(f7["new"]["cells_um"], np.float64) * 1e-6
+    pairs = sorted({(float(cells[k]), float(cells[k + 1]))
+                    for k in range(len(cells) - 1)
+                    if cells[k] != cells[k + 1]
+                    and max(cells[k] / cells[k + 1],
+                            cells[k + 1] / cells[k]) > 1.01})
+    assert len(pairs) >= 8
+    for d0, d1 in pairs:
+        closed = step_reflection(d0, d1, w6.F0, dt, dy, b)
+        assert closed > 0
+        for n_lead, n_tail in ((w6.F7_LEAD, w6.F7_TAIL), (20, 20)):
+            prof = np.array([d0] * n_lead + [d1] * n_tail, np.float64)
+            solved = abs(scattering(prof, n_lead, n_tail, w6.F0, dt, dy, b)[0])
+            assert _rel_close(closed, solved, STEP_ORACLE_REL), (
+                d0, d1, n_lead, closed, solved)
 
 
 @pytest.mark.parametrize("side", ["old", "new"])
