@@ -884,9 +884,14 @@ alone (4.5e-7 OLD, 4.0e-8 NEW, 2.8e-12 T).
 
 Open, for the lead: R_total and T_total still come from the dense solve,
 and the OLD row's 4.5e-7 cross-platform spread uses 45 % of the replay's
-1e-6 budget. The stable form is a Riccati cascade over the uniform runs —
-this chain is exactly such a cascade, with admittance sin(q_j)/d_j per run
-and phase q_j per cell — and it was deliberately left out of a CI fix.
+1e-6 budget — flipping one cell of the OLD profile by a single ulp moves
+R_total by up to 3.2e-7, so that budget is about one ulp-flip wide. A
+stable form is plausible: each junction's exact reflection is the
+admittance mismatch above, so a Riccati cascade over the uniform runs is
+the candidate. It is not a drop-in — a throwaway prototype of that cascade
+missed both rows by about 20 %, so the node/cell bookkeeping between
+adjacent interfaces has to be derived, not guessed. Left out of a CI fix
+on purpose.
 
 **F8 (FDTD, narrow fine band).** dt(A) = dt(B) = 2.402764937e-12 s, gates
 t_r 1.047 / gate_end 2.091 ns (870 steps) as declared; the builder emitted

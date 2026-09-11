@@ -55,10 +55,13 @@ against a 60-digit solve of ``scattering``'s own rows, and against
 genuine multi-cell solves. Their measured macOS-vs-Linux spread is
 4.5e-7 (OLD row R_total), 4.0e-8 (NEW row) and 2.8e-12 (T_total): the
 OLD row uses 45 % of the budget, so a third platform could still put it
-over. The stable form for those is a Riccati/transmission-line cascade
-over the uniform runs — this chain is exactly such a cascade, with
-admittance sin(q_j)/d_j per run — and it is deliberately NOT done here;
-it is written up for the lead instead of smuggled into a CI fix.
+over. A stable form for those is plausible but not a drop-in:
+each junction's exact reflection is the admittance mismatch this file's
+step oracle is built on, so a Riccati cascade over the uniform runs is
+the candidate, but a throwaway prototype of it missed both rows by about
+20 %, so the node/cell bookkeeping between adjacent interfaces has to be
+derived rather than guessed. That is model work, not a CI fix, and it is
+deliberately NOT done here.
 
 STEP_ORACLE_REL below is a separate, looser number: it bounds how far
 the float64 dense solve of a step may sit from the exact closed form,
