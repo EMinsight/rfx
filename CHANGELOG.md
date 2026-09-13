@@ -9,6 +9,25 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 The #931 artifact-to-carrier sweep, complete field ledger, and named unresolved
 fixture findings are recorded in the [docs-truth audit](docs/design_notes/20260908_docs_truth_audit.md).
 
+### Fixed — cv02 retained verdict exit contract (#946)
+
+- Add a source contract that requires the persisted `exit_code` and every
+  `sys.exit` path in the ring-resonator crossval to use the same `_rc` value,
+  preventing a later exit branch from contradicting retained evidence.
+
+### Fixed — cv02 Q-rate interval transform (#945)
+
+- Transform the declared decay-rate interval into its exact asymmetric log-Q
+  bounds, including an unbounded high-Q side when the rate interval reaches
+  zero. Keep the existing record-resolution policy and public scalar window,
+  while removing the false symmetric upper restriction.
+
+### Fixed — TMTT paper settling witnesses (#918)
+
+- Add passive Ex, Ez and Hy point records to the beam-steering and MSL-notch
+  paper builders so NTFF and field-DFT results carry the shared ring-down
+  witness without changing their solve or AD observables.
+
 ### Fixed — shared coordinates for Kottke smoothing (#833)
 
 - Build uniform-grid smoothing coordinates from the same exact host-float64

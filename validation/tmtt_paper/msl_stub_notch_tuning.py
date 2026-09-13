@@ -266,6 +266,14 @@ def build_sim(freqs: jnp.ndarray) -> tuple[
                      width=W_TRACE, height=H_SUB,
                      direction="-x", impedance=50.0)
 
+    # A pair of local fields in the same observation region as the first MSL
+    # port supplies an energy ring-down witness for the paper example (#918).
+    # They are passive records and do not participate in either DFT-plane
+    # extractor or the AD objective.
+    witness = (PORT_MARGIN + 3.0 * DX, y_trace, 0.5 * H_SUB)
+    sim.add_probe(witness, "ez")
+    sim.add_probe(witness, "hy")
+
     # Plane DFT probes — line-integrated V (Ez) + closed-Ampere-loop I
     # (Hy + Hz) per port.  register_msl_plane_probes / _v_from_plane /
     # _i_from_plane call `compute_msl_s_matrix`'s own primitives
@@ -360,7 +368,8 @@ def build_stub_occ(grid, trace_y_hi: float, L_stub: jnp.ndarray) -> jnp.ndarray:
 
     in_x = ((x_centres >= stub_x_lo) & (x_centres <= stub_x_hi)).astype(np.float32)
     in_z = (np.abs(z_centres - z_patch) <= 0.5 * DX).astype(np.float32)
-    in_x_j = jnp.asarray(in_x); in_z_j = jnp.asarray(in_z)
+    in_x_j = jnp.asarray(in_x)
+    in_z_j = jnp.asarray(in_z)
     y_far = jnp.asarray(y_centres - trace_y_hi, dtype=jnp.float32)
     sig_low = jax.nn.sigmoid(y_far / SIGMOID_BETA)
     sig_high = jax.nn.sigmoid((L_stub - y_far) / SIGMOID_BETA)
@@ -852,11 +861,13 @@ def main() -> int:
     ax.set_xlabel("L_stub (mm)")
     ax.set_ylabel(f"|S21(f={F_TARGET/1e9:.1f} GHz)|² (JAX extractor)")
     ax.set_title("Multimodal cost vs L_stub — multi-start basins")
-    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
 
     ax = axes[1]
     ax.plot(iters, history["db"], "b-o", lw=1.4, ms=4)
-    ax.set_xlabel("Adam iter"); ax.set_ylabel("|S21(f_target)| dB (JAX)")
+    ax.set_xlabel("Adam iter")
+    ax.set_ylabel("|S21(f_target)| dB (JAX)")
     ax.set_title(f"Adam convergence (best start "
                  f"{best_history['start']}, seed "
                  f"{L_seeds_mm[best_history['start']]:.1f}mm)")
@@ -867,10 +878,12 @@ def main() -> int:
             label=f"imperative @ L_opt={L_opt*1e3:.2f}mm")
     ax.axvline(F_TARGET / 1e9, color="r", ls=":", alpha=0.8,
                label=f"f_target={F_TARGET/1e9:.2f} GHz")
-    ax.set_xlabel("Frequency (GHz)"); ax.set_ylabel("|S21| dB (imperative)")
+    ax.set_xlabel("Frequency (GHz)")
+    ax.set_ylabel("|S21| dB (imperative)")
     ax.set_title("Cross-solver gate — imperative notch at L_opt")
     ax.set_ylim(-50, 5)
-    ax.grid(True, alpha=0.3); ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
 
     fig.suptitle(
         f"MSL stub notch tuning — density-PEC reformulation + JAX N-probe extractor\n"
@@ -881,7 +894,8 @@ def main() -> int:
     )
     plt.tight_layout()
     out = os.path.join(SCRIPT_DIR, "msl_stub_notch_tuning.png")
-    plt.savefig(out, dpi=150); plt.close()
+    plt.savefig(out, dpi=150)
+    plt.close()
     print(f"\nWrote: {out}")
     return 0 if all_ok else 1
 

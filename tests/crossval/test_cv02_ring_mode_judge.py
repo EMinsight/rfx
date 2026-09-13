@@ -14,6 +14,7 @@ Pre-declaration:
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import math
 import sys
@@ -288,10 +289,11 @@ def test_b2_scan_every_displacement_past_the_window_is_now_caught(
 
 
 def test_b3_wrong_q_on_the_gated_mode_passes_the_shipped_judge_and_fails() -> None:
-    """Mode 2's Q wrong by 5x -- exactly the radiation-loss error a staircased
-    curved boundary produces. The shipped judge gates no Q at all."""
+    """Mode 2's Q is five times too low -- a radiation-loss error a staircased
+    curved boundary can produce. The shipped judge gates no Q at all; the
+    corrected transformed interval rejects this low-Q side."""
     defect = [
-        rmj.SolverMode(0.147213, 357.6 * 5.0),
+        rmj.SolverMode(0.147213, 357.6 / 5.0),
         rmj.SolverMode(0.175298, 1864.1),
         rmj.SolverMode(0.118068, 86.5),
     ]
@@ -362,14 +364,51 @@ def test_q_window_is_the_record_length_resolution_limit() -> None:
     assert w2 == pytest.approx(w1 / 4.0, rel=1e-12)
 
 
-def test_no_admitted_q_gate_tolerates_more_than_a_factor_five() -> None:
-    """Consequence of the 1/4 e-folding cut: the loosest window this rule can
-    ever issue is tau/T = 4, so the widest admitted band is a factor
-    1 + 4 = 5. Any Q error strictly larger than 5x fails on every gated mode.
+def test_q_rate_interval_maps_to_asymmetric_q_bounds() -> None:
+    """The inverse decay-rate map has a finite lower and one-sided upper
+    bound; the old symmetric ``log1p(s)`` gate rejected the latter too soon.
     """
-    widest = math.log(1.0 + 1.0 / rmj.Q_RECORD_MIN_EFOLDS)
-    assert widest == pytest.approx(math.log(5.0))
-    assert math.log(5.001) > widest
+    record = 20.0 / math.pi  # tau = 10/pi, hence s = tau/T = 0.5
+    lower, upper = rmj.q_log_bounds(1.0, 10.0, record)
+    assert lower == pytest.approx(-math.log(1.5))
+    assert upper == pytest.approx(-math.log(0.5))
+    assert lower < 0.0 < upper
+
+    # Ratios infinitesimally inside either transformed endpoint are admissible
+    # (using an interior epsilon avoids making the test depend on libm's last
+    # bit when the endpoint is reconstructed through a logarithm).
+    for ratio in ((1.0 / 1.5) * (1.0 + 1e-9), 2.0 * (1.0 - 1e-9)):
+        verdict = rmj.judge(
+            [rmj.ReferenceMode(1.0, 10.0)],
+            [rmj.SolverMode(1.0, 10.0 * ratio)],
+            record,
+            f_min=0.5,
+            f_max=1.5,
+        )
+        assert verdict.gates["q"] is True
+
+    # At s >= 1, the rate interval reaches zero and the high-Q side is
+    # unbounded; the low-Q side remains bounded by the positive-rate edge.
+    record = 5.0 / math.pi  # tau = 10/pi, hence s = 2
+    lower, upper = rmj.q_log_bounds(1.0, 10.0, record)
+    assert lower == pytest.approx(-math.log(3.0))
+    assert upper == math.inf
+    high_q = rmj.judge(
+        [rmj.ReferenceMode(1.0, 10.0)],
+        [rmj.SolverMode(1.0, 1.0e9)],
+        record,
+        f_min=0.5,
+        f_max=1.5,
+    )
+    low_q = rmj.judge(
+        [rmj.ReferenceMode(1.0, 10.0)],
+        [rmj.SolverMode(1.0, 2.0)],
+        record,
+        f_min=0.5,
+        f_max=1.5,
+    )
+    assert high_q.gates["q"] is True
+    assert low_q.gates["q"] is False
 
 
 def test_reference_side_carries_the_same_q_floor_as_rfx() -> None:
@@ -436,7 +475,7 @@ def test_committed_200k_rerun_reproduces_the_audit_and_refutes_it() -> None:
 def test_report_renders_every_row_kind_without_crashing() -> None:
     """UNMATCHED and SURPLUS cannot co-occur -- the assignment always uses
     ``min(n_ref, n_rfx)`` pairs -- so each is rendered from its own verdict."""
-    short = [rmj.SolverMode(0.147213 * 0.85, 357.6 * 5.0),
+    short = [rmj.SolverMode(0.147213 * 0.85, 2.0),
              rmj.SolverMode(0.118068, 86.5)]
     text = rmj.format_report(_judge(short))
     assert "UNMATCHED" in text
@@ -784,3 +823,40 @@ def test_verdict_lane_q_gate_is_run_length_contingent() -> None:
     assert fast_c.q_log_ratio < fast_c.q_window
     # and the limitation is written where the window is derived
     assert "Known limitation" in rmj.q_window.__doc__
+
+
+def test_cv02_persists_and_exits_through_one_decision_value() -> None:
+    """The retained record and every process exit must share ``_rc``.
+
+    cv02 writes its JSON before the visualization tail.  A later ad-hoc
+    ``sys.exit(2)`` can therefore make a record claim PASS while the process
+    reports inconclusive (the failure found on the abandoned #907 branch).
+    This source contract keeps that invariant cheap and always-on: adding an
+    exit path with a literal or another expression fails review immediately.
+    """
+    tree = ast.parse(SCRIPT_PATH.read_text(encoding="utf-8"),
+                     filename=str(SCRIPT_PATH))
+    exit_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "exit"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "sys"
+    ]
+    assert exit_calls, "cv02 must retain an explicit process exit"
+    assert all(
+        len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "_rc"
+        for node in exit_calls
+    ), "every cv02 exit path must use the persisted _rc decision"
+
+    persisted = [
+        node_value for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key, node_value in zip(node.keys, node.values)
+        if isinstance(key, ast.Constant) and key.value == "exit_code"
+    ]
+    assert len(persisted) == 1
+    assert isinstance(persisted[0], ast.Name) and persisted[0].id == "_rc"
