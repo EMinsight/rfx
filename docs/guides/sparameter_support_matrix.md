@@ -365,11 +365,10 @@ ports are required. `run()` provides only per-port diagnostics.
   main maximum and mean linear-magnitude differences are `0.0193` and
   `0.00195`.
   > **Historical record — 2026-06-16 numbers; quote them with their date
-  > (2026-08-31, issue #812 Phase 0).
-  > issue #812 Phase 0).** They come from
+  > (2026-08-31, issue #812 Phase 0).** Those historical values come from
   > `tests/fixtures/waveguide_broad_e5/wr90_rectangular_broad_e4_comparison.json`,
   > which was committed at `b0322c1` (2026-06-16, PR #181) and never
-  > regenerated. Its **provenance is settled**: feeding
+  > regenerated at the time of that audit. Its **provenance is settled**: feeding
   > `git show b0322c1:tests/fixtures/waveguide_broad_e5/cv11_wr90_fresh_stdout.txt`
   > (that stdout as it stood at the artifact's own commit — it was overwritten
   > later, at `20e5533`) to the artifact's own builder
@@ -379,21 +378,21 @@ ports are required. `run()` provides only per-port diagnostics.
   > differing at ~1 ulp (`5.3e-18`, `1.7e-18`).
   >
   > What was wrong with that record was its **age**. The cv11 stdouts committed in that
-  > directory today are from 2026-08-28 (`20e5533`, #724/#730), and the same
+  > directory at the August audit were from 2026-08-28 (`20e5533`, #724/#730), and the same
   > builder on them rebuilds the slab `S11` `max_mag_abs_diff` to `0.0186` /
   > `0.0194` / `0.0193` against the artifact's `0.0707` (3.6x-3.8x better) and
   > the slab `S11` `mean_mag_abs_diff` to `0.007705`-`0.007771` against
   > `0.043976`. The artifact's slab-`S11` rfx magnitude range
-  > `[0.0397, 0.5924]` reads `[0.0018, 0.5243--0.5251]` on the current runs,
+  > `[0.0397, 0.5924]` reads `[0.0018, 0.5243--0.5251]` on those August runs,
   > while the Palace reference column is identical throughout — the delta is
   > entirely on the rfx leg, which is what a code change between June and
   > August looks like.
   >
   > **Direction matters: that historical record understated the family.** Every
-  > pre-fix/current run cited there was
+  > August run cited there was
   > *better*, and `0.0707` is inside the artifact's own `max_mag_abs_tol` of
   > `0.1`. No gate is at risk and no rectangular-waveguide physics verdict is
-  > challenged. Two minor warts remain: `source_cv11_stdout` records a `/tmp`
+  > challenged by that audit. Two minor warts remained in the June artifact: `source_cv11_stdout` records a `/tmp`
   > path even though a file of that basename is committed beside the artifact,
   > and there is no `setup` block (no commit, `dx`, `NUM_PERIODS` or
   > `CPML_LAYERS`).
@@ -403,11 +402,15 @@ ports are required. `run()` provides only per-port diagnostics.
   > run of its own producing script". That is withdrawn — it rebuilt only from
   > the working-tree revision of those stdouts, never from their content at the
   > artifact's commit. Settling this needed `git show`, not an FDTD run. The
-  > later refresh is recorded in `provenance.refresh_2026_09_13` and explains
-  > the June→August and August→current-main changes rather than silently
-  > re-pinning a value. Full record: the
+  > later refresh is recorded in `provenance.refresh_2026_09_13`. Its material
+  > A/B explains the September pre-fix→post-fix change. The June→August 3.7x
+  > improvement remains unattributed; CPML and aperture changes are candidates.
+  > Full record: the
   > artifact's own `provenance` key and
   > `docs/design_notes/20260831_cv11_broad_e4_artifact_provenance.md`.
+- The pinned producer uses `normalize=True` for empty/slab and `False` for
+  PEC short. These refreshed magnitudes do not validate the `"flux"` extractor
+  or its AD path; the normalization audit is retained in the artifact.
 - The refreshed artifact is sourced from current-main VESSL run `369367260736`
   (producer commit `8206031d`) and is reproduced by the committed stdout. Its
   load-bearing slab S11 values are
