@@ -286,21 +286,39 @@ and would red every same-process pytest-split shard.
 from __future__ import annotations
 
 LOCK_PROVENANCE = {
+    # Every module a fixture builder below imports from, plus the
+    # snapshot directory itself. REGENERATE, do not hand-edit: the
+    # generator is an ast walk of this file for ImportFrom/Import nodes
+    # whose module starts with "tests". The list stood at the 14 modules
+    # of the 8586f549 capture while legs 3-7 added 33 fixtures drawn from
+    # ten more, and four consecutive leg reports flagged it stale before
+    # leg 7 refreshed it; tests/locks/test_lock_provenance_gate.py checks
+    # only that each entry EXISTS, so a short list is green and useless.
     "fixture": (
         "tests/_pec_short_advisory_fixture.py,"
         "tests/_coax_msl_instrument_fixture.py,"
         "tests/_waveguide_chain_battery_fixture.py,"
-        "tests/unit/preflight/test_preflight_rasterization.py,"
-        "tests/unit/preflight/test_preflight_absorber.py,"
-        "tests/unit/preflight/test_preflight_guards.py,"
-        "tests/unit/preflight/test_inverse_design_preflight.py,"
-        "tests/unit/preflight/test_adi_preflight.py,"
-        "tests/unit/preflight/test_flux_region_preflight.py,"
-        "tests/unit/preflight/test_pec_face_short_of_domain_wall.py,"
-        "tests/unit/ports/test_msl_realized_port_contract.py,"
+        "tests/locks/test_refplane_port_waves.py,"
+        "tests/unit/boundaries/test_boundary_spec_cpml_budget.py,"
         "tests/unit/farfield/test_ntff_small_gp_advisory.py,"
+        "tests/unit/geometry/test_fidelity_topology_findings.py,"
         "tests/unit/geometry/test_subpixel_pec.py,"
         "tests/unit/materials/test_thin_conductor_honesty.py,"
+        "tests/unit/nonuniform/test_nonuniform_upml_guard.py,"
+        "tests/unit/nonuniform/test_nu_port_sigma_dual_spacing.py,"
+        "tests/unit/ports/test_msl_realized_port_contract.py,"
+        "tests/unit/preflight/test_adi_preflight.py,"
+        "tests/unit/preflight/test_flux_region_preflight.py,"
+        "tests/unit/preflight/test_inverse_design_preflight.py,"
+        "tests/unit/preflight/test_pec_face_short_of_domain_wall.py,"
+        "tests/unit/preflight/test_preflight_absorber.py,"
+        "tests/unit/preflight/test_preflight_guards.py,"
+        "tests/unit/preflight/test_preflight_rasterization.py,"
+        "tests/unit/preflight/test_waveguide_layout_from_band_low_edge.py,"
+        "tests/unit/preflight/test_wire_port_gap_distance.py,"
+        "tests/unit/sparams/test_mixed_port_sparam.py,"
+        "tests/unit/sparams/test_waveguide_nu_sparam.py,"
+        "tests/unit/subgrid/test_subgrid_validation.py,"
         "tests/data/preflight_split_snapshot"
     ),
     "generator": (
@@ -520,6 +538,24 @@ _REEXPORTED_FROM_MESH = (
     "_local_cell",
 )
 
+#: The seven names #980 Phase 3 leg 7 -- the last motion leg -- moved to
+#: ``rfx.preflight.realization``: the three conductor-realization CLASSES and
+#: the four numpy leaves only they read. Nothing outside the facade imports
+#: any of them and nothing patches any of them (the one patch that names a
+#: realization member,
+#: ``tests/unit/ports/test_msl_preflight_conductor_gap.py:307``, sets
+#: ``_assemble_realized`` on the INSTANCE, which shadows the class member
+#: wherever the body lives). So this block exists for the namespace surface
+#: above -- and, for the three classes, for the identity test below: a
+#: re-typed ``_RealizedPEC`` would leave two classes behind one name and every
+#: ``isinstance`` reading it would silently test the wrong one, exactly the
+#: failure ``PreflightWarning`` was pinned against in leg 0.
+_REEXPORTED_FROM_REALIZATION = (
+    "_CampaignStaticsContext", "_EntryRealization", "_RealizedPEC",
+    "_realized_edges_np", "_shape_bounds", "_shift_back_np",
+    "_wall_nodes_on_plane",
+)
+
 #: Every leg's re-export block, keyed by the module it pulls from. The
 #: identity and whole-block tests below walk this, so a new leg adds one row
 #: here instead of a second copy of either test.
@@ -528,6 +564,7 @@ _REEXPORT_BLOCKS = {
     "rfx.preflight.mesh": _REEXPORTED_FROM_MESH,
     "rfx.preflight.msl": _REEXPORTED_FROM_MSL,
     "rfx.preflight.pec_geometry": _REEXPORTED_FROM_PEC_GEOMETRY,
+    "rfx.preflight.realization": _REEXPORTED_FROM_REALIZATION,
     "rfx.preflight.waveguide": _REEXPORTED_FROM_WAVEGUIDE,
 }
 
@@ -733,6 +770,23 @@ _REBOUND_ON_MIXIN = {
         "_validate_cfg_source_on_reflector_plane",
         "_validate_cfg_unresolved_pulse",
         "_validate_tfsf_vacuum_boundary",
+    ),
+    # Leg 7, the last motion leg. None of these four was a @staticmethod
+    # either, so _REBOUND_AS_STATICMETHOD stays at two names. These are the
+    # split's most-reached members and they emit NOTHING: they hand the
+    # realized conductor set to the families that do. _campaign_ctx is
+    # entered by 64 of the 65 fixtures below and _assemble_realized by 35,
+    # from four leg modules by self. (msl._msl_assemble_once,
+    # ports._check_coaxial_port_junction_aperture + _validate_cfg_port_
+    # inside_pec, waveguide._check_waveguide_port_evanescent,
+    # mesh._validate_thin_metal_on_nu_mesh, ntff._validate_ntff_inverse_
+    # design, pec_geometry._validate_cfg_campaign_statics) and from six test
+    # modules directly -- so a lost rebind here does not surface as one
+    # missing advisory, it reds most of the corpus. _port_pec_mask is the
+    # kept name tests/_waveguide_chain_battery_fixture.py:351 still uses.
+    "rfx.preflight.realization": (
+        "_assemble_realized", "_campaign_ctx", "_port_pec_mask",
+        "_port_realized_edges",
     ),
     "rfx.preflight.ports": (
         "_check_coaxial_port_junction_aperture",
