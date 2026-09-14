@@ -48,6 +48,25 @@ Modules:
   features the non-uniform and SBP-SAT subgridded lanes refuse. Its three
   class-BODY constants (``_MULTIBAND_RATIO_CAP``, ``_INPLANE_RATIO_CAP``,
   ``_AXIS_OF_COMPONENT``) deliberately stay on ``_PreflightMixin``.
+* :mod:`rfx.preflight.ntff` — the near-to-far-field family: four
+  ``_PreflightMixin`` bodies covering the #334 inverse-design umbrella
+  (PEC overlap as an error, the lambda/4 near-field advisory) with the
+  small-ground-plane check it calls, the #500 NTFF-box-in-the-absorber
+  check, and the minimum-steps hint, which emits nothing and only writes
+  ``self._ntff_min_steps_hint``. It moves no module-level name.
+* :mod:`rfx.preflight.sources` — the source-configuration family: four
+  ``_PreflightMixin`` bodies covering the #471 TFSF vacuum-boundary lane
+  guard (the split's one remaining ``@staticmethod``, re-wrapped by the
+  facade), the P1.6 source-on-a-PEC/PMC-face check, the P0.5 no-sources
+  guard and the #386 unresolved-pulse advisory. It moves no module-level
+  name.
+* :mod:`rfx.preflight.ports` — the lumped/wire-port and coaxial-port
+  family: six ``_PreflightMixin`` bodies covering the #589 coax
+  junction-aperture short, the #425 TFSF-plus-lumped-RLC refusal, the two
+  #313 reference-plane advisories, the #929/#931 port-frozen-by-realized-PEC
+  check with its wire-port cell-centre helper, and the #71 floating
+  single-cell port. Its one module-level leaf, ``_component_is_dead``,
+  went to ``_common`` instead, because ``_RealizedPEC`` still reads it.
 * :mod:`rfx.preflight.absorber` — the absorber/boundary-configuration
   family: eleven ``_PreflightMixin`` bodies covering what the absorber is
   made of (the #636 dispersive-pole advisory, the lossless-Q

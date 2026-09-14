@@ -83,6 +83,21 @@ from rfx.preflight._common import (
     PreflightConfigError,
     PreflightIssue,
     PreflightReport,
+    # Leg 6 added the last two, in the relative order they held here. The
+    # ``port_in_pec`` dead-component rule (#929) and the H-curl-loop table it
+    # reads are the leg-6 equivalent of leg 2's ``_sorted_box_corners``: a
+    # pure leaf whose two readers straddle this split. One is
+    # ``_validate_cfg_port_inside_pec``, which leaves with leg 6 for
+    # ``rfx/preflight/ports.py``; the other is
+    # ``_RealizedPEC.component_is_dead`` below, which stays here until the
+    # realization leg. A leg module may not import from this facade, so the
+    # leaf has to live where both sides can reach it, and putting it in
+    # ``ports.py`` instead would have made the realization leg import from a
+    # port-family peer for a thirty-line helper. ``_H_LOOP`` travels with it:
+    # an AST scope walk over the whole file finds exactly one load of that
+    # name, inside ``_component_is_dead`` itself.
+    _H_LOOP,
+    _component_is_dead,
 )
 
 
@@ -295,50 +310,6 @@ def _realized_edges_np(pec_mask, sheets, wires, periodic, shape):
     cells = None if pec_mask is None else jnp.asarray(pec_mask)
     edges = realized_pec_edge_masks(cells, sheets, wires, periodic)
     return tuple(np.asarray(m, dtype=bool) for m in edges)
-
-
-_H_LOOP = {
-    # H component -> the four E edges of its curl loop, as (component,
-    # di, dj, dk) offsets from the H index. Hx[i,j,k] sits at
-    # (x_i, y_{j+1/2}, z_{k+1/2}); its loop is Ey[i,j,k], Ey[i,j,k+1],
-    # Ez[i,j,k], Ez[i,j+1,k]; cyclically for Hy, Hz.
-    "hx": ((1, 0, 0, 0), (1, 0, 0, 1), (2, 0, 0, 0), (2, 0, 1, 0)),
-    "hy": ((2, 0, 0, 0), (2, 1, 0, 0), (0, 0, 0, 0), (0, 0, 0, 1)),
-    "hz": ((0, 0, 0, 0), (0, 0, 1, 0), (1, 0, 0, 0), (1, 1, 0, 0)),
-}
-
-
-def _component_is_dead(edges, component: str, idx) -> bool:
-    """Whether a field component at grid index ``idx`` is frozen by the
-    realized PEC edges — the one rule for ``port_in_pec`` (#929).
-
-    An E component is dead iff its OWN edge is PEC (the contract's one
-    sentence). An H component is dead iff ALL FOUR E edges of its curl
-    loop are PEC: then ``curl E = 0`` around it every step and it never
-    moves. Half a cell above a sheet only one loop edge is PEC, so H there
-    is live — the sheet exemption falls out of the rule instead of a
-    thickness heuristic; inside a one-cell volume all four are PEC and H
-    is frozen, which is what a volume declaration means.
-    """
-    comp = component.lower()
-    i, j, k = (int(v) for v in idx)
-    shape = edges[0].shape
-    if comp in ("ex", "ey", "ez"):
-        c = "xyz".index(comp[1])
-        if not (0 <= i < shape[0] and 0 <= j < shape[1] and 0 <= k < shape[2]):
-            return False
-        return bool(edges[c][i, j, k])
-    loop = _H_LOOP.get(comp)
-    if loop is None:
-        return False
-    for c, di, dj, dk in loop:
-        ii, jj, kk = i + di, j + dj, k + dk
-        if not (0 <= ii < shape[0] and 0 <= jj < shape[1]
-                and 0 <= kk < shape[2]):
-            return False
-        if not edges[c][ii, jj, kk]:
-            return False
-    return True
 
 
 class _RealizedPEC:
@@ -783,46 +754,31 @@ class _CampaignStaticsContext:
 class _PreflightMixin:
     """Preflight / validation methods mixed into :class:`Simulation`."""
 
-    @staticmethod
-    def _validate_tfsf_vacuum_boundary(materials: MaterialArrays, tfsf_cfg) -> None:
-        """Ensure the TFSF boundary planes remain vacuum.
-
-        The TFSF correction assumes vacuum on and immediately adjacent to
-        the TFSF boundaries. Fail loudly instead of allowing silently wrong
-        scattered fields. For the 4-edge Method-B box this means the y planes
-        as well as the x planes (issue #471 F5: the x-only check let a PEC
-        strip on the y_lo plane pass silently); the check for that path lives
-        with the source in ``tfsf_oblique_open.validate_vacuum_boundary`` so
-        ``compute_rcs`` can run the identical check.
-        """
-        from rfx.sources.tfsf import is_tfsf_methodB
-
-        if is_tfsf_methodB(tfsf_cfg):
-            from rfx.sources.tfsf_oblique_open import validate_vacuum_boundary
-
-            validate_vacuum_boundary(materials, tfsf_cfg)
-            return
-
-        boundary_slices = (
-            ("x_lo-1", slice(tfsf_cfg.x_lo - 1, tfsf_cfg.x_lo)),
-            ("x_lo", slice(tfsf_cfg.x_lo, tfsf_cfg.x_lo + 1)),
-            ("x_hi", slice(tfsf_cfg.x_hi, tfsf_cfg.x_hi + 1)),
-            ("x_hi+1", slice(tfsf_cfg.x_hi + 1, tfsf_cfg.x_hi + 2)),
-        )
-
-        for plane_name, xs in boundary_slices:
-            eps = np.asarray(materials.eps_r[xs, :, :])
-            sigma = np.asarray(materials.sigma[xs, :, :])
-            mu = np.asarray(materials.mu_r[xs, :, :])
-            if not (
-                np.allclose(eps, 1.0)
-                and np.allclose(sigma, 0.0)
-                and np.allclose(mu, 1.0)
-            ):
-                raise ValueError(
-                    "TFSF plane-wave source requires vacuum on and adjacent to "
-                    f"the TFSF x boundaries; non-vacuum material found at {plane_name}"
-                )
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the TFSF vacuum-boundary lane guard moved
+    # VERBATIM to ``rfx/preflight/sources.py`` and is bound back here, AT
+    # THE POSITION it held in this class body.
+    #
+    # It is the ONE ``@staticmethod`` this leg moves, and the decorator
+    # cannot travel with the body: at module level ``@staticmethod`` makes a
+    # staticmethod OBJECT, which is not callable. So the leg module holds a
+    # plain function and the wrapper is re-applied on the line below the
+    # import. That wrapper is load-bearing, not cosmetic -- the sole caller,
+    # ``rfx/runners/uniform.py:610``, writes
+    # ``sim._validate_tfsf_vacuum_boundary(materials, tfsf[0])`` through an
+    # INSTANCE, so dropping it would bind ``sim`` to ``materials`` and shift
+    # every argument by one. Leg 2 established the pattern with
+    # ``_congruence_origin_shift``; both are pinned by
+    # ``tests/locks/test_preflight_split_snapshot.py``'s
+    # ``_REBOUND_AS_STATICMETHOD``.
+    #
+    # The import is CLASS-scoped rather than module-level because this
+    # module's namespace is pinned by SET EQUALITY (55 names, none added,
+    # none dropped), so even a module-level ``_sources`` alias would be a
+    # surface change.
+    # ------------------------------------------------------------------
+    from rfx.preflight.sources import _validate_tfsf_vacuum_boundary
+    _validate_tfsf_vacuum_boundary = staticmethod(_validate_tfsf_vacuum_boundary)
 
     def _validate_run_sparameter_request(
         self,
@@ -1143,142 +1099,27 @@ class _PreflightMixin:
         _check_waveguide_port_aperture_snap,
     )
 
-    def _check_coaxial_port_junction_aperture(self) -> None:
-        """Advise when a coaxial port's pin meets REGISTERED PEC at its
-        junction plane — a short by geometry, not by the port (issue #589).
-
-        Root cause this names: ``_assemble_materials`` is PEC-OR-only
-        (``pec_mask = pec_mask | mask``, rfx/api/_compile.py) and there is
-        no CSG subtraction shape, so a ground plane declared as a full PEC
-        sheet with a dielectric "clearance hole" declared AFTER it stays
-        solid. The committed coax-MSL junction fixture was built exactly
-        that way; its settled run measured S00 = (-0.9928, -0.0048) at
-        6 GHz — the pin was terminated in a short by the ground sheet, and
-        no check said so (the fixture's only structural test asserted
-        pin-column PEC continuity, trivially true through a solid sheet).
-
-        What is measured: on the PRODUCTION assembly's REALIZED conductor
-        set (:meth:`_port_realized_edges`, sim.add geometry and thin
-        conductors only — the coax stub the compute_coaxial_* /
-        compute_coax_msl_transition methods stamp into eps/sigma is not
-        registered geometry and is not read here), at the port's
-        junction plane ``k = position_to_index(position)[axis]``, the
-        count of NODES CARRYING A TANGENTIAL WALL in the FIRST dielectric
-        ring outside the pin. "Carries a wall" is the lattice ownership
-        contract's own test (#931 §1.9): some E edge tangential to the
-        port axis and incident to the node is PEC — which is what a sheet
-        ground at plane ``k`` and a volume ground whose face lies on
-        plane ``k`` both put there, and what a primal CELL mask never
-        marked for a volume's far face (the #868 class). The ring is
-        defined ON THE LATTICE: ``a + dx/sqrt(2) < r <= min(a +
-        dx/sqrt(2) + dx, shell_inner)`` with ``r`` the node distance from
-        the port centre and ``shell_inner = b - min(dx, (b - a)/2)`` the
-        radius ``stamp_coaxial_line`` realizes for the shell. The inner
-        bound is the pin's own reach: a PEC volume is centre-sampled
-        (§1.1) and every node of an occupied cell carries its wall, so
-        the pin's OWN nodes extend to at most ``a + dx/sqrt(2)`` (half
-        the cell diagonal past its radius); a node beyond that cannot be
-        a corner of a pin cell, so anything there is OTHER registered
-        conductor. The earlier ``a + dx/2`` bound was calibrated to the
-        pre-#931 node-sampled knife-edge footprint and would count the
-        pin's own realized rim.
-
-        Deliberately NOT the full ``a < r < shell_inner`` annulus: a
-        clearance hole narrower than the shell (the fixture's predeclared
-        0.4 mm hole under a 0.5 mm shell_inner leaves a one-cell ground
-        lip, 32/68 of that annulus PEC) is a valid launch and the wide
-        rule would flag the fix.
-
-        Report-only (severity "warning", no refusal): a calibration short
-        built from REGISTERED PEC would trip it and is the user's call.
-        The repo's own calibration short is stamped via
-        ``stamp_coaxial_short_plane`` (sigma), so no current lane does.
-        Not audited (silent by construction, disclosed here): the
-        non-uniform lane, 2-D mode, and a port whose position does not map
-        into the grid (the compiler rejects that separately). Measured on
-        the example snapshot (tests/contracts/test_example_fidelity_contract.py):
-        the one coaxial variant has 0 PEC cells in the ring, so no
-        snapshot row changes.
-        """
-        import warnings as _w
-
-        if not self._coaxial_ports:
-            return
-        if (self._dx_profile is not None or self._dy_profile is not None
-                or self._dz_profile is not None):
-            return
-        from rfx.sources.coaxial_port import _FACE_CONFIG
-
-        grid = self._build_grid()
-        if getattr(grid, "is_2d", False):
-            return
-        realized = self._port_realized_edges(grid)
-        if realized is None:
-            return
-        dx = float(grid.dx)
-        pads = (int(grid.pad_x_lo), int(grid.pad_y_lo), int(grid.pad_z_lo))
-        axis_names = ("x", "y", "z")
-        for n, port in enumerate(self._coaxial_ports):
-            cfg = _FACE_CONFIG.get(str(port.face))
-            if cfg is None:
-                continue
-            axis = axis_names.index(cfg[0])
-            pos = tuple(float(v) for v in port.position)
-            try:
-                idx = grid.position_to_index(pos)
-            except ValueError:
-                continue
-            k = int(idx[axis])
-            t1, t2 = [a for a in range(3) if a != axis]
-            a = float(port.pin_radius)
-            b = float(port.outer_radius)
-            shell_inner = b - min(dx, 0.5 * (b - a))
-            c1 = (np.arange(grid.shape[t1]) - pads[t1]) * dx - pos[t1]
-            c2 = (np.arange(grid.shape[t2]) - pads[t2]) * dx - pos[t2]
-            r = np.hypot(c1[:, None], c2[None, :])
-            if not (0 <= k < grid.shape[axis]):
-                continue
-            plane = realized.wall_nodes_on_plane(axis, k)
-            r_lo = a + dx / math.sqrt(2.0)
-            r_hi = min(r_lo + dx, shell_inner)
-            ring = (r > r_lo) & (r <= r_hi)
-            n_ring = int(np.count_nonzero(ring))
-            if n_ring == 0:
-                continue
-            n_pec = int(np.count_nonzero(plane & ring))
-            if n_pec == 0:
-                continue
-            outside = plane & (r > r_lo) & (r <= b)
-            r_first = float(r[outside].min()) if outside.any() else float("nan")
-            _w.warn(
-                PreflightWarning(
-                    f"Coaxial port {n} (face='{port.face}', pin r="
-                    f"{a * 1e6:.0f} um, outer r={b * 1e6:.0f} um): at its "
-                    f"junction plane ({axis_names[axis]}="
-                    f"{pos[axis] * 1e3:.3f} mm, node {k - pads[axis]}) "
-                    f"{n_pec}/{n_ring} nodes of the FIRST dielectric ring "
-                    f"outside the pin ({r_lo * 1e6:.0f} < r <= "
-                    f"{r_hi * 1e6:.0f} um; lattice-based bounds, so the "
-                    f"pin's own realized rim, at most r = {a * 1e6:.0f} um "
-                    f"+ dx/sqrt(2), is excluded) carry a REALIZED PEC wall "
-                    f"— the first registered conductor outside the pin "
-                    f"sits at r = {r_first * 1e6:.1f} um. The pin is "
-                    f"terminated in a short by registered geometry at this "
-                    f"plane. The assembly is PEC-OR-only: a ground sheet "
-                    f"declared as a full plane with a dielectric 'hole' "
-                    f"declared AFTER it stays solid (issue #589: S00 = "
-                    f"-0.9928 at 6 GHz measured on exactly that fixture). "
-                    f"If a clearance aperture was intended, build the "
-                    f"conductor WITH the hole (a patterned sheet shape via "
-                    f"add_thin_conductor, or an annular volume); if this "
-                    f"short is the intended calibration standard, no "
-                    f"action is needed (report-only).",
-                    code="coaxial_port_junction_short",
-                    source="_check_coaxial_port_junction_aperture",
-                    loc=f"coaxial_port[{n}] face={port.face}",
-                ),
-                stacklevel=4,
-            )
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the coax junction-aperture check -- the single
+    # body of the ports_coax family -- moved VERBATIM to
+    # ``rfx/preflight/ports.py`` and is bound back here, AT THE POSITION it
+    # held in this class body. Position is not cosmetic --
+    # ``_validate_simulation_config`` calls these checks in a fixed
+    # sequence and the resulting advisory ORDER is the observable
+    # ``tests/locks/test_preflight_split_snapshot.py`` renders.
+    #
+    # The import is CLASS-scoped rather than module-level because this
+    # module's namespace is pinned by SET EQUALITY (55 names, none added,
+    # none dropped), so even a module-level ``_ports`` alias would be a
+    # surface change -- and ``_ports`` is already an INSTANCE attribute
+    # here, which is a second reason. Binding the function here keeps
+    # ``sim._check_coaxial_port_junction_aperture()`` a bound method with
+    # its name, signature and ``__doc__`` intact, and its
+    # ``self._port_realized_edges`` call -- realization, which stays in
+    # this module -- keeps resolving through the composed ``Simulation``
+    # MRO exactly as before.
+    # ------------------------------------------------------------------
+    from rfx.preflight.ports import _check_coaxial_port_junction_aperture
 
     # ------------------------------------------------------------------
     # #980 Phase 3 leg 3: the cutoff emitter and its two lanes moved
@@ -1855,342 +1696,32 @@ class _PreflightMixin:
                 "compute_coaxial_s_matrix() is not supported with solver='adi'."
             )
 
-    def _validate_ntff_inverse_design(
-        self, *, include_pec_overlap_error: bool = True,
-    ) -> None:
-        """NTFF checks: PEC overlap (error) and λ/4 gap (warn).
-
-        CHECK 2: NTFF face plane strictly intersecting a PEC bbox
-        (hard error; skipped when ``include_pec_overlap_error=False`` —
-        the ``run()`` advisory tier, issue #303).
-        CHECK 3: NTFF face closer than λ/4 to any geometry or port/source.
-        Passive DFT probes are NOT counted: they read field state without
-        perturbing it, so a probe on a box face is a measurement choice,
-        not a radiating/scattering culprit (issue #303).
-        CHECK 4: source backed by a PEC sheet under ~1λ across
-        (warning-severity advisory; both tiers, issue #334) — the far-field
-        pattern will be shaped by ground-plane edge diffraction. Expected
-        physics, not a solver defect; the advisory exists so a resonance
-        fixture is not mistaken for a pattern fixture.
-        """
-        import warnings as _w
-
-        if self._ntff is None:
-            return
-
-        corner_lo, corner_hi, freqs = self._ntff
-        # face = (axis, sign, coord, tangential bbox: [(lo_a, hi_a), (lo_b, hi_b)])
-        faces = []
-        for axis in range(3):
-            other = [a for a in range(3) if a != axis]
-            tang = ((corner_lo[other[0]], corner_hi[other[0]]),
-                    (corner_lo[other[1]], corner_hi[other[1]]))
-            faces.append(("lo", axis, corner_lo[axis], tang))
-            faces.append(("hi", axis, corner_hi[axis], tang))
-
-        # CHECK 2: PEC intersection, CLOSED on the REALIZED wall planes
-        # (#931 §1.7). A PEC volume drawn z_a -> z_b realizes walls at
-        # BOTH planes, so an NTFF face lying exactly ON a wall plane sits
-        # on a conductor surface (tangential E zeroed there) and is an
-        # overlap; a sheet (thin conductor or zero-thickness Box) is one
-        # plane and is in the census too. Bounds along the normal axis are
-        # the entry's own realized wall planes in physical units, read
-        # through the shared context; the tangential overlap uses the
-        # declared bounds. A traced mesh has no concrete planes, so that
-        # lane keeps the declared-bounds test (closed).
-        try:
-            has_pec_geom = any(
-                self._resolve_material(e.material_name).sigma
-                >= self._PEC_SIGMA_THRESHOLD
-                for e in self._geometry)
-        except KeyError:
-            has_pec_geom = False   # unresolved material: add()/run() raise
-        realized_entries = []
-        if include_pec_overlap_error and (
-                has_pec_geom or getattr(self, "_thin_conductors", None)):
-            ctx = self._campaign_ctx()
-            if ctx.error is None:
-                shape = tuple(ctx.grid.shape)
-                for e in ctx.pec_entries():
-                    if e.kind == "wire" or e.lo is None:
-                        continue
-                    walls = []
-                    for a in range(3):
-                        planes = e.wall_planes(a, ctx.periodic, shape)
-                        if not planes:
-                            walls = None
-                            break
-                        nodes = ctx.nodes[a]
-                        walls.append((float(nodes[min(planes)]),
-                                      float(nodes[max(planes)]),
-                                      ctx.local_spacing(a, float(nodes[min(planes)]))))
-                    if walls is not None:
-                        realized_entries.append((e, walls))
-            else:
-                for e in ctx.entry_realizations():
-                    if e.kind in ("wire", "lossy") or e.lo is None:
-                        continue
-                    realized_entries.append((e, [
-                        (float(e.lo[a]), float(e.hi[a]), 0.0)
-                        for a in range(3)]))
-        for side, axis, coord, tang in faces:
-            for e, walls in realized_entries:
-                w_lo, w_hi, d_loc = walls[axis]
-                tol = 1e-9 * d_loc
-                if not (w_lo - tol <= coord <= w_hi + tol):
-                    continue
-                # Tangential overlap along the other two axes (declared)
-                other = [a for a in range(3) if a != axis]
-                overlap = True
-                for idx, (tlo, thi) in zip(other, tang):
-                    if e.hi[idx] <= tlo or e.lo[idx] >= thi:
-                        overlap = False
-                        break
-                if overlap:
-                    raise PreflightConfigError(
-                        f"NTFF face {'xyz'[axis]}_{side} at {coord*1e3:.2f}mm "
-                        f"lies on or inside PEC {e.label} '{e.name}' "
-                        f"(realized as a {e.kind}: {'xyz'[axis]} walls at "
-                        f"[{w_lo*1e3:.3f}, {w_hi*1e3:.3f}] mm; declared "
-                        f"bbox {tuple(e.lo)}–{tuple(e.hi)}). NTFF box must "
-                        f"enclose all radiators with no conductor surface "
-                        f"on or crossing any face. Shrink or move the NTFF "
-                        f"box.",
-                        code="ntff_pec_overlap",
-                        source="_validate_ntff_inverse_design",
-                    )
-
-        # CHECK 3: λ/2 (Huygens) and λ/4 (reactive-near-field) gaps to any
-        # geometry/source (probes excluded, issue #303). Issue #77: the λ/2 Huygens-equivalence rule
-        # was documented but only the λ/4 strong
-        # tier was enforced; a face at λ/30 above a ground-plane PEC silently
-        # ran and produced corrupted directivity. The two-tier check below
-        # warns mildly in [λ/4, λ/2) (results may degrade) and strongly in
-        # < λ/4 (directivity / pattern likely corrupted).
-        if freqs is None:
-            return
-        try:
-            f_max = float(jnp.max(jnp.asarray(freqs)))
-        except Exception:
-            f_max = float(self._freq_max)
-        lam_min = C0 / max(f_max, 1.0)
-        gap_thresh = lam_min / 4.0
-        huygens_thresh = lam_min / 2.0
-
-        # Collect candidate bboxes and point positions
-        bboxes: list[tuple[str, tuple, tuple]] = []
-        for entry in self._geometry:
-            try:
-                c1, c2 = entry.shape.bounding_box()
-                bboxes.append((entry.material_name, c1, c2))
-            except (NotImplementedError, TypeError, AttributeError):
-                continue
-        # #931: PEC thin conductors are sheets — conductors in the census.
-        from rfx.materials.thin_conductor import sheet_bounds as _sheet_bounds
-        for _ti, tc in enumerate(getattr(self, "_thin_conductors", ())):
-            if not getattr(tc, "is_pec", False):
-                continue
-            try:
-                c1, c2 = _sheet_bounds(tc.shape)
-            except (NotImplementedError, TypeError, AttributeError):
-                continue
-            if c1 is None or c2 is None:
-                continue
-            bboxes.append((f"thin_conductor[{_ti}]", tuple(c1), tuple(c2)))
-        points: list[tuple[str, tuple]] = []
-        for pe in self._ports:
-            points.append(("port/source", tuple(pe.position)))
-        # Probes intentionally excluded (issue #303): a DFT probe is a
-        # passive observer and does not radiate or scatter.
-
-        for side, axis, coord, tang in faces:
-            other = [a for a in range(3) if a != axis]
-            min_gap = float("inf")
-            culprit = None
-            # bbox distances
-            for name, c1, c2 in bboxes:
-                # tangential overlap check — only meaningful gap if the face
-                # is "above" the feature in the normal direction
-                overlap = True
-                for idx, (tlo, thi) in zip(other, tang):
-                    if c2[idx] <= tlo or c1[idx] >= thi:
-                        overlap = False
-                        break
-                if not overlap:
-                    continue
-                if coord <= c1[axis]:
-                    d = c1[axis] - coord
-                elif coord >= c2[axis]:
-                    d = coord - c2[axis]
-                else:
-                    d = 0.0  # already handled by CHECK 2 for PEC; skip
-                    continue
-                if d < min_gap:
-                    min_gap, culprit = d, f"geometry '{name}'"
-            # points
-            for name, pos in points:
-                # require tangential in-box for relevance
-                in_tang = all(
-                    tang[i][0] <= pos[other[i]] <= tang[i][1] for i in range(2)
-                )
-                if not in_tang:
-                    continue
-                d = abs(coord - pos[axis])
-                if d < min_gap:
-                    min_gap, culprit = d, f"{name} at {pos}"
-
-            if culprit is not None and min_gap < gap_thresh:
-                _w.warn(
-                    PreflightWarning(
-                        f"NTFF face {'xyz'[axis]}_{side} is {min_gap*1e3:.2f}mm "
-                        f"from {culprit} — below λ/4 = {gap_thresh*1e3:.2f}mm at "
-                        f"f_max={f_max/1e9:.2f}GHz. NTFF will integrate reactive "
-                        f"near-field; directivity / pattern likely corrupted. "
-                        f"Move NTFF box ≥ λ/2 from any radiating/scattering "
-                        f"structure (Huygens-equivalence rule).",
-                        code="ntff_near_field",
-                        source="_validate_ntff_inverse_design",
-                    ),
-                    stacklevel=3,
-                )
-            elif culprit is not None and min_gap < huygens_thresh:
-                _w.warn(
-                    PreflightWarning(
-                        f"NTFF face {'xyz'[axis]}_{side} is {min_gap*1e3:.2f}mm "
-                        f"from {culprit} — below λ/2 = {huygens_thresh*1e3:.2f}mm "
-                        f"at f_max={f_max/1e9:.2f}GHz. Close to reactive near-"
-                        f"field; far-field pattern accuracy may degrade. Move "
-                        f"NTFF box ≥ λ/2 from radiating/scattering structures.",
-                        code="ntff_near_field",
-                        source="_validate_ntff_inverse_design",
-                    ),
-                    stacklevel=3,
-                )
-
-        # CHECK 4 (issue #334): electrically small ground plane under a
-        # radiator. Advisory in BOTH tiers — it is pattern physics, not an
-        # inverse-design structural gate.
-        self._validate_ntff_small_ground_plane(f_max, lam_min)
-
-    def _validate_ntff_small_ground_plane(
-        self, f_max: float, lam: float,
-    ) -> None:
-        """CHECK 4 (issue #334): finite PEC sheet backing a radiator that is
-        under ~1λ across → edge-diffraction-shaped far-field pattern.
-
-        Background: a 0.48λ × 0.44λ ground plane produces a pattern dominated
-        by ground-plane edge diffraction (broadside dip, off-axis side peaks)
-        — correct physics for that geometry, but a trap when the fixture was
-        built for resonance/impedance work and its pattern is then read as a
-        solver defect. The advisory names the mechanism up front.
-
-        Predicate (warning-severity, fires at most ONCE per preflight):
-        - a PEC geometry entry is sheet-like: thin-axis extent
-          ``t <= max(λ/20, L_small/10)`` with both lateral extents >= λ/8;
-        - a radiator backs it: an ``add_source()`` / lumped-wire
-          ``add_port()`` entry sits laterally inside the sheet footprint and
-          within half a wavelength of the sheet along the thin axis
-          (image-theory coupling zone);
-        - among qualifying sheets only the LARGEST footprint is judged — in a
-          patch stack that is the ground plane, never the (intentionally
-          sub-wavelength) resonant patch element itself;
-        - fire iff that sheet's smaller lateral extent < 1λ at the highest
-          requested NTFF frequency (sub-wavelength across the whole
-          requested pattern band — the conservative direction).
-
-        λ is evaluated at ``f_max`` of the NTFF frequencies: if the sheet is
-        sub-wavelength even at the shortest requested wavelength, every bin
-        of the requested pattern carries the edge-diffraction shaping.
-
-        TFSF and MSL/waveguide/coax excitations are not counted as radiators
-        here (same scope as the CHECK 3 point list): a sub-wavelength PEC
-        plate as a scattering target is a legitimate RCS fixture, not a
-        ground-plane misuse.
-        """
-        import warnings as _w
-
-        ports = [tuple(pe.position) for pe in self._ports]
-        if not ports:
-            return
-
-        best = None  # (lateral_area, L_small, L_big, c1, c2)
-        # #931: a ground plane is canonically a SHEET declaration
-        # (add_thin_conductor / zero-thickness Box), so PEC thin
-        # conductors are in the census beside PEC geometry entries.
-        from rfx.materials.thin_conductor import sheet_bounds as _sheet_bounds
-        candidates = []
-        for entry in self._geometry:
-            if entry.material_name != "pec":
-                continue
-            try:
-                c1, c2 = entry.shape.bounding_box()
-            except (NotImplementedError, TypeError, AttributeError):
-                continue
-            candidates.append((c1, c2))
-        for tc in getattr(self, "_thin_conductors", ()):
-            if not getattr(tc, "is_pec", False):
-                continue
-            try:
-                c1, c2 = _sheet_bounds(tc.shape)
-            except (NotImplementedError, TypeError, AttributeError):
-                continue
-            if c1 is None or c2 is None:
-                continue
-            candidates.append((tuple(c1), tuple(c2)))
-        for c1, c2 in candidates:
-            ext = [c2[a] - c1[a] for a in range(3)]
-            thin = min(range(3), key=lambda a: ext[a])
-            lat = [a for a in range(3) if a != thin]
-            l_small = min(ext[lat[0]], ext[lat[1]])
-            l_big = max(ext[lat[0]], ext[lat[1]])
-            # sheet-like: electrically thin, or thin relative to its own
-            # footprint (covers coarse-meshed few-cell-thick ground planes)
-            if ext[thin] > max(lam / 20.0, l_small / 10.0):
-                continue
-            # electrically non-negligible in BOTH lateral dims — wires,
-            # narrow straps and tiny pads are not ground planes
-            if l_small < lam / 8.0:
-                continue
-            backed = False
-            for pos in ports:
-                if not all(c1[a] <= pos[a] <= c2[a] for a in lat):
-                    continue
-                d = max(c1[thin] - pos[thin], pos[thin] - c2[thin], 0.0)
-                if d <= lam / 2.0:
-                    backed = True
-                    break
-            if not backed:
-                continue
-            area = ext[lat[0]] * ext[lat[1]]
-            if best is None or area > best[0]:
-                best = (area, l_small, l_big, c1, c2)
-
-        if best is None:
-            return
-        _, l_small, l_big, c1, c2 = best
-        if l_small >= lam:
-            return  # ground plane >= ~1λ both ways: clean-pattern regime
-
-        _w.warn(
-            PreflightWarning(
-                f"Far-field pattern advisory: the PEC sheet backing a source "
-                f"(bbox ({c1[0]*1e3:.1f}, {c1[1]*1e3:.1f}, {c1[2]*1e3:.1f})"
-                f"–({c2[0]*1e3:.1f}, {c2[1]*1e3:.1f}, {c2[2]*1e3:.1f}) mm) "
-                f"spans {l_big*1e3:.1f}mm × {l_small*1e3:.1f}mm = "
-                f"{l_big/lam:.2f}λ × {l_small/lam:.2f}λ at "
-                f"f_max={f_max/1e9:.2f}GHz — a ground plane under ~1λ "
-                f"across. Expect the radiation pattern to be shaped by "
-                f"ground-plane edge diffraction (broadside dip, off-axis "
-                f"side peaks). This is expected physics, not a solver "
-                f"defect, and the fixture stays fine for resonance / "
-                f"impedance work. For a clean broadside pattern enlarge the "
-                f"ground plane to at least ~1.4λ; if the small ground plane "
-                f"is intentional, interpret the pattern accordingly.",
-                code="ntff_small_ground_plane",
-                source="_validate_ntff_small_ground_plane",
-            ),
-            stacklevel=4,
-        )
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the NTFF inverse-design umbrella (PEC overlap as
+    # an ERROR, the lambda/4 near-field advisory) and the #334 small
+    # ground-plane check it calls moved VERBATIM to
+    # ``rfx/preflight/ntff.py`` and are bound back here, AT THE POSITIONS
+    # they held in this class body. Position is not cosmetic --
+    # ``preflight`` reaches this family through its own ordered call
+    # sequence and the resulting advisory ORDER is the observable
+    # ``tests/locks/test_preflight_split_snapshot.py`` renders.
+    #
+    # The import is CLASS-scoped rather than module-level because this
+    # module's namespace is pinned by SET EQUALITY (55 names, none added,
+    # none dropped), so even a module-level ``_ntff`` alias would be a
+    # surface change -- and ``_ntff`` is already an INSTANCE attribute
+    # here, which is a second reason.
+    #
+    # ``_validate_ntff_inverse_design`` keeps two ``self.`` calls:
+    # ``_campaign_ctx`` (realization, which STAYS here) and
+    # ``_validate_ntff_small_ground_plane`` (which travels with it). Both
+    # resolve through the composed ``Simulation`` MRO, so neither call site
+    # changed.
+    # ------------------------------------------------------------------
+    from rfx.preflight.ntff import (
+        _validate_ntff_inverse_design,
+        _validate_ntff_small_ground_plane,
+    )
 
     def _validate_simulation_config(self) -> None:
         """Comprehensive pre-simulation configuration validation.
@@ -2345,33 +1876,15 @@ class _PreflightMixin:
                 source="_validate_cfg_precision_x64",
             ))
 
-    def _validate_cfg_tfsf_with_lumped_rlc(self, _w) -> None:
-        """Warn: a lumped RLC element illuminated by a TFSF plane wave is unstable.
-
-        A ``add_lumped_rlc(...)`` element driven by a TFSF plane wave diverges
-        (measured: blow-up to ~1e35 by ~250 steps, C-independent). The root cause is
-        the TFSF total/scattered-field decomposition coupling into the lumped ADE
-        current, NOT a missing circuit path: embedding the element in a PEC-gap
-        structure does NOT cure it (tested 2026-07-22, #425 — a two-electrode PEC gap
-        still grows 0.1→1e25→NaN over ~800 steps; see
-        docs/research_notes/experiments/tfsf_lumped_pec_gap_stability.py). So there is
-        no geometry fix at the API level; a stable plane-wave lumped lane needs a
-        solver-level fix to the TFSF↔lumped coupling. The tunable-load (varactor)
-        gradient IS validated on the PORT-fed lane (``add_port`` +
-        ``forward(rlc_values_override=...)`` — tests/unit/autodiff/test_lumped_rlc_ad.py); use that
-        for varactor/RIS design. See the tracking issue (#425).
-        """
-        if self._tfsf is None or not self._lumped_rlc:
-            return
-        _w.warn(PreflightWarning(
-            "add_lumped_rlc(...) + a TFSF plane-wave source is numerically unstable "
-            "(fields diverge, C-independent). This is the TFSF↔lumped-ADE coupling, "
-            "not a missing circuit path — a PEC-gap structure does NOT cure it "
-            "(tested, #425). Use the validated PORT-fed lane (add_port + "
-            "forward(rlc_values_override=...)) for varactor/tunable-load design.",
-            code="tfsf_lumped_rlc_unstable",
-            source="_validate_cfg_tfsf_with_lumped_rlc",
-        ))
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the #425 TFSF-plus-lumped-RLC refusal moved
+    # VERBATIM to ``rfx/preflight/ports.py``, bound back at its original
+    # position for the reason the block above gives. The split inventory
+    # filed it under ports_lumped rather than sources because what it
+    # refuses is the LUMPED ELEMENT under that illumination, not the TFSF
+    # source itself.
+    # ------------------------------------------------------------------
+    from rfx.preflight.ports import _validate_cfg_tfsf_with_lumped_rlc
 
     # ------------------------------------------------------------------
     # #980 Phase 3 leg 5: the graded-Box rasterization check moved VERBATIM
@@ -2380,68 +1893,12 @@ class _PreflightMixin:
     # ------------------------------------------------------------------
     from rfx.preflight.mesh import _validate_cfg_graded_box_rasterization
 
-    def _validate_cfg_refplane_placement(self, _w) -> None:
-        """Advisories for ``add_port(reference_plane_cells=...)`` (issue #313).
-
-        (a) ``reference_plane_cells < 10`` puts the measurement planes in the
-        port near field.  Measured on the canonical 16 mm thru (dx = 0.5 mm,
-        gap-trimmed V, 2026-07-10 battery): N=3 planes read Zc = 52-53 ohm
-        with |Im/Re| up to 8.2%, beta/(w/c) = 1.16-1.20, and a -3.1%
-        closed-box-referee |S21| residual, while N=10 planes read the clean
-        mid-line constants.  The Phase-0 pre-registration rule places BOTH
-        planes (N and 2N cells) >= 10 cells from every port.
-
-        (b) When SOME but not ALL impedance-carrying wire ports opt in, the
-        off-diagonal S entries involving a non-opted port silently stay on
-        the legacy port-cell path (only pairs where both ports opt in use
-        the plane waves) — surface that at preflight instead of letting the
-        mixed matrix pass unremarked.
-        """
-        wire_ports = [
-            pe for pe in self._ports
-            if pe.impedance != 0.0 and pe.extent is not None
-        ]
-        opted = [
-            pe for pe in wire_ports
-            if getattr(pe, "reference_plane_cells", None) is not None
-        ]
-        if not opted:
-            return
-        near = [pe for pe in opted if pe.reference_plane_cells < 10]
-        if near:
-            _w.warn(
-                PreflightWarning(
-                    f"{len(near)} reference-plane port(s) use "
-                    "reference_plane_cells < 10 — planes this close sit in "
-                    "the port near field. Measured on the canonical thru "
-                    "(dx = 0.5 mm, 2026-07-10 battery): N=3 planes read "
-                    "Zc = 52-53 ohm with |Im(Zc)/Re(Zc)| up to 8.2% and "
-                    "beta/(w/c) = 1.16-1.20 (vs the clean mid-line "
-                    "constants at N=10), and the closed-box-referee |S21| "
-                    "residual was -3.1%. The Phase-0 pre-registration rule "
-                    "(issue #313) places BOTH planes (N and 2N cells) >= 10 "
-                    "cells from every port — prefer "
-                    "reference_plane_cells >= 10 when the line length "
-                    "allows it.",
-                    code="refplane_near_field",
-                    source="_validate_cfg_refplane_placement",
-                ),
-                stacklevel=2,
-            )
-        if len(opted) != len(wire_ports):
-            _w.warn(
-                PreflightWarning(
-                    f"{len(opted)} of {len(wire_ports)} impedance-carrying "
-                    "wire ports opt into reference_plane_cells — "
-                    "off-diagonal S entries involving a non-opted port "
-                    "SILENTLY stay on the legacy port-cell path (only "
-                    "pairs where BOTH ports opt in use the plane waves). "
-                    "Opt in every wire port of the S-matrix, or none.",
-                    code="refplane_partial_optin",
-                    source="_validate_cfg_refplane_placement",
-                ),
-                stacklevel=2,
-            )
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the two #313 reference-plane advisories moved
+    # VERBATIM to ``rfx/preflight/ports.py``, bound back at their original
+    # position for the reason the blocks above give.
+    # ------------------------------------------------------------------
+    from rfx.preflight.ports import _validate_cfg_refplane_placement
 
     # ------------------------------------------------------------------
     # #980 Phase 3 leg 2: the conformal-fine-dx guard moved VERBATIM to
@@ -2589,174 +2046,33 @@ class _PreflightMixin:
     # ------------------------------------------------------------------
     from rfx.preflight.absorber import _validate_cfg_absorber_placement
 
-    def _validate_cfg_source_on_reflector_plane(
-        self, _w, dx: float, _pmc_faces_set: set
-    ) -> None:
-        """P1.6: Source / port placed ON a PEC or PMC face plane. Both
-        reflectors zero specific field components at the plane every
-        time step (PEC: tangential E; PMC: tangential H); a source
-        that drives a zeroed component is silently discarded. A
-        source that drives a component forced to zero by the mirror
-        image (e.g. normal E on a PMC face) fights the symmetry and
-        yields numerically inconsistent results.
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the P1.6 source-on-a-reflector-plane check moved
+    # VERBATIM to ``rfx/preflight/sources.py``, bound back at its original
+    # position. Position is not cosmetic --
+    # ``_validate_simulation_config`` calls these checks in a fixed
+    # sequence and the resulting advisory ORDER is the observable
+    # ``tests/locks/test_preflight_split_snapshot.py`` renders.
+    # ------------------------------------------------------------------
+    from rfx.preflight.sources import _validate_cfg_source_on_reflector_plane
 
-        Component-specific rule:
-          PEC face (axis = ax_name): tangential E (Ex/Ey/Ez with
-            component axis != ax_name) is zeroed every E update.
-            Normal E (component axis == ax_name) is the legitimate
-            way to drive a PEC mirror.
-          PMC face (axis = ax_name): tangential H (Hx/Hy/Hz with
-            component axis != ax_name) is zeroed; the outgoing
-            wave from an on-plane tangential E source is killed via
-            this H zeroing. Normal E (component axis == ax_name) is
-            odd-symmetric and must be zero at the plane by image,
-            so injecting it fights the mirror.
-
-        This follows the industry convention (Meep / OpenEMS /
-        Tidy3D all follow the same rule).
-        """
-        _all_reflector_faces = set(self._pec_faces) | set(_pmc_faces_set)
-        if _all_reflector_faces:
-            _dx_axis = [float(dx), float(dx), float(dx)]
-            if (self._dz_profile is not None
-                    and not is_tracer(self._dz_profile)):
-                _dx_axis[2] = float(self._dz_profile[0])
-            for face in _all_reflector_faces:
-                ax_name = face[0]
-                side = face[2:]
-                ax_i = "xyz".index(ax_name)
-                face_kind = "PMC" if face in _pmc_faces_set else "PEC"
-                d_ext = self._domain[ax_i] if ax_i < len(self._domain) else self._domain[-1]
-                plane_coord = 0.0 if side == "lo" else float(d_ext)
-                tol = 0.5 * _dx_axis[ax_i]
-                for pe in self._ports:
-                    pos = pe.position
-                    coord = pos[ax_i]
-                    if abs(coord - plane_coord) > tol:
-                        continue
-                    # Classify the source component vs. the face axis.
-                    comp = pe.component.lower()
-                    comp_field = comp[0]       # 'e' or 'h'
-                    comp_axis = comp[1:]       # 'x' / 'y' / 'z'
-                    is_tangential = (comp_axis != ax_name)
-                    if face_kind == "PMC":
-                        if comp_field == "e" and is_tangential:
-                            msg = (
-                                f"Source/port at {pos} (component={pe.component}) "
-                                f"sits on the PMC {face} plane. The outgoing "
-                                f"tangential H is zeroed every step by "
-                                f"apply_pmc_faces, so no wave radiates — the "
-                                f"probe records silent zero field. Offset by "
-                                f"one cell ({_dx_axis[ax_i]*1e3:.3g} mm) off "
-                                f"the plane to let the Yee curl run normally."
-                            )
-                        elif comp_field == "e" and not is_tangential:
-                            msg = (
-                                f"Source/port at {pos} (component={pe.component}) "
-                                f"sits on the PMC {face} plane and drives the "
-                                f"NORMAL E component. PMC imposes odd symmetry "
-                                f"on normal E (it must be zero at the plane), "
-                                f"so the source fights the mirror image. Use a "
-                                f"tangential E source offset by one cell "
-                                f"({_dx_axis[ax_i]*1e3:.3g} mm) off the plane."
-                            )
-                        elif comp_field == "h" and is_tangential:
-                            msg = (
-                                f"Source/port at {pos} (component={pe.component}) "
-                                f"sits on the PMC {face} plane and drives a "
-                                f"tangential H. apply_pmc_faces zeros this "
-                                f"component at the plane every step, so the "
-                                f"source has no effect."
-                            )
-                        else:
-                            msg = None      # normal H on PMC plane is legit
-                    else:                    # PEC
-                        if comp_field == "e" and is_tangential:
-                            msg = (
-                                f"Source/port at {pos} (component={pe.component}) "
-                                f"sits on the PEC {face} plane and drives a "
-                                f"tangential E. PEC zeros E_tan at the plane "
-                                f"every step, so the source is silently "
-                                f"discarded. Use a normal E source at this "
-                                f"face, or offset by one cell "
-                                f"({_dx_axis[ax_i]*1e3:.3g} mm) off the plane."
-                            )
-                        elif comp_field == "h" and not is_tangential:
-                            msg = (
-                                f"Source/port at {pos} (component={pe.component}) "
-                                f"sits on the PEC {face} plane and drives the "
-                                f"NORMAL H component. PEC imposes odd symmetry "
-                                f"on normal H (it must be zero at the plane). "
-                                f"Use a tangential H source or offset by one "
-                                f"cell ({_dx_axis[ax_i]*1e3:.3g} mm) off the plane."
-                            )
-                        else:
-                            msg = None      # tangential H or normal E on PEC is legit
-                    if msg is not None:
-                        _w.warn(
-                            PreflightWarning(
-                                msg,
-                                code="source_decoupled",
-                                source="_validate_cfg_source_on_reflector_plane",
-                            ),
-                            stacklevel=3,
-                        )
-
-    def _validate_cfg_ntff_absorber_overlap(
-        self,
-        _w,
-        cpml_thickness: float,
-        cpml_thick_lo: list[float],
-        cpml_thick_hi: list[float],
-        absorber_label: str,
-    ) -> None:
-        """P1.4: NTFF box overlap with absorber.
-
-        Issue #500: uses :func:`_absorber_boundary_for_axis` — the CPML
-        pad is EXTERIOR to ``[0, domain_extent]`` (see that helper), so an
-        NTFF corner is only in the absorber when it is genuinely outside
-        the requested domain, not merely within ``ct_{lo,hi}`` of an edge.
-        """
-        if self._ntff is not None and cpml_thickness > 0:
-            corner_lo, corner_hi, _ = self._ntff
-            for ax in range(3):
-                domain_ext = self._domain[ax] if ax < len(self._domain) else self._domain[-1]
-                ax_i = min(ax, 2)
-                ct_lo = cpml_thick_lo[ax_i]
-                ct_hi = cpml_thick_hi[ax_i]
-                lo_b, hi_b = _absorber_boundary_for_axis(domain_ext, ct_lo, ct_hi)
-                if (lo_b is not None and corner_lo[ax] < lo_b) or (
-                    hi_b is not None and corner_hi[ax] > hi_b
-                ):
-                    _w.warn(
-                        PreflightWarning(
-                            f"NTFF box extends into {absorber_label} region along "
-                            f"{'xyz'[ax]}-axis. Far-field results will be "
-                            f"corrupted. Shrink NTFF box to interior.",
-                            code="absorber_overlap",
-                            source="_validate_cfg_ntff_absorber_overlap",
-                        ),
-                        stacklevel=3,
-                    )
-                    break
-
-        # P1.5: non-uniform + NTFF is SUPPORTED (stale "unsupported" note removed
-        # 2026-07-02). The NU runner accumulates the NTFF box and
-        # compute_far_field handles graded-z per-cell dS + z-edges; a graded-z
-        # dipole directivity benchmarks within ~0.05 dB of theory
-        # (tests/unit/farfield/test_farfield_nonuniform.py). No guard needed.
-
-    def _validate_cfg_ntff_min_steps(self, dx: float) -> None:
-        """P1.7: NTFF with too few steps."""
-        if self._ntff is not None:
-            _, _, ntff_freqs = self._ntff
-            if ntff_freqs is not None:
-                min_freq = float(min(ntff_freqs))
-                period = 1.0 / max(min_freq, 1.0)
-                dt_est = dx / (C0 * 1.732) * 0.99  # CFL estimate
-                min_steps_for_ntff = int(10 * period / dt_est)
-                # Can't check n_steps here (not known yet), but store hint
-                self._ntff_min_steps_hint = min_steps_for_ntff
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the #500 NTFF-box-in-the-absorber check and the
+    # P1.7 minimum-steps hint moved VERBATIM to ``rfx/preflight/ntff.py``,
+    # bound back at their original positions. The P1.5 comment that used to
+    # sit between them is part of the first body's suite and travelled with
+    # it.
+    #
+    # ``_validate_cfg_ntff_min_steps`` emits nothing: it writes
+    # ``self._ntff_min_steps_hint``, an INSTANCE attribute, which is
+    # unaffected by where the body is defined -- ``rfx/interop/_design.py``
+    # reads that name out of ``EXCLUDED_SIMULATION_ATTRS`` and keeps doing
+    # so.
+    # ------------------------------------------------------------------
+    from rfx.preflight.ntff import (
+        _validate_cfg_ntff_absorber_overlap,
+        _validate_cfg_ntff_min_steps,
+    )
 
     def _validate_cfg_settling_witness_present(self, _w) -> None:
         """Warn when the declared inputs cannot produce a ring-down witness.
@@ -2806,508 +2122,30 @@ class _PreflightMixin:
     # ------------------------------------------------------------------
     from rfx.preflight.absorber import _validate_cfg_geometry_in_cpml
 
-    def _validate_cfg_port_inside_pec(self, _w, dx: float) -> None:
-        """P1.8: Port/source/probe frozen by realized PEC.
-
-        Lattice ownership contract (#931 §1.7 / #929): every question this
-        check asks is answered by the run's REALIZED edge set, read once
-        from the production assembly with the sheet/wire collectors:
-
-        * a wire-port extent cell is DEAD iff the port component's own E
-          edge at that index is PEC (``_wire_port_live_cells``, the same
-          primitive the assembler uses — issue #544 made the two share
-          it, and #931 made the primitive read edges, so a sheet trace,
-          which owns no cell, is visible here);
-        * a point port / source / probe on an E component is dead iff its
-          own edge is PEC; on an H component iff all four E edges of its
-          curl loop are PEC (``curl E = 0`` freezes it). Half a cell above
-          a SHEET only one loop edge is PEC, so an MSL diagnostic Hy probe
-          at the trace plane stays live; inside a one-cell VOLUME all four
-          are PEC and H is frozen, which is what a volume declaration
-          means. The former ``<= 1.5 dx`` thickness exemption inferred
-          sheet-ness from a bounding box — the #929 class — and is gone;
-        * the #556/#929 end-gap advisory measures the separation from
-          the actual source-end node to the nearest conductor on its own
-          column. A volume face, sheet plane, or axial PEC edge ending at
-          that node supplies contact. Contact is silent; a separation
-          is reported without guessing the intended coupling mechanism.
-
-        Non-uniform lane: the wire-port primitive cannot index a
-        ``NonUniformGrid`` (no ``position_to_index``), so the wire-port
-        advisories emit a "classification unavailable" note there rather
-        than guess (issue #544 review item 6; #303 class); the point
-        port/probe rule runs on both lanes through the shared context.
-        """
-        ctx = self._campaign_ctx()
-        is_nonuniform = ctx.lane == "nonuniform"
-        realized = None
-        classification_unavailable_reason: str | None = None
-        if ctx.error == "traced-mesh":
-            classification_unavailable_reason = (
-                "traced mesh (mesh-as-design-variable) -- no concrete "
-                "node positions")
-        elif ctx.error is not None:
-            classification_unavailable_reason = ctx.error
-        elif is_nonuniform:
-            classification_unavailable_reason = (
-                "non-uniform mesh (dz_profile/dx_profile/"
-                "dy_profile set) -- the shared wire-port primitive "
-                "only covers the uniform-grid path (issue #544)"
-            )
-        # A model with no conductor declaration has nothing that can
-        # freeze a port: skip the production assembly (the expensive part
-        # of the context) rather than run it to read an all-False set.
-        has_conductor = bool(getattr(self, "_thin_conductors", None))
-        if not has_conductor:
-            try:
-                has_conductor = any(
-                    self._resolve_material(e.material_name).sigma
-                    >= self._PEC_SIGMA_THRESHOLD for e in self._geometry)
-            except KeyError:
-                has_conductor = False
-        if ctx.error is None and has_conductor:
-            realized = ctx.realized()
-            if realized is None:
-                classification_unavailable_reason = ctx.assembly_error
-        grid = ctx.grid
-        entries = ctx.entry_realizations() if ctx.error is None else []
-        shape = tuple(grid.shape) if grid is not None else None
-
-        def _owners(component, idx):
-            """Names of the declarations whose OWN realized edges freeze
-            ``component`` at ``idx`` (attribution through the same
-            function, never through a per-entry cell mask)."""
-            names = []
-            for e in entries:
-                if not e.is_pec:
-                    continue
-                if _component_is_dead(e.edges(ctx.periodic, shape),
-                                      component, idx):
-                    if e.name not in names:
-                        names.append(e.name)
-            return names or ["unknown"]
-
-        for pe in self._ports:
-            if not getattr(pe, "extent", None):
-                continue
-            rasterized = self._wire_port_cell_centers(pe)
-            if rasterized is None:
-                continue
-            centers, mid_idx = rasterized
-            mid_center = centers[mid_idx]
-
-            dead_indices: list[int] = []
-            dead_names: list[str] = []
-            if realized is not None and not is_nonuniform:
-                from rfx.sources.sources import (
-                    WirePort, _wire_port_cells, _wire_port_live_cells,
-                )
-                axis = {"ex": 0, "ey": 1, "ez": 2}[pe.component]
-                end = list(pe.position)
-                end[axis] += pe.extent
-                wp = WirePort(
-                    start=tuple(pe.position), end=tuple(end),
-                    component=pe.component, impedance=pe.impedance,
-                )
-                try:
-                    cells, live_flags, _ = _wire_port_live_cells(
-                        grid, wp, realized.edges)
-                except ValueError:
-                    # Every extent cell is dead: _wire_port_live_cells
-                    # raises there (issue #318 — such a port has no live
-                    # cell to terminate or drive) instead of returning a
-                    # degenerate split. Report all cells dead.
-                    cells = _wire_port_cells(grid, wp)
-                    live_flags = [False] * len(cells)
-                dead_indices = [
-                    idx for idx, live in enumerate(live_flags) if not live
-                ]
-                if dead_indices:
-                    for idx in dead_indices:
-                        for name in _owners(pe.component, cells[idx]):
-                            if name not in dead_names:
-                                dead_names.append(name)
-
-                # Issue #556 (D5 follow-up, #488 arc): the OPPOSITE
-                # failure mode of the #314/#319 advisories above. There,
-                # a port extent cell lands ON PEC (dead cell). Here, the
-                # port terminates SHORT of a conductor. On the
-                # D5 "end-fed trace" fixture (dx=80um, h_sub=254um) the
-                # trace's realization landed one full cell above the
-                # wire's top. That historical D5 report described
-                # |S21| rising with frequency (docs/research_notes/
-                # 20260728_i488_falsifier_ledger.md). It motivated this
-                # check, but a geometric gap alone does not identify its
-                # electromagnetic coupling mechanism. No cell is dead in
-                # that fixture, so #314/#319 are correctly silent.
-                #
-                # Contact (#931 §1.9, #929) is read from realized walls
-                # and PEC source-axis edges on the terminal's own column.
-                # The wire's last edge on the + side runs
-                # from node ``cells[-1]`` to ``cells[-1] + 1``, so its end
-                # node is ``cells[-1] + 1``; on the - side the end node
-                # is ``cells[0]``. "Fires" = the end edge is live, the
-                # end node has no conductor contact but a further node
-                # on that column does. Search every realized candidate
-                # (#929), not only a one-cell neighbour. An axial PEC edge
-                # can supply contact without a tangential wall (filaments).
-                # A dipole ending in open vacuum stays silent. A measured
-                # separation alone does not determine the intended coupling.
-                if cells and live_flags:
-                    axis_letter = "xyz"[axis]
-                    for end_idx, step in ((0, -1), (len(cells) - 1, +1)):
-                        if not live_flags[end_idx]:
-                            continue
-                        end_node = list(cells[end_idx])
-                        if step > 0:
-                            end_node[axis] += 1
-                        ij = tuple(end_node[t] for t in range(3)
-                                   if t != axis)
-                        if not all(0 <= end_node[t] < shape[t]
-                                   for t in range(3)):
-                            continue
-                        planes = set(realized.wall_planes(axis, ij=ij))
-                        line_index = tuple(slice(None) if a == axis else end_node[a]
-                                           for a in range(3))
-                        axial_edges = np.flatnonzero(
-                            np.asarray(realized.edges[axis])[line_index])
-                        # Looking downward, edge k ends at node k+1;
-                        # looking upward, it begins at node k.
-                        edge_nodes = {int(k)+(1 if step < 0 else 0)
-                                      for k in axial_edges}
-                        contacts = planes | edge_nodes
-                        if end_node[axis] in contacts:
-                            continue            # galvanic contact
-                        candidates = [k for k in contacts
-                                      if 0 <= k < shape[axis]
-                                      and (k-end_node[axis])*step > 0]
-                        if not candidates:
-                            continue
-                        beyond = min(candidates, key=lambda k: abs(k-end_node[axis]))
-                        edge_index = list(end_node)
-                        edge_index[axis] = beyond-(1 if step < 0 else 0)
-                        adj_names = []
-                        for e in entries:
-                            if not e.is_pec:
-                                continue
-                            if beyond in e.wall_planes(axis, ctx.periodic,
-                                                       shape):
-                                foot = e.footprint_on_plane(
-                                    axis, beyond, ctx.periodic, shape)
-                                if bool(foot[ij]) and e.name not in adj_names:
-                                    adj_names.append(e.name)
-                        if beyond in edge_nodes:
-                            for name in _owners(pe.component, tuple(edge_index)):
-                                if name not in adj_names:
-                                    adj_names.append(name)
-                        adj_names = adj_names or ["unknown"]
-                        side = ("+" if step > 0 else "-") + axis_letter
-                        nodes_ax = ctx.nodes[axis]
-                        gap_cells = abs(beyond-end_node[axis])
-                        gap_m = abs(float(nodes_ax[beyond])-float(nodes_ax[end_node[axis]]))
-                        kind = "wall plane" if beyond in planes else f"{pe.component}-edge endpoint"
-                        _w.warn(
-                            PreflightWarning(
-                                f"Wire port at {pe.position} (extent "
-                                f"{pe.extent}, component {pe.component}): "
-                                f"its {side}-side end node "
-                                f"{tuple(end_node)} ({axis_letter} = "
-                                f"{_fmt_len(float(nodes_ax[end_node[axis]]))}) "
-                                f"carries no realized PEC contact, but the "
-                                f"nearest outward conductor node {beyond} "
-                                f"({axis_letter} = "
-                                f"{_fmt_len(float(nodes_ax[beyond]))}) is a "
-                                f"realized {kind} of {adj_names}. The "
-                                f"port end is "
-                                f"{gap_cells} cell(s) (gap = {gap_m:g} m) short "
-                                f"of that conductor. This is a geometric "
-                                f"separation; it does not determine the "
-                                f"intended electromagnetic coupling. If "
-                                f"galvanic contact is intended, adjust the "
-                                f"position and extent together so its end node "
-                                f"lands on that wall plane or conductor endpoint, "
-                                f"or correct the conductor declaration.",
-                                code="wire_port_end_gap_to_conductor",
-                                source="_validate_cfg_port_inside_pec",
-                            ),
-                            stacklevel=3,
-                        )
-            elif classification_unavailable_reason is not None:
-                _w.warn(
-                    PreflightWarning(
-                        f"Wire port at {pe.position} (extent {pe.extent}): "
-                        f"dead-cell classification unavailable "
-                        f"({classification_unavailable_reason}). The "
-                        f"#314/#319 PEC-overlap advisories and the #556 "
-                        f"end-gap-to-conductor advisory are skipped "
-                        f"for this port -- inspect the realized live/dead "
-                        f"source edges and the intended terminal contacts "
-                        f"on that mesh. Conductor overlap at an endpoint "
-                        f"can be intentional; do not infer contact from "
-                        f"the absence of this advisory.",
-                        code="wire_port_dead_cell_classification_unavailable",
-                        source="_validate_cfg_port_inside_pec",
-                    ),
-                    stacklevel=3,
-                )
-
-            if mid_idx in dead_indices:
-                # Kept verbatim from the #314 fix (PR #317): probe-cell
-                # corruption is the stronger, measured failure mode.
-                name = dead_names[0] if dead_names else "an assembled PEC region"
-                _w.warn(
-                    PreflightWarning(
-                        f"Wire port at {pe.position} (extent "
-                        f"{pe.extent}): its MIDPOINT V/I probe cell "
-                        f"(center {tuple(round(x, 6) for x in mid_center)}) "
-                        f"lands inside PEC geometry "
-                        f"'{name}'. S-parameters from "
-                        f"this port are silently corrupted (measured: "
-                        f"near-null forward transmission + over-unity "
-                        f"reverse). Shorten/lengthen the extent or move "
-                        f"the port so the midpoint cell sits in "
-                        f"dielectric (issue #314).",
-                        code="wire_port_midpoint_in_pec",
-                        source="_validate_cfg_port_inside_pec",
-                    ),
-                    stacklevel=3,
-                )
-
-            non_midpoint_dead = [i for i in dead_indices if i != mid_idx]
-            if non_midpoint_dead:
-                n = len(centers)
-                n_live = n - len(dead_indices)
-                z0 = getattr(pe, "impedance", 0.0) or 0.0
-                z_eff = z0 * n_live / n
-                _w.warn(
-                    PreflightWarning(
-                        f"Wire port at {pe.position} (extent {pe.extent}) "
-                        f"rasterizes to n={n} cells of which "
-                        f"{len(dead_indices)} have their {pe.component} "
-                        f"edge inside realized PEC "
-                        f"{dead_names} (n_live/n = {n_live}/{n}). Dead "
-                        f"cells are shorted by the PEC and are excluded "
-                        f"from the port's resistance distribution, drive "
-                        f"injection, and wave normalization (issue #318 "
-                        f"fix): the port terminates at {z0:g} ohm across "
-                        f"its {n_live} live cells. (rfx versions before "
-                        f"the #318 fix counted all {n} cells and "
-                        f"physically terminated at Z0*(n_live/n) = "
-                        f"{z_eff:.1f} ohm — the issue-#313 finding.) "
-                        f"Verify the extent was MEANT to end on/inside "
-                        f"the conductor, and keep the midpoint V/I probe "
-                        f"cell live; to silence, shorten the extent or "
-                        f"move the port so none of its cells has its "
-                        f"{pe.component} edge inside a conductor (per the "
-                        f"realized edge set -- a volume shorts every edge "
-                        f"between its two faces, a sheet shorts only the "
-                        f"edges IN its plane and leaves the normal edge "
-                        f"through it live).",
-                        code="wire_port_dead_extent_cells",
-                        source="_validate_cfg_port_inside_pec",
-                    ),
-                    stacklevel=3,
-                )
-
-        if realized is None:
-            return
-        _internal = getattr(self, "_internal_probe_indices", frozenset())
-        _probe_entries = [
-            pe for _pi, pe in enumerate(self._probes) if _pi not in _internal
-        ]  # skip library-internal witness probes (issue #470; see
-        #    _validate_cfg_absorber_placement for the rationale)
-        for pe in list(self._ports) + _probe_entries:
-            if getattr(pe, "extent", None):
-                continue        # wire ports: the per-cell rule above
-            pos = tuple(float(v) for v in pe.position)
-            component = (getattr(pe, "component", "") or "").lower()
-            if component not in ("ex", "ey", "ez", "hx", "hy", "hz"):
-                continue
-            try:
-                if is_nonuniform:
-                    from rfx.nonuniform import position_to_index as _nu_p2i
-                    idx = tuple(int(v) for v in _nu_p2i(grid, pos))
-                else:
-                    idx = tuple(int(v) for v in grid.position_to_index(pos))
-            except (ValueError, TypeError, IndexError, AttributeError):
-                continue
-            if not realized.component_is_dead(component, idx):
-                continue
-            names = _owners(component, idx)
-            what = ("its own E edge is a realized PEC edge"
-                    if component[0] == "e" else
-                    "all four E edges of its curl loop are realized PEC "
-                    "edges, so curl E = 0 and the component never moves")
-            _w.warn(
-                PreflightWarning(
-                    f"Port/source/probe at {pos} ({component}) is frozen "
-                    f"by realized PEC geometry {names}: {what} (lattice "
-                    f"ownership contract, #931). Field will be zero. "
-                    f"Move it off the conductor, or drive/read a "
-                    f"component the conductor leaves live (the normal E "
-                    f"through a sheet plane; tangential H beside a sheet).",
-                    code="port_in_pec",
-                    source="_validate_cfg_port_inside_pec",
-                ),
-                stacklevel=3,
-            )
-
-    def _wire_port_cell_centers(self, pe):
-        """Per-cell physical sample centers of a wire port's rasterization.
-
-        Uses the production endpoint snap and shared half-open edge span on
-        either grid lane. Returns ``(centers, midpoint_index)`` with one
-        physical E-edge center per driven cell and the midpoint V/I probe
-        at ``cells[len(cells) // 2]``. Returns None when the declaration
-        cannot be rasterized (diagnostics must not crash a run).
-        """
-        try:
-            from rfx.sources.sources import (
-                WirePort, _wire_port_cells, wire_port_edge_span,
-            )
-            from rfx.nonuniform import NonUniformGrid, position_to_index
-            from rfx.geometry.rasterize_grid import (
-                coords_from_nonuniform_grid, coords_from_uniform_grid,
-            )
-            axis = {"ex": 0, "ey": 1, "ez": 2}[pe.component]
-            end = list(pe.position)
-            end[axis] += pe.extent
-            grid = self._build_realized_grid()
-            if isinstance(grid, NonUniformGrid):
-                start_idx = position_to_index(grid, pe.position)
-                end_idx = position_to_index(grid, tuple(end))
-                lo, hi = sorted((start_idx[axis], end_idx[axis]))
-                first, last = wire_port_edge_span(
-                    grid, axis, lo, hi, float(pe.position[axis]),
-                    float(end[axis]))
-                cells = []
-                for k in range(first, last + 1):
-                    cell = list(start_idx)
-                    cell[axis] = k
-                    cells.append(tuple(cell))
-                coords = coords_from_nonuniform_grid(grid)
-            else:
-                wp = WirePort(start=tuple(pe.position), end=tuple(end),
-                              component=pe.component, impedance=pe.impedance)
-                cells = _wire_port_cells(grid, wp)
-                coords = coords_from_uniform_grid(grid)
-            if not cells:
-                return None
-            nodes = [np.asarray(line, dtype=float)
-                     for line in (coords.x, coords.y, coords.z)]
-            centers = []
-            for cell in cells:
-                # An E edge is at its node on the transverse axes and at
-                # the midpoint of its bounding nodes on its own axis.
-                pos = [float(nodes[ax][cell[ax]]) for ax in range(3)]
-                pos[axis] = 0.5 * (pos[axis] + nodes[axis][cell[axis] + 1])
-                centers.append(tuple(pos))
-            return centers, len(cells) // 2
-        except Exception:
-            return None
-
-    def _validate_cfg_floating_single_cell_port(self, _w) -> None:
-        """P1.9: Single-cell port in dielectric with no adjacent PEC pin
-        (issue #71). A single-cell LumpedPort placed mid-substrate with
-        no conducting pin or microstrip does not couple to patch-antenna
-        TM modes — the optimiser reads a nonsense loss from the
-        floating Ez source. Recommend extent=<substrate_height> to
-        promote to a WirePort spanning ground → patch.
-        """
-        _PORT_COMP_AXIS = {"ex": 0, "ey": 1, "ez": 2}
-        for pe in self._ports:
-            # Filter: only true ports (impedance > 0), single-cell
-            # (extent is None), actively excited (excite is True).
-            # add_source() creates _PortEntry with impedance=0.0 and is
-            # intentionally a soft source — not a port footgun.
-            if not pe.impedance or pe.impedance <= 0.0:
-                continue
-            if pe.extent is not None:
-                continue
-            if not pe.excite:
-                continue
-            pos = pe.position
-            # Find the dielectric geometry enclosing the port cell.
-            enclosing_eps_r = None
-            enclosing_name = None
-            for entry in self._geometry:
-                if entry.material_name == "pec":
-                    continue
-                if not hasattr(entry.shape, "bounding_box"):
-                    continue
-                try:
-                    c1, c2 = entry.shape.bounding_box()
-                except (NotImplementedError, TypeError):
-                    continue
-                inside = all(c1[ax] <= pos[ax] <= c2[ax] for ax in range(3))
-                if not inside:
-                    continue
-                mspec = self._materials.get(entry.material_name)
-                if mspec is not None and float(mspec.eps_r) > 1.0 + 1e-3:
-                    enclosing_eps_r = float(mspec.eps_r)
-                    enclosing_name = entry.material_name
-                    break
-            if enclosing_eps_r is None:
-                continue
-            # Check for a PEC geometry one cell away along the port's
-            # component axis (coax-style pin or microstrip feed edge).
-            # Without such a pin, the port cell cannot drive a vertical
-            # current that couples to the patch TM mode.
-            comp_axis = _PORT_COMP_AXIS.get(pe.component)
-            if comp_axis is None:
-                continue
-            nudge = float(self._dx or 0.0) * 1.01
-            adj_positions = (
-                tuple(pos[i] + (nudge if i == comp_axis else 0.0) for i in range(3)),
-                tuple(pos[i] - (nudge if i == comp_axis else 0.0) for i in range(3)),
-            )
-            # #931: a pin / ground may be a SHEET declaration
-            # (add_thin_conductor); sheets are conductors in this census.
-            from rfx.materials.thin_conductor import sheet_bounds as _sb
-            adjacent_bounds = []
-            for entry in self._geometry:
-                if entry.material_name != "pec":
-                    continue
-                if not hasattr(entry.shape, "bounding_box"):
-                    continue
-                try:
-                    c1, c2 = entry.shape.bounding_box()
-                except (NotImplementedError, TypeError):
-                    continue
-                adjacent_bounds.append((c1, c2))
-            for tc in getattr(self, "_thin_conductors", ()):
-                if not getattr(tc, "is_pec", False):
-                    continue
-                try:
-                    c1, c2 = _sb(tc.shape)
-                except (NotImplementedError, TypeError, AttributeError):
-                    continue
-                if c1 is not None and c2 is not None:
-                    adjacent_bounds.append((tuple(c1), tuple(c2)))
-            has_adjacent_pec = False
-            for apos in adj_positions:
-                for c1, c2 in adjacent_bounds:
-                    if all(c1[ax] <= apos[ax] <= c2[ax] for ax in range(3)):
-                        has_adjacent_pec = True
-                        break
-                if has_adjacent_pec:
-                    break
-            if has_adjacent_pec:
-                continue
-            _w.warn(
-                PreflightWarning(
-                    f"Single-cell port at {pos} ({pe.component}) sits inside "
-                    f"dielectric '{enclosing_name}' (eps_r={enclosing_eps_r:.2f}) "
-                    f"with no adjacent PEC along the {pe.component[1]}-axis. A "
-                    f"floating single-cell port inside substrate does not "
-                    f"couple to patch-antenna TM modes. Pass "
-                    f"extent=<substrate_height> to create a WirePort spanning "
-                    f"ground → patch plane (issue #71).",
-                    code="floating_port",
-                    source="_validate_cfg_floating_single_cell_port",
-                ),
-                stacklevel=3,
-            )
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the port/source/probe-frozen-by-realized-PEC
+    # check (345 lines, five emission sites -- the largest single body in
+    # this file), the wire-port cell-centre helper it calls and the #71
+    # floating-single-cell-port advisory moved VERBATIM to
+    # ``rfx/preflight/ports.py``, bound back at their original positions.
+    #
+    # ``_validate_cfg_port_inside_pec`` reads the run's REALIZED edge set
+    # through ``self._campaign_ctx``, which stays HERE with the realization
+    # family, and calls ``self._wire_port_cell_centers``, which travels
+    # with it. Both are attribute lookups on the composed ``Simulation``,
+    # so the rebind is the whole of what keeps them resolving.
+    #
+    # Its module-global read, ``_component_is_dead`` (the #929 one-sentence
+    # dead-component rule), did NOT travel with it: that leaf has a second
+    # reader in ``_RealizedPEC.component_is_dead`` above, so it went to
+    # ``rfx/preflight/_common.py`` where both sides can reach it, and is
+    # re-exported here for the bare-name read and the namespace surface.
+    # ------------------------------------------------------------------
+    from rfx.preflight.ports import (
+        _validate_cfg_port_inside_pec,
+        _wire_port_cell_centers,
+        _validate_cfg_floating_single_cell_port,
+    )
 
     # ------------------------------------------------------------------
     # #980 Phase 3 leg 4: the P0.4 PEC-boundary-on-an-open-structure
@@ -3318,24 +2156,12 @@ class _PreflightMixin:
     # ------------------------------------------------------------------
     from rfx.preflight.absorber import _validate_cfg_pec_boundary_open_structure
 
-    def _validate_cfg_no_sources(self, _w) -> None:
-        """P0.5: No sources configured."""
-        if (
-            not self._ports
-            and self._tfsf is None
-            and not self._waveguide_ports
-            and not self._floquet_ports
-            and not self._msl_ports
-        ):
-            _w.warn(
-                PreflightWarning(
-                    "No sources, ports, TFSF, or waveguide/Floquet/MSL ports configured. "
-                    "Simulation will produce zero fields.",
-                    code="no_sources",
-                    source="_validate_cfg_no_sources",
-                ),
-                stacklevel=3,
-            )
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the P0.5 no-sources guard moved VERBATIM to
+    # ``rfx/preflight/sources.py``, bound back at its original position for
+    # the reason the blocks above give.
+    # ------------------------------------------------------------------
+    from rfx.preflight.sources import _validate_cfg_no_sources
 
     # Validated multi-band grading envelope (SPEC-01 WP6, #780; witness
     # battery validation/research/multiband_nu/, pre-declaration note
@@ -3453,74 +2279,12 @@ class _PreflightMixin:
     )
 
 
-    def _validate_cfg_unresolved_pulse(self, _w, dx: float) -> None:
-        """Warn when a pulse waveform is unresolved by the time step (#386).
-
-        ``tau < 3*dt`` means the sampled excitation is a sub-dt spike: the
-        pulse's spectrum extends far past the grid Nyquist limit and the
-        discrete time integral no longer cancels, so a soft source leaves a
-        static charge field that CPML cannot absorb. The canonical way to
-        get here is passing an absolute-Hz number as ``bandwidth`` where a
-        FRACTIONAL one is expected (``tau = 1/(f0*bandwidth*pi)`` then
-        misses by ~9 orders of magnitude), so this fires regardless of
-        ``until_decay`` — a sub-dt spike is always broken.
-
-        ``dt`` is estimated from the preflight ``dx`` via the uniform-lane
-        3D Courant formula (``Grid.courant_dt``). A refining ``dz_profile``
-        makes the actual dt smaller, so the estimate errs toward firing; a
-        strictly coarsening profile can raise the NU dt above this estimate
-        by at most sqrt(3/2) ~ 1.22x (the NU dt combines per-axis minimum
-        cell sizes, ``rfx/nonuniform.py``), so the check can under-fire by
-        <= 22% — harmless against a mistake that misses the threshold by
-        ~9 orders of magnitude, not by percent.
-        """
-        dt = dx / (C0 * math.sqrt(3.0)) * 0.99  # Grid.courant_dt(dx, ndim=3)
-        entries = list(self._ports) + list(self._msl_ports)
-        if self._tfsf is not None:
-            entries.append(self._tfsf)
-        for entry in entries:
-            wf = getattr(entry, "waveform", None)
-            tau = None
-            if wf is not None and not isinstance(wf, str):
-                try:
-                    tau = float(wf.tau)
-                except (AttributeError, TypeError, ValueError,
-                        ZeroDivisionError):
-                    tau = None
-            else:
-                # String-named waveforms (the TFSF entry's
-                # "differentiated_gaussian" / "modulated_gaussian"): both
-                # pulse families share tau = 1/(pi*f0*bandwidth), so the
-                # absolute-Hz-bandwidth footgun on
-                # add_tfsf_source(bandwidth=...) is computable from the
-                # entry's own f0/bandwidth attributes when both are set.
-                f0 = getattr(entry, "f0", None)
-                bw = getattr(entry, "bandwidth", None)
-                if f0 and bw:
-                    try:
-                        tau = 1.0 / (math.pi * float(f0) * float(bw))
-                    except (TypeError, ValueError, ZeroDivisionError):
-                        tau = None
-            if tau is None or not math.isfinite(tau) or tau <= 0.0:
-                continue
-            if tau < 3.0 * dt:
-                _wf_name = wf if isinstance(wf, str) else type(wf).__name__
-                _w.warn(
-                    PreflightWarning(
-                        f"waveform tau={tau:.3g}s is below 3*dt "
-                        f"(dt~{dt:.3g}s, tau/dt={tau/dt:.3g}): pulse "
-                        "unresolved by the time step — an absolute-Hz "
-                        "bandwidth was likely passed where a FRACTIONAL "
-                        "one is expected; the discrete DC residue leaves "
-                        "a static charge field CPML cannot absorb "
-                        "(issue #386)",
-                        code="unresolved_pulse",
-                        loc=f"waveform {_wf_name} at "
-                            f"{getattr(entry, 'position', None)}",
-                        source="_validate_cfg_unresolved_pulse",
-                    ),
-                    stacklevel=3,
-                )
+    # ------------------------------------------------------------------
+    # #980 Phase 3 leg 6: the #386 unresolved-pulse advisory moved VERBATIM
+    # to ``rfx/preflight/sources.py``, bound back at its original position
+    # for the reason the blocks above give.
+    # ------------------------------------------------------------------
+    from rfx.preflight.sources import _validate_cfg_unresolved_pulse
 
     # ------------------------------------------------------------------
     # #980 Phase 3 leg 5: the two lane-limitation checks -- what the
