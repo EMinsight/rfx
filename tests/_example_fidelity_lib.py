@@ -345,7 +345,7 @@ def _v_from(label: str, fn: Callable[[ModuleType], dict]) -> Variant:
 
 
 CLASSIFICATION: dict[str, Entry] = {
-    # ---- no_simulation (20): zero real Simulation() calls, AST-verified --
+    # ---- no_simulation (22): zero real Simulation() calls, AST-verified --
     "validation/crossval/16_pec_sphere_mie_ka_sweep.py": Entry(
         "no_simulation",
         "drives the functional rfx.rcs.compute_rcs entry point directly on "
@@ -422,6 +422,17 @@ CLASSIFICATION: dict[str, Entry] = {
         "no_simulation",
         "shared quasi-1-D TFSF slab rig helpers (record-length derivation, "
         "tail witness, envelope fit) factored out of cv22 -- no Simulation()"),
+    "validation/crossval/26_oblique_slab_fresnel.py": Entry(
+        "no_simulation",
+        "cv26 oblique-slab case: drives cv04's low-level rig (Grid, "
+        "init_tfsf_2d, update_e/update_h with the Bloch phase, CPML) "
+        "directly under a main guard -- no Simulation() call"),
+    "validation/crossval/comparators/oblique_fresnel.py": Entry(
+        "no_simulation",
+        "pure-numpy oblique Fresnel oracle, Meep k_point mapping, exact "
+        "2-D Yee-lattice / CPML model, windows and falsifiers for cv26 -- "
+        "no rfx Simulation (it imports tfsf_2d's auxiliary-grid constants, "
+        "#888, rather than restating them)"),
     "validation/crossval/comparators/slab_family.py": Entry(
         "no_simulation",
         "the slab family's leaf declaration (#928): the cv04 rig constants, "
@@ -450,6 +461,11 @@ CLASSIFICATION: dict[str, Entry] = {
         "backfills the auxiliary-echo record invariant (#888) into the "
         "committed slab-family lattice_witness.json documents -- pure geometry "
         "and JSON editing, no solver, no rfx import at all"),
+    "validation/crossval/comparators/emit_cv26_lattice_witness_replay.py": Entry(
+        "no_simulation",
+        "recomputes cv26's derived lattice-witness window from the committed "
+        "per-arm records with the standard's own budget primitives -- arithmetic "
+        "on artifacts already on disk, no solver, no FDTD, no rfx import"),
     "validation/crossval/comparators/emit_cv04_fringe_gate_evidence.py": Entry(
         "no_simulation",
         "emits cv04's fringe-gate evidence JSON from the committed R(f) "
