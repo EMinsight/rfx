@@ -1013,18 +1013,51 @@ class PreflightReport(list):
 
     A ``list`` subclass holding :class:`PreflightIssue` items, so it IS a list
     and every legacy ``list[str]`` call site (iterate / ``"\\n".join`` / ``len``
-    / truthiness) keeps working unchanged. It also exposes the canonical report
-    API shared with :class:`rfx.validation.PortValidationReport` and
+    / indexing / ``==``) keeps working unchanged. It also exposes the canonical
+    report API shared with :class:`rfx.validation.PortValidationReport` and
     :class:`rfx.subgridding.validation.SubgridValidationReport`.
+
+    **Boolean evaluation raises** :class:`TypeError` on purpose (see
+    :meth:`__bool__`). List truthiness is inverted for a report: an EMPTY
+    (clean) report is falsy and a report carrying only advisories is truthy,
+    so ``if not sim.preflight(): raise`` and ``assert sim.preflight()`` both
+    mean the opposite of what they read as. Use :attr:`ok` (no error-severity
+    finding), :attr:`errors`, or :meth:`raise_for_failure` for a gate, and
+    ``len(report)`` / :attr:`issues` when the item count is what you want.
 
     ``flux_regions`` records finite monitor windows in metres and cell
     indices. These records are metadata, not findings: an aligned window
-    must not change list truthiness or the historical strict-mode gate.
+    must not change ``len(report)`` or the historical strict-mode gate.
     """
 
     def __init__(self, issues=(), *, flux_regions=None):
         super().__init__(issues)
         self.flux_regions = [] if flux_regions is None else list(flux_regions)
+
+    # Class attribute, not a module-level constant: the module namespace of
+    # ``rfx.api._preflight`` is pinned by set equality
+    # (``tests/locks/test_preflight_split_snapshot.py``) ahead of the #980
+    # split, and this message belongs to the class anyway.
+    _BOOL_TRAP_MESSAGE = (
+        "PreflightReport cannot be evaluated as a boolean: it is a list of "
+        "issues, so an EMPTY (clean) report is falsy and a report with only "
+        "advisories is truthy \u2014 the opposite of what `if not "
+        "sim.preflight()` intends. Check `report.ok` (no error-severity "
+        "issues), `report.errors`, or call `report.raise_for_failure()`; use "
+        "`len(report)` / `report.issues` for the item count."
+    )
+
+    def __bool__(self) -> bool:
+        """Always raise: list truthiness is inverted for a report (#980).
+
+        Inherited ``list.__bool__`` makes a clean report falsy and an
+        advisory-only report truthy, so the natural-reading gates
+        ``if not sim.preflight(): raise`` and ``assert sim.preflight()``
+        fire exactly backwards. Raising is louder than a docstring: the
+        trap becomes a failure at the call site instead of a run that
+        silently skipped its own gate.
+        """
+        raise TypeError(type(self)._BOOL_TRAP_MESSAGE)
 
     @property
     def issues(self) -> list:
@@ -1066,7 +1099,7 @@ class PreflightReport(list):
     def format(self) -> str:
         """Return a compact human-readable multiline summary."""
         status = "PASS" if self.ok else "FAIL"
-        count = f"{len(self)} issue(s)" if self else "no issues"
+        count = f"{len(self)} issue(s)" if len(self) else "no issues"
         lines = [f"preflight: {status} ({count})"]
         for issue in self:
             sev = getattr(issue, "severity", "warning")
@@ -3160,7 +3193,7 @@ class _PreflightMixin:
                     est.warning, severity="warning", code="ad_memory"
                 ))
 
-        if strict and issues:
+        if strict and len(issues):   # PreflightReport refuses bool() (#980)
             # Aggregate-then-raise: escalate ALL findings at once. Preserves the
             # historical "strict escalates any issue to ValueError" contract,
             # but reports every problem in one pass instead of fail-on-first
@@ -3172,7 +3205,7 @@ class _PreflightMixin:
                 + "\n  - ".join(issues)
             )
 
-        if issues:
+        if len(issues):              # PreflightReport refuses bool() (#980)
             for iss in issues:
                 print(f"  [PREFLIGHT] {iss}")
         elif check_ntff is True:
@@ -3331,7 +3364,7 @@ class _PreflightMixin:
         # waveguide ports there is no layout to audit. Emitted as warnings by
         # the check sites (the repo idiom) and folded into the report here, so
         # the coded fields survive into PreflightIssue.
-        if key == "waveguide" and not issues:
+        if key == "waveguide" and not len(issues):   # refuses bool() (#980)
             _wg_entries = list(self._waveguide_ports)
             if _wg_entries:
                 import warnings as _wmod
@@ -3370,7 +3403,7 @@ class _PreflightMixin:
                 + ":\n  - " + "\n  - ".join(_errors)
             )
 
-        if issues:
+        if len(issues):              # PreflightReport refuses bool() (#980)
             for issue in issues:
                 print(f"  [SPARAM PREFLIGHT] {issue}")
         else:
