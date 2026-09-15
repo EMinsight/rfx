@@ -29,7 +29,14 @@ from jax import lax
 from jax.experimental.shard_map import shard_map
 from jax.sharding import Mesh, PartitionSpec as P
 
-from rfx.core.yee import EPS_0, MU_0, FDTDState
+from rfx.core.yee import (
+    EPS_0,
+    MU_0,
+    FDTDState,
+    MaterialArrays,
+    _shift_fwd,
+    _shift_bwd,
+)
 
 __all__ = [
     "cpml_coeff_e_vacuum",
@@ -47,6 +54,10 @@ __all__ = [
     "shard_stacked_psi",
     "inject_sources_shmap",
     "sample_probes_shmap",
+    "_update_h_local_nu",
+    "_update_e_local_nu",
+    "update_h_nu_shmap",
+    "update_e_nu_shmap",
 ]
 
 
@@ -746,3 +757,219 @@ def sample_probes_shmap(st, mesh, n_prb, prb_local_specs, prb_device_ids):
         return lax.psum(jnp.stack(samples), "x")
 
     return _sample(st.ex, st.ey, st.ez, st.hx, st.hy, st.hz)
+
+
+# ---------------------------------------------------------------------------
+# Local NU update kernels (operate on per-device slab including ghosts)
+# ---------------------------------------------------------------------------
+#
+# #1038 leg 4 (prerequisite). Moved VERBATIM -- name, signature, docstring and
+# body byte-for-byte -- from ``distributed_nu.py`` L137/L169. Neither was
+# duplicated; they move for the same reason leg 2 moved ``split_array_x`` /
+# ``gather_array_x``: leg 4's shared NU shard wrappers below call them, and
+# this module MUST NOT import from ``rfx.runners.distributed_nu`` (it is the
+# leaf of the runner DAG, and ``distributed_nu`` imports it at L49). Their only
+# dependencies are ``rfx.core.yee`` names, so the move is cycle-free.
+#
+# ``distributed_nu.py`` re-imports both at the position they were defined, so
+# ``rfx.runners.distributed_nu._update_{h,e}_local_nu`` keeps resolving for
+# ``tests/unit/runners/test_distributed_nu_kernel.py`` and for
+# ``distributed_v2.py``'s function-local import. The two leading-underscore
+# names in ``__all__`` above are deliberate: renaming a physics kernel to fit
+# this module's public-name convention would put a rename inside a
+# bit-identity leg for cosmetic reasons, so the exported spelling is the
+# original one.
+
+def _update_h_local_nu(state, materials, dt,
+                      inv_dx_slab, inv_dy_full, inv_dz_full,
+                      inv_dx_h_slab, inv_dy_h_full, inv_dz_h_full):
+    """H update on a local slab using NU inverse spacings.
+
+    Mirrors ``rfx/core/yee.py::update_h_nu`` but accepts pre-sliced
+    per-device ``inv_dx`` / ``inv_dx_h`` (length nx_local), while
+    y/z spacings are replicated (full-axis).
+    """
+    ex, ey, ez = state.ex, state.ey, state.ez
+    mu = materials.mu_r * MU_0
+
+    curl_x = (
+        (_shift_fwd(ez, 1) - ez) * inv_dy_h_full[None, :, None]
+        - (_shift_fwd(ey, 2) - ey) * inv_dz_h_full[None, None, :]
+    )
+    curl_y = (
+        (_shift_fwd(ex, 2) - ex) * inv_dz_h_full[None, None, :]
+        - (_shift_fwd(ez, 0) - ez) * inv_dx_h_slab[:, None, None]
+    )
+    curl_z = (
+        (_shift_fwd(ey, 0) - ey) * inv_dx_h_slab[:, None, None]
+        - (_shift_fwd(ex, 1) - ex) * inv_dy_h_full[None, :, None]
+    )
+
+    hx = state.hx - (dt / mu) * curl_x
+    hy = state.hy - (dt / mu) * curl_y
+    hz = state.hz - (dt / mu) * curl_z
+
+    return state._replace(hx=hx, hy=hy, hz=hz)
+
+
+def _update_e_local_nu(state, materials, dt,
+                      inv_dx_slab, inv_dy_full, inv_dz_full):
+    """E update on a local slab using NU inverse (cell-local) spacings.
+
+    Mirrors ``rfx/core/yee.py::update_e_nu``.
+    """
+    hx, hy, hz = state.hx, state.hy, state.hz
+    eps = materials.eps_r * EPS_0
+    sigma = materials.sigma
+
+    sigma_dt_2eps = sigma * dt / (2.0 * eps)
+    ca = (1.0 - sigma_dt_2eps) / (1.0 + sigma_dt_2eps)
+    cb = (dt / eps) / (1.0 + sigma_dt_2eps)
+
+    curl_x = (
+        (hz - _shift_bwd(hz, 1)) * inv_dy_full[None, :, None]
+        - (hy - _shift_bwd(hy, 2)) * inv_dz_full[None, None, :]
+    )
+    curl_y = (
+        (hx - _shift_bwd(hx, 2)) * inv_dz_full[None, None, :]
+        - (hz - _shift_bwd(hz, 0)) * inv_dx_slab[:, None, None]
+    )
+    curl_z = (
+        (hy - _shift_bwd(hy, 0)) * inv_dx_slab[:, None, None]
+        - (hx - _shift_bwd(hx, 1)) * inv_dy_full[None, :, None]
+    )
+
+    ex = ca * state.ex + cb * curl_x
+    ey = ca * state.ey + cb * curl_y
+    ez = ca * state.ez + cb * curl_z
+
+    return state._replace(ex=ex, ey=ey, ez=ez, step=state.step + 1)
+
+
+# ---------------------------------------------------------------------------
+# NU shard_map update wrappers
+# ---------------------------------------------------------------------------
+#
+# #1038 leg 4, inventory §2.4 -- THE renamed-clone pair the survey called the
+# load-bearing finding. ``distributed_v2.py`` carried a copy of
+# ``distributed_nu.py``'s NU shard wrappers under renamed inner functions
+# (``_h_nu`` / ``_e_nu`` against ``_h`` / ``_e``), inside its ``if is_nu:``
+# branch, and already imported the local kernels they wrap FROM
+# ``distributed_nu``. The survey measured the two H copies at 0.884 and the two
+# E copies at 0.947 similarity, the difference being the ``def`` name plus, for
+# H, one re-wrapped argument list.
+#
+# Both copies were nested closures. The body below is ``distributed_nu.py``'s
+# text, dedented, with the eight names it read from its enclosing
+# ``run_nonuniform_distributed_pec`` turned into explicit parameters spelled
+# exactly as they were spelled there -- so the statements are unchanged, only
+# where the names come from. Both runners keep a same-named nested
+# ``_update_h_shmap`` that forwards here, so no call site in either step body
+# moved. This is the shape inventory §8 prescribes as the fusion-hazard
+# mitigation, and the one ``exchange_component_shmap`` already uses: take the
+# closed-over values explicitly and build the ``shard_map`` inside.
+#
+# TRACED, not eager. Unlike the leg-3 face kernels these are called from inside
+# the jitted step body and lifting the locals to parameters changes the jaxpr's
+# shape. Fixture 9 (``distributed_v2_nu_branch``) is the only fast-lane witness
+# for v2's ``is_nu`` branch; fixtures 11-12 (``distributed_nu_*``) witness the
+# NU runner. Those rows staying bit-identical is the evidence, not the argument.
+
+def update_h_nu_shmap(st, mat, mesh, dt,
+                      inv_dx_sharded, inv_dy_rep, inv_dz_rep,
+                      inv_dx_h_sharded, inv_dy_h_rep, inv_dz_h_rep):
+    """H update on the NU distributed path, via ``shard_map``.
+
+    Shared by ``distributed_nu.run_nonuniform_distributed_pec`` and by the
+    ``is_nu`` branch of ``distributed_v2.run_distributed``.
+
+    Parameters
+    ----------
+    st, mat
+        The sharded :class:`FDTDState` and :class:`MaterialArrays`.
+    mesh
+        The 1-D x-axis :class:`jax.sharding.Mesh`.
+    dt
+        Timestep, closed over as a Python float by both original copies.
+    inv_dx_sharded, inv_dx_h_sharded
+        Per-device slabs of the inverse x spacings (cell-local and
+        mean-spacing), sharded over ``"x"``.
+    inv_dy_rep, inv_dz_rep, inv_dy_h_rep, inv_dz_h_rep
+        Full-axis inverse y/z spacings, replicated on every device.
+
+    Returns the state with ``hx``/``hy``/``hz``/``step`` replaced. The E-field
+    components are passed in because the H curl reads them, and returned
+    untouched by not being in ``out_specs``.
+    """
+    @partial(
+        shard_map,
+        mesh=mesh,
+        in_specs=(
+            P("x"), P("x"), P("x"),  # ex, ey, ez
+            P("x"), P("x"), P("x"),  # hx, hy, hz
+            P(),                     # step
+            P("x"), P("x"), P("x"),  # eps_r, sigma, mu_r
+            P("x"), P(None), P(None),  # inv_dx, inv_dy, inv_dz
+            P("x"), P(None), P(None),  # inv_dx_h, inv_dy_h, inv_dz_h
+        ),
+        out_specs=(P("x"), P("x"), P("x"), P()),
+        check_rep=False,
+    )
+    def _h(ex, ey, ez, hx, hy, hz, step, eps_r, sigma, mu_r,
+           invdx, invdy, invdz, invdxh, invdyh, invdzh):
+        _st = FDTDState(ex=ex, ey=ey, ez=ez, hx=hx, hy=hy, hz=hz, step=step)
+        _mat = MaterialArrays(eps_r=eps_r, sigma=sigma, mu_r=mu_r)
+        new_st = _update_h_local_nu(
+            _st, _mat, dt, invdx, invdy, invdz, invdxh, invdyh, invdzh)
+        return new_st.hx, new_st.hy, new_st.hz, new_st.step
+
+    hx, hy, hz, step = _h(
+        st.ex, st.ey, st.ez, st.hx, st.hy, st.hz, st.step,
+        mat.eps_r, mat.sigma, mat.mu_r,
+        inv_dx_sharded, inv_dy_rep, inv_dz_rep,
+        inv_dx_h_sharded, inv_dy_h_rep, inv_dz_h_rep,
+    )
+    return st._replace(hx=hx, hy=hy, hz=hz, step=step)
+
+
+def update_e_nu_shmap(st, mat, mesh, dt,
+                      inv_dx_sharded, inv_dy_rep, inv_dz_rep):
+    """E update on the NU distributed path, via ``shard_map``.
+
+    The E sibling of :func:`update_h_nu_shmap`, shared by the same two
+    runners and merged for the same reason -- inventory §2.4 measured the two
+    inner kernels at 0.947 similarity, the entire residue being the ``def``
+    name. It needs three inverse-spacing arrays rather than six because the E
+    curl reads only the cell-local spacings, not the mean-spacing ones.
+
+    Returns the state with ``ex``/``ey``/``ez``/``step`` replaced. Dispersion
+    is NOT handled here: ``distributed_v2.run_distributed`` refuses Debye and
+    Lorentz on the NU path upstream, and its caller passes the polarisation
+    state straight back out.
+    """
+    @partial(
+        shard_map,
+        mesh=mesh,
+        in_specs=(
+            P("x"), P("x"), P("x"),
+            P("x"), P("x"), P("x"),
+            P(),
+            P("x"), P("x"), P("x"),
+            P("x"), P(None), P(None),
+        ),
+        out_specs=(P("x"), P("x"), P("x"), P()),
+        check_rep=False,
+    )
+    def _e(ex, ey, ez, hx, hy, hz, step, eps_r, sigma, mu_r,
+           invdx, invdy, invdz):
+        _st = FDTDState(ex=ex, ey=ey, ez=ez, hx=hx, hy=hy, hz=hz, step=step)
+        _mat = MaterialArrays(eps_r=eps_r, sigma=sigma, mu_r=mu_r)
+        new_st = _update_e_local_nu(_st, _mat, dt, invdx, invdy, invdz)
+        return new_st.ex, new_st.ey, new_st.ez, new_st.step
+
+    ex, ey, ez, step = _e(
+        st.ex, st.ey, st.ez, st.hx, st.hy, st.hz, st.step,
+        mat.eps_r, mat.sigma, mat.mu_r,
+        inv_dx_sharded, inv_dy_rep, inv_dz_rep,
+    )
+    return st._replace(ex=ex, ey=ey, ez=ez, step=step)

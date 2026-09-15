@@ -873,6 +873,38 @@ _SHARED_HELPER_BINDINGS = (
      "_apply_pmc_shmap"),
     ("apply_pmc_face_shmap", "rfx.runners.distributed_nu",
      "_apply_pmc_face_nu_shmap"),
+    # #1038 leg 4 (prerequisite) -- the two local NU Yee kernels. Not a
+    # de-duplication: single definitions in distributed_nu.py that had to move
+    # BELOW the shared module so leg 4's shared NU shard wrappers can call
+    # them without importing from distributed_nu (which would invert the DAG).
+    # distributed_nu.py re-imports both at the position they were defined, so
+    # these rows are what says the re-import is the SAME object and not a
+    # resurrected copy. v2's own import of them is function-local (inside
+    # run_distributed), so there is no rfx.runners.distributed_v2 attribute to
+    # guard -- one module-level importer, one row each.
+    ("_update_h_local_nu", "rfx.runners.distributed_nu",
+     "_update_h_local_nu"),
+    ("_update_e_local_nu", "rfx.runners.distributed_nu",
+     "_update_e_local_nu"),
+    # #1038 leg 4 -- the NU H shard wrapper (inventory §2.4). v2 carried a
+    # renamed copy (`_h_nu`) of the NU runner's own `_h` inside its `if is_nu:`
+    # branch; both were nested closures, so the eight locals they read (mesh,
+    # dt and the six inv-spacing arrays) became explicit parameters and each
+    # site keeps a same-named `_update_h_shmap` forwarder. TRACED: this one
+    # runs inside the jitted step body, so the jaxpr's shape changed with it --
+    # fixture 9 (distributed_v2_nu_branch) and fixtures 11-12 are what say the
+    # arrays did not move with it.
+    ("update_h_nu_shmap", "rfx.runners.distributed_nu", "update_h_nu_shmap"),
+    ("update_h_nu_shmap", "rfx.runners.distributed_v2", "update_h_nu_shmap"),
+    # #1038 leg 4 -- the NU E shard wrapper, the other half of inventory §2.4.
+    # The two inner kernels (`_e` / `_e_nu`) differed in the def name and
+    # NOTHING else: their statement bodies were byte-identical before the
+    # merge. Five locals became parameters. Also traced inside the step body,
+    # same witnesses as the H rows above. v2's caller still returns
+    # (state, db_st, lr_st) with the polarisation state passed straight
+    # through -- the shared body returns the state only.
+    ("update_e_nu_shmap", "rfx.runners.distributed_nu", "update_e_nu_shmap"),
+    ("update_e_nu_shmap", "rfx.runners.distributed_v2", "update_e_nu_shmap"),
 )
 
 
