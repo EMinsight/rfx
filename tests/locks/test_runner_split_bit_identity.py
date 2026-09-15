@@ -852,6 +852,27 @@ _SHARED_HELPER_BINDINGS = (
     # split_array_x and that name was then defined BELOW distributed.py's
     # import of this module. One importer only, so one row.
     ("split_poles_x", "rfx.runners.distributed", "split_poles_x"),
+    # #1038 leg 3 -- the domain-face PEC kernel (inventory §2.3(c)). Unlike the
+    # leg-1/leg-2 helpers these were already top-level functions taking every
+    # value explicitly, so nothing became a parameter and the traced jaxpr is
+    # structurally unchanged. The two copies differed in ONE token, each
+    # runner's own spelling of the per-rank slab length; the NU side was
+    # renamed to nx_local_with_ghost first, which made the normalised-AST
+    # hashes equal. Two importers, two module-local aliases, two rows.
+    ("apply_pec_face_shmap", "rfx.runners.distributed_v2",
+     "_apply_pec_shmap"),
+    ("apply_pec_face_shmap", "rfx.runners.distributed_nu",
+     "_apply_pec_face_nu_shmap"),
+    # #1038 leg 3 -- the domain-face PMC kernel (inventory §2.3(d)). Same story
+    # as the PEC row above and the same single token of difference; after the
+    # rename the two inner bodies were byte-identical, not merely
+    # AST-equivalent. NOTE the kernel is shared but the HOOK POINT is not: v2
+    # calls it after the H ghost exchange, the NU runner before it. That
+    # divergence is leg 5 / inventory §3.2 and these rows do not speak to it.
+    ("apply_pmc_face_shmap", "rfx.runners.distributed_v2",
+     "_apply_pmc_shmap"),
+    ("apply_pmc_face_shmap", "rfx.runners.distributed_nu",
+     "_apply_pmc_face_nu_shmap"),
 )
 
 

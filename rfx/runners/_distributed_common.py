@@ -27,9 +27,9 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 from jax.experimental.shard_map import shard_map
-from jax.sharding import PartitionSpec as P
+from jax.sharding import Mesh, PartitionSpec as P
 
-from rfx.core.yee import EPS_0, MU_0
+from rfx.core.yee import EPS_0, MU_0, FDTDState
 
 __all__ = [
     "cpml_coeff_e_vacuum",
@@ -40,6 +40,8 @@ __all__ = [
     "unstack_and_gather",
     "zeros_psi_stacked",
     "exchange_component_shmap",
+    "apply_pec_face_shmap",
+    "apply_pmc_face_shmap",
     "shard_stacked",
     "shard_stacked_poles",
     "shard_stacked_psi",
@@ -338,6 +340,215 @@ def exchange_component_shmap(field, mesh, n_devices):
         return f
 
     return _exchange(field)
+
+
+# ---------------------------------------------------------------------------
+# Domain-face boundary conditions inside shard_map
+# ---------------------------------------------------------------------------
+#
+# Unlike the leg-1/leg-2 helpers, these were already TOP-LEVEL functions
+# taking every value they need as an explicit parameter, on both runners.
+# Nothing became a parameter that was not one before, so the inner kernel
+# closes over exactly the names it closed over at its old address and the
+# traced jaxpr is structurally unchanged -- the 13 baseline fixtures are
+# what says so, not this comment.
+
+def apply_pec_face_shmap(state: FDTDState, mesh: Mesh, n_devices: int,
+                         nx_local_with_ghost: int,
+                         pad_x: int = 0) -> FDTDState:
+    """Apply PEC on the physical domain faces (x_lo, x_hi, y, z) under
+    ``shard_map``, using device identity for the two x faces.
+
+    Y- and Z-face PEC is local to every rank and runs unconditionally.
+    X-face PEC is rank-conditional: only rank 0 zeroes x_lo, only rank
+    N-1 zeroes x_hi.
+
+    The X faces act on the **first real cell** (``ghost``) and the
+    **last real cell** (``nx_local_with_ghost - 1 - ghost - pad_x``),
+    NOT on the seam ghost cells (which belong to neighbouring ranks)
+    and NOT on the alignment-pad cells. ``pad_x`` (#622): when the last
+    rank's slab carries alignment-pad cells past the real x-hi face
+    (global node ``nx - 1``), the face must act on that real node, not
+    on the padded slab end. This is V3 bullet 7 ("Hard PEC only acts on
+    physical boundary or masked cells, not on seam ghosts") and V3
+    bullet 6 ("Hard PEC does not re-zero interior seam cells of
+    neighbouring ranks").
+
+    ``nx_local_with_ghost`` is the per-rank slab length INCLUDING both
+    ghost layers -- ``nx_padded // n_devices + 2 * ghost`` on both
+    runners; ``ShardedNUGrid.nx_local`` is that same quantity and
+    ``ShardedNUGrid.nx_per_rank`` is NOT (#1038 leg 3 derives this at
+    every call site).
+
+    #1038 leg 3. This is ``distributed_v2.py::_apply_pec_shmap``
+    verbatim from the ``@partial`` down. ``distributed_nu.py`` carried a
+    copy whose kernel differed in exactly one token -- its own parameter
+    spelling -- plus three comments; the rename in the preceding commit
+    made the two normalised-AST hashes equal
+    (``29aeb6858fb45082...``) and the NU copy's richer face comments are
+    folded into this docstring.
+
+    **This function does not encode a hook point.** The two runners call
+    it at different places in their step bodies: ``distributed_v2`` after
+    the E ghost exchange and BEFORE source injection
+    (``step_fn_pec`` step 5), ``distributed_nu`` AFTER source injection
+    (step 7). That ordering divergence is inventory §3.2 / leg 5
+    territory -- a physics question with its own gate, deliberately left
+    untouched here. Callers own their ordering; this function only
+    applies the faces.
+    """
+
+    @partial(
+        shard_map,
+        mesh=mesh,
+        in_specs=(
+            P("x"),  # ex
+            P("x"),  # ey
+            P("x"),  # ez
+        ),
+        out_specs=(
+            P("x"),
+            P("x"),
+            P("x"),
+        ),
+        check_rep=False,
+    )
+    def _pec(ex, ey, ez):
+        ghost = 1
+
+        # Y-axis PEC (all devices)
+        ex = ex.at[:, 0, :].set(0.0)
+        ex = ex.at[:, -1, :].set(0.0)
+        ez = ez.at[:, 0, :].set(0.0)
+        ez = ez.at[:, -1, :].set(0.0)
+
+        # Z-axis PEC (all devices)
+        ex = ex.at[:, :, 0].set(0.0)
+        ex = ex.at[:, :, -1].set(0.0)
+        ey = ey.at[:, :, 0].set(0.0)
+        ey = ey.at[:, :, -1].set(0.0)
+
+        device_idx = lax.axis_index("x")
+
+        # X-lo PEC: device 0 only
+        is_first = (device_idx == 0)
+        ey_xlo = jnp.where(is_first, 0.0, ey[ghost, :, :])
+        ez_xlo = jnp.where(is_first, 0.0, ez[ghost, :, :])
+        ey = ey.at[ghost, :, :].set(ey_xlo)
+        ez = ez.at[ghost, :, :].set(ez_xlo)
+
+        # X-hi PEC: device N-1 only (skip ghost AND alignment pad, #622)
+        is_last = (device_idx == n_devices - 1)
+        last_real = nx_local_with_ghost - 1 - ghost - pad_x
+        ey_xhi = jnp.where(is_last, 0.0, ey[last_real, :, :])
+        ez_xhi = jnp.where(is_last, 0.0, ez[last_real, :, :])
+        ey = ey.at[last_real, :, :].set(ey_xhi)
+        ez = ez.at[last_real, :, :].set(ez_xhi)
+
+        return ex, ey, ez
+
+    ex, ey, ez = _pec(state.ex, state.ey, state.ez)
+    return state._replace(ex=ex, ey=ey, ez=ez)
+
+
+def apply_pmc_face_shmap(state: FDTDState, mesh: Mesh, n_devices: int,
+                         nx_local_with_ghost: int,
+                         pmc_faces: frozenset, pad_x: int = 0) -> FDTDState:
+    """Apply PMC (``H_tangential = 0``) on the physical domain faces under
+    ``shard_map``.
+
+    Electromagnetic dual of :func:`apply_pec_face_shmap`: PEC zeroes
+    tangential E, PMC zeroes tangential H. Y- and Z-face PMC is local to
+    every rank; X-face PMC is rank-conditional (only rank 0 zeroes
+    x_lo, only rank N-1 zeroes x_hi).
+
+    Yee convention: a ``_hi`` face acts on index ``-2`` (half a cell
+    INSIDE the wall), not ``-1`` (the ghost outside) -- see
+    ``rfx/boundaries/pmc.py``. On the x axis that is ``last_inside``,
+    one cell in from the last real cell
+    ``nx_local_with_ghost - 1 - ghost - pad_x``; the faces never act on
+    a seam ghost, nor on the alignment-pad cells when ``pad_x > 0``
+    (#622, same class as the PEC face fix).
+
+    ``pmc_faces`` is a Python ``frozenset`` read at trace time, so each
+    face's ``if`` is resolved while the kernel is staged out, not at
+    run time. An empty set short-circuits before the kernel is built.
+
+    #1038 leg 3. ``distributed_v2.py::_apply_pmc_shmap`` and
+    ``distributed_nu.py::_apply_pmc_face_nu_shmap`` were the SAME kernel
+    with one token of difference, each runner's own spelling of the
+    slab length; after the rename in this leg's first commit the two
+    inner bodies hashed byte-identical
+    (``c6baaf31de52299c39c564403a6fda4fbebdaea26014bbceb7f12d30983f0b12``).
+
+    **This function does not encode a hook point, and the two runners
+    disagree about one.** ``distributed_v2`` calls it AFTER the H ghost
+    exchange (``step_fn_cpml`` 3b / ``step_fn_pec`` 2b);
+    ``distributed_nu`` calls it BEFORE the H ghost exchange (step 2b),
+    so that the zero propagates to neighbour ranks through the
+    exchange. Both cite the same OQ9 directive for the H-half placement
+    and reach opposite conclusions about the exchange. That is inventory
+    §3.2 / leg 5 territory -- a physics question with its own gate --
+    and merging the kernel settles nothing about it. Callers own their
+    ordering.
+    """
+    if not pmc_faces:
+        return state
+
+    @partial(
+        shard_map,
+        mesh=mesh,
+        in_specs=(
+            P("x"),  # hx
+            P("x"),  # hy
+            P("x"),  # hz
+        ),
+        out_specs=(
+            P("x"),
+            P("x"),
+            P("x"),
+        ),
+        check_rep=False,
+    )
+    def _pmc(hx, hy, hz):
+        ghost = 1
+
+        # Yee convention: _hi PMC acts on index -2 (0.5·dx INSIDE the
+        # wall), not -1 (ghost outside). See rfx/boundaries/pmc.py.
+        if "y_lo" in pmc_faces:
+            hx = hx.at[:, 0, :].set(0.0)
+            hz = hz.at[:, 0, :].set(0.0)
+        if "y_hi" in pmc_faces:
+            hx = hx.at[:, -2, :].set(0.0)
+            hz = hz.at[:, -2, :].set(0.0)
+        if "z_lo" in pmc_faces:
+            hx = hx.at[:, :, 0].set(0.0)
+            hy = hy.at[:, :, 0].set(0.0)
+        if "z_hi" in pmc_faces:
+            hx = hx.at[:, :, -2].set(0.0)
+            hy = hy.at[:, :, -2].set(0.0)
+
+        device_idx = lax.axis_index("x")
+        is_first = (device_idx == 0)
+        is_last = (device_idx == n_devices - 1)
+        last_real = nx_local_with_ghost - 1 - ghost - pad_x
+        last_inside = last_real - 1
+
+        if "x_lo" in pmc_faces:
+            hy_new = jnp.where(is_first, 0.0, hy[ghost, :, :])
+            hz_new = jnp.where(is_first, 0.0, hz[ghost, :, :])
+            hy = hy.at[ghost, :, :].set(hy_new)
+            hz = hz.at[ghost, :, :].set(hz_new)
+        if "x_hi" in pmc_faces:
+            hy_new = jnp.where(is_last, 0.0, hy[last_inside, :, :])
+            hz_new = jnp.where(is_last, 0.0, hz[last_inside, :, :])
+            hy = hy.at[last_inside, :, :].set(hy_new)
+            hz = hz.at[last_inside, :, :].set(hz_new)
+
+        return hx, hy, hz
+
+    hx, hy, hz = _pmc(state.hx, state.hy, state.hz)
+    return state._replace(hx=hx, hy=hy, hz=hz)
 
 
 # ---------------------------------------------------------------------------
