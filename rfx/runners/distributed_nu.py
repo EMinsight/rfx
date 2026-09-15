@@ -50,6 +50,11 @@ from rfx.runners._distributed_common import (
     cpml_coeff_e_vacuum,
     cpml_coeff_h_vacuum,
     exchange_component_shmap,
+    inject_sources_shmap,
+    sample_probes_shmap,
+    shard_stacked,
+    shard_stacked_poles,
+    shard_stacked_psi,
 )
 
 
@@ -1093,9 +1098,7 @@ def shard_cpml_state_x_slab(cpml_state_stacked, sharded_grid: ShardedNUGrid,
     shd = NamedSharding(mesh, _P("x"))
 
     def _shard_psi(arr):
-        n_dev, n_c, d1, d2 = arr.shape
-        merged = arr.reshape(n_dev * n_c, d1, d2)
-        return jax.device_put(merged, shd)
+        return shard_stacked_psi(arr, shd)
 
     return CPMLState(
         psi_ex_ylo=_shard_psi(cpml_state_stacked.psi_ex_ylo),
@@ -1200,17 +1203,12 @@ def shard_debye_coeffs_x_slab(debye_coeffs, sharded_grid: ShardedNUGrid,
 
     def _shard_3d(arr):
         # (n_devices, nx_local, ny, nz) -> (n_devices*nx_local, ny, nz)
-        n_dev = arr.shape[0]
-        rest = arr.shape[1:]
-        return jax.device_put(arr.reshape(n_dev * rest[0], *rest[1:]), shd)
+        return shard_stacked(arr, shd)
 
     def _shard_4d(arr):
         # (n_devices, n_poles, nx_local, ny, nz) ->
         # (n_devices*n_poles, nx_local, ny, nz)
-        n_dev, n_poles, nx_loc, ny_a, nz_a = arr.shape
-        return jax.device_put(
-            arr.reshape(n_dev * n_poles, nx_loc, ny_a, nz_a), shd,
-        )
+        return shard_stacked_poles(arr, shd)
 
     return DebyeCoeffs(
         ca=_shard_3d(coeffs_slabs.ca),
@@ -1254,10 +1252,7 @@ def shard_debye_state_x_slab(debye_state, sharded_grid: ShardedNUGrid,
     shd = NamedSharding(mesh, _P("x"))
 
     def _shard_4d(arr):
-        n_dev, n_poles, nx_loc, ny_a, nz_a = arr.shape
-        return jax.device_put(
-            arr.reshape(n_dev * n_poles, nx_loc, ny_a, nz_a), shd,
-        )
+        return shard_stacked_poles(arr, shd)
 
     return DebyeState(
         px=_shard_4d(state_slabs.px),
@@ -1313,15 +1308,10 @@ def shard_lorentz_coeffs_x_slab(lorentz_coeffs, sharded_grid: ShardedNUGrid,
     shd = NamedSharding(mesh, _P("x"))
 
     def _shard_3d(arr):
-        n_dev = arr.shape[0]
-        rest = arr.shape[1:]
-        return jax.device_put(arr.reshape(n_dev * rest[0], *rest[1:]), shd)
+        return shard_stacked(arr, shd)
 
     def _shard_4d(arr):
-        n_dev, n_poles, nx_loc, ny_a, nz_a = arr.shape
-        return jax.device_put(
-            arr.reshape(n_dev * n_poles, nx_loc, ny_a, nz_a), shd,
-        )
+        return shard_stacked_poles(arr, shd)
 
     return LorentzCoeffs(
         ca=_shard_3d(coeffs_slabs.ca),
@@ -1370,10 +1360,7 @@ def shard_lorentz_state_x_slab(lorentz_state, sharded_grid: ShardedNUGrid,
     shd = NamedSharding(mesh, _P("x"))
 
     def _shard_4d(arr):
-        n_dev, n_poles, nx_loc, ny_a, nz_a = arr.shape
-        return jax.device_put(
-            arr.reshape(n_dev * n_poles, nx_loc, ny_a, nz_a), shd,
-        )
+        return shard_stacked_poles(arr, shd)
 
     return LorentzState(
         px=_shard_4d(state_slabs.px),
@@ -2252,9 +2239,7 @@ def run_nonuniform_distributed_pec(
     state_slabs = _split_state(full_state, n_devices, ghost)
 
     def _shard_stacked(arr):
-        n_dev = arr.shape[0]
-        rest = arr.shape[1:]
-        return jax.device_put(arr.reshape(n_dev * rest[0], *rest[1:]), shd)
+        return shard_stacked(arr, shd)
 
     sharded_state = FDTDState(
         ex=_shard_stacked(state_slabs.ex),
@@ -2598,68 +2583,15 @@ def run_nonuniform_distributed_pec(
             return new_state, new_db_st, new_lr_st
 
     def _inject_sources_shmap(st, src_vals_step):
-        if n_src == 0:
-            return st
-
-        @partial(
-            shard_map,
-            mesh=mesh,
-            in_specs=(P("x"), P("x"), P("x"), P()),
-            out_specs=(P("x"), P("x"), P("x")),
-            check_rep=False,
+        return inject_sources_shmap(
+            st, src_vals_step, mesh, n_src,
+            src_local_specs, src_device_ids,
         )
-        def _inject(ex, ey, ez, sv):
-            device_idx = lax.axis_index("x")
-            for idx_s in range(n_src):
-                li, lj, lk, lc = src_local_specs[idx_s]
-                dev_id = src_device_ids[idx_s]
-                val = jnp.where(device_idx == dev_id, sv[idx_s], 0.0)
-                if lc == "ex":
-                    ex = ex.at[li, lj, lk].add(val)
-                elif lc == "ey":
-                    ey = ey.at[li, lj, lk].add(val)
-                elif lc == "ez":
-                    ez = ez.at[li, lj, lk].add(val)
-            return ex, ey, ez
-
-        ex, ey, ez = _inject(st.ex, st.ey, st.ez, src_vals_step)
-        return st._replace(ex=ex, ey=ey, ez=ez)
 
     def _sample_probes_shmap(st):
-        if n_prb == 0:
-            return jnp.zeros(0, dtype=jnp.float32)
-
-        @partial(
-            shard_map,
-            mesh=mesh,
-            in_specs=(P("x"), P("x"), P("x"),
-                      P("x"), P("x"), P("x")),
-            out_specs=P(),
-            check_rep=False,
+        return sample_probes_shmap(
+            st, mesh, n_prb, prb_local_specs, prb_device_ids,
         )
-        def _sample(ex, ey, ez, hx, hy, hz):
-            device_idx = lax.axis_index("x")
-            samples = []
-            for idx_p in range(n_prb):
-                li, lj, lk, lc = prb_local_specs[idx_p]
-                dev_id = prb_device_ids[idx_p]
-                if lc == "ex":
-                    raw = ex[li, lj, lk]
-                elif lc == "ey":
-                    raw = ey[li, lj, lk]
-                elif lc == "ez":
-                    raw = ez[li, lj, lk]
-                elif lc == "hx":
-                    raw = hx[li, lj, lk]
-                elif lc == "hy":
-                    raw = hy[li, lj, lk]
-                else:
-                    raw = hz[li, lj, lk]
-                val = jnp.where(device_idx == dev_id, raw, 0.0)
-                samples.append(val)
-            return lax.psum(jnp.stack(samples), "x")
-
-        return _sample(st.ex, st.ey, st.ez, st.hx, st.hy, st.hz)
 
     # ------------------------------------------------------------------
     # Phase 2C: shmap-wrapped CPML helpers (no-op when CPML disabled)
