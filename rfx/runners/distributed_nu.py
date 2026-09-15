@@ -55,6 +55,8 @@ from rfx.runners._distributed_common import (
     shard_stacked,
     shard_stacked_poles,
     shard_stacked_psi,
+    unstack_and_gather,
+    zeros_psi_stacked,
 )
 
 
@@ -1036,7 +1038,7 @@ def init_cpml_for_sharded_nu(sharded_grid: ShardedNUGrid, n_devices: int,
 
     def _zeros(d1, d2):
         # (n_devices, n_cpml, d1, d2) — same dtype as single-device init
-        return jnp.zeros((n_devices, n, d1, d2), dtype=jnp.float32)
+        return zeros_psi_stacked(n_devices, n, d1, d2)
 
     cpml_state_stacked = CPMLState(
         # E-field psi arrays
@@ -2970,8 +2972,6 @@ def run_nonuniform_distributed_pec(
     # ------------------------------------------------------------------
     # Gather sharded state -> full-domain (nx, ny, nz)
     # ------------------------------------------------------------------
-    from rfx.runners.distributed import gather_array_x
-
     def _unstack_and_gather(sharded_arr):
         # Phase 2F: must remain traceable under ``jax.grad``.  The prior
         # ``np.array(sharded_arr)`` call broke whenever a caller wrapped
@@ -2979,18 +2979,9 @@ def run_nonuniform_distributed_pec(
         # gathered ``final_state`` arrays.  Use pure JAX reshape +
         # ``gather_array_x`` (already JAX-friendly) so the gather stays
         # in the JAX trace.
-        total_x = sharded_arr.shape[0]
-        assert total_x == n_devices * nx_local, (
-            f"unstack: total_x={total_x} != n_devices*nx_local={n_devices * nx_local}"
+        return unstack_and_gather(
+            sharded_arr, n_devices, nx_local, ghost, pad_x, sharded_grid.nx,
         )
-        stacked = jnp.reshape(
-            sharded_arr,
-            (n_devices, nx_local) + tuple(sharded_arr.shape[1:]),
-        )
-        gathered = gather_array_x(stacked, ghost)
-        if pad_x > 0:
-            gathered = gathered[: sharded_grid.nx]
-        return gathered
 
     final_state = FDTDState(
         ex=_unstack_and_gather(final_state_sharded.ex),

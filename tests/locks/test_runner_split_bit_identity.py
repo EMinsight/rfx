@@ -826,6 +826,32 @@ _SHARED_HELPER_BINDINGS = (
      "sample_probes_shmap"),
     ("sample_probes_shmap", "rfx.runners.distributed_v2",
      "sample_probes_shmap"),
+    # #1038 leg 2 (a) -- the stacked-CPML-psi allocator. Two nested ``_zeros``
+    # closures over (n_devices, n) that differed only in how they spelled the
+    # two face-parallel extents (inventory §2.3(b)). Both callers are
+    # setup-time, so this row guards a de-duplication with no jaxpr exposure.
+    ("zeros_psi_stacked", "rfx.runners.distributed", "zeros_psi_stacked"),
+    ("zeros_psi_stacked", "rfx.runners.distributed_nu", "zeros_psi_stacked"),
+    # #1038 leg 2 -- the x-slab primitives. Not a de-duplication: these were
+    # single definitions in distributed.py that had to move BELOW the shared
+    # module so that shared bodies calling them (leg 2b's unstack_and_gather,
+    # leg 2c's split_poles_x) can import them without a cycle. distributed.py
+    # re-exports both at their old position, so these rows are what says the
+    # re-export is the same object and not a resurrected copy.
+    ("split_array_x", "rfx.runners.distributed", "split_array_x"),
+    ("gather_array_x", "rfx.runners.distributed", "gather_array_x"),
+    ("gather_array_x", "rfx.runners.distributed_v2", "gather_array_x"),
+    # #1038 leg 2 (b) -- the final-state gather. The two copies differed in the
+    # trim bound (``sharded_grid.nx`` in the NU runner, the enclosing ``nx`` in
+    # v2) and in the assert message; the bound is now an explicit argument each
+    # caller supplies, so neither call site's expression moved.
+    ("unstack_and_gather", "rfx.runners.distributed_nu", "unstack_and_gather"),
+    ("unstack_and_gather", "rfx.runners.distributed_v2", "unstack_and_gather"),
+    # #1038 leg 2 (c) -- the per-pole x-splitter. Three nested copies, all in
+    # distributed.py, which leg 1 had to leave behind because their body calls
+    # split_array_x and that name was then defined BELOW distributed.py's
+    # import of this module. One importer only, so one row.
+    ("split_poles_x", "rfx.runners.distributed", "split_poles_x"),
 )
 
 

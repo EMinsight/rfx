@@ -34,6 +34,11 @@ from rfx.core.yee import EPS_0, MU_0
 __all__ = [
     "cpml_coeff_e_vacuum",
     "cpml_coeff_h_vacuum",
+    "split_array_x",
+    "gather_array_x",
+    "split_poles_x",
+    "unstack_and_gather",
+    "zeros_psi_stacked",
     "exchange_component_shmap",
     "shard_stacked",
     "shard_stacked_poles",
@@ -41,6 +46,162 @@ __all__ = [
     "inject_sources_shmap",
     "sample_probes_shmap",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Domain splitting / gathering (x-axis slabs with ghost cells)
+# ---------------------------------------------------------------------------
+#
+# #1038 leg 2. Moved VERBATIM from ``distributed.py``, where they sat at
+# L58/L107 -- ten lines AFTER that module's own import of this one. Nothing
+# about them was duplicated; they move because they are the x-slab primitives
+# every shared helper in this module that touches slabs has to call, and a
+# shared body could not reach them at their old address without a circular
+# import. ``distributed.py`` re-exports both at the position they were
+# defined, so ``rfx.runners.distributed.split_array_x`` / ``.gather_array_x``
+# still resolve for its external importers.
+#
+# Both are closure-free and use only ``jnp``, so this module stays the
+# dependency-DAG leaf (inventory §2.5): it imports nothing from
+# ``rfx.runners.*``.
+
+
+def split_array_x(arr, n_devices, ghost=1, pad_value=0.0):
+    """Split a 3D array into N slabs along x with ghost cells.
+
+    Parameters
+    ----------
+    arr : ndarray, shape (nx, ny, nz)
+    n_devices : int
+    ghost : int
+        Number of ghost cells on each side.
+    pad_value : float
+        Value used for ghost cells at the physical boundary (device 0
+        left ghost and device N-1 right ghost).  Default 0.0 is correct
+        for field arrays; use 1.0 for eps_r and mu_r to avoid division
+        by zero in the Yee update.
+
+    Returns
+    -------
+    slabs : ndarray, shape (n_devices, nx_local + 2*ghost, ny, nz)
+    """
+    nx = arr.shape[0]
+    nx_per = nx // n_devices
+    slabs = []
+    for i in range(n_devices):
+        x_start = i * nx_per
+        x_end = x_start + nx_per
+
+        # Desired range including ghosts
+        want_lo = x_start - ghost
+        want_hi = x_end + ghost
+
+        # Clamp to valid array range
+        g_lo = max(0, want_lo)
+        g_hi = min(nx, want_hi)
+
+        slab_data = arr[g_lo:g_hi]
+
+        # Pad where the desired range exceeds array bounds
+        pad_lo = g_lo - want_lo   # > 0 when want_lo < 0
+        pad_hi = want_hi - g_hi   # > 0 when want_hi > nx
+
+        if pad_lo > 0 or pad_hi > 0:
+            pad_widths = [(pad_lo, pad_hi)] + [(0, 0)] * (arr.ndim - 1)
+            slab_data = jnp.pad(slab_data, pad_widths, mode='constant',
+                                constant_values=pad_value)
+
+        slabs.append(slab_data)
+    return jnp.stack(slabs)
+
+
+def gather_array_x(slabs, ghost=1):
+    """Gather slabs back into a single array, stripping ghost cells.
+
+    Parameters
+    ----------
+    slabs : ndarray, shape (n_devices, nx_local + 2*ghost, ny, nz)
+    ghost : int
+
+    Returns
+    -------
+    arr : ndarray, shape (nx, ny, nz)
+    """
+    # Strip ghost cells from each slab and concatenate
+    inner = slabs[:, ghost:-ghost, :, :]  # (n_devices, nx_per, ny, nz)
+    n_devices = inner.shape[0]
+    # Reshape: merge device and x dims
+    nx_per = inner.shape[1]
+    ny = inner.shape[2]
+    nz = inner.shape[3]
+    return inner.reshape(n_devices * nx_per, ny, nz)
+
+
+def split_poles_x(arr, n_poles, n_devices, ghost):
+    """Split a per-pole array ``(n_poles, nx, ny, nz)`` into x-slabs.
+
+    Applies :func:`split_array_x` to each pole and stacks the results on
+    axis 1, giving ``(n_devices, n_poles, nx_local, ny, nz)``. Ghost cells
+    at the physical x boundaries are padded with ``0.0``, which is the
+    correct fill for every array this is used on: the polarization state
+    fields of Debye/Lorentz, and Lorentz's ``a``/``b``/``c`` coefficients.
+
+    NOT for a coefficient whose ghost fill must be non-zero --
+    ``_split_lorentz_coeffs`` splits ``cc`` with ``pad_value=1/EPS_0``
+    through :func:`split_array_x` directly, and its comment records the
+    NaN-in-backward reason. That call is deliberately not routed here.
+    """
+    return jnp.stack([
+        split_array_x(arr[p], n_devices, ghost, pad_value=0.0)
+        for p in range(n_poles)
+    ], axis=1)
+
+
+def unstack_and_gather(sharded_arr, n_devices, nx_local, ghost, pad_x, nx):
+    """Flatten a sharded x-slab array back to one full-domain array.
+
+    The shard_map runners hold fields as ``(n_devices * nx_local, ny, nz)``
+    -- rank slabs concatenated along x, each still carrying its ghost cells.
+    This reshapes that into ``(n_devices, nx_local, ny, nz)``, hands it to
+    :func:`gather_array_x` (which strips the ghosts and merges the rank and x
+    axes), and trims the high-x PEC padding cells that were added to make
+    ``nx`` divisible by ``n_devices``.
+
+    Parameters
+    ----------
+    sharded_arr : jax array, shape ``(n_devices * nx_local, ny, nz)``
+    n_devices, nx_local, ghost, pad_x : int
+        The slab decomposition the array was built with.
+    nx : int
+        Trim bound: the UNPADDED global x cell count. ``distributed_v2``
+        passes its local ``nx`` (``grid.shape[0]``); ``distributed_nu``
+        passes ``sharded_grid.nx``. Those are the same quantity -- both
+        equal ``n_devices * (nx_local - 2 * ghost) - pad_x``, i.e. the
+        gathered length less the padding -- which is why the two runners'
+        copies of this body could merge; see the #1038 leg 2b commit
+        message for the binding-by-binding derivation. It stays an explicit
+        parameter rather than being recomputed here so that neither caller's
+        expression changes.
+
+    Must remain pure JAX: callers wrap the runners in ``jax.grad`` to drive
+    an objective from the gathered ``final_state``, and an earlier
+    ``np.array(sharded_arr)`` host-pull here raised
+    ``TracerArrayConversionError``. Guarded by
+    tests/unit/runners/test_distributed_v2_gather_traceable.py.
+    """
+    total_x = sharded_arr.shape[0]
+    assert total_x == n_devices * nx_local, (
+        f"unstack: total_x={total_x} != n_devices*nx_local={n_devices * nx_local}"
+    )
+    stacked = jnp.reshape(
+        sharded_arr,
+        (n_devices, nx_local) + tuple(sharded_arr.shape[1:]),
+    )
+    gathered = gather_array_x(stacked, ghost)
+    # Trim padding cells if nx was padded
+    if pad_x > 0:
+        gathered = gathered[:nx]
+    return gathered
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +245,44 @@ def cpml_coeff_h_vacuum(dt: float) -> float:
     assumption is intentional and load-bearing: see the module docstring.
     """
     return dt / MU_0
+
+
+# ---------------------------------------------------------------------------
+# Stacked CPML psi allocation
+# ---------------------------------------------------------------------------
+#
+# #1038 leg 2 (a). ``distributed._init_cpml_distributed`` and
+# ``distributed_nu.init_cpml_for_sharded_nu`` each built the 24 psi arrays of
+# a ``CPMLState`` through a nested ``_zeros`` closure over ``n_devices`` and
+# the CPML layer count ``n``. The two bodies were the same statement spelled
+# with different parameter names (``dim1, dim2`` vs ``d1, d2``) -- inventory
+# §2.3(b). ``dim1, dim2`` is the spelling that landed; the second parameter
+# keeps the terse name ``n`` the two closures used so the moved statement is
+# byte-identical to the one it replaced.
+#
+# Both callers run at setup time, outside any jit/shard_map trace, so this
+# move carries no jaxpr-shape change.
+
+
+def zeros_psi_stacked(n_devices, n, dim1, dim2):
+    """Zero CPML psi array stacked over ranks: ``(n_devices, n, dim1, dim2)``.
+
+    Parameters
+    ----------
+    n_devices : int
+        Number of ranks the psi array is stacked over (axis 0).
+    n : int
+        CPML layer count (``grid.cpml_layers``) -- the psi depth on axis 1.
+    dim1, dim2 : int
+        The two face-parallel extents. Which grid dimensions these are
+        depends on the face; callers pass ``nx_local`` for a y-/z-face psi
+        that indexes along the rank-local x slab, and the global ``ny``/``nz``
+        for an x-face psi.
+
+    ``float32`` is fixed here, matching the single-device
+    ``rfx.boundaries.cpml.init_cpml`` convention both callers mirror.
+    """
+    return jnp.zeros((n_devices, n, dim1, dim2), dtype=jnp.float32)
 
 
 # ---------------------------------------------------------------------------
