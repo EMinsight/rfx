@@ -338,6 +338,11 @@ NEWLY_GATED_NOTES = (
     "docs/design_notes/issue812_phase_identity_results.md",
 )
 
+ISSUE1043_STABILITY_NOTE = (
+    "docs/design_notes/issue1043_cpml_subpixel_coefficient_results.md")
+ISSUE1043_F1_NOTE = (
+    "docs/design_notes/issue1043_f1_pec_short_gate_results.md")
+
 # Markdown documents, with the regex that cuts them into named sites.
 MARKDOWN_SITES: dict[str, str] = {
     "validation/README.md": r"^\|\s*`(crossval/[^`]+)`",
@@ -370,6 +375,16 @@ MARKDOWN_SITES: dict[str, str] = {
     # exactly the shape this gate exists for, so the note is opted in with the
     # section that carries them.
     CV01_CPML_NOTE: r"^#+\s+(.*\S)\s*$",
+    # 2026-09-15 (#1043 / PR #1047 verification round): both results notes are
+    # opted in because their verdicts ARE tables of measured numbers read out
+    # of the committed stability / PEC-short artifacts -- exactly the shape
+    # this gate exists for. It is opted in for a measured reason: a
+    # transcription slip survived review in one of them (the 80-period head
+    # range read the bin-0 value 0.9969 instead of the bin-5 minimum 0.9552),
+    # and value-checked citations are what catches that class rather than the
+    # instance.
+    ISSUE1043_STABILITY_NOTE: r"^#+\s+(.*\S)\s*$",
+    ISSUE1043_F1_NOTE: r"^#+\s+(.*\S)\s*$",
 }
 
 DOCUMENTS = (MANIFEST, *MARKDOWN_SITES)
@@ -703,6 +718,28 @@ CLASSIFICATION: dict[str, str] = {
     "docs/design_notes/issue812_cv17_cv18_geometry_sensitivity_predeclaration.md": GATED,
     "docs/design_notes/issue812_phase_identity_predeclaration.md": GATED,
     "docs/design_notes/issue812_phase_identity_results.md": GATED,
+    # 2026-09-15 (#1043 Stage A, CPML + subpixel psi coefficient): neither note
+    # carries a `::` span at all -- `parses` and `others` are both empty. Every
+    # number in the results note is replayed by
+    # scripts/diagnostics/cpml_subpixel_stability/ into
+    # scripts/diagnostics/_artifacts/cpml_subpixel_stability/*.json, and the
+    # load-bearing ones are additionally pinned by
+    # tests/unit/boundaries/test_cpml_subpixel_coefficient_consistency.py,
+    # which is a stronger check than a key lookup.
+    "docs/design_notes/issue1043_cpml_subpixel_coefficient_predeclaration.md":
+        NO_ARTIFACT_REFERENCE,
+    ISSUE1043_STABILITY_NOTE: GATED,
+    # 2026-09-15 (#1043 review round 1, F1): the pre-declaration's only `::`
+    # span is a pytest node id
+    # (`test_subpixel_pec.py::test_pec_short_s11_with_conformal_face_pec`), so
+    # it lands in `others` and never in `parses`; the results note carries no
+    # `::` span at all. Every number in both is replayed by
+    # scripts/diagnostics/cpml_subpixel_stability/f1_pec_short_gate.py and the
+    # load-bearing ones are pinned by the two gates in
+    # tests/unit/geometry/test_subpixel_pec.py.
+    "docs/design_notes/issue1043_f1_pec_short_gate_predeclaration.md":
+        NO_ARTIFACT_REFERENCE,
+    ISSUE1043_F1_NOTE: GATED,
     "docs/design_notes/mixed_refplane_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/portgrid_m0m1_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/portgrid_m0m1_results.md": NO_ARTIFACT_REFERENCE,
