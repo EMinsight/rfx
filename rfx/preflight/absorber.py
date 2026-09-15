@@ -916,6 +916,98 @@ def _validate_cfg_geometry_in_cpml(
             )
 
 
+def _validate_cfg_dielectric_at_absorber_seam(self, _w) -> None:
+    """A dielectric reaches an absorber seam in a shape nothing can continue.
+
+    The complement of ``_validate_cfg_geometry_in_cpml``. That check reports
+    geometry standing INSIDE the absorber; this one reports geometry the pad
+    material extension cannot carry INTO it, under a feature that says it
+    puts it there. The extension continues a boundary-reaching structure
+    outward -- the staircase lane by replicating the material arrays, the
+    smoothed lane by continuing the SHAPE. A shape with no continuation
+    across the reached face (a sphere, a cylinder reached across its axis, an
+    imported mesh) gets neither on the smoothed lane and is then solved with
+    vacuum in its own pad: the end facet #831 measured as ``|B/A| ~ 0.53`` on
+    a straight guide, WORSENING with absorber depth.
+
+    **It asks the continuation itself**, rather than re-deriving "reaches a
+    padded face" from ``self._domain``. The first draft did re-derive it, and
+    the two rules disagreed on a case neither author had in mind: a shape
+    that CROSSES the boundary is unextendable per the builder (its bounding
+    box reaches the face) and was invisible to a domain-window test, which
+    asked whether the face landed inside ``[0, d]``. Two hand-written copies
+    of one predicate is the #627 defect, not an implementation detail, so
+    there is now one: :func:`rfx.geometry.smoothing.smoothed_shape_pairs`,
+    the same call the three runner sites make, with the same PEC and
+    dispersion filtering.
+
+    Silent where nothing is lost or another check owns it: a Box and an
+    axis-aligned Cylinder ARE continued; a PEC volume is continued by neither
+    lane; a dispersive material at an absorber face is
+    ``_validate_cfg_dispersive_pole_at_absorber_face``'s subject (pole masks
+    are deliberately never continued -- #627b divergence, #808 promoted
+    statics); and a traced mesh axis has no concrete node positions to test,
+    the same precedent ``_validate_cfg_graded_box_rasterization`` sets.
+
+    Declared vs solved, in input units: which entry reaches which face, and
+    what permittivity the pad there will hold. It does not predict what that
+    costs the result -- how much a facet reflects depends on the mode.
+    """
+    if self._boundary not in ("cpml", "upml") or not self._geometry:
+        return
+    if int(getattr(self, "_cpml_layers", 0)) <= 0:
+        return
+
+    profiles = (self._dx_profile, self._dy_profile, self._dz_profile)
+    if is_tracer(self._dx) or any(
+            p is not None and is_tracer(p) for p in profiles):
+        return
+
+    try:
+        grid = (self._build_nonuniform_grid()
+                if any(p is not None for p in profiles)
+                else self._build_grid())
+    except Exception:
+        # Preflight never turns a configuration problem into a crash here:
+        # whatever makes the grid unbuildable has its own check, and this
+        # advisory has nothing to say without realized pads.
+        return
+
+    from rfx.geometry.smoothing import smoothed_shape_pairs
+    try:
+        _pairs, unextendable = smoothed_shape_pairs(self, grid)
+    except Exception:
+        return
+    if not unextendable:
+        return
+
+    # The entry index and material name ride ON the finding. They used to be
+    # recovered here by ``id(u.shape)`` against ``self._geometry``, which
+    # misses exactly the cases worth naming: the continuation rewrites the
+    # shape as it walks the axes, so a cylinder continued along x and
+    # unextendable on y reports the CONTINUED object and the lookup fell
+    # through to ``Material '?' (geometry entry #-1, ...)``.
+    for u in unextendable:
+        idx, mat_name = u.entry_index, u.material_name
+        axis_name = "xyz"[u.axis]
+        _w.warn(
+            PreflightWarning(
+                f"Material '{mat_name}' (geometry entry #{idx}, "
+                f"{type(u.shape).__name__}) reaches the {axis_name}-{u.side} "
+                f"absorber seam, and {u.reason}. With subpixel smoothing the "
+                f"pad there is solved at eps_r = 1.0, not the declared "
+                f"{u.eps_r:g}, so the structure is terminated by an end facet "
+                f"at the interior/pad boundary (issue #1043). Move it clear "
+                f"of the face, or declare it as a Box / axis-aligned "
+                f"Cylinder, which are continued.",
+                code="dielectric_at_absorber_seam",
+                loc=f"geometry[#{idx}] {axis_name}-{u.side}",
+                source="_validate_cfg_dielectric_at_absorber_seam",
+            ),
+            stacklevel=3,
+        )
+
+
 def _validate_cfg_pec_boundary_open_structure(self, _w) -> None:
     """P0.4: PEC boundary on likely open structure."""
     if self._boundary == "pec" and self._ntff is not None:
@@ -981,4 +1073,10 @@ _validate_cfg_geometry_in_cpml.__qualname__ = (
 )
 _validate_cfg_pec_boundary_open_structure.__qualname__ = (
     "_PreflightMixin._validate_cfg_pec_boundary_open_structure"
+)
+# Twelfth body, added here rather than moved (#1043 stage B): it was never in
+# the class, so its qualname is set for the same reason -- the composition-time
+# rewrite in rfx/api/__init__.py only promotes ``_PreflightMixin.<name>``.
+_validate_cfg_dielectric_at_absorber_seam.__qualname__ = (
+    "_PreflightMixin._validate_cfg_dielectric_at_absorber_seam"
 )

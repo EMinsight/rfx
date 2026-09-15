@@ -628,6 +628,50 @@ def compute_waveguide_s_matrix(
     # then compute_smoothed_eps. The reference run is vacuum and has no
     # ε interfaces, so it always passes aniso_eps=None inside the
     # extractor.
+    #
+    # THE MIRROR IS BROKEN AS OF #1043 STAGE B, on purpose, and here is the
+    # note that says so rather than leaving it to be rediscovered. The two
+    # runner sites now build their pairs through
+    # ``rfx.geometry.smoothing.smoothed_shape_pairs``, which continues a
+    # dielectric that reaches a CPML/UPML face out through that pad — without
+    # it, such a structure is solved with eps_r = 1 in its own absorber and
+    # ends in a facet (#831: |B/A| 0.53 on a straight guide, worse as the
+    # absorber deepens). The two blocks below still build the raw list, so a
+    # waveguide fixture whose dielectric reaches a port's absorber carries
+    # that facet.
+    #
+    # Not changed with the runners because this lane is v1.8 chain-closed:
+    # 185 verdicts replay against a frozen artifact, so moving its numbers is
+    # a measurement change that wants its own pre-declaration and its own
+    # re-measurement, not a ride on the runner fix ("refactoring and
+    # measurement changes do not travel together", #928).
+    #
+    # NOTHING IN THE TREE SOLVES THROUGH IT TODAY, counted by an AST scan of
+    # the call sites rather than by grep (a line-oriented grep misses the
+    # multi-line calls, and did: round-1 said "exactly one", and there are
+    # FOUR). All four, classified:
+    #   1. tests/unit/materials/test_sheet_impedance.py:1075 -- asserts the
+    #      f0-sheet fence raises ("on the waveguide S-matrix lane").
+    #   2. tests/unit/sparams/test_waveguide_nu_sparam.py:396 --
+    #      pytest.raises(NotImplementedError) on the NU dispatch.
+    #   3. tests/unit/sparams/test_waveguide_port_reference_sims.py:250 --
+    #      monkeypatches extract_waveguide_s_matrix_flux to raise, and asserts
+    #      it: stops before the solve by construction.
+    #   4. tests/unit/geometry/test_stage2_dual_path.py:306 -- the one REAL
+    #      solve, subpixel_smoothing="kottke_pec". Its only interior geometry
+    #      is a PEC box at x=[84,87] mm in a 120 mm domain, and PEC is
+    #      continued by NEITHER lane; y/z are pec walls so the only pads are
+    #      on x, which that box does not reach.
+    # Three fences and one PEC-only solve. So the gap is latent: no committed
+    # number moves if it is closed, and none is wrong while it is open. Every
+    # other caller takes the default, including the v1.8 chain-closure battery
+    # and the #1043 F1 PEC-short gate driver.
+    #
+    # A latent gap, then, not a live wrong number. Anyone closing it: the
+    # reference run passes dielectric_shapes=[] and cannot carry a facet, so
+    # only the device run can. Tracked as #1066; section 8a of
+    # docs/design_notes/issue1043_pad_continuation_results.md carries the
+    # census.
     # Stage 2 unified path: subpixel_smoothing="kottke_pec" routes
     # through compute_inv_eps_tensor_diag and skips the Stage 1
     # eps_correction + apply_conformal_pec chain entirely. Both
