@@ -69,12 +69,14 @@ from rfx.runners.distributed import (
 )
 from rfx.runners._distributed_common import (
     apply_pec_face_shmap,
+    apply_pec_mask_shmap,
     apply_pmc_face_shmap,
     exchange_component_shmap,
     inject_sources_shmap,
     sample_probes_shmap,
     shard_stacked,
     shard_stacked_psi,
+    split_array_x,
     unstack_and_gather,
     update_e_nu_shmap,
     update_h_nu_shmap,
@@ -756,6 +758,30 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
     state_slabs = _split_state(full_state, n_devices, ghost)
     materials_slabs = _split_materials(materials, n_devices, ghost)
 
+    # #1053 leg 1: carry the realized-PEC cell mask into the sharded world.
+    # ``pec_mask`` is the full-domain primal-cell occupancy of every declared
+    # PEC VOLUME, already padded to ``nx_padded`` above (with ``True``, the
+    # high-x alignment convention ``shard_pec_mask_x_slab`` also uses). Until
+    # now this lane built it and dropped it on the floor.
+    #
+    # ``pad_value=False`` fills the PHYSICAL-boundary ghost rows -- device 0's
+    # left ghost and device N-1's right ghost. It must be False and not True:
+    # a True there puts a spurious PEC wall on the whole x_lo / x_hi node
+    # plane of the outer ranks and shorts a CPML face (#689/#931, recorded at
+    # distributed_nu.py:538-547). Interior ghost rows get the seam
+    # neighbour's real value from the slicing, which is what lets a rank's
+    # first/last real cell see its true x neighbour under the four-incident-
+    # cell rule.
+    #
+    # ``split_array_x`` + ``shard_stacked`` reproduce
+    # ``distributed_nu.shard_pec_mask_x_slab`` BIT-IDENTICALLY -- verified on
+    # (nx, pad_x) in {(8,0), (7,1), (16,0)}, ny=nz=6, n_devices=2, random
+    # masks, jnp.array_equal True on every case. So this lane needs no sharder
+    # of its own, and the two lanes cannot disagree about slab layout.
+    pec_mask_slabs = (
+        None if pec_mask is None
+        else split_array_x(pec_mask, n_devices, ghost, pad_value=False))
+
     # Shard the stacked slabs: shape (n_devices, nx_local, ny, nz) ->
     # each device owns nx_local rows of the sharded (n_devices*nx_local, ny, nz) array.
     shd = _x_sharding(mesh)
@@ -821,6 +847,16 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
     mat_mu_r  = _shard_stacked(materials_slabs.mu_r)
     sharded_materials = MaterialArrays(
         eps_r=mat_eps_r, sigma=mat_sigma, mu_r=mat_mu_r)
+
+    # #1053 leg 1. ``None`` whenever the model declares no PEC volume, which
+    # is every fixture of the #1038 bit-identity lock -- so the stage leg 2
+    # hooks on this is a no-op branch there and the lock stays 15/15. The step
+    # bodies read this as a CLOSURE VARIABLE, next to ``sharded_materials``,
+    # not through ``run_distributed``'s ``**kwargs``: that kwargs bag is
+    # forwarded only on the ``n_devices == 1`` fast path and is silently
+    # discarded at exactly the device counts this stage exists for.
+    sharded_pec_mask = (
+        None if pec_mask_slabs is None else _shard_stacked(pec_mask_slabs))
 
     # ------------------------------------------------------------------
     # Dispersive materials
@@ -1105,11 +1141,13 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         Stage order (#1041)::
 
             H -> CPML-H -> exch H -> PMC face -> E -> CPML-E
-              -> sources -> exch E -> probes
+              -> sources -> PEC mask -> exch E -> probes
 
         The E ghost exchange is the LAST stage of the E half-step, so a
-        ghost row is always a copy of the owner's FINISHED real row. This
-        is ``distributed_nu.py``'s order since ``ac782d4f`` (#931 T3) and
+        ghost row is always a copy of the owner's FINISHED real row -- a
+        row the realized-PEC mask stage has already zeroed where the
+        geometry says metal (#1053). This is ``distributed_nu.py``'s order
+        since ``ac782d4f`` (#931 T3) and
         the mirror of the H half, which applies the PMC face before the H
         exchange "so the zero propagates via the exchange". Until #1041
         this body exchanged BEFORE injecting, which lagged a seam-cell
@@ -1161,6 +1199,27 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         # 6. Source injection
         st = _inject_sources_shmap(st, src_vals)
 
+        # 6b. Realized-PEC cell mask (#1053). Geometry PEC, as opposed to the
+        #     domain faces step_fn_pec applies -- this body has no domain-face
+        #     PEC at all, because its faces are CPML. Each rank realizes the
+        #     per-component edge masks on its own slab by calling the one
+        #     owner, rfx.boundaries.pec.realized_pec_edge_masks, and zeroes
+        #     only its REAL cells; the ghost rows are forced False inside the
+        #     kernel so a seam cell is zeroed exactly once, by the rank that
+        #     owns it.
+        #
+        #     POSITION IS LOAD-BEARING: after injection, immediately BEFORE
+        #     the E ghost exchange. The exchange then hands the neighbour a
+        #     FINISHED row. Exchanging first leaves rank 0's right ghost
+        #     carrying the un-zeroed Ey/Ez of the seam plane rank 1 zeroes a
+        #     stage later, and rank 0's next H update at its last real cell
+        #     reads that stale plane -- measured on the nu lane at 2.107e-01
+        #     final-step error against a 5e-5 gate (ac782d4f, #931 T3), versus
+        #     7.773e-08 in this order.
+        if sharded_pec_mask is not None:
+            st = apply_pec_mask_shmap(
+                st, sharded_pec_mask, mesh, n_devices, nx_local)
+
         # 7. Exchange E ghost cells -- LAST stage of the E half-step, so a
         #    ghost row is a copy of the owner's FINISHED real row (#1041,
         #    the ordering distributed_nu.py took in ac782d4f / #931 T3).
@@ -1205,14 +1264,16 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         Stage order (#1041)::
 
             H -> exch H -> PMC face -> E -> sources -> PEC face
-              -> exch E -> probes
+              -> PEC mask -> exch E -> probes
 
         Same invariant as ``step_fn_cpml``: the E ghost exchange is last,
         so a ghost row is a copy of the owner's finished real row. The
         PEC face moved with it for lane parity with ``distributed_nu``;
         on THIS lane that half of the move is provably and measurably
-        inert (stage 6 comment), because the only PEC here is the domain
-        face.
+        inert (stage 6 comment), because the DOMAIN-FACE PEC is the only
+        thing it touches. The realized-PEC cell mask of stage 5b is a
+        different matter entirely and is why the invariant is load-bearing
+        rather than merely tidy (#1053).
         """
         _step_idx, src_vals = xs
         st = carry["fdtd"]
@@ -1255,6 +1316,20 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         #    is injected. #1041 measured no such fixture and did not change
         #    it -- a source on a PEC face is its own question.
         st = _apply_pec_shmap(st, mesh, n_devices, nx_local, pad_x=pad_x)
+
+        # 5b. Realized-PEC cell mask (#1053), AFTER the domain faces and
+        #     immediately before the E ghost exchange -- distributed_nu's
+        #     stage 8, in distributed_nu's position. See the long note on
+        #     step_fn_cpml stage 6b: getting this one stage later, after the
+        #     exchange, cost 2.107e-01 against a 5e-5 gate when the nu lane
+        #     had it there. The domain-face PEC above did NOT move; its
+        #     position relative to the exchange was measured inert (#1041
+        #     fixture P, bit-identical), and that measurement does not
+        #     transfer to a body mask, which is the whole reason this stage
+        #     goes here and not next to it.
+        if sharded_pec_mask is not None:
+            st = apply_pec_mask_shmap(
+                st, sharded_pec_mask, mesh, n_devices, nx_local)
 
         # 6. Exchange E ghost cells -- LAST stage of the E half-step, so a
         #    ghost row is a copy of the owner's FINISHED real row (#1041,
