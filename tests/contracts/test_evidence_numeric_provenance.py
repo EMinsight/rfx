@@ -363,6 +363,13 @@ ISSUE1043_PAD_CONTINUATION_NOTE = (
 # them, so a number that moves without the note moving reds here.
 TILT_RESULTS = (
     "docs/design_notes/waveguide_false_lane_transmission_tilt_results.md")
+# 2026-09-16 (#873, the near-field composition run that followed the tilt one):
+# same reason again -- the verdict IS a table of measured numbers read out of
+# near_field_composition.json, including a leg that PASSES and one that FAILS,
+# and the difference between them is which number is quoted. Its "10. Numeric
+# provenance" section emits the citations from the artifact.
+NEAR_FIELD_RESULTS = (
+    "docs/design_notes/waveguide_driven_plane_near_field_composition_results.md")
 
 # Markdown documents, with the regex that cuts them into named sites.
 MARKDOWN_SITES: dict[str, str] = {
@@ -410,6 +417,7 @@ MARKDOWN_SITES: dict[str, str] = {
     ISSUE831_RESULTS: r"^#+\s+(.*\S)\s*$",
     ISSUE1043_PAD_CONTINUATION_NOTE: r"^#+\s+(.*\S)\s*$",
     TILT_RESULTS: r"^#+\s+(.*\S)\s*$",
+    NEAR_FIELD_RESULTS: r"^#+\s+(.*\S)\s*$",
 }
 
 DOCUMENTS = (MANIFEST, *MARKDOWN_SITES)
@@ -565,9 +573,18 @@ REQUIRED_SITES: dict[tuple[str, str], int] = {
 # tutorial's STRAIGHT-run mp.inf block as the bend geometry), and the correction
 # replaces one existence-only citation with twelve that resolve the bend arms'
 # measured extents. Raised by the delta, in the same commit.
-MIN_REFERENCES = 1326
-MIN_VALUE_CHECKED = 1247
-MIN_DISTINCT_ARTIFACTS = 78
+# 2026-09-16 (#873, near-field composition): +86 references over +1 distinct
+# artifact (tests/fixtures/waveguide_false_lane_column_power/
+# near_field_composition.json, cited here for the first time), all 86
+# value-checked -- the results note's section 10. Raised by the delta, in the
+# same commit that adds them, as the entries above did. The last 11 of the 86
+# arrived with the PR #1094 review: its first finding was that the note gave a
+# reason for an estimator swap that is false at one rung, and the reason that
+# does hold is three numbers already IN the artifact that nothing cited. A
+# number the argument leans on and the gate cannot see is the gap that catches.
+MIN_REFERENCES = 1412
+MIN_VALUE_CHECKED = 1333
+MIN_DISTINCT_ARTIFACTS = 79
 
 
 # --------------------------------------------------------------------------
@@ -846,6 +863,14 @@ CLASSIFICATION: dict[str, str] = {
     "docs/design_notes/v18_waveguide_s_chain_plan.md": SYMBOL_SPAN_PARSER_SCOPE,
     "docs/design_notes/waveguide_chain_battery_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/waveguide_chain_battery_remeasure_predeclaration.md": NO_ARTIFACT_REFERENCE,
+    # 2026-09-16 (#873 near-field composition): the pre-declaration was written
+    # before any projection coefficient existed and carries no `::` span. Its
+    # basis tables are properties of the port code and the grid, computed from
+    # rfx/sources/_waveguide_modes.py rather than read out of any artifact, so
+    # there is nothing here for this gate to resolve.
+    "docs/design_notes/waveguide_driven_plane_near_field_composition_predeclaration.md":
+        NO_ARTIFACT_REFERENCE,
+    NEAR_FIELD_RESULTS: GATED,
     "docs/design_notes/waveguide_false_lane_column_power_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/waveguide_false_lane_column_power_results.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-16 (#873 attempt 2): the pre-declaration was written before any
