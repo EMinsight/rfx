@@ -6,6 +6,67 @@ SemVer — **BREAKING** entries are flagged in upper-case.
 
 ## [Unreleased — 2.0.0]
 
+### Fixed — Kottke subpixel smoothing is x64-invariant: concrete shapes are smoothed in host float64 (#833)
+
+- `compute_smoothed_eps`, `compute_inv_eps_tensor_diag` and `compute_smoothed_eps_nonuniform`
+  ran the SDF → fill-fraction → analytic-normal → Kottke chain through `jax.numpy`, so with
+  `jax_enable_x64` off every step rounded in float32 and each interface voxel landed up to
+  15 f32 ulps away from the x64=1 value (PR #1088's drift pin: max rel 1.131e-06 / 6.467e-07 /
+  1.025e-06 for ex/ey/ez on the boundary-voxel Box fixture, dx = 2.54e-4 m, ε 4). Coordinate
+  routing alone could not close that — the coordinates were already the correctly rounded
+  float32 of the exact spine. Option (a), PI decision 2026-09-16: when every input is concrete
+  (host node/centre spine, Python-float shape parameters and permittivities) the whole chain now
+  runs in numpy float64 and is cast to the active JAX dtype ONCE at the end. The formulas
+  (Kottke averaging, SDFs, `f = clip(0.5 − sdf/ℓ)`, nearest-face normals) and the output
+  dtypes/shapes are unchanged; a traced input (a Sphere radius under `jax.grad`, a traced mesh
+  axis) takes the same body through `jax.numpy` as before (witnessed bit-identical under
+  `jax.jit` at both flags). Design AD through `kottke_inv_eps_from_occupancy` is untouched.
+- **Acceptance**: `eps(x64=0) == float32(eps(x64=1))` bitwise on every voxel — measured on the
+  Box fixture, a Sphere and a Cylinder (all three SDF families), `compute_inv_eps_tensor_diag`
+  with the dielectric Box alone and with PEC Sphere + Cylinder (the PEC-limit branch), and the
+  NU sibling on the graded WR-90 fixture (47×37×67) with Box / Sphere / Cylinder. The drift pin
+  in `tests/unit/geometry/test_smoothing_coordinate_contract.py` is replaced by that lock
+  (`assert_array_equal`, no tolerance), plus a traced-radius test for the `jax.numpy` fallback.
+- **x64=1 is reproduced for float32-representable permittivities** (ε 1, 4, …): uniform lane
+  bit-identical or ≤ 4 f64 ulps (numpy vs XLA reassociation; Box ex/ey identical, ez 143 voxels
+  at 1 ulp). Two qualified exceptions, both precision corrections of the old path: (i) the old
+  accumulators were `float32` even at x64=1, so a background or shape ε that is not
+  float32-representable was rounded — with `background_eps=2.2` on the Box fixture every
+  non-interface voxel now moves by 2.167e-08 rel (4.768e-08 abs, 13 425 / 13 375 / 13 245 of
+  14 025 voxels for ex/ey/ez: 2.2 vs float32(2.2) = 2.200000047683716); (ii) NU lane ≤ 2.2e-07
+  rel on the interface voxels (1094 of 116 513 for the Box) because the geometric-mean cell
+  length that normalises the fill fraction is now formed in float64 from the exact spine; the
+  old path formed it in float32 from the float32 store (2.6e-07 rel off on every cell).
+- **x64=0 operator delta on the opt-in lane** (the default precision; stated plainly): the
+  smoothed ε at x64=0 is now the float32 image of the float64 result. On the Box fixture
+  ex max|Δ| 1.907e-06 (15 ulps, 511 voxels), ey 1.192e-06 (5 ulps, 603), ez 1.311e-06 (11 ulps,
+  538); inverse-ε 12 / 11 / 13 ulps. Sphere up to 80 ulps (1.9e-05 abs), Cylinder up to 53.
+  NU Box: ey/ez 16 ulps on 1094 voxels, and 12 voxels exactly 0.2 D inside BOTH the x-lo and
+  z-hi faces (rx == rz == −0.2 D in exact arithmetic) change by |Δε| 0.99. `_normal_box`
+  selects x on `rx >= rz`, which the exact tie would satisfy (x-normal, ε 2.105); in float64
+  the two distances round differently, rz − rx = 64 f64 ulps, so z wins (ε 3.100) — a
+  deterministic rounding result, not a convention, and base x64=1 already gave 3.100. Only
+  the x64=0 float32 evaluation gave 2.105 there; the traced (`jax.numpy`) path at x64=0 still
+  does. **Recorded limitation**: on such exact ties the concrete and traced paths now disagree
+  by 0.99 at x64=0 (3.100 vs 2.105), where before both gave 2.105. An explicit tie rule in
+  `_normal_box` would move x64=1 values on tie voxels and is a separate formula change, not
+  made here.
+  Everything under `subpixel_smoothing=False`, the staircase fallback (shapes without an SDF),
+  and `compute_conformal_weights_sdf` are bit-identical at both flags.
+- End-to-end (100 steps, 4 cm CPML cube, off-node ε 4 Box 11.3–28.7 mm, dx 2 mm, one TE10
+  port; preflight advisories identical before/after): at x64=1 all six field arrays are
+  bit-identical for `subpixel_smoothing=True`, `"kottke_pec"` and `False`; at x64=0 `False` is
+  bit-identical and the two smoothed lanes move by ≤ 8.5e-07 of the field maximum
+  (ex 3.2e-08 abs on 10 115 of 12 789 cells).
+- Build cost (reviewer-measured, 165³ grid, `compute_smoothed_eps` peak RSS delta): 943 MB
+  after vs 1327 MB before at x64=0, 943 MB vs 837 MB at x64=1, about 4× faster on the host path.
+- Mask-only shapes (no SDF) have their staircase mask evaluated before the backend is chosen,
+  so a mask that is a tracer under `jax.jit` routes the build through `jax.numpy` as before
+  (pinned at both flags in the contract file).
+- No committed gate moved. Pre-existing x64=1 red `test_compute_inv_eps_tensor_diag_returns_float32`
+  (the PEC-limit branch promotes to float64 at x64=1) is left to that test; the lock asserts
+  values only for that case and pins no x64=1 dtype there.
+
 ### Added — the MSL Z0 length-invariance envelope drift is attributed to two commits (#796)
 
 - The `|Z0|` length-invariance spread on the pre-#931 MSL thru board moved 0.4607 % → 0.4676 %
