@@ -31,6 +31,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from rfx.grid import Grid
 from rfx.geometry.csg import Shape
@@ -675,7 +676,9 @@ def compute_smoothed_eps_nonuniform(
     local cell sizes — first-order accurate for non-cubic Yee cells, in
     line with the SDF-to-fill approximation in the uniform path.
     """
-    from rfx.geometry.rasterize_grid import coords_from_nonuniform_grid
+    from rfx.geometry.rasterize_grid import (
+        centres_from_nonuniform_grid, coords_from_nonuniform_grid,
+    )
 
     coords = coords_from_nonuniform_grid(nu_grid)
     # `coords` are E-NODE positions (cell edges) since #562 unified the NU
@@ -687,17 +690,26 @@ def compute_smoothed_eps_nonuniform(
     # interface-value bound (1 < eps < 4) passes under either sign — see
     # test_compute_smoothed_eps_nonuniform_reduces_to_uniform, which is the
     # assertion that catches it.
-    node_x = coords.x  # (nx,)
-    node_y = coords.y  # (ny,)
-    node_z = coords.z  # (nz,)
+    node_x = jnp.asarray(coords.x)  # (nx,)
+    node_y = jnp.asarray(coords.y)  # (ny,)
+    node_z = jnp.asarray(coords.z)  # (nz,)
+
+    # Cell centres — centre[i] = node[i] + d[i]/2 from the shared producer
+    # rasterize_grid.centres_from_nonuniform_grid: d comes from the float64
+    # cell-size spine (not the float32 store) and the sum is formed in host
+    # float64 before the cast to the active JAX dtype (#833). ``node +
+    # f32(store)/2`` sat 3.7e-12 m off the exact spine at x64=1 and 1.1e-9 m
+    # at x64=0 on the graded WR-90 fixture.
+    _c = centres_from_nonuniform_grid(nu_grid, coords)
+    centers_x = jnp.asarray(_c.x)
+    centers_y = jnp.asarray(_c.y)
+    centers_z = jnp.asarray(_c.z)
+
+    # Float32 solver store — the fill-fraction normalisation below keeps
+    # reading it (a cell-size scale, not a sample coordinate).
     dx_arr = jnp.asarray(nu_grid.dx_arr, dtype=jnp.float32)
     dy_arr = jnp.asarray(nu_grid.dy_arr, dtype=jnp.float32)
     dz_arr = jnp.asarray(nu_grid.dz, dtype=jnp.float32)
-
-    # Cell centres — centre[i] = node[i] + d_arr[i]/2
-    centers_x = node_x + dx_arr / 2.0
-    centers_y = node_y + dy_arr / 2.0
-    centers_z = node_z + dz_arr / 2.0
 
     # Local-cell characteristic length (geometric mean of three cell
     # widths) — used to normalise SDF → fill fraction. Anisotropic cell
