@@ -42,6 +42,43 @@ speak earlier is a change to `CORE_CONFIG_CHECKS`, and reds both that lock and
 arguments each check receives. Neither red is one to regenerate past: it means
 preflight output moved.
 
+## PR body contract
+
+Every PR body carries two lines, each exactly once, outside code fences, HTML
+comments and `pre` blocks:
+
+- `Lane: lane:<label>` — the owner lane, one of the repository's `lane:*` labels
+  (`gh label list | grep '^lane:'`). Every open issue carries exactly one.
+- `Review: <who read it> (separate instance) — ACCEPT` (or `ACCEPT WITH CHANGES`).
+  A merged change is read by an agent instance other than the one that wrote it;
+  several pods push under one GitHub account, so the body is the only provenance.
+  `REJECT` never passes.
+
+`<who read it>` names the reviewing instance. A field that is nothing but an
+angle-bracketed span is an unedited stub and fails; a name that merely contains
+brackets, such as `claude <noreply@anthropic.com>`, is fine.
+
+Two exceptions take a `Review: skipped` line, and the reason must open with the
+literal `(a)` or `(b)` so a later audit can tell which was claimed:
+
+```
+Review: skipped — (a) <easily reverted pure docs/comment change>
+Review: skipped — (b) <the PI instructed the skip>
+```
+
+The separator before the verdict may be an em dash, an en dash or a plain
+hyphen, and the failure text names all three. Both lines must start flush left:
+a claim inside a bullet, block quote or bold run does not count, because the
+point of the contract is that the two lines are greppable across every PR.
+
+The check is `scripts/ci/check_pr_body.py` (stdlib only; `--file PATH` to run it
+against a body locally), gated by `.github/workflows/pr-body.yml` on open, edit,
+reopen and synchronize. `.github/pull_request_template.md` seeds both stubs, and
+`tests/contracts/test_pr_body_contract.py` pins the accepted forms.
+
+**The gate binds only once `pr-body-contract` is a required check in branch
+protection.** Until then a red run is visible but does not block a merge, which
+is the same advisory state the prose rule was in.
 ## Changelog fragments
 
 Do NOT append to `CHANGELOG.md`. Add `changelog.d/<number>.<type>.md` holding
