@@ -18,11 +18,14 @@ rather than trusting the figure beside it.
 | what | command |
 |---|---|
 | test | `pytest` — live count: `python -m pytest --collect-only -q \| tail -1` |
-| lint | `ruff check rfx/ tests/ --select E,F,W --ignore E501,F401,E741,E731,E701,E702,E402` |
+| lint | `scripts/ci/lint.sh` — the scope, selector and ignore list CI uses, in one file |
 | preflight | `sim.preflight()` — multi-check suite; grep `def _validate_` in `rfx/preflight/*.py` AND `rfx/api/_preflight.py` for the live set (the check families live in the package; the facade keeps the entry points and the request validators) |
 
-Lint is gated in CI by `.github/workflows/lint.yml` on every push/PR. Note CI lints
-`rfx/ tests/ validation/`; `scripts/` is out of scope.
+Lint is gated in CI by `.github/workflows/lint.yml` on every push/PR, and that
+workflow does nothing but call `scripts/ci/lint.sh`. The scope is `rfx/ tests/
+validation/ scripts/ci/ scripts/dev/ scripts/changelog/` — the packages under test
+plus every script that gates a merge. The rest of `scripts/` is out of scope and has
+its own backlog.
 
 ### Adding a preflight check
 
@@ -41,6 +44,85 @@ speak earlier is a change to `CORE_CONFIG_CHECKS`, and reds both that lock and
 `tests/locks/test_preflight_registry_sequence.py`, which pins the sequence and the
 arguments each check receives. Neither red is one to regenerate past: it means
 preflight output moved.
+
+## What runs on a PR, and how to run it locally
+
+One standing instruction: run `scripts/ci/local.sh` before every push. It is every
+short gate a PR must pass, in the order CI runs them, stopping at the first failure.
+Measure it rather than trusting this sentence: on 2026-09-18 `tests/contracts` alone
+was 5 min 16 s of it, and everything else together was under ten seconds.
+
+`scripts/ci/local.sh` runs, in order: ruff, docs-hygiene, changelog-fragment, pr-body, workflow-yaml, contract-tests.
+
+```
+scripts/ci/local.sh                   # the six steps; pr-body reports skipped
+scripts/ci/local.sh /tmp/body.md      # also check that PR body
+PYTHON=.venv/bin/python scripts/ci/local.sh
+```
+
+Each gate is a script, not a line of yaml, because a gate you cannot run is one you
+debug by pushing. `scripts/ci/lint.sh` and `scripts/ci/docs_hygiene.sh` are the whole
+of `lint.yml`; `scripts/ci/check_pr_body.py` is the whole of `pr-body.yml`;
+`scripts/ci/check_changelog_fragment.py` is the whole of `changelog-fragment.yml`. The
+local runner calls those same files, so a green local run and a green CI run mean the
+same thing. `tests/contracts/test_ci_workflows_contract.py` fails if a command moves
+back inline, and if this list and `local.sh` stop agreeing.
+
+The changelog step diffs `origin/main...HEAD` and asks the two questions CI asks: is
+there a fragment for a change under `rfx/`, and was `CHANGELOG.md` edited without the
+`release` label. Override the endpoints with `CHANGELOG_BASE=` and `CHANGELOG_HEAD=`.
+`assemble.py --check`, which validates fragment names and headings, runs after it and
+answers a different question — it never notices a missing fragment.
+
+Set `PYTHON=` once and every step and every script the runner calls uses that
+interpreter, ruff included.
+
+What it does NOT run is the heavy half — the six-shard fast suite and the
+guard/preflight suite in `pr-tests.yml`, 22 to 42 minutes a shard. Those start only when
+the diff touches code:
+
+| the diff touches | the shards run |
+|---|---|
+| `rfx/`, `tests/`, `validation/`, `examples/` | yes |
+| `pyproject.toml`, `setup.*`, any `conftest.py`, any `.test_durations` | yes |
+| `pr-tests.yml`, `changed_paths.py`, `classify_changes.sh` — the lane itself | yes |
+| anything else: `docs/`, other workflows, the rest of `scripts/`, `changelog.d/` | no — but `tests/contracts` still does |
+| any push to `main` | always yes |
+
+The `changes` job decides, and its log prints the changed paths and the verdict. Ask it
+yourself before you push:
+
+```
+python scripts/ci/changed_paths.py $(git diff --name-only --no-renames origin/main...HEAD)
+EVENT_NAME=pull_request BASE_SHA=origin/main HEAD_SHA=HEAD bash scripts/ci/classify_changes.sh
+```
+
+`guards-and-preflight` and `fast-suite (1)`…`(6)` keep their names and still report
+SUCCESS on every pull request — those are the contexts branch protection requires, and
+a renamed or absent job leaves a required check unreported and blocks every merge.
+
+**`tests/contracts/` runs either way.** Much of what lives there asserts on `docs/`,
+`scripts/`, `.github/workflows/`, `CHANGELOG.md` and `README.md` — the very paths the
+classifier calls not-code. `test_the_lint_scope_covers_this_gates_own_script` pins
+`scripts/ci/lint.sh`; `test_prune_worktrees.py` pins `scripts/dev/prune_worktrees.py`;
+`test_support_matrix_parity.py` pins a file under `docs/guides/`. Skipping them on a
+docs or scripts diff would disarm exactly the gates that watch docs and scripts, so a
+later PR could shrink the ruff scope and the test forbidding it would never run. When
+the verdict is false, `guards-and-preflight` runs `pytest tests/contracts` in place of
+the guard suite; when it is true, the six shards collect the whole tree and pick them up
+there. Count them yourself rather than trusting a number here:
+`grep -rl 'docs/\|scripts/\|workflows' tests/contracts/*.py | wc -l`.
+
+**`changes` must be a required check too**, alongside `ruff`,
+`guards-and-preflight` and `fast-suite (1)`…`(6)`. `needs: changes` means a `changes`
+job that dies of a runner fault leaves the heavy jobs skipped by dependency, and a
+skipped job does not fail a required context — a merge would go through having run
+nothing. The job is 15 s.
+
+The classifier fails open everywhere else: a push to `main`, a missing sha, a diff that
+would not compute, and any verdict other than the literal `false` all run the full lane.
+Work steps gate on `!= 'false'`, not `== 'true'`, so an empty or unexpected output runs
+everything rather than skipping everything.
 
 ## PR body contract
 
