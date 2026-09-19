@@ -68,13 +68,20 @@ relative comparisons at a fixed position are unaffected.
 
 ## Examples and validation coverage
 
-**A shipped paper example declares WR-90 but solves a wider guide.**
-`validation/tmtt_paper/waveguide_dielectric_taper.py` declares 22.86 × 10.16 mm
-and neither committed mesh divides either number, so the narrow wall is realized
-up to 8 % wide. The taper is optimized in whatever guide it sits in, so its
-numbers are self-consistent — but they are not WR-90 numbers. The preflight
-`port_aperture_snap` advisory fires on this example and says so.
-→ [#1100](https://github.com/bk-squared/rfx/issues/1100)
+**A shipped paper example's headline numbers are not WR-90 numbers.**
+`validation/tmtt_paper/waveguide_dielectric_taper.py` declares 22.86 × 10.16 mm.
+Its default SMOKE lane meshes at a commensurate dx = 1.27 mm and realizes WR-90
+exactly. Its paper lane does not: dx = 0.5 mm realizes 23.00 × 10.50 mm
+(46 × 21 cells, +0.61 % / +3.35 %) and the dx = 0.25 mm production mesh realizes
+23.00 × 10.25 mm (92 × 41 cells, +0.61 % / +0.89 %). Both have a TE10 cutoff of
+6.517 GHz against the declared 6.557 GHz. The −26.7 dB and −38.0 dB figures the
+docstring quotes were measured on those guides.
+
+Decided 2026-09-19 (#1122, closed): disclosed, not corrected — no erratum and no
+re-mesh. The file states the realized guide in its docstring, in its README entry
+and in the result block the run prints, and derives every analytic reference from
+the realized walls, so a reader meets the right structure beside every number.
+The SMOKE half was #1100.
 
 **Committed examples are verified at build time, not by their results.** The
 example-fidelity gate builds every reachable example and pins the preflight rows
