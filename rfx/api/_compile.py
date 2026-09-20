@@ -30,6 +30,7 @@ from rfx.geometry.rasterize_grid import (
     GridCoords,
     cell_sizes_from_uniform_grid,
     centres_from_uniform_grid,
+    assert_declared_span_is_filled,
     classify_pec_entry,
     extend_cpml_pad_materials,
 )
@@ -157,6 +158,7 @@ class _CompileMixin:
         sheet_specs: list | None = None,
         pec_sheets: list | None = None,
         pec_wires: list | None = None,
+        pad_fill_findings: list | None = None,
     ) -> tuple[MaterialArrays, _DebyeSpec | None, _LorentzSpec | None, jnp.ndarray | None, list, list, jnp.ndarray | None]:
         """Build material arrays plus per-pole dispersion masks.
 
@@ -183,6 +185,16 @@ class _CompileMixin:
             that only reads cells still passes ``pec_sheets=[],
             pec_wires=[]`` and drops the result, which makes "I read cells
             only" an explicit decision at the call site.
+        pad_fill_findings : list or None
+            Out-parameter. When a list is given, a declared-but-unfilled
+            span at a padded hi face (#1070) is APPENDED to it instead of
+            raising ``PadFillShortfall``. ``fidelity_report`` passes one:
+            an audit whose job is to show where the realized model differs
+            from the declared one has to show this difference too, and a
+            report that refuses to run instead of naming the defect is the
+            opposite of useful (review of PR #1136, A). A solve passes
+            nothing and gets the raise, because there the pad would be
+            filled with vacuum and the answer would be wrong.
         include_thin_conductors : bool, default True
             When False, stop one step short of the finished arrays and
             return the state as it is *before* the ``_thin_conductors``
@@ -269,6 +281,15 @@ class _CompileMixin:
         _pec_sheets = pec_sheets if pec_sheets is not None else []
         _pec_wires = pec_wires if pec_wires is not None else []
 
+        # #1070: a structure declared out to a padded face must rasterize to
+        # within the one node the half-open Box rule costs it. Checked only
+        # when a pad will actually be filled from that edge, and only on a
+        # concrete mask -- under an outer jit the mask is a tracer and the
+        # question cannot be asked on the host.
+        _check_pad_fill = (include_cpml_pad_extension
+                           and self._boundary in ("cpml", "upml")
+                           and self._cpml_layers > 0)
+
         for entry in self._geometry:
             mat = self._resolve_material(entry.material_name)
             mask = entry.shape.mask(grid)
@@ -291,6 +312,17 @@ class _CompileMixin:
                     _pec_wires.append(wire)
                 pec_shapes.append(entry.shape)
             else:
+                # #1070, and only here (review of PR #1136, C): the pad
+                # extension replicates eps/sigma/mu, never ``pec_mask``, so
+                # the vacuum-in-the-pad failure this checks for cannot happen
+                # to a PEC entry. Asking about one would report a condition
+                # that does not exist, in a message about dielectric pads.
+                # It has to sit AFTER classify_pec_entry, because that is
+                # what decides which an entry is.
+                if _check_pad_fill and not is_tracer(mask):
+                    assert_declared_span_is_filled(
+                        entry.material_name, entry.shape, mask, grid,
+                        self._domain, record=pad_fill_findings)
                 eps_r = jnp.where(mask, mat.eps_r, eps_r)
                 sigma = jnp.where(mask, mat.sigma, sigma)
                 mu_r = jnp.where(mask, mat.mu_r, mu_r)
