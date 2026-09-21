@@ -2530,6 +2530,25 @@ def test_extra_flux_monitors_entry_validation():
         )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason=(
+        "The attempt-2 board cannot be BUILT since PR #981 added validate_msl_port_geometry: "
+        "its MSL port declares the ground at z = 2.6 mm, and on that column the realized "
+        "conductor planes are at 2.4, 2.5, 2.8 and 2.9 mm, so the port's reference has no metal "
+        "under it and the builder refuses (rfx/sources/msl_port.py, reached from "
+        "compute_coax_msl_transition). Measured on main df08175c, 2026-09-21: this test "
+        "dies in 3.5 s with that ValueError, before a single time step; it has been the red "
+        "in shard 3 of the weekly lane since then (#1022). The QUESTION this test asks -- "
+        "opt-in flux monitors must not move S by one bit -- is still wanted, so it is not "
+        "removed. Repairing the board is coax-MSL lane work, deferred past v2.0 (PI, "
+        "2026-09-20). raises=ValueError alone is broad -- this function also raises ValueError for "
+        "bad monitor entries -- so the body below checks the MESSAGE and turns any other "
+        "ValueError into an AssertionError, which this marker does not absorb. strict=True turns "
+        "the day the board builds again into an XPASS error that forces this marker off."
+    ),
+)
 @pytest.mark.slow_physics
 def test_extra_flux_monitors_do_not_perturb_s():
     """The #589 non-perturbation witness: S bit-identical with and without
@@ -2545,12 +2564,21 @@ def test_extra_flux_monitors_do_not_perturb_s():
     not a tolerance to loosen silently.
     """
     n_steps = 1000  # bit-identity is step-count independent; keep it cheap
-    r_off = _build_coax_msl_transition_sim_attempt2().compute_coax_msl_transition(
-        **_attempt2_kwargs(n_steps))
-    r_on = _build_coax_msl_transition_sim_attempt2().compute_coax_msl_transition(
-        **_attempt2_kwargs(n_steps),
-        extra_flux_monitors=_attempt2_scratch_flux_entries(),
-    )
+    try:
+        r_off = _build_coax_msl_transition_sim_attempt2().compute_coax_msl_transition(
+            **_attempt2_kwargs(n_steps))
+    except ValueError as exc:
+        # The xfail marker is for ONE ValueError: the board's MSL ground has no metal under it.
+        # Any other ValueError must surface as a failure instead of being absorbed.
+        assert "no longitudinal conductor edge meets it" in str(exc), exc
+        raise
+    try:
+        r_on = _build_coax_msl_transition_sim_attempt2().compute_coax_msl_transition(
+            **_attempt2_kwargs(n_steps),
+            extra_flux_monitors=_attempt2_scratch_flux_entries(),
+        )
+    except ValueError as exc:  # the board built, so a ValueError here is the monitors' fault
+        raise AssertionError(f"extra_flux_monitors was rejected: {exc}") from exc
 
     assert r_off.flux_monitors is None
     assert np.array_equal(np.asarray(r_off.s_params), np.asarray(r_on.s_params)), (
