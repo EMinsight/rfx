@@ -426,26 +426,8 @@ DOCUMENTS = (MANIFEST, *MARKDOWN_SITES)
 # floor is a deliberate act that belongs in the same commit as the reason.
 REQUIRED_SITES: dict[tuple[str, str], int] = {
     ("docs/design_notes/20260911_harminv_record_support.md", "Actual FDTD records"): 3,
-    # 2026-09-14 (#813 Arm 1): the cv01 CPML note's result section states its
-    # verdict as a table and resolves every cell in "Numeric provenance". The
-    # floor is the reproduced count (26 of its 35 references carry a value),
-    # not a round number: a rewrite that drops the citations would leave the
-    # table's numbers with nothing behind them.
-    (CV01_CPML_NOTE, "Numeric provenance"): 26,
-    # 2026-09-14 (#813 round-1 review): the interior arm that splits the
-    # 40-layer residual. Its whole claim is the two halves of that split and
-    # the 10-layer pair they are compared against, so the floor is the
-    # reproduced count of value-carrying citations (19).
-    (CV01_CPML_NOTE, "Numeric provenance, residual split"): 19,
-    # 2026-09-15 (#813, cv01's committed record re-measured after #1057): the
-    # note's third result section states a before/after gate table -- including
-    # a gate that CHANGES verdict -- and resolves every cell of it against
-    # validation/crossval/_01_waveguide_bend_results/crossval_r2.json. The
-    # floor is the reproduced count of value-carrying citations (40 of its 56;
-    # raised from 31/45 by the PR #1080 review, which replaced one existence-only
-    # citation about upstream's tutorial geometry with twelve that resolve the
-    # bend arms' actual extents).
-    (CV01_CPML_NOTE, "Numeric provenance, after #1057"): 40,
+    # 2026-09-21: the cv01 CPML note's three floors (26, 19, 40) went with cv01 --
+    # every citation under them reaches an artifact in REMOVED_ARTIFACT_PREFIXES.
     # 2026-09-16 (#873 attempt 2): the transmission-tilt note's verdict rests on
     # six groups of measured numbers -- the observable and its ladder, the bound
     # that retires four candidates, the four-plane measurement that locates the
@@ -582,7 +564,13 @@ REQUIRED_SITES: dict[tuple[str, str], int] = {
 # reason for an estimator swap that is false at one rung, and the reason that
 # does hold is three numbers already IN the artifact that nothing cited. A
 # number the argument leans on and the gate cannot see is the gap that catches.
-MIN_REFERENCES = 1412
+# 2026-09-21 (cv01/cv02/cv05/cv10 removed): their manifest entries, README rows
+# and benchmarks rows left the gated surface, and 163 citations in three dated
+# notes reach artifacts that went with cv01 and cv05 (REMOVED_ARTIFACT_PREFIXES,
+# skipped per citation; the 24 other citations in those notes stay checked).
+# Measured after the removal: 1386 references, 1338 value-checked, 82 artifacts.
+# Only the floor that no longer holds is lowered.
+MIN_REFERENCES = 1386
 MIN_VALUE_CHECKED = 1333
 MIN_DISTINCT_ARTIFACTS = 79
 
@@ -881,6 +869,7 @@ CLASSIFICATION: dict[str, str] = {
     "docs/design_notes/waveguide_false_lane_transmission_tilt_predeclaration.md":
         NO_ARTIFACT_REFERENCE,
     TILT_RESULTS: GATED,
+    "docs/design_notes/20260921_crossval_role_redesign.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/waveguide_vi_envelope_sweep_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/waveguide_vi_envelope_sweep_results.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/wp4e_lumped_component_value_ad_spike.md": NO_ARTIFACT_REFERENCE,
@@ -927,11 +916,26 @@ def _sites(root: Path, doc: str) -> list[tuple[str, str]]:
     return out
 
 
+# 2026-09-21: artifacts that left the tree with a removed cross-validation case
+# (cv01, cv05). A dated note that cites them is not rewritten: its citations
+# under these prefixes are skipped and every other citation in the note stays
+# gated. `test_a_skipped_artifact_prefix_is_really_gone` keeps the list honest --
+# a prefix that exists again, or one added to silence a citation whose artifact
+# is still here, fails. The artifacts themselves are at commit 66ed61c2.
+REMOVED_ARTIFACT_PREFIXES: tuple[str, ...] = (
+    "scripts/diagnostics/_artifacts/cv01_cpml_813/",
+    "validation/crossval/_01_waveguide_bend_results/",
+    "validation/crossval/_05_patch_results/",
+    "tests/fixtures/patch_mode_identification/cv05_ringdown_spectra.json",
+)
+
+
 def collect(root: Path) -> list[Reference]:
     refs: list[Reference] = []
     for doc in DOCUMENTS:
         for site, text in _sites(root, doc):
-            refs.extend(parse_references(doc, site, text))
+            refs.extend(r for r in parse_references(doc, site, text)
+                        if not r.path.startswith(REMOVED_ARTIFACT_PREFIXES))
     return refs
 
 
@@ -961,6 +965,20 @@ def test_the_cited_population_is_still_present() -> None:
     assert len(artifacts) >= MIN_DISTINCT_ARTIFACTS, (
         f"references reach only {len(artifacts)} distinct artifacts "
         f"({sorted(artifacts)}); expected at least {MIN_DISTINCT_ARTIFACTS}."
+    )
+
+
+@pytest.mark.parametrize("prefix", REMOVED_ARTIFACT_PREFIXES)
+def test_a_skipped_artifact_prefix_is_really_gone(prefix: str) -> None:
+    # The skip is a string prefix, so "is this path missing" is not enough: a
+    # string that is no path at all (``.../patch_mode_identification/cv15_``)
+    # would pass that and still silence citations to live files. What must hold
+    # is that NO tracked file starts with it.
+    live = sorted(t for t in _TRACKED() if t.startswith(prefix))
+    assert not live, (
+        f"{prefix} is listed in REMOVED_ARTIFACT_PREFIXES, so citations under it "
+        f"are skipped, but {len(live)} tracked file(s) start with it, e.g. "
+        f"{live[0]}. Remove or narrow the prefix so those citations are checked."
     )
 
 
