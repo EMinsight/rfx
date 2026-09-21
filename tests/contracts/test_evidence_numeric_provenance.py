@@ -370,6 +370,12 @@ TILT_RESULTS = (
 # provenance" section emits the citations from the artifact.
 NEAR_FIELD_RESULTS = (
     "docs/design_notes/waveguide_driven_plane_near_field_composition_results.md")
+# 2026-09-21: the open-boundary contract. It is a RULE, and the rule rests on a
+# before/after pair of measured numbers (a lossless patch that gains energy, and
+# settles once its ground plane is continued through the absorber). A rule whose
+# evidence could drift unnoticed is the shape this gate exists for, so its
+# "8. Numeric provenance" section cites the record JSONs by key.
+OPEN_BOUNDARY_CONTRACT = "docs/design_notes/20260921_open_boundary_contract.md"
 
 # Markdown documents, with the regex that cuts them into named sites.
 MARKDOWN_SITES: dict[str, str] = {
@@ -418,6 +424,7 @@ MARKDOWN_SITES: dict[str, str] = {
     ISSUE1043_PAD_CONTINUATION_NOTE: r"^#+\s+(.*\S)\s*$",
     TILT_RESULTS: r"^#+\s+(.*\S)\s*$",
     NEAR_FIELD_RESULTS: r"^#+\s+(.*\S)\s*$",
+    OPEN_BOUNDARY_CONTRACT: r"^#+\s+(.*\S)\s*$",
 }
 
 DOCUMENTS = (MANIFEST, *MARKDOWN_SITES)
@@ -561,9 +568,13 @@ REQUIRED_SITES: dict[tuple[str, str], int] = {
 # (REMOVED_ARTIFACT_PREFIXES, skipped per citation; both notes carry the dated
 # removal header). Measured after the removal: 385 references, 356
 # value-checked, 28 artifacts. The floors are lowered to the measured values.
-MIN_REFERENCES = 385
-MIN_VALUE_CHECKED = 356
-MIN_DISTINCT_ARTIFACTS = 28
+# 2026-09-21 (open-boundary contract): +15 references, all value-checked, over +7
+# distinct artifacts (the patch ring-down records under
+# scripts/diagnostics/open_boundary_contract/). Raised by the delta, on top of
+# the iris removal above: 400 references, 371 value-checked, 35 artifacts.
+MIN_REFERENCES = 400
+MIN_VALUE_CHECKED = 371
+MIN_DISTINCT_ARTIFACTS = 35
 
 
 # --------------------------------------------------------------------------
@@ -849,6 +860,7 @@ CLASSIFICATION: dict[str, str] = {
     "docs/design_notes/waveguide_driven_plane_near_field_composition_predeclaration.md":
         NO_ARTIFACT_REFERENCE,
     NEAR_FIELD_RESULTS: GATED,
+    OPEN_BOUNDARY_CONTRACT: GATED,
     "docs/design_notes/waveguide_false_lane_column_power_predeclaration.md": NO_ARTIFACT_REFERENCE,
     "docs/design_notes/waveguide_false_lane_column_power_results.md": NO_ARTIFACT_REFERENCE,
     # 2026-09-16 (#873 attempt 2): the pre-declaration was written before any
