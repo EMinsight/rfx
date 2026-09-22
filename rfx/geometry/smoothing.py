@@ -1420,26 +1420,21 @@ def kottke_inv_eps_from_occupancy(
     *,
     aniso_inv_eps_baseline: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray] | None = None,
     background_eps: float = 1.0,
-    grad_eps: float = 1e-12,
+    periodic: tuple[bool, bool, bool] = (False, False, False),
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Stage 2 Kottke inv-eps tensor from a continuous-fill PEC occupancy.
+    """Inverse-permittivity tensor from a continuous-fill PEC occupancy (#1197).
 
     The AD-traceable analogue of the ``pec_shapes`` branch in
-    :func:`compute_inv_eps_tensor_diag`.  ``pec_occupancy`` is a per-cell
-    fill fraction in ``[0, 1]``; ``f = occ`` plays the role of Kottke's
-    fill, and the interface normal is derived from ``∇occ / |∇occ|``.
-
-    For a sigmoid mask, ``∇occ`` is large only at the boundary cells
-    (occ ≈ 0.5 transition zone); interior PEC cells (occ ≈ 1) and
-    exterior vacuum cells (occ ≈ 0) have small ``|∇occ|`` but
-    Kottke's diagonal output is independent of the normal there
-    (``inv_perp = inv_par = (1−f)/ε`` reduces to a scalar at f → 0
-    or f → 1 in the PEC limit), so the small-norm regime is benign.
-
-    Yee staggering is approximated by applying the cell-centred Kottke
-    output to all three E-component positions of the cell.  The error
-    is O(dx) at the sigmoid edge — second-order to the staircase
-    error that the override path replaces.
+    :func:`compute_inv_eps_tensor_diag`, built from the lattice ownership
+    contract's own rule rather than from a cell-centred Kottke fill: each E
+    edge is conductor to the degree that the four cells sharing it are
+    occupied (``_volume_occupancy_masks``, #931 §1.2 hard / §1.6 relaxed),
+    ``inv_c = (1 - M_c) * baseline_c``. At binary occupancy the zeros are
+    ``realized_pec_edge_masks`` bit for bit; a fractional cell is a lossless
+    interpolation (a static high-permittivity cell), exact at 0 and 1 and a
+    continuation in between -- it still shifts a resonance (measured -3.6 %
+    on a cavity's TM110 with a slab edge at a cell centre). Feed the result
+    to ``update_e_aniso_inv``.
 
     Parameters
     ----------
@@ -1448,18 +1443,18 @@ def kottke_inv_eps_from_occupancy(
         Continuous-fill PEC field; values clipped to ``[0, 1]``.
     aniso_inv_eps_baseline : (inv_xx, inv_yy, inv_zz) tuple, optional
         Pre-computed inv-eps tensor with dielectric subpixel smoothing
-        already applied.  When supplied, the Kottke PEC limit is taken
-        as the elementwise minimum against this baseline (union of
-        PEC effects on top of dielectrics).  When ``None``, the
+        already applied.  When supplied, ``1 - M_c`` scales it -- the
+        same keep factor ``apply_pec_occupancy`` applies to E, so the two
+        lanes are one function of the occupancy.  When ``None``, the
         background uses ``background_eps``.
     background_eps : float
         Background permittivity used when ``aniso_inv_eps_baseline``
         is ``None``.  Default 1.0 (vacuum).
-    grad_eps : float
-        Numerical guard for ``|∇occ|`` normalisation.  Cells with
-        ``|∇occ| < grad_eps`` get a default normal direction (x̂);
-        the Kottke output is independent of the normal in those cells
-        (see docstring above).
+    periodic : (bool, bool, bool)
+        The run's periodic flags (``Simulation._periodic_flags()``): the
+        incident-cell shifts wrap on a periodic axis, exactly as the hard
+        rule's do. ``Grid`` carries no such attribute, so the caller passes
+        them.
 
     Returns
     -------
@@ -1469,98 +1464,41 @@ def kottke_inv_eps_from_occupancy(
         ``simulation.run(aniso_inv_eps=...)`` or
         ``update_e_aniso_inv``.
     """
+    # #1197. The tensor is the E-update form of the lattice ownership
+    # contract, so it is built from the contract's own rule: an E edge is
+    # conductor to the degree that the FOUR cells sharing it are occupied
+    # (#931 §1.2 hard, §1.6 relaxed: ``M_c = 1 - prod(1 - o)`` over the two
+    # backward shifts transverse to the component), and ``inv_c = 1 - M_c``
+    # scales the baseline. At binary occupancy this IS
+    # ``realized_pec_edge_masks`` bit for bit -- the conductor ends where the
+    # occupancy ends. In between it is a lossless interpolation (a static
+    # high-permittivity cell), not the per-step decay that the
+    # ``apply_pec_occupancy`` scaling amounts to.
+    #
+    # What it replaces, and why: a cell-centred fill with a normal from
+    # ``grad(occ)`` applied to all three components, then a six-neighbour
+    # ``max`` dilation with a Heaviside at 0.5. The dilation wrote inv = 0
+    # one full cell past the occupancy in every direction, including the
+    # NORMAL component in the first air cell above a conductor -- exactly
+    # where a cavity mode's normal E is largest. Measured on a 24 mm PEC cube
+    # with a binary PEC slab (TM110 is independent of the slab height):
+    # analytic 8.833 GHz, ``apply_pec_occupancy`` 8.8305, this builder with
+    # the dilation 8.5266 (-3.5 %), at a half-cell edge 8.3228 (-5.8 %). The
+    # dilation had been kept (2026-05-31 review) on the |S21| witness of one
+    # open-stub run (run #962) in 60939e0's commit message; that run's
+    # fixture is not recorded anywhere, and the cavity oracle supersedes it.
+    from rfx.boundaries.pec import _volume_occupancy_masks
     f = jnp.clip(pec_occupancy.astype(jnp.float32), 0.0, 1.0)
-    # Clamp the sigmoid tail to exactly zero so the strict-Kottke
-    # `f > 0` selector does not trip on `1e-30` etc.  AD cells in the
-    # tail (occ < 1e-3) contribute nothing to the cost — their
-    # gradient is genuinely zero at this scale — so the hard clamp
-    # is functionally smooth.  Cells above the threshold flow
-    # gradients normally.
+    # Sigmoid-floor values (1e-30 ...) are vacuum, and their gradient is
+    # pinned zero (2026-05-17 decision, kept).
     f = jnp.where(f < 1e-3, jnp.zeros_like(f), f)
-
-    # Central-difference gradient of the occupancy.  ``jnp.roll`` gives
-    # periodic boundary semantics; on rfx's CPML/PEC domain boundaries
-    # the occupancy is vacuum (0) by construction (PEC stub geometry
-    # never extends to the absorbing boundary).  Periodic boundary
-    # therefore evaluates to "0 next to 0" at the domain edge, giving
-    # a vanishing gradient — physically correct: no interface there.
-    dx = float(grid.dx)
-    dy = float(getattr(grid, "dy", grid.dx))
-    dz = float(getattr(grid, "dz", grid.dx))
-    grad_x = (jnp.roll(f, -1, axis=0) - jnp.roll(f, 1, axis=0)) / (2.0 * dx)
-    grad_y = (jnp.roll(f, -1, axis=1) - jnp.roll(f, 1, axis=1)) / (2.0 * dy)
-    grad_z = (jnp.roll(f, -1, axis=2) - jnp.roll(f, 1, axis=2)) / (2.0 * dz)
-    norm = jnp.sqrt(grad_x ** 2 + grad_y ** 2 + grad_z ** 2 + grad_eps ** 2)
-    n_x = grad_x / norm
-    n_y = grad_y / norm
-    n_z = grad_z / norm
-
-    # Kottke PEC limit at every cell.  ``eps_outside`` is the dielectric
-    # background — for the sigmoid stub on ro4350b, this is the substrate
-    # ε at substrate cells and vacuum elsewhere.  When the caller passes
-    # an ``aniso_inv_eps_baseline``, we use the baseline's reciprocal
-    # as the local background ε (one per axis); otherwise the scalar
-    # ``background_eps`` applies everywhere.
+    m_x, m_y, m_z = _volume_occupancy_masks(f, tuple(bool(p) for p in periodic))
     if aniso_inv_eps_baseline is not None:
         inv_xx_b, inv_yy_b, inv_zz_b = aniso_inv_eps_baseline
-        # The PEC Kottke needs a scalar eps_outside per cell — the
-        # baseline already encodes the dielectric subpixel smoothing
-        # per axis.  We invert each component locally.
-        eps_outside_x = 1.0 / (inv_xx_b + 1e-30)
-        eps_outside_y = 1.0 / (inv_yy_b + 1e-30)
-        eps_outside_z = 1.0 / (inv_zz_b + 1e-30)
     else:
-        bg = jnp.asarray(background_eps, dtype=jnp.float32)
-        eps_outside_x = bg
-        eps_outside_y = bg
-        eps_outside_z = bg
-
-    # Strict-Kottke PEC limit (`is_pec=True`): `inv_par = 0` for any
-    # f > 0 (frozen parallel-to-interface E), `inv_perp = (1-f)/eps`.
-    # The f-tail clamp above ensures only "real" PEC cells (occ ≥
-    # 1e-3) trip the `f > 0` selector — sigmoid-floor values like
-    # 1e-30 are clamped to 0 and correctly behave as vacuum.
-    inv_xx_c, _, _ = _kottke_inv_eps_diag(
-        f, jnp.inf, eps_outside_x, n_x, n_y, n_z, is_pec=True,
-    )
-    _, inv_yy_c, _ = _kottke_inv_eps_diag(
-        f, jnp.inf, eps_outside_y, n_x, n_y, n_z, is_pec=True,
-    )
-    _, _, inv_zz_c = _kottke_inv_eps_diag(
-        f, jnp.inf, eps_outside_z, n_x, n_y, n_z, is_pec=True,
-    )
-
-    # Force-zero interior cells AND dilate the PEC by 1 cell so the
-    # boundary cell acts as a hard mirror.  The reference imperative
-    # path (``compute_inv_eps_tensor_diag``, line ~779) sets
-    # `inv = where(e_inside, 0, inv)` — interior cells are exactly 0;
-    # only the *single* boundary cell at the SDF crossing keeps the
-    # Kottke output.  For the occupancy path we don't have an SDF;
-    # we replicate this by applying a sigmoid Heaviside projection to
-    # the *neighbor-max* occupancy.  Cells whose own occ OR any 6-neighbor
-    # occ exceeds 0.5 get full PEC (interior + 1-cell dilation); cells
-    # with all neighbors at ≤ 0.5 keep their Kottke output.  This
-    # dilation is the AD-smooth analogue of the binary `apply_pec_mask`
-    # `pec_mask & (roll | roll)` rule (which is what the legacy
-    # imperative cross-solver uses for hard `Box(material="pec")`).
-    occ_dilated = f
-    for _axis in range(3):
-        occ_dilated = jnp.maximum(occ_dilated, jnp.roll(f, 1, axis=_axis))
-        occ_dilated = jnp.maximum(occ_dilated, jnp.roll(f, -1, axis=_axis))
-    smooth_width = 0.05
-    interior_mask = jax.nn.sigmoid((occ_dilated - 0.5) / smooth_width)
-    inv_xx_c = (1.0 - interior_mask) * inv_xx_c
-    inv_yy_c = (1.0 - interior_mask) * inv_yy_c
-    inv_zz_c = (1.0 - interior_mask) * inv_zz_c
-
-    if aniso_inv_eps_baseline is not None:
-        inv_xx_b, inv_yy_b, inv_zz_b = aniso_inv_eps_baseline
-        inv_xx = jnp.minimum(inv_xx_b, inv_xx_c).astype(jnp.float32)
-        inv_yy = jnp.minimum(inv_yy_b, inv_yy_c).astype(jnp.float32)
-        inv_zz = jnp.minimum(inv_zz_b, inv_zz_c).astype(jnp.float32)
-    else:
-        inv_xx = inv_xx_c.astype(jnp.float32)
-        inv_yy = inv_yy_c.astype(jnp.float32)
-        inv_zz = inv_zz_c.astype(jnp.float32)
-
+        bg = 1.0 / jnp.asarray(background_eps, dtype=jnp.float32)
+        inv_xx_b = inv_yy_b = inv_zz_b = bg
+    inv_xx = ((1.0 - m_x) * inv_xx_b).astype(jnp.float32)
+    inv_yy = ((1.0 - m_y) * inv_yy_b).astype(jnp.float32)
+    inv_zz = ((1.0 - m_z) * inv_zz_b).astype(jnp.float32)
     return inv_xx, inv_yy, inv_zz
