@@ -617,6 +617,73 @@ def e_node_dual_spacing_at(profile_full, k: int):
     return 0.5 * (profile_full[k - 1] + profile_full[k])
 
 
+
+def _waveguide_port_axis_metrics(grid, cfg):
+    """``(dx_h, dx_e)`` for one waveguide port: the metric each half of its
+    one-sided TFSF boundary divides by.
+
+    A waveguide port injects through two corrections half a cell apart, and
+    on a graded mesh they do not sit on the same metric. Before this, both
+    took the grid's BOUNDARY cell, so a port inside a fine band injected at
+    the boundary cell's scale: on the WR-90 fixture of
+    ``tests/unit/sparams/test_waveguide_nu_sparam.py``, 1.5 mm boundary and
+    0.75 mm band, both corrections ran at 0.5000 of the local metric (gap
+    G13, program repro R2). Where the port sits in a boundary-sized cell the
+    two numbers ARE the boundary cell, which is why every existing NU port
+    test is unaffected.
+
+    Which metric each half is entitled to is the interface's table
+    (``rfx/_grid_metric.py``), applied at the plane each correction acts on,
+    not at the port's nominal index:
+
+    * the H correction lands on the upstream half-cell, ``x_index - 1`` for
+      a ``+`` port and ``x_index`` for a ``-`` one, and differences two E
+      nodes across that one cell, so it takes the PRIMAL width there;
+    * the E correction lands on the source plane, ``x_index`` for ``+`` and
+      ``x_index + 1`` for ``-``, and sits ON a node, so it takes that node's
+      DUAL spacing.
+
+    The axis is the port's own, read from ``direction``; ``x_index`` is the
+    plane index along it and the name is historical. A ``+y`` port reads the
+    y cells (``test_nonuniform_api`` has one). Before this, every port took
+    the x boundary scalar whatever it propagated along, which on a dz-only
+    graded mesh happened to be the right number because dx and dy are equal
+    there.
+
+    On a uniform axis the two collapse to the same number and to
+    ``grid.dx``, so nothing on the uniform lane moves.
+
+    Host reads, per #1190: a concrete axis is resolved to Python floats here,
+    once, outside the scan. A traced axis keeps its tracer, the way the CPML
+    z pair already does, so the mesh-as-design-variable path survives.
+
+    On a grid built by hand -- the ``NonUniformGrid`` constructor called
+    directly and then handed to ``run_nonuniform``, both public -- there is
+    no float64 cell spine, so ``cells`` and ``duals`` each widen the float32
+    store and each warn. Measured: two ``ExactNodeSpineMissingWarning`` per
+    port per call, and the metric comes back 8.692e-09 relative above the
+    spine's value (0.000750000006519258 against 0.00075 on the WR-90 band).
+    That is the pre-#802 float32 quantization reaching the injection
+    coefficient, far below anything a user reads, and it is the existing
+    degraded path rather than something this helper introduces. Build the
+    grid with ``make_nonuniform_grid`` and neither happens.
+    """
+    axis = cfg.direction[-1].lower()
+    forward = cfg.direction.startswith("+")
+    h_plane = cfg.x_index - 1 if forward else cfg.x_index
+    e_plane = cfg.x_index if forward else cfg.x_index + 1
+
+    n = int((grid.nx, grid.ny, grid.nz)[("x", "y", "z").index(axis)])
+    h_plane = max(0, min(int(h_plane), n - 1))
+    e_plane = max(0, min(int(e_plane), n - 1))
+
+    cells = grid.cells(axis)
+    duals = grid.duals(axis)
+    if is_tracer(cells):
+        return cells[h_plane], duals[e_plane]
+    return float(cells[h_plane]), float(duals[e_plane])
+
+
 def make_nonuniform_grid(
     domain_xy: tuple[float, float],
     dz_profile: np.ndarray,
@@ -2412,8 +2479,12 @@ def _build_nu_scan(
             for cfg in waveguide_ports
         )
         waveguide_meta = tuple(waveguide_ports)
+        waveguide_port_metrics = tuple(
+            _waveguide_port_axis_metrics(grid, cfg) for cfg in waveguide_ports
+        )
     else:
         waveguide_meta = ()
+        waveguide_port_metrics = ()
 
     # TFSF 1D auxiliary state carry. Injection axis is x (uniform on
     # NU paths we support — dz-only nonuniformity), so the 1D aux runs
@@ -2459,8 +2530,9 @@ def _build_nu_scan(
             st = apply_tfsf_h(st, tfsf_cfg, carry["tfsf"], grid.dx, dt)
         if use_waveguide_ports:
             from rfx.sources.waveguide_port import apply_waveguide_port_h as _apply_wg_h_nu
-            for cfg_meta in waveguide_meta:
-                st = _apply_wg_h_nu(st, cfg_meta, step_idx, dt, grid.dx)
+            for cfg_meta, _m in zip(waveguide_meta,
+                                    waveguide_port_metrics):
+                st = _apply_wg_h_nu(st, cfg_meta, step_idx, dt, _m[0])
         if use_cpml:
             st, cpml_new = apply_cpml_h(st, cpml_params, carry["cpml"],
                                          cpml_grid, cpml_axes_eff,
@@ -2517,8 +2589,9 @@ def _build_nu_scan(
             st = apply_tfsf_e(st, tfsf_cfg, tfsf_h_state, grid.dx, dt)
         if use_waveguide_ports:
             from rfx.sources.waveguide_port import apply_waveguide_port_e as _apply_wg_e_nu
-            for cfg_meta in waveguide_meta:
-                st = _apply_wg_e_nu(st, cfg_meta, step_idx, dt, grid.dx)
+            for cfg_meta, _m in zip(waveguide_meta,
+                                    waveguide_port_metrics):
+                st = _apply_wg_e_nu(st, cfg_meta, step_idx, dt, _m[1])
         if use_cpml:
             st, cpml_new = apply_cpml_e(st, cpml_params, cpml_new,
                                          cpml_grid, cpml_axes_eff,
@@ -2567,15 +2640,19 @@ def _build_nu_scan(
         # Waveguide-port injection + DFT probe accumulation. The dx
         # arg is unused by the per-cell-weighted integrals (cfg already
         # stores u_widths/v_widths), but kept in the function signature
-        # for back-compat.
+        # for back-compat. It is handed the port's own primal cell rather
+        # than the grid's boundary scalar so that nothing here reads a
+        # scalar the port does not sit on; because the callee ignores it,
+        # no recorded number moves either way.
         new_waveguide_port_accs = None
         if use_waveguide_ports:
             from rfx.sources.waveguide_port import (
                 update_waveguide_port_probe,
             )
             new_waveguide_port_accs = []
-            for accs, cfg_meta in zip(
-                carry["waveguide_port_accs"], waveguide_meta
+            for accs, cfg_meta, _m in zip(
+                carry["waveguide_port_accs"], waveguide_meta,
+                waveguide_port_metrics,
             ):
                 cfg = cfg_meta._replace(
                     v_probe_t=accs[0],
@@ -2586,7 +2663,7 @@ def _build_nu_scan(
                     n_steps_recorded=accs[5],
                 )
                 # TFSF-style corrections applied earlier at canonical slots.
-                cfg_updated = update_waveguide_port_probe(cfg, st, dt, grid.dx)
+                cfg_updated = update_waveguide_port_probe(cfg, st, dt, _m[0])
                 new_waveguide_port_accs.append((
                     cfg_updated.v_probe_t,
                     cfg_updated.v_ref_t,
