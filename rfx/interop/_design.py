@@ -503,7 +503,55 @@ _SOFT_SOURCE_FIELDS: dict[str, _F] = {
     "amplitude_kind": _opt(_STR),
 }
 
+def _termination_references(value, what):
+    if not isinstance(value, (list, tuple)):
+        raise _refuse(f"{what}: terminated conductors must be a list")
+    refs = []
+    for item in value:
+        if (not isinstance(item, (list, tuple)) or len(item) != 2
+                or item[0] not in ("_geometry", "_thin_conductors")):
+            raise _refuse(f"{what}: invalid conductor reference {item!r}")
+        index = _integer(item[1], what=what)
+        if index < 0:
+            raise _refuse(f"{what}: negative conductor index {index}")
+        refs.append((item[0], index))
+    return refs
+
+
+_TERMINATES = _F(
+    dump=lambda v, w: [list(ref) for ref in _termination_references(v, w)],
+    load=_termination_references,
+)
+
+
+def _termination_inputs(sim, references):
+    from rfx.geometry.port_termination import ConductorReference
+    if references is None:
+        return None
+    values = []
+    for collection, index in references:
+        entries = getattr(sim, collection)
+        if index >= len(entries):
+            raise _refuse(f"terminates: unknown {collection} entry {index}")
+        values.append(ConductorReference(collection, entries[index]))
+    return values
+
+
+def _ports_with_termination_indices(sim, ports):
+    """Serialize current positions, preserving a lazy MSL default as null."""
+    for port in ports:
+        references = None if port.terminates is None else []
+        for ref in port.terminates or ():
+            index = next((i for i, entry in enumerate(getattr(sim, ref.collection))
+                          if entry is ref.entry), None)
+            if index is not None:
+                references.append((ref.collection, index))
+        yield (dataclasses.replace(port, terminates=references)
+               if dataclasses.is_dataclass(port) else port._replace(terminates=references))
+
+
 _LUMPED_PORT_FIELDS: dict[str, _F] = {
+    "terminates": _TERMINATES,
     "position": _vec(3),
     "component": _STR,
     "impedance": _NUM,
@@ -535,6 +583,7 @@ _THIN_CONDUCTOR_FIELDS: dict[str, _F] = {
 }
 
 _COAXIAL_PORT_FIELDS: dict[str, _F] = {
+    "terminates": _TERMINATES,
     "position": _vec(3),
     "face": _STR,
     "pin_length": _NUM,
@@ -625,6 +674,7 @@ _FLOQUET_PORT_FIELDS: dict[str, _F] = {
 }
 
 _MSL_PORT_FIELDS: dict[str, _F] = {
+    "terminates": _opt(_TERMINATES),
     "name": _STR,
     "position": _vec(3),
     "width": _NUM,
@@ -1025,6 +1075,7 @@ _SOFT_SOURCE_PINNED_DEFAULTS: dict[str, Any] = {
     "excite": True,
     "direction": None,
     "reference_plane_cells": None,
+    "terminates": (),
 }
 
 
@@ -1080,6 +1131,7 @@ def _dump_ports(sim: Any) -> tuple[list[dict], list[dict]]:
                     f"field, so the entry was not built through the public "
                     f"API and cannot be rebuilt through it"
                 )
+            entry = next(_ports_with_termination_indices(sim, [entry]))
             lumped.append(
                 {
                     name: field.dump(getattr(entry, name), f"{what}.{name}")
@@ -1424,7 +1476,7 @@ def design_to_dict(sim: Any) -> dict[str, Any]:
             "soft_sources": soft_sources,
             "lumped_ports": lumped_ports,
             "msl_ports": _dump_list(
-                _msl_ports_with_resolved_offsets(sim),
+                _ports_with_termination_indices(sim, _msl_ports_with_resolved_offsets(sim)),
                 _MSL_PORT_FIELDS,
                 _MSLPortEntry,
                 what="_msl_ports",
@@ -1436,7 +1488,7 @@ def design_to_dict(sim: Any) -> dict[str, Any]:
                 what="_waveguide_ports",
             ),
             "coaxial_ports": _dump_list(
-                sim._coaxial_ports,
+                _ports_with_termination_indices(sim, sim._coaxial_ports),
                 _COAXIAL_PORT_FIELDS,
                 CoaxialPort,
                 what="_coaxial_ports",
@@ -1741,6 +1793,7 @@ def simulation_from_design(document: Any) -> Any:
             outer_radius=values["outer_radius"],
             impedance=values["impedance"],
             waveform=values["excitation"],
+            terminates=_termination_inputs(sim, values["terminates"]),
         )
 
     for index, payload in enumerate(
@@ -1813,6 +1866,7 @@ def simulation_from_design(document: Any) -> Any:
             _LUMPED_PORT_FIELDS,
             what=f"excitations.lumped_ports[{index}]",
         )
+        values["terminates"] = _termination_inputs(sim, values["terminates"])
         sim.add_port(
             values.pop("position"),
             values.pop("component"),
@@ -1825,6 +1879,7 @@ def simulation_from_design(document: Any) -> Any:
         values = _load_entry(
             payload, _MSL_PORT_FIELDS, what=f"excitations.msl_ports[{index}]"
         )
+        values["terminates"] = _termination_inputs(sim, values["terminates"])
         sim.add_msl_port(values.pop("position"), **values)
 
     for index, payload in enumerate(

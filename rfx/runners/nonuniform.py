@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from dataclasses import replace
 
 import jax
 import numpy as np
@@ -65,8 +66,13 @@ def assemble_interface_eps_nu(sim, grid, materials):
     # The bounding node has no outgoing real cell: copy the last centre.
     for x in centres:
         x[-1] = x[-2]
+    from rfx.geometry.smoothing import continued_conductor_shape
+    geometry = [replace(entry, shape=continued_conductor_shape(
+                    sim, grid, entry.shape, entry=entry, unextendable=[]))
+                if sim._resolve_material(entry.material_name).sigma >= sim._PEC_SIGMA_THRESHOLD
+                else entry for entry in sim._geometry]
     cell, debye, lorentz, pec, *_ = rasterize_geometry(
-        sim._geometry, sim._resolve_material, GridCoords(*centres, grid.shape),
+        geometry, sim._resolve_material, GridCoords(*centres, grid.shape),
         pec_sigma_threshold=sim._PEC_SIGMA_THRESHOLD)
     if debye is not None or lorentz is not None:
         raise ValueError("interface_eps='dual_average' cannot combine with Debye/Lorentz materials")
@@ -173,12 +179,19 @@ def assemble_materials_nu(
     centres = centres_from_nonuniform_grid(grid, coords)
     _pec_sheets = pec_sheets if pec_sheets is not None else []
     _pec_wires = pec_wires if pec_wires is not None else []
+    from rfx.geometry.smoothing import continued_conductor_shape, warn_unextendable_shapes
+    conductor_findings = []
+    geometry = [replace(entry, shape=continued_conductor_shape(
+                    sim, grid, entry.shape, entry=entry, unextendable=conductor_findings))
+                if sim._resolve_material(entry.material_name).sigma >= sim._PEC_SIGMA_THRESHOLD
+                else entry for entry in sim._geometry]
 
     result = rasterize_geometry(
-        sim._geometry,
+        geometry,
         sim._resolve_material,
         coords,
         pec_sigma_threshold=sim._PEC_SIGMA_THRESHOLD,
+        pole_geometry_entries=sim._geometry,
         centres=centres,
         cell_sizes=cell_sizes,
         sheets=_pec_sheets,
@@ -237,9 +250,12 @@ def assemble_materials_nu(
     # rfx.boundaries.pec.realized_pec_edge_masks. A shape thicker than one
     # local cell along its normal is refused ("not a sheet; use add()").
     if sim._thin_conductors:
-        pec_tcs = [tc for tc in sim._thin_conductors
+        conductors = [replace(tc, shape=continued_conductor_shape(
+                        sim, grid, tc.shape, entry=tc, unextendable=conductor_findings))
+                      for tc in sim._thin_conductors]
+        pec_tcs = [tc for tc in conductors
                    if getattr(tc, "is_pec", False)]
-        lossy_tcs = [tc for tc in sim._thin_conductors
+        lossy_tcs = [tc for tc in conductors
                      if not getattr(tc, "is_pec", False)]
         for tc in pec_tcs:
             _pec_sheets.append(sheet_spec_from_shape(
@@ -385,6 +401,7 @@ def assemble_materials_nu(
     _refuse_uncollected_pec(_pec_sheets if pec_sheets is None else (),
                             _pec_wires if pec_wires is None else (),
                             lane="non-uniform")
+    warn_unextendable_shapes(conductor_findings)
     return materials, debye_spec, lorentz_spec, pec_mask
 
 
@@ -908,7 +925,7 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                 smoothed_shape_pairs, warn_unextendable_shapes,
             )
             shape_eps_pairs, _unextendable = smoothed_shape_pairs(sim, grid)
-            warn_unextendable_shapes(_unextendable)
+            warn_unextendable_shapes([u for u in _unextendable if not u.conductor])
             if shape_eps_pairs:
                 aniso_eps = compute_smoothed_eps_nonuniform(
                     grid, shape_eps_pairs, background_eps=1.0,

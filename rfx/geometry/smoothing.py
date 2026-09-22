@@ -296,15 +296,11 @@ def _get_normal_fn(shape: Shape):
 #: continuing it would move the structure to the boundary and throw away the
 #: resolution the lane exists to provide.
 #:
-#: The consequence, stated rather than left to be found: on the hi face the two
-#: lanes disagree over a one-cell window. The staircase lane's rule is a
-#: cell-centre test, so ``extend_cpml_pad_materials``' #627a fallback continues
-#: any box with ``corner_hi > interior_hi - dx`` (the half-open convention drops
-#: the last node, and the fallback promotes from one column inward); this lane
-#: continues only ``corner_hi >= interior_hi``. No tolerance makes them agree
-#: everywhere, because one rule is a cell-centre test and the other is sub-cell.
-#: A structure meant to reach the boundary should be drawn to it, and then both
-#: lanes continue it.
+#: The declared face is also a reach target, using cells_spanning's
+#: relative tolerance. A declaration spanning 535.43 cells therefore reaches
+#: the rounded 536-cell domain's absorber. Bounds short of both targets keep
+#: their declared end, even when a neighbouring occupied cell is copied by
+#: the separate material-array extension.
 _PAD_REACH_TOL_CELLS = 1e-6
 
 #: How far past the array the continued face is pushed, in local cells. The
@@ -317,7 +313,8 @@ _PAD_CONTINUE_CELLS = 2.0
 class UnextendableShape(NamedTuple):
     """One (shape, axis, side) a pad continuation could not express.
 
-    ``axis`` is 0/1/2 and ``side`` is ``"lo"`` / ``"hi"``. It carries the
+    ``axis`` is 0/1/2 and ``side`` is ``"lo"`` / ``"hi"`` (``"all"``
+    when a traced mesh axis disables conductor continuation). It carries the
     shape's declared ``eps_r`` so a caller can say what the pad will hold
     instead of what was drawn, without re-resolving the material.
 
@@ -346,6 +343,8 @@ class UnextendableShape(NamedTuple):
     eps_r: float = 1.0
     entry_index: int = -1
     material_name: str = "?"
+    conductor: bool = False
+    collection: str = "geometry"
 
 
 def warn_unextendable_shapes(unextendable, *, stacklevel: int = 3) -> None:
@@ -361,6 +360,23 @@ def warn_unextendable_shapes(unextendable, *, stacklevel: int = 3) -> None:
     if not unextendable:
         return
     import warnings as _w
+    conductors = [u for u in unextendable if u.conductor]
+    traced = [u for u in conductors if u.side == "all"]
+    if traced:
+        _w.warn("Conducting geometry is kept as declared: "
+                + "; ".join(dict.fromkeys(u.reason for u in traced))
+                + ". No continuation is applied.", stacklevel=stacklevel)
+        conductors = [u for u in conductors if u.side != "all"]
+    if conductors:
+        faces = ", ".join(
+            f"{type(u.shape).__name__} at {'xyz'[u.axis]}-{u.side} ({u.reason})"
+            for u in conductors)
+        _w.warn("Conducting geometry reaches an absorbing face but has no "
+                f"geometry continuation: {faces}. No continuation is applied "
+                "across those faces.", stacklevel=stacklevel)
+    unextendable = [u for u in unextendable if not u.conductor]
+    if not unextendable:
+        return
     faces = ", ".join(
         f"{type(u.shape).__name__} at {'xyz'[u.axis]}-{u.side} "
         f"(eps_r {u.eps_r:g}; {u.reason})"
@@ -413,10 +429,31 @@ def _continue_cylinder(shape, axis: int, side: str, target: float):
     return Cylinder(tuple(centre), shape.radius, hi - lo, shape.axis)
 
 
+def _reaches_pad_face(bounds, axis, side, edge, cell, declared_domain,
+                      occupied_faces=None):
+    lo, hi = bounds
+    reaches = ((float(lo[axis]) <= edge + _PAD_REACH_TOL_CELLS*cell
+                if side == "lo" else
+                float(hi[axis]) >= edge - _PAD_REACH_TOL_CELLS*cell)
+               if occupied_faces is None else (axis, side) in occupied_faces)
+    if declared_domain is not None and axis < len(declared_domain):
+        from rfx.grid import CELL_COUNT_ULP_BUDGET
+        face = 0.0 if side == "lo" else float(declared_domain[axis])
+        slack = CELL_COUNT_ULP_BUDGET * np.finfo(float).eps * max(cell, abs(face))
+        reaches = reaches or (float(lo[axis]) <= face+slack if side == "lo"
+                              else float(hi[axis]) >= face-slack)
+    return reaches
+
+
 def extend_shapes_into_cpml_pad(
     shapes: list[tuple[Shape, float]],
     node_coords,
     pads,
+    *,
+    declared_domain=None,
+    occupied_faces=None,
+    skip_faces=(),
+    conductor=False,
 ) -> tuple[list[tuple[Shape, float]], list["UnextendableShape"]]:
     """Continue boundary-touching shapes out through the absorber pads.
 
@@ -441,6 +478,11 @@ def extend_shapes_into_cpml_pad(
         (reflector / periodic / no absorber) and is never continued, which is
         how per-face ``BoundarySpec`` allocation reaches this function without
         being re-derived here.
+    skip_faces : collection of (axis, side)
+        Faces held at their declared bounds by the conductor port-pair rule.
+    conductor : bool
+        Keep a conducting Box's zero-extent normal axis unchanged. Dielectric
+        Boxes retain their existing continuation along all reached axes.
 
     Returns
     -------
@@ -472,6 +514,9 @@ def extend_shapes_into_cpml_pad(
         bbox_lo, bbox_hi = bounds
         current = shape
         for axis in range(3):
+            # A sheet continues in its plane; its normal remains a plane.
+            if conductor and isinstance(shape, Box) and bbox_lo[axis] == bbox_hi[axis]:
+                continue
             nodes = node_coords[axis]
             # PER AXIS, not per run. A mesh-as-design-variable profile makes
             # ONE axis' node positions tracers (a traced dz leaves x and y
@@ -486,18 +531,18 @@ def extend_shapes_into_cpml_pad(
             cell_lo, cell_hi = _axis_cells(nodes)
             for side, pad, cell in (("lo", int(pads[axis][0]), cell_lo),
                                     ("hi", int(pads[axis][1]), cell_hi)):
+                if (axis, side) in skip_faces:
+                    continue
                 if pad <= 0 or cell <= 0.0 or n < 2:
                     continue
                 if side == "lo":
                     edge = float(nodes[pad])
-                    reaches = (float(bbox_lo[axis])
-                               <= edge + _PAD_REACH_TOL_CELLS * cell)
                     target = float(nodes[0]) - _PAD_CONTINUE_CELLS * cell
                 else:
                     edge = float(nodes[n - 1 - pad])
-                    reaches = (float(bbox_hi[axis])
-                               >= edge - _PAD_REACH_TOL_CELLS * cell)
                     target = float(nodes[n - 1]) + _PAD_CONTINUE_CELLS * cell
+                reaches = _reaches_pad_face(bounds, axis, side, edge, cell,
+                                           declared_domain, occupied_faces)
                 if not reaches:
                     continue
                 if isinstance(current, Box):
@@ -518,6 +563,131 @@ def extend_shapes_into_cpml_pad(
                         float(eps_r)))
         out.append((current, eps_r))
     return out, unextendable
+
+
+def _declared_conductor_lattice(sim, grid, shape, coords):
+    """Classify once on the same lattice the assembler uses, before growth."""
+    from rfx.geometry.rasterize_grid import (
+        cell_centres_from_nodes, cell_sizes_from_nonuniform_grid,
+        cell_sizes_from_uniform_grid, classify_pec_entry, sheet_spec_from_shape)
+
+    sizes = (cell_sizes_from_nonuniform_grid(grid) if hasattr(grid, "dx_arr")
+             else cell_sizes_from_uniform_grid(grid))
+    thin = next((tc for tc in getattr(sim, "_thin_conductors", ())
+                 if tc.shape is shape), None)
+    # Concrete geometry must remain concrete inside an outer jit too.
+    with jax.ensure_compile_time_eval():
+        if thin is not None:
+            if thin.is_pec or thin.surface_impedance_f0 is not None:
+                name = f"thin_conductor[{sim._thin_conductors.index(thin)}]"
+                sheet = sheet_spec_from_shape(
+                    shape, coords, sizes, name=name, refuse_thick=True)
+                return [(np.asarray(sheet.footprint), (False, False, False))]
+            return [(np.asarray(shape.mask_on_coords(coords.x, coords.y, coords.z)),
+                     (False, False, False))]
+        centres = cell_centres_from_nodes(coords, sizes)
+        name = next((e.material_name for e in getattr(sim, "_geometry", ())
+                     if e.shape is shape), None)
+        cells, sheet, wire = classify_pec_entry(
+            shape, coords, centres, sizes, name=name)
+        if cells is not None:
+            return [(np.asarray(cells), (True, True, True))]
+        if sheet is not None:
+            return [(np.asarray(sheet.footprint), (False, False, False))]
+        return [(np.asarray(mask), tuple(a == component for a in range(3)))
+                for component, mask in enumerate(wire.edges)]
+
+
+def _occupied_conductor_faces(lattice, grid):
+    faces = set()
+    for axis, letter in enumerate("xyz"):
+        for side in ("lo", "hi"):
+            pad = int(getattr(grid, f"pad_{letter}_{side}"))
+            if not pad:
+                continue
+            for mask, cell_axes in lattice:
+                index = (pad if side == "lo" else
+                         grid.shape[axis] - 1 - pad - int(cell_axes[axis]))
+                if np.take(mask, index, axis=axis).any():
+                    faces.add((axis, side))
+    return faces
+
+
+def _conductor_reached_faces(sim, grid, shape, lattice, nodes):
+    from rfx.geometry.csg import declared_bounds
+    occupied = _occupied_conductor_faces(lattice, grid)
+    bounds = declared_bounds(shape)
+    if bounds is None:
+        return occupied
+    reached = set()
+    for axis, line in enumerate(nodes):
+        if bounds[0][axis] == bounds[1][axis]:
+            continue
+        cells = _axis_cells(line)
+        for side, cell in zip(("lo", "hi"), cells):
+            pad = int(getattr(grid, f"pad_{'xyz'[axis]}_{side}"))
+            if pad and _reaches_pad_face(
+                    bounds, axis, side, float(line[pad if side == "lo" else -1-pad]),
+                    cell, sim._unresolved_domain, occupied):
+                reached.add((axis, side))
+    return reached
+
+
+def continued_conductor_shape(sim, grid, shape, *, entry=None, unextendable=None):
+    """Return the conducting geometry solved through absorbing faces (C2/C5).
+
+    Reached declared faces and occupied outermost interior lattice layers
+    continue. Entries named by a port's ``terminates`` stay declared on
+    every reached face.
+    Port-generated structures do not call this function.
+    """
+    from rfx.core.jax_utils import is_tracer
+    from rfx.geometry.rasterize_grid import (
+        coords_from_nonuniform_grid, coords_from_uniform_grid)
+
+    if (getattr(sim, "_boundary", None) not in ("cpml", "upml")
+            or int(getattr(sim, "_cpml_layers", 0)) <= 0):
+        return shape
+    coords = (coords_from_nonuniform_grid(grid) if hasattr(grid, "dx_arr")
+              else coords_from_uniform_grid(grid))
+    nodes = (coords.x, coords.y, coords.z)
+    traced_axes = tuple(a for a, n in enumerate(nodes) if is_tracer(n))
+    if traced_axes:
+        reason = ("mesh axis " + ", ".join("xyz"[a] for a in traced_axes)
+                  + " is traced; conductor continuation is disabled on every face")
+        findings = [UnextendableShape(
+            shape, traced_axes[0], "all", reason, conductor=True)]
+        if unextendable is not None:
+            unextendable.extend(findings)
+        else:
+            warn_unextendable_shapes(findings)
+        return shape
+    pads = [[getattr(grid, f"pad_{a}_lo"), getattr(grid, f"pad_{a}_hi")]
+            for a in "xyz"]
+    # A shape without a bounding box has nothing to continue (no face to
+    # move), and rasterizing it here would raise before the assembler's own
+    # refusal of such a shape; the assembler keeps that message.
+    from rfx.geometry.csg import declared_bounds
+    if declared_bounds(shape) is None:
+        return shape
+    lattice = _declared_conductor_lattice(sim, grid, shape, coords)
+    occupied = _occupied_conductor_faces(lattice, grid)
+    from rfx.geometry.port_termination import conductor_entries, held_conductor_entries
+    if entry is None:
+        entry = next((candidate for _, candidate in conductor_entries(sim)
+                      if candidate.shape is shape), None)
+    held = (_conductor_reached_faces(sim, grid, shape, lattice, nodes)
+            if any(other is entry for other in held_conductor_entries(sim, grid)) else set())
+    pairs, findings = extend_shapes_into_cpml_pad(
+        [(shape, 1.0)], nodes, pads,
+        declared_domain=sim._unresolved_domain, occupied_faces=occupied,
+        skip_faces=held, conductor=True)
+    findings = [u._replace(shape=shape, conductor=True) for u in findings]
+    if unextendable is None:
+        warn_unextendable_shapes(findings)
+    else:
+        unextendable.extend(findings)
+    return pairs[0][0]
 
 
 def smoothed_shape_pairs(sim, grid):
@@ -548,8 +718,6 @@ def smoothed_shape_pairs(sim, grid):
     """
     pairs = [(entry.shape, sim._resolve_material(entry.material_name).eps_r)
              for entry in sim._geometry]
-    if not pairs:
-        return pairs, []
     if (getattr(sim, "_boundary", None) not in ("cpml", "upml")
             or int(getattr(sim, "_cpml_layers", 0)) <= 0):
         return pairs, []
@@ -581,24 +749,26 @@ def smoothed_shape_pairs(sim, grid):
     # 1e6, the value every other reader of this threshold defaults to
     # (rfx/surrogate.py, rfx/fidelity.py, rfx/pcb.py). An ``inf``
     # default fails OPEN: a sim without the attribute would classify a
-    # PEC material as a dielectric and continue metal into the pad,
-    # which is the one thing both lanes agree never to do.
+    # PEC material as a dielectric and miss its port-entry exception.
     pec_sigma = float(getattr(sim, "_PEC_SIGMA_THRESHOLD", 1e6))
     for idx, (entry, (shape, eps_r)) in enumerate(zip(sim._geometry, pairs)):
         mat = sim._resolve_material(entry.material_name)
-        # PEC volumes are not continued on EITHER lane: ``pec_mask`` is not in
-        # ``extend_cpml_pad_materials``' signature, so the staircase lane ends
-        # a PEC structure at the seam too, and the two lanes have to agree
-        # about what stands in a pad.
-        if float(getattr(mat, "sigma", 0.0)) >= pec_sigma:
-            out.append((shape, eps_r))
-            continue
         if (getattr(mat, "debye_poles", None)
                 or getattr(mat, "lorentz_poles", None)):
             out.append((shape, eps_r))
             continue
+        # Both lanes realize conductors through the same geometry helper.
+        if float(getattr(mat, "sigma", 0.0)) >= pec_sigma:
+            unext = []
+            solved = continued_conductor_shape(sim, grid, shape, entry=entry, unextendable=unext)
+            out.append((solved, eps_r))
+            unextendable.extend(u._replace(entry_index=idx,
+                                          material_name=entry.material_name)
+                                for u in unext)
+            continue
         one, unext = extend_shapes_into_cpml_pad(
-            [(shape, eps_r)], node_coords, pads)
+            [(shape, eps_r)], node_coords, pads,
+            declared_domain=sim._unresolved_domain)
         out.extend(one)
         # Stamp the entry's identity HERE, in the loop that knows it, and put
         # the DECLARED shape back. The builder reports whatever object it held
@@ -609,6 +779,14 @@ def smoothed_shape_pairs(sim, grid):
             u._replace(shape=shape, entry_index=idx,
                        material_name=entry.material_name)
             for u in unext)
+    # Thin entries are rasterized separately, but share the unsupported-face
+    # report even when the simulation contains no ordinary geometry entries.
+    for idx, tc in enumerate(getattr(sim, "_thin_conductors", ())):
+        unext = []
+        continued_conductor_shape(sim, grid, tc.shape, entry=tc, unextendable=unext)
+        unextendable.extend(u._replace(entry_index=idx,
+                                      material_name=f"thin_conductor[{idx}]",
+                                      collection="thin_conductor") for u in unext)
     return out, unextendable
 
 

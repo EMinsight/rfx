@@ -2409,7 +2409,8 @@
       "pin_radius",
       "outer_radius",
       "impedance",
-      "waveform"
+      "waveform",
+      "terminates"
     ],
     "add_dft_plane_probe": [
       "axis",
@@ -2474,7 +2475,8 @@
       "n_probes",
       "name",
       "mode",
-      "eps_r_sub"
+      "eps_r_sub",
+      "terminates"
     ],
     "add_ntff_box": [
       "corner_lo",
@@ -2496,7 +2498,8 @@
       "extent",
       "excite",
       "direction",
-      "reference_plane_cells"
+      "reference_plane_cells",
+      "terminates"
     ],
     "add_probe": [
       "position",

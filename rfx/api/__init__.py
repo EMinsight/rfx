@@ -1219,6 +1219,7 @@ class Simulation(
         outer_radius: float = 2.055e-3,
         impedance: float = 50.0,
         waveform=None,
+        terminates=None,
     ) -> "Simulation":
         """Add an SMA-style coaxial probe port.
 
@@ -1234,6 +1235,10 @@ class Simulation(
         """
         if waveform is None:
             waveform = GaussianPulse(f0=self._freq_max / 2, bandwidth=0.8)
+        from rfx.geometry.port_termination import resolve_terminates
+        terminated = resolve_terminates(
+            self, terminates, port=f"add_coaxial_port at {position}")
+
         self._coaxial_ports.append(CoaxialPort(
             position=position,
             face=face,
@@ -1242,6 +1247,7 @@ class Simulation(
             outer_radius=outer_radius,
             impedance=impedance,
             excitation=waveform,
+            terminates=terminated,
         ))
         return self
 
@@ -1631,6 +1637,7 @@ class Simulation(
         excite: bool = True,
         direction: str | None = None,
         reference_plane_cells: int | None = None,
+        terminates=None,
     ) -> "Simulation":
         """Add a lumped port (single-cell) or wire port (multi-cell).
 
@@ -1758,11 +1765,16 @@ class Simulation(
                 stacklevel=2,
             )
 
+        from rfx.geometry.port_termination import resolve_terminates
+        terminated = resolve_terminates(
+            self, terminates, port=f"add_port at {position}")
+
         self._ports.append(_PortEntry(
             position=position, component=component,
             impedance=impedance, waveform=waveform,
             extent=extent, excite=excite, direction=direction,
             reference_plane_cells=reference_plane_cells,
+            terminates=terminated,
         ))
         return self
 
@@ -1782,6 +1794,7 @@ class Simulation(
         name: str | None = None,
         mode: str = "laplace",
         eps_r_sub: float | None = None,
+        terminates=None,
     ) -> "Simulation":
         """Add a microstrip-line (MSL) port spanning the full trace cross-section.
 
@@ -2044,6 +2057,10 @@ class Simulation(
             _, _eps_eff_hj = _hj(width, height, eps_r_sub_estimate)
             self._msl_auto_probe_spacing[name] = float(_eps_eff_hj)
 
+        from rfx.geometry.port_termination import resolve_terminates
+        terminated = (None if terminates is None else resolve_terminates(
+            self, terminates, port=f"add_msl_port at {position}"))
+
         self._msl_ports.append(_MSLPortEntry(
             name=name,
             position=position,
@@ -2058,6 +2075,7 @@ class Simulation(
             n_probes=n_probes,
             mode=mode,
             eps_r_sub=eps_r_sub,
+            terminates=terminated,
         ))
         return self
 

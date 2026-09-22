@@ -390,6 +390,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "terminates",
               "position",
               "component",
               "impedance",
@@ -400,6 +401,7 @@
               "reference_plane_cells"
             ],
             "properties": {
+              "terminates": {"$ref": "#/$defs/terminated_conductors"},
               "position": {
                 "$ref": "#/$defs/vec3"
               },
@@ -446,6 +448,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "terminates",
               "name",
               "position",
               "width",
@@ -461,6 +464,12 @@
               "eps_r_sub"
             ],
             "properties": {
+              "terminates": {
+                "anyOf": [
+                  {"$ref": "#/$defs/terminated_conductors"},
+                  {"type": "null"}
+                ]
+              },
               "name": {
                 "type": "string",
                 "minLength": 1
@@ -628,6 +637,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "terminates",
               "position",
               "face",
               "pin_length",
@@ -637,6 +647,7 @@
               "excitation"
             ],
             "properties": {
+              "terminates": {"$ref": "#/$defs/terminated_conductors"},
               "position": {
                 "$ref": "#/$defs/vec3"
               },
@@ -1102,6 +1113,16 @@
     }
   },
   "$defs": {
+    "terminated_conductors": {
+      "type": "array",
+      "items": {
+        "type": "array", "minItems": 2, "maxItems": 2,
+        "prefixItems": [
+          {"enum": ["_geometry", "_thin_conductors"]},
+          {"type": "integer", "minimum": 0}
+        ]
+      }
+    },
     "vec2": {
       "type": "array",
       "minItems": 2,
