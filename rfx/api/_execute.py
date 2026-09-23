@@ -2307,6 +2307,7 @@ class _ExecuteMixin:
         s_params=None,
         freqs=None,
         dft_planes=None,
+        wire_port_sparams=None,
     ) -> ForwardResult:
         """Assemble the minimal ``ForwardResult`` for both NU forward lanes.
 
@@ -2320,6 +2321,10 @@ class _ExecuteMixin:
         parameters — there is no closure capture of caller locals, matching
         the W6.1 ``_StepContext`` / W6.6 builder precedents. Centralising the
         constructor keeps the two lanes' output schema from drifting apart.
+
+        ``wire_port_sparams`` is the per-port ``(meta, accs)`` pair tuple
+        the single-device lane's ``Result`` carries; the distributed lane
+        has no wire-port accumulators and leaves it ``None``.
         """
         return ForwardResult(
             time_series=time_series,
@@ -2329,6 +2334,7 @@ class _ExecuteMixin:
             s_params=s_params,
             freqs=freqs,
             dft_planes=dft_planes,
+            wire_port_sparams=wire_port_sparams,
         )
 
     def _forward_nonuniform_from_materials(
@@ -2409,6 +2415,7 @@ class _ExecuteMixin:
             s_params=getattr(result, "s_params", None),
             freqs=getattr(result, "freqs", None),
             dft_planes=getattr(result, "dft_planes", None),
+            wire_port_sparams=getattr(result, "wire_port_sparams", None),
         )
 
     def _forward_distributed_nonuniform_from_materials(
@@ -2817,6 +2824,7 @@ class _ExecuteMixin:
             freqs=None,
             dft_planes=result.get("dft_planes")
                 if hasattr(result, "get") else None,
+            wire_port_sparams=None,
         )
 
     # ---- unified lane dispatch (W6.3) ----
@@ -3213,19 +3221,37 @@ class _ExecuteMixin:
         # port — which folds its impedance into sigma at its own cells and
         # leaves neither — would pass it. Checked here from the
         # declarations, where every port is visible whatever it does later.
+        #
+        # A port's cells are its EDGES, not its end NODES. An extent from
+        # node n0 to node n1 drives the edges n0 .. n1 - 1, so node n1 is
+        # only the far terminal and the plane it sits on carries no port
+        # cell. Comparing against n1 refused a design box on the port's end
+        # plane — exactly where a patch fed by a via lives. The edge span is
+        # read from ``rfx.sources.sources.wire_port_edge_span`` (the ONE
+        # spelling both runners rasterize with) rather than re-derived here:
+        # a sub-cell extent whose two ends snap to one node drives the edge
+        # on the side the extent occupies, which ``hi - 1`` cannot know. The
+        # step-level fence (``rfx.simulation._resolve_design_box``) reads the
+        # port's ``live_cells`` on the uniform lane and, on the graded lane,
+        # the mid cell plus the excited edges through its ``sources`` entry.
+        from rfx.sources.sources import wire_port_edge_span
         _axis_of = {"ex": 0, "ey": 1, "ez": 2}
         for _pe in self._ports:
             if _pe.impedance == 0.0:
                 continue  # a plain soft source; caught as a source cell
             _lo = list(self._design_box_index_of(grid, _pe.position))
-            _hi = list(_lo)
+            _cell_lo = list(_lo)
+            _cell_hi = list(_lo)
             if getattr(_pe, "extent", None) is not None:
                 _axis = _axis_of[_pe.component]
                 _end = list(_pe.position)
                 _end[_axis] += _pe.extent
-                _hi[_axis] = self._design_box_index_of(grid, _end)[_axis]
-            if all(bounds[2 * d] <= max(_lo[d], _hi[d])
-                   and min(_lo[d], _hi[d]) < bounds[2 * d + 1]
+                _n_end = self._design_box_index_of(grid, _end)[_axis]
+                _n0, _n1 = sorted((_lo[_axis], _n_end))
+                _cell_lo[_axis], _cell_hi[_axis] = wire_port_edge_span(
+                    grid, _axis, _n0, _n1, _pe.position[_axis], _end[_axis])
+            if all(bounds[2 * d] <= _cell_hi[d]
+                   and _cell_lo[d] < bounds[2 * d + 1]
                    for d in range(3)):
                 raise ValueError(
                     f"the design box (cells {bounds}) holds port cells "
@@ -3395,11 +3421,15 @@ class _ExecuteMixin:
             realized box. Usually the traced quantity. Required with
             *design_box* unless *design_occupancy_override* is given
             instead, and rejected without a box.
-        design_sigma_override : jnp.ndarray or None
+        design_sigma_override : jnp.ndarray, 3-tuple of them, or None
             Conductivity at the *design_box* cells, same shape. ``None``
             (default) keeps the run's own conductivity there, so a lossy
             background inside the box is carried exactly rather than
-            silently replaced by a lossless one.
+            silently replaced by a lossless one. A 3-tuple
+            ``(sigma_x, sigma_y, sigma_z)`` gives each E component its own
+            conductivity — what a conducting SHEET needs, whose current runs
+            along its two in-plane edges only. See
+            :class:`~rfx.simulation.DesignBoxSpec`.
         design_occupancy_override : jnp.ndarray or None
             Issue #1183. Relaxed-conductor occupancy in ``[0, 1]`` at the
             *design_box* cells — metal-shape design (a notch stub, topology
