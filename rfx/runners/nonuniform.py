@@ -16,6 +16,7 @@ from rfx.materials.debye import init_debye
 from rfx.materials.lorentz import init_lorentz
 from rfx.materials.thin_conductor import check_sheet_occupancy, sheet_bounds
 from rfx.sources.waveguide_port import _node_span_to_cell_span
+from rfx.sources.sources import stamp_lumped_sigma as _stamp_lumped_sigma
 from rfx.nonuniform import (
     NonUniformGrid,
     e_node_dual_spacing_at,
@@ -396,10 +397,9 @@ def assemble_materials_nu(
                 continue
             m = tc.shape.mask_on_coords(coords.x, coords.y, coords.z)
             sigma_eff = tc.sigma_bulk * (tc.thickness / d_norm.reshape(bshape))
-            materials = MaterialArrays(
+            materials = materials._replace(
                 eps_r=jnp.where(m, tc.eps_r, materials.eps_r),
                 sigma=jnp.where(m, sigma_eff, materials.sigma),
-                mu_r=materials.mu_r,
             )
     # Node-pinned PEC sheets (add_pinned_sheet): built from node indices, so
     # they need no node POSITION and are the one sheet declaration a traced
@@ -883,10 +883,16 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     # port-sigma updates and the scan launch.
     materials_concrete = materials
     if eps_override is not None or sigma_override is not None:
-        materials = MaterialArrays(
+        # A whole-grid override REPLACES the array, so any lumped stamp that
+        # was folded into it is gone; its #1210 record goes with it, or the
+        # E update would add back a load the override does not carry.
+        materials = materials._replace(
             eps_r=eps_override if eps_override is not None else materials.eps_r,
             sigma=sigma_override if sigma_override is not None else materials.sigma,
-            mu_r=materials.mu_r,
+            eps_r_lumped=(None if eps_override is not None
+                          else materials.eps_r_lumped),
+            sigma_lumped=(None if sigma_override is not None
+                          else materials.sigma_lumped),
         )
     elif design_box is not None:
         # #1183, the same rule at the same place: the design permittivity
@@ -1095,9 +1101,12 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                         d_cell = dxi
                         dp1, dp2 = dual_yj, dual_zk
                     sigma_port = n_live * d_cell / (pe.impedance * dp1 * dp2)
-                    materials = materials._replace(
-                        sigma=materials.sigma.at[ci, cj, ck].add(
-                            sigma_port))
+                    # #1210: a port's load is a device across ONE edge, so
+                    # it is recorded as an edge-owned stamp and kept out of
+                    # the edge average. Stamped bare it was quartered, and a
+                    # 50 ohm termination presented 200 ohm.
+                    materials = _stamp_lumped_sigma(
+                        materials, (ci, cj, ck), sigma_port)
                     # No PEC clearing here (#931 §1.9, corrected): a cell
                     # is LIVE exactly when the port component's own edge is
                     # not PEC, so releasing that component is a no-op, and
@@ -1191,8 +1200,8 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
                 d_parallel = dxi
                 d_perp1, d_perp2 = dual_yj, dual_zk
             sigma_port = d_parallel / (pe.impedance * d_perp1 * d_perp2)
-            materials = materials._replace(
-                sigma=materials.sigma.at[i, j, k].add(sigma_port))
+            materials = _stamp_lumped_sigma(      # #1210
+                materials, (i, j, k), sigma_port)
             if pec_edge_masks is not None:
                 # The lumped port drives ONE edge: its own component at
                 # its own cell (#931 §1.9, corrected).

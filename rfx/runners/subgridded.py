@@ -11,6 +11,8 @@ import jax.numpy as jnp
 from rfx.core.yee import EPS_0, MU_0
 from rfx.probes.probes import PreDecisionLumpedDiagonalWarning
 from rfx.grid import Grid
+from rfx.sources.sources import stamp_lumped_sigma as _stamp_lumped_sigma
+from rfx.core.yee import cell_component_e_coeffs as _cell_component_e_coeffs
 
 
 def _run_subgridded_once(
@@ -384,10 +386,9 @@ def _run_subgridded_once(
             raw_waveform = jax.vmap(pe.waveform)(times)
             native = "cb" if sim._boundary in ("cpml", "upml") else "raw"
             if native == "cb" or needs_scale(pe.amplitude_kind, native):
-                eps = float(mats_f.eps_r[i, j, k]) * EPS_0
-                sigma_val = float(mats_f.sigma[i, j, k])
-                loss = sigma_val * dt / (2.0 * eps)
-                cb = (dt / eps) / (1.0 + loss)
+                # #1210: the drive coefficient is the E update's own per-component Cb.
+                cb = float(_cell_component_e_coeffs(
+                    mats_f, idx, pe.component, dt)[1])
             else:
                 cb = None  # not needed on the raw no-conversion path
             waveform = cb * raw_waveform if native == "cb" else raw_waveform
@@ -431,8 +432,8 @@ def _run_subgridded_once(
             sigma_port_per_cell = n_cells / (pe.impedance * dx_f)
             for cell in cells:
                 i, j, k = cell
-                mats_f = mats_f._replace(
-                    sigma=mats_f.sigma.at[i, j, k].add(sigma_port_per_cell))
+                mats_f = _stamp_lumped_sigma(      # #1210
+                    mats_f, (i, j, k), sigma_port_per_cell)
                 if pec_mask_f is not None:
                     pec_mask_f = pec_mask_f.at[i, j, k].set(False)
 
@@ -440,10 +441,9 @@ def _run_subgridded_once(
             if pe.excite and pe.waveform is not None:
                 for cell in cells:
                     i, j, k = cell
-                    eps = float(mats_f.eps_r[i, j, k]) * EPS_0
-                    sigma_val = float(mats_f.sigma[i, j, k])
-                    loss = sigma_val * dt / (2.0 * eps)
-                    cb = (dt / eps) / (1.0 + loss)
+                    # #1210: the drive coefficient is the E update's own per-component Cb.
+                    cb = float(_cell_component_e_coeffs(
+                        mats_f, (i, j, k), pe.component, dt)[1])
                     waveform = (cb / dx_f) * jax.vmap(pe.waveform)(times) / n_cells
                     sources_f.append((i, j, k, pe.component, np.array(waveform)))
         else:
@@ -451,16 +451,14 @@ def _run_subgridded_once(
             idx = _pos_to_fine_idx(pe.position)
             i, j, k = idx
             sigma_port = 1.0 / (pe.impedance * dx_f)
-            mats_f = mats_f._replace(
-                sigma=mats_f.sigma.at[i, j, k].add(sigma_port))
+            mats_f = _stamp_lumped_sigma(mats_f, (i, j, k), sigma_port)  # #1210
             if pec_mask_f is not None:
                 pec_mask_f = pec_mask_f.at[i, j, k].set(False)
 
             if pe.excite and pe.waveform is not None:
-                eps = float(mats_f.eps_r[i, j, k]) * EPS_0
-                sigma_val = float(mats_f.sigma[i, j, k])
-                loss = sigma_val * dt / (2.0 * eps)
-                cb = (dt / eps) / (1.0 + loss)
+                # #1210: the drive coefficient is the E update's own per-component Cb.
+                cb = float(_cell_component_e_coeffs(
+                    mats_f, idx, pe.component, dt)[1])
                 waveform = (cb / dx_f) * jax.vmap(pe.waveform)(times)
                 sources_f.append((i, j, k, pe.component, np.array(waveform)))
 
