@@ -582,8 +582,8 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         devices = jax.devices()
     n_devices = len(devices)
     # The multi-process path is needed only when the mesh holds a device
-    # this process cannot address: then the scan bodies may not close over
-    # sharded arrays and the final fields must be gathered across hosts.
+    # this process cannot address: the final fields must be gathered across
+    # hosts, and non-uniform grids are not supported across processes.
     # ``jax.process_count() > 1`` is the wrong predicate -- a multi-process
     # job whose mesh is its own local devices is fully addressable, and
     # ``process_allgather`` would concatenate such arrays across processes
@@ -951,13 +951,12 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         mu_r=shard_x_slabs(materials.mu_r, n_devices, nx_per, ghost, 1.0, shd),
     )
 
-    # #1053 leg 1. ``None`` whenever the model declares no PEC volume, which
-    # is every fixture of the #1038 bit-identity lock -- so the stage leg 2
-    # hooks on this is a no-op branch there and the lock stays 15/15. The single-
-    # process scan captures this as a constant, next to ``sharded_materials``,
-    # not through ``run_distributed``'s ``**kwargs``: that kwargs bag is
-    # forwarded only on the ``n_devices == 1`` fast path and is silently
-    # discarded at exactly the device counts this stage exists for.
+    # #1053 leg 1. ``None`` whenever the model declares no PEC volume. The
+    # scan receives it as a jit argument next to ``sharded_materials`` (on
+    # every topology since PI decision A, 2026-09-23), not through
+    # ``run_distributed``'s ``**kwargs``: that kwargs bag is forwarded only on
+    # the ``n_devices == 1`` fast path and is silently discarded at exactly the
+    # device counts this stage exists for.
     sharded_pec_mask = (
         None if pec_mask is None
         else shard_x_slabs(pec_mask, n_devices, nx_per, ghost, False, shd))
@@ -1491,6 +1490,9 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
     # ------------------------------------------------------------------
     # Run with jit + lax.scan
     # ------------------------------------------------------------------
+    # Pass per-cell invariants as jit arguments on every topology. Closed-over
+    # arrays become whole-domain compiled constants retained on every device,
+    # including when a single process drives several devices.
     if use_cpml:
         carry_init = {
             "fdtd": sharded_state,
@@ -1498,39 +1500,26 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
             "debye": debye_state_sharded,
             "lorentz": lorentz_state_sharded,
         }
-        if multi_process:
-            def _run_cpml(
-                carry, scan_xs, materials_arg, debye_coeffs_arg, lorentz_coeffs_arg,
-                cpml_params_arg, pec_mask_arg,
-            ):
-                return lax.scan(
-                    lambda scan_carry, scan_inputs: step_fn_cpml(
-                        scan_carry, scan_inputs, materials_arg,
-                        debye_coeffs_arg, lorentz_coeffs_arg,
-                        cpml_params_arg, pec_mask_arg,
-                    ),
-                    carry,
-                    scan_xs,
-                )
-
-            run_fn = jax.jit(_run_cpml)
-            final_carry, probe_ts = run_fn(
-                carry_init, xs, sharded_materials,
-                debye_coeffs_sharded, lorentz_coeffs_sharded,
-                cpml_params, sharded_pec_mask,
-            )
-        else:
-            # Capture invariants here so single-process JIT still sees constants.
-            run_fn = jax.jit(lambda carry, xs: lax.scan(
-                lambda c, x: step_fn_cpml(
-                    c, x, sharded_materials,
-                    debye_coeffs_sharded, lorentz_coeffs_sharded,
-                    cpml_params, sharded_pec_mask,
+        def _run_cpml(
+            carry, scan_xs, materials_arg, debye_coeffs_arg, lorentz_coeffs_arg,
+            cpml_params_arg, pec_mask_arg,
+        ):
+            return lax.scan(
+                lambda scan_carry, scan_inputs: step_fn_cpml(
+                    scan_carry, scan_inputs, materials_arg,
+                    debye_coeffs_arg, lorentz_coeffs_arg,
+                    cpml_params_arg, pec_mask_arg,
                 ),
                 carry,
-                xs,
-            ))
-            final_carry, probe_ts = run_fn(carry_init, xs)
+                scan_xs,
+            )
+
+        run_fn = jax.jit(_run_cpml)
+        final_carry, probe_ts = run_fn(
+            carry_init, xs, sharded_materials,
+            debye_coeffs_sharded, lorentz_coeffs_sharded,
+            cpml_params, sharded_pec_mask,
+        )
         final_state_sharded = final_carry["fdtd"]
     else:
         carry_init = {
@@ -1538,39 +1527,26 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
             "debye": debye_state_sharded,
             "lorentz": lorentz_state_sharded,
         }
-        if multi_process:
-            def _run_pec(
-                carry, scan_xs, materials_arg, debye_coeffs_arg, lorentz_coeffs_arg,
-                pec_mask_arg,
-            ):
-                return lax.scan(
-                    lambda scan_carry, scan_inputs: step_fn_pec(
-                        scan_carry, scan_inputs, materials_arg,
-                        debye_coeffs_arg, lorentz_coeffs_arg,
-                        pec_mask_arg,
-                    ),
-                    carry,
-                    scan_xs,
-                )
-
-            run_fn = jax.jit(_run_pec)
-            final_carry, probe_ts = run_fn(
-                carry_init, xs, sharded_materials,
-                debye_coeffs_sharded, lorentz_coeffs_sharded,
-                sharded_pec_mask,
-            )
-        else:
-            # Capture invariants here so single-process JIT still sees constants.
-            run_fn = jax.jit(lambda carry, xs: lax.scan(
-                lambda c, x: step_fn_pec(
-                    c, x, sharded_materials,
-                    debye_coeffs_sharded, lorentz_coeffs_sharded,
-                    sharded_pec_mask,
+        def _run_pec(
+            carry, scan_xs, materials_arg, debye_coeffs_arg, lorentz_coeffs_arg,
+            pec_mask_arg,
+        ):
+            return lax.scan(
+                lambda scan_carry, scan_inputs: step_fn_pec(
+                    scan_carry, scan_inputs, materials_arg,
+                    debye_coeffs_arg, lorentz_coeffs_arg,
+                    pec_mask_arg,
                 ),
                 carry,
-                xs,
-            ))
-            final_carry, probe_ts = run_fn(carry_init, xs)
+                scan_xs,
+            )
+
+        run_fn = jax.jit(_run_pec)
+        final_carry, probe_ts = run_fn(
+            carry_init, xs, sharded_materials,
+            debye_coeffs_sharded, lorentz_coeffs_sharded,
+            sharded_pec_mask,
+        )
         final_state_sharded = final_carry["fdtd"]
 
     if multi_process:
