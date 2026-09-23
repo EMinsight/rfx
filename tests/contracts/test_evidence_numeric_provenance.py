@@ -938,6 +938,14 @@ CLASSIFICATION: dict[str, str] = {
     # test_msl_notch_graded_replay.py, which pins the recorded verdicts
     # (fired ones included) instead of quoting an artifact field by span.
     "docs/design_notes/20260922_msl_notch_graded_mesh_predeclaration.md": NO_ARTIFACT_REFERENCE,
+    # The FZ ladder that follows it, same shape: a pre-declaration plus a
+    # results section of fact tables. Its numbers come from
+    # validation/research/multiband_nu/results/msl_notch_graded_fz.json and,
+    # for the three arms it reuses rather than re-runs, from
+    # msl_notch_graded.json; tests/unit/nonuniform/test_msl_notch_fz_replay.py
+    # re-derives every one of them and pins the recorded verdicts. No `::`
+    # span anywhere in it.
+    "docs/design_notes/20260922_msl_notch_fz_ladder_predeclaration.md": NO_ARTIFACT_REFERENCE,
     # The NU grid core step 0 pre-declaration. No parseable artifact
     # reference: its two `::` spans are the class names
     # `rfx/grid.py::Grid` and `rfx/nonuniform.py::NonUniformGrid`, which
