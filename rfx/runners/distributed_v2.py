@@ -88,6 +88,7 @@ from rfx.runners._distributed_common import (
     sample_probes_shmap,
     shard_stacked,
     shard_stacked_psi,
+    stage_dispersion_slabs,
     split_array_x,
     unstack_and_gather,
     update_e_nu_shmap,
@@ -503,6 +504,18 @@ def refuse_unsupported_distributed_features(sim, *, lane, bloch=None):
             f"{single_device_hint}."
         )
 
+    kerr = sorted(name for name, material in (getattr(sim, "_materials", None) or {}).items()
+                  if getattr(material, "chi3", 0.0) != 0.0)
+    if kerr:
+        raise NotImplementedError(
+            f"Kerr chi3 (nonlinear) material(s) {', '.join(repr(k) for k in kerr)}: "
+            f"not supported on the {lane} path; the lane drops chi3 and would run "
+            "the material as linear, with no warning "
+            "(rfx.runners.distributed_v2.run_distributed / "
+            "rfx.runners.distributed.run_distributed material assembly). "
+            f"Remove chi3, or {single_device_hint}."
+        )
+
     monitors = []
     if getattr(sim, "_flux_monitors", None):
         monitors.append("add_flux_monitor() (flux monitors)")
@@ -670,10 +683,13 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         pec_shapes = None
     else:
         grid = sim._build_grid()
-        base_materials, debye_spec, lorentz_spec, pec_mask, pec_shapes, *_ = (
+        base_materials, debye_spec, lorentz_spec, pec_mask, pec_shapes, *_assembly_rest = (
             sim._assemble_materials(grid, pec_sheets=_d_pec_sheets,
                                     pec_wires=_d_pec_wires)
         )
+        # The rest (Kerr chi3 among it, refused above) is unused on this lane;
+        # drop it now so no whole-domain array stays alive through the loop.
+        del _assembly_rest
     if _d_pec_sheets or _d_pec_wires:
         _d_declared = []
         if _d_pec_sheets:
@@ -923,21 +939,6 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         inv_dy_rep = inv_dy_h_rep = None
         inv_dz_rep = inv_dz_h_rep = None
 
-    def _shard_stacked(arr):
-        """Merge device axis into x, then shard."""
-        return shard_stacked(arr, shd)
-
-    def _shard_stacked_5d(arr):
-        """(n_devices, n_poles, nx_local, ny, nz) -> shard along device dim.
-
-        Merges (n_dev, n_poles) into first axis so P("x") gives each
-        device (n_poles, nx_local, ny, nz) — matching the layout expected
-        by _update_e_debye_local / _update_e_lorentz_local.
-        """
-        n_dev, n_poles, nx_loc, ny_a, nz_a = arr.shape
-        merged = arr.reshape(n_dev * n_poles, nx_loc, ny_a, nz_a)
-        return jax.device_put(merged, shd)
-
     field_shape = (n_devices * nx_local, ny, nz)
     sharded_state = FDTDState(
         **{name: jnp.zeros(field_shape, dtype=jnp.float32, device=shd)
@@ -964,41 +965,21 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
     # ------------------------------------------------------------------
     # Dispersive materials
     # ------------------------------------------------------------------
-    _, debye_full, lorentz_full = sim._init_dispersion(
-        materials, grid.dt, debye_spec, lorentz_spec)
-    # _init_dispersion's first result aliases materials. Drop it too, along
-    # with assembly inputs and any padded dispersion-mask aliases.
-    del _, base_materials, materials, pec_mask, pec_shapes
+    has_debye = debye_spec is not None
+    has_lorentz = lorentz_spec is not None
+    debye, lorentz = stage_dispersion_slabs(
+        materials, grid.dt, debye_spec, lorentz_spec,
+        n_devices, nx_per, ghost, shd)
+    del base_materials, materials, pec_mask, pec_shapes
     del debye_spec, lorentz_spec
     if pad_x > 0:
-        if debye_full is not None:
+        if has_debye:
             del d_poles, d_masks
-        if lorentz_full is not None:
+        if has_lorentz:
             del l_poles, l_masks
 
-    has_debye = debye_full is not None
-    has_lorentz = lorentz_full is not None
-
     if has_debye:
-        debye_coeffs_full, debye_state_full = debye_full
-        debye_coeffs_slabs = _split_debye_coeffs(debye_coeffs_full, n_devices, ghost)
-        debye_state_slabs = _split_debye_state(debye_state_full, n_devices, ghost)
-
-        # Shard coefficients
-        debye_coeffs_sharded = DebyeCoeffs(
-            ca=_shard_stacked(debye_coeffs_slabs.ca),
-            cb=_shard_stacked(debye_coeffs_slabs.cb),
-            cc=_shard_stacked_5d(debye_coeffs_slabs.cc),
-            alpha=_shard_stacked_5d(debye_coeffs_slabs.alpha),
-            beta=_shard_stacked_5d(debye_coeffs_slabs.beta),
-        )
-        debye_state_sharded = DebyeState(
-            px=_shard_stacked_5d(debye_state_slabs.px),
-            py=_shard_stacked_5d(debye_state_slabs.py),
-            pz=_shard_stacked_5d(debye_state_slabs.pz),
-        )
-        del debye_coeffs_full, debye_state_full
-        del debye_coeffs_slabs, debye_state_slabs
+        debye_coeffs_sharded, debye_state_sharded = debye
     else:
         # Absent dispersion is never read by the E update; its carry passes
         # through unchanged. Keep ranks for shard_map, one scalar per device.
@@ -1018,28 +999,7 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
         )
 
     if has_lorentz:
-        lorentz_coeffs_full, lorentz_state_full = lorentz_full
-        lorentz_coeffs_slabs = _split_lorentz_coeffs(lorentz_coeffs_full, n_devices, ghost)
-        lorentz_state_slabs = _split_lorentz_state(lorentz_state_full, n_devices, ghost)
-
-        lorentz_coeffs_sharded = LorentzCoeffs(
-            ca=_shard_stacked(lorentz_coeffs_slabs.ca),
-            cb=_shard_stacked(lorentz_coeffs_slabs.cb),
-            cc=_shard_stacked(lorentz_coeffs_slabs.cc),
-            a=_shard_stacked_5d(lorentz_coeffs_slabs.a),
-            b=_shard_stacked_5d(lorentz_coeffs_slabs.b),
-            c=_shard_stacked_5d(lorentz_coeffs_slabs.c),
-        )
-        lorentz_state_sharded = LorentzState(
-            px=_shard_stacked_5d(lorentz_state_slabs.px),
-            py=_shard_stacked_5d(lorentz_state_slabs.py),
-            pz=_shard_stacked_5d(lorentz_state_slabs.pz),
-            px_prev=_shard_stacked_5d(lorentz_state_slabs.px_prev),
-            py_prev=_shard_stacked_5d(lorentz_state_slabs.py_prev),
-            pz_prev=_shard_stacked_5d(lorentz_state_slabs.pz_prev),
-        )
-        del lorentz_coeffs_full, lorentz_state_full
-        del lorentz_coeffs_slabs, lorentz_state_slabs
+        lorentz_coeffs_sharded, lorentz_state_sharded = lorentz
     else:
         _lz = jnp.zeros((n_devices, 1, 1), dtype=jnp.float32, device=shd)
         _lz5 = jnp.zeros((n_devices, 1, 1, 1), dtype=jnp.float32, device=shd)
@@ -1060,7 +1020,7 @@ def run_distributed(sim, *, n_steps, devices=None, exchange_interval=1,
             pz_prev=jax.device_put(_lz5, shd),
         )
 
-    del debye_full, lorentz_full
+    del debye, lorentz
 
     # ------------------------------------------------------------------
     # CPML state
