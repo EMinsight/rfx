@@ -2123,6 +2123,7 @@ class _ExecuteMixin:
 
         _, debye, lorentz = self._init_dispersion(
             materials, grid.dt, debye_spec, lorentz_spec,
+            periodic=periodic_bool,
         )
 
         ntff_box = None
