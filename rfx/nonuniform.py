@@ -3781,6 +3781,7 @@ def run_nonuniform_until_decay(
     aniso_eps: tuple | None = None,
     sheet_impedance=None,
     design_box=None,
+    stop_fn=None,
 ) -> dict:
     """Run non-uniform FDTD until the interior-domain energy decays (#383).
 
@@ -3837,6 +3838,12 @@ def run_nonuniform_until_decay(
     contract. ``checkpoint`` / ``checkpoint_every`` / ``n_warmup`` are
     deliberately absent from the signature (the caller raises before
     dispatching here).
+
+    ``stop_fn`` (issue #1254, ``run(..., until_identified=True)``), when
+    given, is called at every chunk boundary after the energy check as
+    ``stop_fn(steps_done, peek)``; ``peek()`` returns
+    :func:`_assemble_nu_result` of the record so far, and a true return ends
+    the loop there. ``None`` (default) leaves the loop unchanged.
 
     Returns
     -------
@@ -3967,10 +3974,13 @@ def run_nonuniform_until_decay(
         # decay_by == 0.0 is the documented forced-N escape: max_steps is then
         # the exact run length, not a cap, and the line should not say "(cap)".
         reporter = ProgressReporter(max_steps, label=report_label,
-                                    total_is_cap=(decay_by > 0.0))
+                                    total_is_cap=(decay_by > 0.0
+                                                  or stop_fn is not None))
 
     while steps_done < max_steps:
         this_chunk = min(int(check_interval), max_steps - steps_done)
+        if stop_fn is not None and max_steps - steps_done - this_chunk == 1:
+            this_chunk += 1   # #1254: no one-step last chunk (XLA inlines it)
         xs = (
             jnp.arange(steps_done, steps_done + this_chunk, dtype=jnp.int32),
             src_waveforms[steps_done:steps_done + this_chunk],
@@ -4023,6 +4033,15 @@ def run_nonuniform_until_decay(
                         break
                 else:
                     energy_below = 0
+
+        # #1254: the caller's stop check at the chunk boundary.
+        if stop_fn is not None:
+            from rfx.progress import concat_chunks
+            if stop_fn(steps_done, lambda: _assemble_nu_result(
+                    setup, carry, concat_chunks(ys_chunks))):
+                if reporter is not None and reporter.last_reported != steps_done:
+                    reporter.report(steps_done)
+                break
 
     # #388: measured static-remnant advisory on cap-hit (until_decay is absorbing-only on
     # the NU lane too, so a cap-hit without firing means the energy criterion could not
