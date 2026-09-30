@@ -134,3 +134,60 @@ def test_cpml_legacy_material_view_and_vacuum_fallback():
         result = apply_cpml_h(state, params, psi, grid, materials=view)[0]
         for a, b in zip(result[3:6], reference[3:6]):
             np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("path", ["uniform", "nonuniform", "fast", "distributed_v2",
+                                   "distributed_nu"])
+@pytest.mark.parametrize("wire", [False, True])
+def test_realized_h_tuple_replays_and_perturbs_one_component(path, wire):
+    from rfx import _realized
+
+    grid, mats, marked, state = _fixture()
+    materials = marked if wire else mats
+    inv = tuple(jnp.full(n, 1/grid.dx) for n in grid.shape)
+
+    @jax.jit
+    def advance(m):
+        if path == "uniform":
+            result = yee.update_h(state, m, grid.dt, grid.dx)
+        elif path == "nonuniform":
+            result = yee.update_h_nu(state, m, grid.dt, *inv)
+        elif path == "fast":
+            result = yee.update_h_fast(state, yee.precompute_coeffs(m, grid.dt, grid.dx).ch)
+        elif path == "distributed_v2":
+            result = dc._update_h_local(state, m, grid.dt, grid.dx)
+        else:
+            result = dc._update_h_local_nu(state, m, grid.dt, *inv, *inv)
+        return jnp.stack(result[3:6])
+
+    plain = np.asarray(advance(materials))
+    with _realized.capture() as saved:
+        observed = np.asarray(advance(materials))
+    records = [r for r in saved.records if "mu_h" in r]
+    assert len(records) == 1
+    stored = records[0]["mu_h"]
+    for got, expected in zip(stored, yee.component_h_materials(materials)):
+        np.testing.assert_array_equal(got, expected)
+
+    def replay(axis):
+        def transform(site, quantity, values):
+            if quantity != "mu_h":
+                return values
+            assert site == records[0]["site"]
+            return tuple(jnp.asarray(value) * (1.01 if i == axis else 1.0)
+                         for i, value in enumerate(stored))
+        return transform
+
+    with _realized.capture(transform=replay(None)):
+        unchanged = np.asarray(advance(materials))
+    assert plain.dtype == observed.dtype == unchanged.dtype
+    assert plain.tobytes() == observed.tobytes() == unchanged.tobytes()
+    for axis in range(3):
+        with _realized.capture(transform=replay(axis)):
+            moved = np.asarray(advance(materials))
+        assert np.isfinite(moved).all()
+        for component in range(3):
+            if component == axis:
+                assert np.any(moved[component] != unchanged[component])
+            else:
+                assert moved[component].tobytes() == unchanged[component].tobytes()

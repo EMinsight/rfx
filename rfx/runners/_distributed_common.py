@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from functools import lru_cache, partial
 
+from rfx import _realized
+
 import jax
 import numpy as np
 import jax.numpy as jnp
@@ -1156,7 +1158,10 @@ def _update_h_local_nu(state, materials, dt,
     y/z spacings are replicated (full-axis).
     """
     ex, ey, ez = state.ex, state.ey, state.ez
-    mu_x, mu_y, mu_z = (m * MU_0 for m in component_h_materials(materials))
+    mu = component_h_materials(materials)
+    if _realized.ACTIVE is not None:
+        mu = _realized.magnetic(materials, mu, "yee.H")
+    mu_x, mu_y, mu_z = (m * MU_0 for m in mu)
     ch_x, ch_y, ch_z = dt / mu_x, dt / mu_y, dt / mu_z
 
     curl_x = (
@@ -1260,7 +1265,17 @@ def slab_e_component_materials(materials, nx_per, nx, rank=None):
     def per_row(edge, cell):
         return tuple(jnp.where(model_cell, e, c) for e, c in zip(edge, cell))
 
-    return per_row(eps_edge, eps_cell), per_row(sig_edge, sig_cell)
+    eps, sigma = per_row(eps_edge, eps_cell), per_row(sig_edge, sig_cell)
+    if _realized.ACTIVE is not None:
+        # Both coefficient paths consume these operands, including the
+        # checkpointed shard_map. Record global ownership for the
+        # full-grid reference.
+        site = ("distributed_nu.E" if _realized.ACTIVE.lane == "fwd_distributed_nu"
+                else "distributed.E")
+        eps, sigma = _realized.electric(
+            view, eps, sigma, site, owned_start=rank * nx_per,
+            owned_count=jnp.minimum(nx_per, nx - rank * nx_per))
+    return eps, sigma
 
 
 def component_e_coeffs(e_materials, dt):
@@ -1666,7 +1681,10 @@ def _update_h_local(state, materials, dt, dx):
     non-periodic (ghost cells handle inter-device coupling).
     """
     ex, ey, ez = state.ex, state.ey, state.ez
-    mu_x, mu_y, mu_z = (m * MU_0 for m in component_h_materials(materials))
+    mu = component_h_materials(materials)
+    if _realized.ACTIVE is not None:
+        mu = _realized.magnetic(materials, mu, "yee.H")
+    mu_x, mu_y, mu_z = (m * MU_0 for m in mu)
     ch_x, ch_y, ch_z = dt / mu_x, dt / mu_y, dt / mu_z
 
     curl_x = (

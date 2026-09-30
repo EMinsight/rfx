@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+from rfx import _realized
+
 import jax
 import jax.numpy as jnp
 
@@ -854,11 +856,19 @@ def _z_slab_material_coupling_h_3d(
 
     def face_coeffs_c(k):
         sl = (slice(fi, fi + ni), slice(fj, fj + nj), k)
-        return mats_c.eps_r[sl] * EPS_0, component_h_materials(mats_c)[0][sl] * MU_0
+        if _realized.ACTIVE is None:
+            return mats_c.eps_r[sl] * EPS_0, component_h_materials(mats_c)[0][sl] * MU_0
+        eps_r, mu_r = mats_c.eps_r[sl], component_h_materials(mats_c)[0][sl]
+        eps_r, mu_r = _realized.face(mats_c, sl, eps_r, mu_r, "sat.c")
+        return eps_r * EPS_0, mu_r * MU_0
 
     def face_coeffs_f(k):
         sl = (slice(None), slice(None), k)
-        return mats_f.eps_r[sl] * EPS_0, component_h_materials(mats_f)[0][sl] * MU_0
+        if _realized.ACTIVE is None:
+            return mats_f.eps_r[sl] * EPS_0, component_h_materials(mats_f)[0][sl] * MU_0
+        eps_r, mu_r = mats_f.eps_r[sl], component_h_materials(mats_f)[0][sl]
+        eps_r, mu_r = _realized.face(mats_f, sl, eps_r, mu_r, "sat.f")
+        return eps_r * EPS_0, mu_r * MU_0
 
     def apply_zlo(hx_c_arr, hy_c_arr, hx_f_arr, hy_f_arr):
         c = (slice(fi, fi + ni), slice(fj, fj + nj), plan.k_lo_c)
@@ -1273,11 +1283,19 @@ def _z_slab_material_coupling_e_3d(
 
     def face_coeffs_c(k):
         sl = (slice(fi, fi + ni), slice(fj, fj + nj), k)
-        return mats_c.eps_r[sl] * EPS_0, component_h_materials(mats_c)[0][sl] * MU_0
+        if _realized.ACTIVE is None:
+            return mats_c.eps_r[sl] * EPS_0, component_h_materials(mats_c)[0][sl] * MU_0
+        eps_r, mu_r = mats_c.eps_r[sl], component_h_materials(mats_c)[0][sl]
+        eps_r, mu_r = _realized.face(mats_c, sl, eps_r, mu_r, "sat.c")
+        return eps_r * EPS_0, mu_r * MU_0
 
     def face_coeffs_f(k):
         sl = (slice(None), slice(None), k)
-        return mats_f.eps_r[sl] * EPS_0, component_h_materials(mats_f)[0][sl] * MU_0
+        if _realized.ACTIVE is None:
+            return mats_f.eps_r[sl] * EPS_0, component_h_materials(mats_f)[0][sl] * MU_0
+        eps_r, mu_r = mats_f.eps_r[sl], component_h_materials(mats_f)[0][sl]
+        eps_r, mu_r = _realized.face(mats_f, sl, eps_r, mu_r, "sat.f")
+        return eps_r * EPS_0, mu_r * MU_0
 
     alpha_f = config.tau * ratio / (ratio + 1.0)
     alpha_c = config.tau / (ratio + 1.0)

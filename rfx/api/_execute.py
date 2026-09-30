@@ -18,6 +18,8 @@ import math
 import os
 from typing import NamedTuple
 
+from rfx import _realized
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -1415,6 +1417,8 @@ class _ExecuteMixin:
                 sigma_3d = sigma_3d + absorb_sigma
 
             shape = grid.shape
+            if _realized.ACTIVE is not None:
+                _realized.sources(grid_out, materials, sources_3d, "adi.sources")
             zeros = jnp.zeros(shape, dtype=jnp.float32)
             ex_f, ey_f, ez_f, hx_f, hy_f, hz_f, probe_data = run_adi_3d(
                 zeros, zeros, zeros, zeros, zeros, zeros,
@@ -3113,6 +3117,8 @@ class _ExecuteMixin:
         # Cb from the staged slabs in the runner instead); no second
         # MaterialArrays may keep the original whole-domain eps/sigma alive
         # during the scan.
+        if _realized.ACTIVE is not None:
+            _realized.sources(grid, materials, sources, "distributed_nu.sources")
         staged = []
         for name, pad_value in (("eps_r", 1.0), ("sigma", 0.0), ("mu_r", 1.0)):
             override = eps_override if name == "eps_r" else sigma_override if name == "sigma" else None
@@ -4262,6 +4268,8 @@ class _ExecuteMixin:
             checkpoint_every=checkpoint_every,
             n_warmup=n_warmup,
         )
+        if _realized.ACTIVE is not None:
+            _realized.enter(self, plan.lane)
         # No forward lane (and so no optimize()) applies Dey-Mittra weights.
         self._refuse_conformal_boundary(
             {"fwd_uniform": "uniform forward",
@@ -4874,6 +4882,8 @@ class _ExecuteMixin:
             exchange_interval=exchange_interval,
         )
         n_steps = plan.n_steps
+        if _realized.ACTIVE is not None:
+            _realized.enter(self, plan.lane)
         if ringdown is not None:
             from rfx.ringdown import refuse_run_lane
             refuse_run_lane(plan.lane, sum(

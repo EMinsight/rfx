@@ -9,6 +9,8 @@ from __future__ import annotations
 from functools import partial
 from typing import NamedTuple
 
+from rfx import _realized
+
 import jax
 import jax.numpy as jnp
 
@@ -438,7 +440,10 @@ def update_h(state: FDTDState, materials: MaterialArrays, dt: float, dx: float,
     ex = state.ex.astype(_cdtype)
     ey = state.ey.astype(_cdtype)
     ez = state.ez.astype(_cdtype)
-    mu_x, mu_y, mu_z = (m * MU_0 for m in component_h_materials(materials, periodic))
+    mu = component_h_materials(materials, periodic)
+    if _realized.ACTIVE is not None:
+        mu = _realized.magnetic(materials, mu, "yee.H", periodic=periodic)
+    mu_x, mu_y, mu_z = (m * MU_0 for m in mu)
     ch_x, ch_y, ch_z = dt / mu_x, dt / mu_y, dt / mu_z
 
     # curl E components via forward staggered differences (order=2 byte-identical)
@@ -720,6 +725,8 @@ def e_component_coeffs(materials, dt, periodic=(False, False, False)):
     entry every grid-wide E update uses.
     """
     eps, sig = component_e_materials(materials, periodic)
+    if _realized.ACTIVE is not None:
+        eps, sig = _realized.electric(materials, eps, sig, "yee.E", periodic=periodic)
     pairs = [e_update_coeffs(e, s, dt) for e, s in zip(eps, sig)]
     return tuple(p[0] for p in pairs), tuple(p[1] for p in pairs)
 
@@ -938,7 +945,10 @@ def update_h_nu(state: FDTDState, materials: MaterialArrays, dt: float,
     ex = state.ex.astype(_cdtype)
     ey = state.ey.astype(_cdtype)
     ez = state.ez.astype(_cdtype)
-    mu_x, mu_y, mu_z = (m * MU_0 for m in component_h_materials(materials))
+    mu = component_h_materials(materials)
+    if _realized.ACTIVE is not None:
+        mu = _realized.magnetic(materials, mu, "yee.H")
+    mu_x, mu_y, mu_z = (m * MU_0 for m in mu)
     ch_x, ch_y, ch_z = dt / mu_x, dt / mu_y, dt / mu_z
 
     # Forward differences with same shape (zero-pad via _shift_fwd)
@@ -1062,15 +1072,23 @@ def precompute_coeffs(
     UpdateCoeffs
     """
     mu = component_h_materials(materials, periodic)
+    if _realized.ACTIVE is not None:
+        mu = _realized.magnetic(materials, mu, "precompute.H", periodic=periodic)
     # Preserve the historical scalar-array bake, including its f32 numerator.
     ch = jnp.float32(dt / (MU_0 * dx)) / mu[0]
     if materials.mu_r_wire is not None:
         ch = tuple((dt / (MU_0 * dx)) / m for m in mu)
+    elif _realized.ACTIVE is not None:
+        # Replay each component with the no-record float32 bake.
+        ch = tuple(jnp.float32(dt / (MU_0 * dx)) / m for m in mu)
 
     # #1210: per-component eps/sigma, the mean over the four cells incident
     # to each component's edge. The arithmetic below is unchanged, so a
     # homogeneous grid bakes the same bits it baked before.
     _eps_c, _sig_c = component_e_materials(materials, periodic)
+    if _realized.ACTIVE is not None:
+        _eps_c, _sig_c = _realized.electric(
+            materials, _eps_c, _sig_c, "precompute.E", periodic=periodic)
 
     def _bake(eps_r_c, sigma_c):
         eps = eps_r_c * jnp.float32(EPS_0)
@@ -1413,6 +1431,11 @@ def update_e_aniso(state: FDTDState, materials: MaterialArrays,
     # subpixel fixture) the mean of four equal floats is that float, so those
     # runs keep their bytes.
     sigma_ex, sigma_ey, sigma_ez = component_e_materials(materials, periodic)[1]
+
+    if _realized.ACTIVE is not None:
+        (eps_ex, eps_ey, eps_ez), (sigma_ex, sigma_ey, sigma_ez) = _realized.electric(
+            materials, (eps_ex, eps_ey, eps_ez),
+            (sigma_ex, sigma_ey, sigma_ez), "aniso.E", periodic=periodic)
 
     # Per-component absolute permittivity
     abs_eps_ex = eps_ex * EPS_0

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+from rfx import _realized
+
 import jax
 import jax.numpy as jnp
 
@@ -815,6 +817,10 @@ def adi_step_3d(ex, ey, ez, hx, hy, hz,
     # This API accepts no magnetic materials; radius declarations are refused upstream.
     mu_abs = component_h_materials(MaterialArrays(None, None, 1.0))[0] * MU_0
     _validate_interior_pec(pec_edge_masks)
+    if _realized.ACTIVE is not None:
+        observed = _realized.scalar_electric(
+            MaterialArrays(eps_r, sigma, jnp.ones_like(eps_r)), "adi.E")
+        eps_r, sigma = observed.eps_r, observed.sigma
     eps = eps_r * EPS_0
     half_dt = dt / 2.0
 
