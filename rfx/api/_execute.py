@@ -1357,6 +1357,8 @@ class _ExecuteMixin:
         """
         import copy
 
+        from rfx.sources.wire_radius import require_radius_update
+        require_radius_update(materials, lane="ADI", unsupported=True)
         self._validate_adi_configuration(materials, debye_spec, lorentz_spec)
 
         from rfx.boundaries.pec import realized_pec_edge_masks as _rpem_adi
@@ -1820,6 +1822,7 @@ class _ExecuteMixin:
                     component=pe.component,
                     impedance=pe.impedance,
                     excitation=_drive_waveform,
+                    radius=pe.radius,
                 )
                 # Live-cell-aware fold + injection (issue #318): dead
                 # extent cells inside PEC carry no port sigma and no
