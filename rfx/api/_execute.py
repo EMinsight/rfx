@@ -4948,15 +4948,16 @@ class _ExecuteMixin:
                     s_param_n_steps=s_param_n_steps,
                     devices=devices,
                 )
+            if compute_s_params:
+                from rfx.probes.sparam_driver import refuse_distributed_lumped_s_pmc
+                refuse_distributed_lumped_s_pmc(self)
+
             self._refuse_unsupported_run_kwargs("distributed multi-device", {
                 "subpixel_smoothing": subpixel_smoothing,
                 "checkpoint": checkpoint,
                 "snapshot": snapshot,
                 "until_decay": until_decay,
                 "conformal_pec": _dist_conformal,
-                "compute_s_params": compute_s_params,
-                "s_param_freqs": s_param_freqs,
-                "s_param_n_steps": s_param_n_steps,
                 **({} if report_every is None else {"report_every": report_every}),
             }, instead=_dist_instead)
             from rfx.materials.thin_conductor import refuse_f0_sheets
@@ -4967,6 +4968,16 @@ class _ExecuteMixin:
                 exchange_interval=exchange_interval,
                 conformal_pec=conformal_pec,
             )
+            if compute_s_params:
+                from rfx.probes.sparam_driver import compute_lumped_wire_s_matrix_via_scan
+                if s_param_freqs is None:
+                    s_param_freqs = jnp.linspace(self._freq_max / 10, self._freq_max, 50)
+                _s_params, _ = compute_lumped_wire_s_matrix_via_scan(
+                    self, s_param_freqs,
+                    n_steps=s_param_n_steps if s_param_n_steps is not None else n_steps,
+                    devices=devices,
+                )
+                _res = _res._replace(s_params=_s_params, freqs=np.asarray(s_param_freqs))
             _res = self._attach_run_settling_witness(
                 _res, n_steps=n_steps, num_periods=num_periods)
             _warn_if_nonfinite_result(_res, context="run")
