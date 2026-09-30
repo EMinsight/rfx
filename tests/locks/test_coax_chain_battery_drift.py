@@ -47,9 +47,9 @@ time: 98 s for the thru and 94 s for the bead on four VESSL CPU cores (run
 LOCK_PROVENANCE = {
     "fixture": "tests/fixtures/coax_chain_battery/fixture.json",
     "generator": "scripts/diagnostics/coax_chain_battery_measure.py",
-    "commit": "0f7534fb",
+    "commit": "820dcc2b",
     "date": "2026-09-30",
-    "run_id": "369367266248 (bead), 369367266271 (thru)",
+    "run_id": "369367266454 (bead), 369367266464 (thru)",
     "host": "VESSL gpu, jax 0.6.2 cuda, float32",
     "pinned_until": "2027-03-25",
 }
