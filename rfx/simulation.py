@@ -331,6 +331,7 @@ class SimResult(NamedTuple):
     dt: float | None = None
     current_moment_data: object = None
     current_moment_monitor: object = None
+    adjoint_settling: object = None
 
 
 # ---------------------------------------------------------------------------
@@ -2129,7 +2130,8 @@ def core_step_invariants(ctx: _StepContext) -> dict:
             "sheet_coeffs": _sheet_coeffs}
 
 
-def make_core_step(ctx: _StepContext, invariants: dict | None = None):
+def make_core_step(ctx: _StepContext, invariants: dict | None = None,
+                   *, design_hook=None):
     """Build the shared per-step Yee kernel from an explicit context.
 
     Returns ``core_step(carry, step_idx, src_vals, mag_src_vals)`` ->
@@ -2137,6 +2139,11 @@ def make_core_step(ctx: _StepContext, invariants: dict | None = None):
     optional per-step outputs each caller needs:
       * ``extras["snap_fields"]`` — snapshot field list (``use_snapshot``).
       * ``extras["monitor_val"]`` — monitored scalar (``use_monitor``).
+
+    ``design_hook``, when supplied by the design adjoint, observes the
+    pre-update fields and can inject a local E perturbation immediately after
+    the design update. It returns ``(state, record)``; the record is an extra.
+    With no hook the production operations are unchanged.
 
     ``invariants`` is :func:`core_step_invariants`'s dict (built from ``ctx``
     when omitted); a jitted caller passes one whose per-cell arrays are its
@@ -2307,6 +2314,9 @@ def make_core_step(ctx: _StepContext, invariants: dict | None = None):
                     stencil_order=ctx.stencil_order,
                     bloch=ctx.bloch,
                 )
+
+            if design_hook is not None:
+                st, design_record = design_hook(st_prev_design, st)
 
             # Reactive Kerr correction: scale the E-increment by eps_r/eps_eff (#437).
             if ctx.use_kerr:
@@ -2788,6 +2798,8 @@ def make_core_step(ctx: _StepContext, invariants: dict | None = None):
         if ctx.use_lumped_rlc:
             new_carry["rlc_states"] = tuple(new_rlc_states)
 
+        if design_hook is not None:
+            extras["design_record"] = design_record
         return new_carry, probe_out, extras
 
     return core_step
@@ -2814,6 +2826,7 @@ def run(
     current_moments: object | None = None,
     snapshot: SnapshotSpec | None = None,
     checkpoint: bool = False,
+    gradient: str = "autodiff",
     checkpoint_segments: int | None = None,
     aniso_eps: tuple | None = None,
     aniso_inv_eps: tuple | None = None,
@@ -2848,6 +2861,10 @@ def run(
     grid : Grid
     materials : MaterialArrays
     n_steps : int
+    gradient : {"autodiff", "adjoint"}
+        Adjoint requires a uniform real-valued design box. It stores local
+        DFTs instead of checkpoints; checkpoint options are unused.
+        See the module docstring of ``rfx.adjoint``.
     boundary : "pec", "cpml", or "upml"
     cpml_axes : axes string for CPML (default "xyz")
     pec_axes : axes string or None
@@ -2994,6 +3011,9 @@ def run(
     wire_refplane_sparams = wire_refplane_sparams or []
     lumped_rlc = lumped_rlc or []
     mag_sources = mag_sources or []
+
+    if gradient not in ("autodiff", "adjoint"):
+        raise ValueError("gradient must be 'autodiff' or 'adjoint'")
 
     # ---- shared setup (W6.2) ----
     _setup = _build_step_setup(
@@ -3267,7 +3287,13 @@ def run(
             "a snapshot's frame axes and checkpoint_segments' segment lengths "
             "are fixed from n_steps before it (issue #1254).")
 
-    if checkpoint_segments is None:
+    if gradient == "adjoint":
+        if snapshot is not None or stop_fn is not None or report_every is not None:
+            raise NotImplementedError(
+                "gradient='adjoint' does not support snapshots, stopping or progress")
+        from rfx.adjoint import design_adjoint_scan
+        final_carry, outputs = design_adjoint_scan(_step_ctx, carry_init, xs)
+    elif checkpoint_segments is None:
         # Legacy path: optional per-step rematerialisation only. The scan
         # itself still keeps every step's carry, so peak memory grows
         # linearly with n_steps.
@@ -3499,6 +3525,7 @@ def run(
         dt=dt,
         current_moment_data=final_carry.get("current_moments"),
         current_moment_monitor=current_moments,
+        adjoint_settling=final_carry.get("adjoint_settling"),
     )
 
 
