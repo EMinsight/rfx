@@ -1,22 +1,9 @@
 """Shared scaffolding for the distributed FDTD runners.
 
-This module holds the genuinely-common, bit-identical helpers used by
-``distributed.py``, ``distributed_v2.py`` and ``distributed_nu.py``.
-It is a *mechanical de-duplication* surface only — no algebra change.
-
-Scope rationale (Stage 1.5a):
-
-* ``distributed_v2.py`` already imports the CPML loop body from
-  ``distributed.py`` (``_apply_cpml_{e,h}_distributed``), so the
-  uniform-CPML scaffolding is NOT triplicated and is not re-extracted
-  here.
-* ``distributed_nu.py`` carries the *non-uniform* CPML variant
-  (axis-aware per-face spacing). That is a genuinely different kernel
-  and is intentionally NOT merged.
-* What IS byte-for-byte duplicated, and is extracted here:
-  - the vacuum CPML field-update coefficients, and
-  - the ``shard_map`` ghost-exchange inner body (duplicated verbatim
-    between ``distributed_v2.py`` and ``distributed_nu.py``).
+This module holds shared helpers for ``distributed_v2.py`` and
+``distributed_nu.py``. It also contains the uniform CPML helpers moved here
+when the pmap runner in ``distributed.py`` was retired. The non-uniform
+CPML kernel retains its per-axis, per-face spacing implementation.
 """
 
 from __future__ import annotations
@@ -507,7 +494,7 @@ def exchange_component_shmap(field, mesh, n_devices, *, ranks):
     viewed from outside ``shard_map``; inside each shard sees
     ``(nx_local_with_ghost, ny, nz)``.
 
-    Convention (matches the pmap version in ``distributed.py``):
+    Convention (also used by the retired pmap runner):
     - ``field[0]``  = left ghost  <- left neighbour's rightmost real cell
     - ``field[-1]`` = right ghost <- right neighbour's leftmost real cell
     - real cells: ``field[1:-1]``
@@ -656,10 +643,9 @@ def apply_pec_face_shmap(state: FDTDState, mesh: Mesh, n_devices: int,
     whose exchanged copies the receiving rank discards. What was NOT inert
     was the ``exchange``/``source`` half, and the exchange moved for that.
 
-    The legacy pmap lane does not call this function -- it has its own
-    ``distributed.py::_apply_pec_local`` -- but since #1055 that one sits at
-    the same point in its step body, for the same measured reason. All three
-    lanes now agree on the hook point.
+    The retired pmap lane had its own ``_apply_pec_local``; since #1055
+    that implementation sat at the same point in its step body, for the
+    same measured reason. The remaining shard_map runners agree on that hook.
     """
 
     if pec_faces is None:
