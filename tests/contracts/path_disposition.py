@@ -557,14 +557,12 @@ TABLE: dict[str, dict[str, dict[str, Cell]]] = {
             run_uniform=carries("'current' and 'field' scale the waveform differently (#571)"),
             run_nonuniform=carries(),
             run_subgridded=carries(),
-            run_adi=admission("a soft source with amplitude_kind='current'", RUN_ADI, "both kinds injected the same waveform, a raw E "
-                              "increment (#1308)"),
+            run_adi=refuses("ADI implements only field sources (#1373)", raises="amplitude_kind"),
             run_distributed=carries(),
             fwd_uniform=carries(),
             fwd_nonuniform=carries(),
             fwd_distributed_nu=carries(),
-            fwd_adi=admission("a soft source with amplitude_kind='current'", FWD_ADI, "both kinds injected the same waveform, a raw E "
-                              "increment (#1308)"),
+            fwd_adi=refuses("ADI implements only field sources (#1373)", raises="amplitude_kind"),
         ),
         "lumped_port": lanes(
             run_uniform=carries("drive and 50 Ω load"),

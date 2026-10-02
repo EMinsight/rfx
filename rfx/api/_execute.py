@@ -1430,12 +1430,6 @@ class _ExecuteMixin:
         if self._mode == "3d":
             from rfx.adi import run_adi_3d, ADIState3D, make_adi_absorbing_sigma_3d
 
-            sources_3d = []
-            for pe in self._ports:
-                i, j, k = grid.position_to_index(pe.position)
-                waveform = jax.vmap(pe.waveform)(times)
-                sources_3d.append((i, j, k, pe.component, waveform))
-
             probes_3d = []
             for pe in self._probes:
                 i, j, k = grid.position_to_index(pe.position)
@@ -1449,6 +1443,12 @@ class _ExecuteMixin:
                 absorb_sigma = make_adi_absorbing_sigma_3d(
                     nx, ny, nz, self._cpml_layers, grid.dx, grid.dx, grid.dx)
                 sigma_3d = sigma_3d + absorb_sigma
+
+            sources_3d = []
+            for pe in self._ports:
+                i, j, k = grid.position_to_index(pe.position)
+                waveform = jax.vmap(pe.waveform)(times)
+                sources_3d.append((i, j, k, pe.component, waveform))
 
             shape = grid.shape
             if _realized.ACTIVE is not None:
@@ -1487,12 +1487,6 @@ class _ExecuteMixin:
             )
 
         # ---- 2D TMz path ----
-        sources = []
-        for pe in self._ports:
-            i, j, _ = grid.position_to_index(pe.position)
-            waveform = jax.vmap(pe.waveform)(times)
-            sources.append((i, j, waveform))
-
         probes = []
         for pe in self._probes:
             i, j, _ = grid.position_to_index(pe.position)
@@ -1508,6 +1502,12 @@ class _ExecuteMixin:
             absorb_sigma = make_adi_absorbing_sigma(
                 nx_2d, ny_2d, self._cpml_layers, grid.dx)
             sigma_2d = sigma_2d + absorb_sigma
+
+        sources = []
+        for pe in self._ports:
+            i, j, _ = grid.position_to_index(pe.position)
+            waveform = jax.vmap(pe.waveform)(times)
+            sources.append((i, j, waveform))
 
         # The 2-D TMz lane carries only Ez, so its realized PEC mask is
         # the Mz plane (#931 §1.7).
@@ -1831,6 +1831,9 @@ class _ExecuteMixin:
                                   pe.waveform, n_steps, materials,
                                   amplitude_kind=pe.amplitude_kind)
                 )
+                from rfx.api._source_semantics import guard_float16_source_increment
+                sources[-1] = sources[-1]._replace(waveform=guard_float16_source_increment(
+                    sources[-1].waveform, self._resolve_field_dtype(), pe.amplitude_kind))
                 continue
 
             # Sparam-eligible lumped/wire port — advance the multi-drive index.

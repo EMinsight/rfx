@@ -893,6 +893,11 @@ def message(lane: str, rows, sim, run_args=None) -> str:
                 + "\nUse run() / forward() on a model those paths support.")
     lines = [f"  - {ROW_WORDS[row]} is not carried by the {LANE_WORDS[lane]} lane."
              for row in rows]
+    if lane in _ADI and ("_ports", "amplitude_kind") in rows:
+        lines.append(
+            "ADI implements only amplitude_kind='field'; 'current' is the default "
+            "when amplitude_kind is not given (2.0); declare amplitude_kind='field' "
+            "to run on ADI (the earlier ADI behaviour).")
     carriers = [LANE_WORDS[other] for other in LANES if other != lane
                 and not set(refused(sim, other, run_args)) - LANE_SELECTORS]
     where = ("Lanes that carry every input of this model apart from the ones that choose the "
