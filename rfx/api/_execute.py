@@ -5128,9 +5128,16 @@ class _ExecuteMixin:
         _run_sheet_specs: list = []
         _run_pec_sheets: list = []
         _run_pec_wires: list = []
+        _geometry_masks, _assembly_entries = [], []
         base_materials, debye_spec, lorentz_spec, pec_mask, pec_shapes, _, kerr_chi3 = self._assemble_materials(
             grid, sheet_specs=_run_sheet_specs,
-            pec_sheets=_run_pec_sheets, pec_wires=_run_pec_wires)
+            pec_sheets=_run_pec_sheets, pec_wires=_run_pec_wires,
+            geometry_masks=_geometry_masks, assembly_entries=_assembly_entries)
+        from rfx.realized_geometry import attach_record, record_from_assembly
+        geometry_record = record_from_assembly(
+            self, grid, base_materials, pec_mask, _run_pec_sheets, _run_pec_wires,
+            _geometry_masks, _assembly_entries, lane=plan.lane)
+        del _geometry_masks, _assembly_entries
 
         if plan.lane == "run_adi":
             from rfx.materials.thin_conductor import refuse_f0_sheets
@@ -5164,7 +5171,7 @@ class _ExecuteMixin:
             _warn_if_nonfinite_result(_res, context="run")
             from rfx.current_moments import require_accumulated_current_moments
             require_accumulated_current_moments(self, _res, "run")
-            return _res
+            return attach_record(_res, geometry_record)
 
         # ---- Subgridded lane ----
         if plan.lane == "run_subgridded":
@@ -5212,7 +5219,7 @@ class _ExecuteMixin:
             _warn_if_nonfinite_result(_res, context="run")
             from rfx.current_moments import require_accumulated_current_moments
             require_accumulated_current_moments(self, _res, "run")
-            return _res
+            return attach_record(_res, geometry_record)
 
         # ---- Uniform path ----
         if n_steps is None:
@@ -5283,4 +5290,4 @@ class _ExecuteMixin:
         _warn_if_nonfinite_result(_res, context="run")
         from rfx.current_moments import require_accumulated_current_moments
         require_accumulated_current_moments(self, _res, "run")
-        return _res
+        return attach_record(_res, geometry_record)

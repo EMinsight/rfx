@@ -784,6 +784,10 @@ class Result(NamedTuple):
     # (n_freqs, n_blocks, 3, n_weights) and the slab/block map it belongs to.
     current_moment_data: object = None
     current_moment_monitor: object = None
+    #: Host-side geometry record for the configuration that produced this run.
+    #: Filled by run_uniform, run_adi, run_subgridded, run_distributed (uniform), and run_nonuniform; None on other lanes.
+    #: Also None for traced mesh coordinates; other record errors propagate.
+    realized_geometry: object = None
 
     def find_resonances(self, freq_range=None, probe_idx=0,
                          source_decay_time=None, bandpass=None,

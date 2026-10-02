@@ -8753,12 +8753,6 @@
           },
           "findings": [
             {
-              "axis": "x",
-              "detail": "the realized body extends beyond the declared domain on x \u2014 those cells sit in the CPML pad, where the update equations are the absorber's",
-              "kind": "inside-absorber",
-              "remedy": "keep the body inside the domain, or enlarge the domain so the absorber stays empty"
-            },
-            {
               "axis": "y",
               "detail": "PLACEMENT off by 47.5 um (7.92% of the declared 600.0 um extent); SIZE 596.9 um (-3.1 um, -0.52%)",
               "kind": "off-lattice-face",

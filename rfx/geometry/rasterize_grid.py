@@ -926,6 +926,8 @@ def rasterize_geometry(
     wires: list | None = None,
     periodic=(False, False, False),
     pole_geometry_entries=None,
+    geometry_masks: list | None = None,
+    assembly_entries: list | None = None,
 ):
     """Rasterize geometry entries onto material arrays.
 
@@ -1008,6 +1010,9 @@ def rasterize_geometry(
             cells, sheet, wire = classify_pec_entry(
                 entry.shape, coords, centres, cell_sizes,
                 name=entry.material_name, grid=grid)
+            if assembly_entries is not None:
+                declared_entry = entry if pole_geometry_entries is None else pole_geometry_entries[entry_index]
+                assembly_entries.append((id(declared_entry), cells, sheet, wire, entry.shape))
             if cells is not None:
                 has_pec_cells = True
                 pec_mask = pec_mask | cells
@@ -1031,6 +1036,11 @@ def rasterize_geometry(
             eps_r = jnp.where(mask, mat.eps_r, eps_r)
             sigma = jnp.where(mask, mat.sigma, sigma)
             mu_r = jnp.where(mask, mat.mu_r, mu_r)
+
+        if geometry_masks is not None and mat.sigma < pec_sigma_threshold:
+            declared_entry = (entry if pole_geometry_entries is None
+                              else pole_geometry_entries[entry_index])
+            geometry_masks.append((id(declared_entry), mask))
 
         if mat.chi3 != 0.0:
             chi3_arr = jnp.where(mask, mat.chi3, chi3_arr)
