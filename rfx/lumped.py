@@ -78,7 +78,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from rfx.core.jax_utils import is_tracer
-from rfx.core.yee import EPS_0
+from rfx.core.yee import EPS_0, si_value_eps_r_grad
 
 
 # ---------------------------------------------------------------------------
@@ -273,12 +273,21 @@ def edge_update_denominator(materials, cell, component, dt,
     from rfx.core.yee import cell_component_e_materials
     eps_r, sigma = cell_component_e_materials(materials, cell, component,
                                               periodic)
-    # A traced material (an eps/sigma override under jax.grad, on the graded
-    # lane whose run() and forward() share the concrete builder) keeps the
-    # arrays' dtype: float() would raise there (#1373).
     if as_float and not (is_tracer(eps_r) or is_tracer(sigma)):
-        eps_r, sigma = float(eps_r), float(sigma)
+        # Python floats: host arithmetic, nothing on a tape.
+        return _denominator_si(float(eps_r), float(sigma), dt)
+    # #1357: these bits; the derivative with EPS_0/dt grouped as one factor,
+    # so the cotangent is not first multiplied by 1/dt ~ 5e11.
+    return si_value_eps_r_grad(_denominator_si, _denominator_eps_r,
+                               eps_r, sigma, dt)
+
+
+def _denominator_si(eps_r, sigma, dt):
     return eps_r * EPS_0 / dt + sigma / 2.0
+
+
+def _denominator_eps_r(eps_r, sigma, dt):
+    return eps_r * (EPS_0 / dt) + sigma / 2.0
 
 
 def _resolve_position_to_index(grid, position):

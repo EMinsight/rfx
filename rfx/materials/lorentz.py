@@ -36,7 +36,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from rfx.core.yee import (
-    EPS_0, FDTDState, curl_h, ade_state_dtype, component_e_materials,
+    si_value_eps_r_grad, EPS_0, FDTDState, curl_h, ade_state_dtype, component_e_materials,
 )
 from rfx.materials.debye import per_component, pole_edge_fractions, pole_reach
 
@@ -161,7 +161,7 @@ def lorentz_pole_coeffs(poles, dt, shape, fractions_by_pole):
     return a, b, c
 
 
-def lorentz_e_coeffs(e_materials, dt, a, b, c):
+def _lorentz_e_coeffs_si(e_materials, dt, a, b, c):
     """Build E coefficients from the component means and fixed ADE terms.
 
     Distributed runners form these inside the time loop so autodiff does
@@ -180,6 +180,32 @@ def lorentz_e_coeffs(e_materials, dt, a, b, c):
 
     return LorentzCoeffs(ca=tuple(ca), cb=tuple(cb), a=a, b=b, c=c,
                            cc=tuple(cc))
+
+
+def _lorentz_e_coeffs_eps_r(e_materials, dt, a, b, c):
+    """The Lorentz coefficients in relative-permittivity units (#1357)."""
+    eps_c, sig_c = e_materials
+    ca, cb, cc = [], [], []
+    for comp in range(3):
+        eps_inf = eps_c[comp]
+        sigma = sig_c[comp]
+        gamma = eps_inf + sigma * (dt / (2.0 * EPS_0))
+        safe_gamma = jnp.maximum(gamma, 1e-10)
+        ca.append((eps_inf - sigma * (dt / (2.0 * EPS_0))) / safe_gamma)
+        cb.append((dt / EPS_0) / safe_gamma)
+        cc.append((1.0 / EPS_0) / safe_gamma)
+
+    return LorentzCoeffs(ca=tuple(ca), cb=tuple(cb), a=a, b=b, c=c,
+                           cc=tuple(cc))
+
+
+def lorentz_e_coeffs(e_materials, dt, a, b, c):
+    """Build component E coefficients with SI values and eps_r derivatives.
+
+    Shared by init_lorentz and the distributed in-loop coefficient builders.
+    """
+    return si_value_eps_r_grad(
+        _lorentz_e_coeffs_si, _lorentz_e_coeffs_eps_r, e_materials, dt, a, b, c)
 
 
 def init_lorentz(
@@ -273,15 +299,41 @@ def mixed_e_component_coeffs(debye_coeffs, lorentz_coeffs, comp: int, dt):
     the Debye γ: the Debye P^{n+1} is implicit in E^{n+1}, the Lorentz one
     explicit in E^n.
     """
-    beta_sum = jnp.sum(per_component(debye_coeffs.beta, "beta")[comp], axis=0)
-    gamma_base = 1.0 / per_component(lorentz_coeffs.cc, "cc")[comp]
+    return si_value_eps_r_grad(
+        _mixed_e_coeffs_si, _mixed_e_coeffs_eps_r,
+        per_component(debye_coeffs.beta, "beta")[comp], debye_coeffs.alpha,
+        per_component(lorentz_coeffs.ca, "ca")[comp],
+        per_component(lorentz_coeffs.cc, "cc")[comp], dt)
+
+
+def _mixed_e_coeffs_si(beta, alpha, lorentz_ca, lorentz_cc, dt):
+    """The original mixed update, retaining its SI operation order."""
+    beta_sum = jnp.sum(beta, axis=0)
+    gamma_base = 1.0 / lorentz_cc
     gamma_total = jnp.maximum(gamma_base + beta_sum, EPS_0 * 1e-10)
-    numer_base = per_component(lorentz_coeffs.ca, "ca")[comp] * gamma_base
+    numer_base = lorentz_ca * gamma_base
 
     ca = (numer_base - beta_sum) / gamma_total
     cb = dt / gamma_total
-    cc_debye = (1.0 - debye_coeffs.alpha) / gamma_total
+    cc_debye = (1.0 - alpha) / gamma_total
     cc_lorentz = 1.0 / gamma_total
+    return ca, cb, cc_debye, cc_lorentz
+
+
+def _mixed_e_coeffs_eps_r(beta, alpha, lorentz_ca, lorentz_cc, dt):
+    """Cancel EPS_0 before dividing by the mixed permittivity (#1357).
+
+    lorentz_cc is 1/gamma in SI units. Its relative-unit reciprocal is
+    1/(lorentz_cc*EPS_0); no SI-sized denominator is squared by autodiff.
+    """
+    beta_r = jnp.sum(beta, axis=0) / EPS_0
+    gamma_base_r = 1.0 / (lorentz_cc * EPS_0)
+    gamma_total_r = jnp.maximum(gamma_base_r + beta_r, 1e-10)
+    numer_base_r = lorentz_ca * gamma_base_r
+    ca = (numer_base_r - beta_r) / gamma_total_r
+    cb = (dt / EPS_0) / gamma_total_r
+    cc_debye = ((1.0 - alpha) / EPS_0) / gamma_total_r
+    cc_lorentz = (1.0 / EPS_0) / gamma_total_r
     return ca, cb, cc_debye, cc_lorentz
 
 

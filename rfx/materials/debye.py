@@ -44,7 +44,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from rfx.core.yee import (
-    EPS_0, FDTDState, MaterialArrays, curl_h, ade_state_dtype,
+    si_value_eps_r_grad, EPS_0, FDTDState, MaterialArrays, curl_h, ade_state_dtype,
     component_e_materials, edge_mean_components,
 )
 
@@ -160,7 +160,7 @@ def debye_pole_coeffs(poles, dt, shape, fractions_by_pole):
     return alpha, beta
 
 
-def debye_e_coeffs(e_materials, dt, alpha, beta):
+def _debye_e_coeffs_si(e_materials, dt, alpha, beta):
     """Build E coefficients from the component means and fixed ADE terms.
 
     Distributed runners form these inside the time loop so autodiff does
@@ -186,6 +186,39 @@ def debye_e_coeffs(e_materials, dt, alpha, beta):
 
     return DebyeCoeffs(ca=tuple(ca), cb=tuple(cb), cc=tuple(cc),
                          alpha=alpha, beta=beta)
+
+
+def _debye_e_coeffs_eps_r(e_materials, dt, alpha, beta):
+    """The Debye coefficients in relative-permittivity units (#1357)."""
+    eps_c, sig_c = e_materials
+    n_poles = alpha.shape[0]
+    ca, cb, cc = [], [], []
+    for c in range(3):
+        eps_inf = eps_c[c]
+        sigma = sig_c[c]
+        # Sum of beta across poles
+        beta_sum = jnp.sum(beta[c], axis=0) / EPS_0
+        # Modified update coefficients
+        gamma = eps_inf + beta_sum + sigma * (dt / (2.0 * EPS_0))
+        # Guard against zero (vacuum cells with no Debye)
+        safe_gamma = jnp.maximum(gamma, 1e-10)
+        ca.append((eps_inf - beta_sum - sigma * (dt / (2.0 * EPS_0))) / safe_gamma)
+        cb.append((dt / EPS_0) / safe_gamma)
+        # Cc for each pole: (1 - alpha_p) / gamma
+        cc.append(jnp.stack([((1.0 - alpha[p]) / EPS_0) / safe_gamma
+                             for p in range(n_poles)]))
+
+    return DebyeCoeffs(ca=tuple(ca), cb=tuple(cb), cc=tuple(cc),
+                         alpha=alpha, beta=beta)
+
+
+def debye_e_coeffs(e_materials, dt, alpha, beta):
+    """Build component E coefficients with SI values and eps_r derivatives.
+
+    Shared by init_debye and the distributed in-loop coefficient builders.
+    """
+    return si_value_eps_r_grad(
+        _debye_e_coeffs_si, _debye_e_coeffs_eps_r, e_materials, dt, alpha, beta)
 
 
 def init_debye(
