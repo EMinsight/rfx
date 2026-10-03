@@ -1,23 +1,8 @@
 """Production-envelope validation for the public subgridding API.
 
-The current promoted support surface is deliberately narrow.  The numerical
-runner is a z-slab refinement path: the fine grid covers the full x/y interior
-and refines a bounded z interval.  The validation below encodes the physical
-assumptions required by that SBP-SAT closure instead of relying on smoke tests:
-
-* production support is limited to guarded one-sided PEC/no-CPML full-x/y
-  z slabs whose observables stay away from the remaining artificial interface,
-* artificial coarse/fine interfaces must not coincide with a material or PEC
-  discontinuity,
-* all source/probe plus lumped/wire impedance-port observables handled by the
-  runner must live on the fine grid,
-* NTFF/far-field boxes are limited to the same guarded fine-grid envelope;
-  other unsupported RF post-processing/features are rejected before execution,
-* dispersive/nonlinear material models are rejected because this runner receives
-  only static eps/sigma/mu arrays.
-
-The report is user-facing so examples and CI can show why a case is inside or
-outside the production validation envelope.
+Production runs are refused: this lane is unstable and unverified (#1465).
+The remaining checks describe experimental configurations, not evidence of
+physics support. Research/off are explicit diagnostic opt-ins.
 """
 
 from __future__ import annotations
@@ -603,6 +588,11 @@ def validate_subgrid_setup(
     if mode not in {"production", "research", "off"}:
         issues.append(_issue("error", "bad_validation_mode", f"unknown mode {mode!r}"))
 
+    from rfx.subgridding._notice import SUBGRID_NOTICE, SUBGRID_WARNING
+    issues.append(_issue("error" if mode == "production" else "warning",
+                         "subgrid_unstable_unverified",
+                         SUBGRID_NOTICE if mode == "production" else SUBGRID_WARNING))
+
     topology = ref.get("topology", "overlap_z_slab")
     if topology not in {"overlap_z_slab", "stage2_disjoint_3d"}:
         issues.append(
@@ -1136,50 +1126,11 @@ def validate_subgrid_setup(
                 )
             )
 
-    if is_stage2_disjoint_topology and mode == "research":
-        support_level = "research-stage2-disjoint-3d-public-contract"
-    elif mode == "research":
-        # Research mode reports the same issues but does not make warnings fatal.
-        support_level = "research-experimental"
-    elif is_stage2_disjoint_topology:
-        support_level = "unsupported-production-stage2-disjoint-3d-integration-pending"
-    elif nonvacuum_static_material_names and static_material_allowed:
-        support_level = "production-z-slab-guarded-boundary-static-material-envelope"
-    elif xy_margin is not None and physical_z_boundary is not None and local_xy_candidate_allowed:
-        support_level = "production-local-xy-window-central-source-envelope"
-    elif xy_margin is not None and physical_z_boundary is not None:
-        support_level = "unsupported-production-local-xy-window-external-crossval-blocked"
-    elif physical_z_boundary is not None:
-        support_level = "production-z-slab-guarded-boundary-vacuum-envelope"
-    else:
-        support_level = "unsupported-production-z-slab"
-
-    supported = not any(issue.severity == "error" for issue in issues)
-    if supported and is_stage2_disjoint_topology:
-        issues.append(
-            _issue(
-                "info",
-                "stage2_disjoint_public_contract",
-                "Stage-2 disjoint 3-D topology is available as a research "
-                "public-contract selector with finite smoke-runner support only; "
-                "production waveform gates, material-interface support, and "
-                "external crossval are still required before support claims.",
-            )
-        )
-    elif supported:
-        issues.append(
-            _issue(
-                "info",
-                "support_envelope",
-                "validated guarded one-sided z-slab subgrid: source/probe "
-                "lumped/wire impedance-port, and NTFF/far-field observables "
-                "for full-x/y slabs, closed PEC touched z-boundary with no "
-                "fine-grid CPML requirement, static material loads only when "
-                "continuous across artificial interfaces, and no material/PEC "
-                "jumps at artificial interfaces; local x/y support is limited "
-                "to the central soft-source envelope",
-            )
-        )
+    # #1465: opting in permits diagnostics, not a physics-support claim.
+    unverified = any(issue.code == "subgrid_unstable_unverified" for issue in issues)
+    supported = not unverified and not any(issue.severity == "error" for issue in issues)
+    support_level = ("unsupported-unstable-unverified" if mode == "production"
+                     else f"{mode}-unverified")
     return SubgridValidationReport(
         supported=supported,
         mode=mode,
