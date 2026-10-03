@@ -461,17 +461,14 @@ def make_port_source(grid: Grid, port, materials: MaterialArrays, n_steps):
     The port impedance must already be folded into *materials* via
     ``setup_lumped_port()``.
     """
-    from rfx.sources.sources import port_d_parallel
+    from rfx.sources.port_drive import stamped_drive, port_drive_waveform
     idx = grid.position_to_index(port.position)
     i, j, k = idx
 
-    # #1210: the drive coefficient is the update's own per-component Cb.
-    cb = cell_component_e_coeffs(
-        materials, idx, port.component, grid.dt)[1]
-
-    d_par = port_d_parallel(grid, idx, port.component)
-    times = jnp.arange(n_steps, dtype=jnp.float32) * grid.dt
-    waveform = (cb / d_par) * jax.vmap(port.excitation)(times)
+    waveform = port_drive_waveform(
+        grid, idx, port.component, port.excitation, n_steps, materials,
+        sigma_port=stamped_drive(port, idx)[0],
+        unit_field=stamped_drive(port, idx)[1])
     return SourceSpec(i=i, j=j, k=k,
                       component=port.component, waveform=waveform)
 
@@ -479,11 +476,9 @@ def make_port_source(grid: Grid, port, materials: MaterialArrays, n_steps):
 def make_wire_port_sources(grid, port, materials, n_steps, pec_edge_masks=None):
     """Create a list of SourceSpec for a multi-cell WirePort.
 
-    Each LIVE cell in the wire gets its own SourceSpec with the
-    Cb-corrected waveform scaled by 1/n_live (issue #318: dead extent
-    cells inside PEC get no source — pre-#318 they accumulated phantom
-    EMF).  With ``pec_edge_masks=None`` (or no dead cells) this is the
-    historical all-cells 1/N_cells behaviour.  The port impedance must
+    Each LIVE cell gets a Thevenin source voltage w/n_live and resistance
+    R/n_live: its Norton current is w/R. Dead extent cells inside PEC get
+    no source (issue #318). The port impedance must
     already be folded into *materials* via ``setup_wire_port()``.
 
     Returns
@@ -493,19 +488,17 @@ def make_wire_port_sources(grid, port, materials, n_steps, pec_edge_masks=None):
     from rfx.sources.sources import _wire_port_live_cells
 
     cells, live_flags, n_live = _wire_port_live_cells(grid, port, pec_edge_masks)
-    times = jnp.arange(n_steps, dtype=jnp.float32) * grid.dt
-
-    from rfx.sources.sources import port_d_parallel
+    from rfx.sources.port_drive import stamped_drive, port_drive_waveform
 
     specs = []
     for cell, live in zip(cells, live_flags):
         if not live:
             continue
         i, j, k = cell
-        d_par = port_d_parallel(grid, (i, j, k), port.component)
-        cb = cell_component_e_coeffs(      # #1210
-            materials, (i, j, k), port.component, grid.dt)[1]
-        waveform = (cb / d_par) * jax.vmap(port.excitation)(times) / n_live
+        waveform = port_drive_waveform(
+            grid, cell, port.component, port.excitation, n_steps, materials,
+            sigma_port=stamped_drive(port, cell)[0],
+            unit_field=stamped_drive(port, cell)[1])
         specs.append(SourceSpec(i=i, j=j, k=k,
                                 component=port.component, waveform=waveform))
     return specs

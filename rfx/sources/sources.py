@@ -1,18 +1,19 @@
 """FDTD source implementations.
 
-All source functions are pure: they take state + parameters, return new state.
+Field applicators return new states. Port setup also records its own load
+stamp on the build-local descriptor for subsequent source assembly.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import math
 
 import jax.numpy as jnp
 
 from rfx.grid import Grid
-from rfx.core.yee import (EPS_0, cell_component_e_coeffs, lumped_axis,
+from rfx.core.yee import (EPS_0, lumped_axis,
                           lumped_components)
 
 
@@ -56,7 +57,7 @@ def _nu_cell_arrays(grid):
         # concrete per-cell spacings — but it is now LOUD. Do not "restore"
         # the old behaviour by falling back to the scalars.
         raise NotImplementedError(
-            "port metrics (port_sigma / port_d_parallel / "
+            "port metrics (port_sigma / "
             "port_dual_transverse) need CONCRETE per-cell mesh spacings: the "
             "realized conductance of a stamped sigma is fixed by the E node's "
             "discrete Ampere control volume, which is built from the cell "
@@ -202,8 +203,20 @@ def stamp_lumped_eps(materials, cell, value, component):
 
 def port_d_parallel(grid, position_ijk: tuple[int, int, int],
                     component: str) -> float:
-    """Return the PRIMAL cell size along the port's E-field direction."""
-    return _axis_cell_sizes(grid, position_ijk)[_PORT_AXIS[component]]
+    """Return the port edge's PRIMAL length, retaining a traced profile.
+
+    Only the parallel axis is needed. In particular, a traced transverse
+    axis must not force a host read when building a voltage-port drive.
+    Concrete metrics retain the stored-array value used historically.
+    """
+    axis = _PORT_AXIS[component]
+    if getattr(grid, "dx_arr", None) is not None:
+        from rfx.core.jax_utils import is_tracer
+
+        widths = getattr(grid, ("dx_arr", "dy_arr", "dz")[axis])
+        value = widths[position_ijk[axis]]
+        return value if is_tracer(value) else float(value)
+    return _axis_cell_sizes(grid, position_ijk)[axis]
 
 
 @dataclass(frozen=True)
@@ -387,6 +400,9 @@ class LumpedPort:
     component: str
     impedance: float
     excitation: GaussianPulse
+    # Build-local record of the actual stamp and unit-voltage shape. Excluded
+    # from descriptor identity; setup populates it before source assembly.
+    _drive_stamps: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
 
 def setup_lumped_port(grid: Grid, port: LumpedPort, materials) -> object:
@@ -397,27 +413,27 @@ def setup_lumped_port(grid: Grid, port: LumpedPort, materials) -> object:
     """
     idx = grid.position_to_index(port.position)
     sp = port_sigma(grid, idx, port.component, port.impedance)
+    port._drive_stamps.clear()
+    port._drive_stamps[tuple(idx)] = (sp, 1 / port_d_parallel(grid, idx, port.component))
     return stamp_lumped_sigma(materials, idx, sp, port.component)
 
 
 def apply_lumped_port(state, grid: Grid, port: LumpedPort, t: float, materials) -> object:
     """Inject source voltage at the port cell. Call AFTER update_e().
 
-    E[port] += Cb * V_src / d_parallel
+    E[port] += Cb * V_src / (R * transverse_dual_area)
     """
+    from rfx.sources.port_drive import stamped_drive, port_drive_waveform
+
     idx = grid.position_to_index(port.position)
     i, j, k = idx
-    d_par = port_d_parallel(grid, idx, port.component)
-    dt = grid.dt
-
-    # #1210: the drive coefficient is the E update's own per-component Cb.
-    cb = float(cell_component_e_coeffs(
-        materials, idx, port.component, dt)[1])
-
-    v_src = port.excitation(t)
+    increment = port_drive_waveform(
+        grid, idx, port.component, port.excitation, None, materials,
+        sigma_port=stamped_drive(port, idx)[0],
+        unit_field=stamped_drive(port, idx)[1], time=t)
 
     field = getattr(state, port.component)
-    field = field.at[i, j, k].add(cb * v_src / d_par)
+    field = field.at[i, j, k].add(increment)
     return state._replace(**{port.component: field})
 
 
@@ -445,6 +461,7 @@ class WirePort:
     impedance: float = 50.0
     excitation: object = None  # GaussianPulse or similar
     radius: float | None = None
+    _drive_stamps: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         from rfx.sources.wire_radius import validate_radius
@@ -627,6 +644,7 @@ def setup_wire_port(grid, port, materials, pec_edge_masks=None):
     bit-identical to the historical all-cells formula.
     """
     cells, live_flags, n_live = _wire_port_live_cells(grid, port, pec_edge_masks)
+    port._drive_stamps.clear()
 
     if port.radius is not None:
         from rfx.sources.wire_radius import stamp_wire_radius
@@ -637,6 +655,8 @@ def setup_wire_port(grid, port, materials, pec_edge_masks=None):
         if not live:
             continue
         sp = port_sigma(grid, cell, port.component, port.impedance) * n_live
+        port._drive_stamps[tuple(cell)] = (
+            sp, 1 / (n_live * port_d_parallel(grid, cell, port.component)))
         materials = stamp_lumped_sigma(materials, cell, sp, port.component)
     return materials
 
@@ -649,20 +669,20 @@ def apply_wire_port(state, grid, port, t, materials, pec_edge_masks=None):
     injection — pre-#318 they accumulated phantom EMF on an edge whose
     only discharge path was the port sigma folded at that cell.
     """
+    from rfx.sources.port_drive import stamped_drive, port_drive_waveform
+
     cells, live_flags, n_live = _wire_port_live_cells(grid, port, pec_edge_masks)
-    v_src = port.excitation(t) / n_live
-    dt = grid.dt
 
     field = getattr(state, port.component)
     for cell, live in zip(cells, live_flags):
         if not live:
             continue
         i, j, k = cell
-        d_par = port_d_parallel(grid, (i, j, k), port.component)
-        # #1210: the drive coefficient is the E update's own per-component Cb.
-        cb = float(cell_component_e_coeffs(
-            materials, (i, j, k), port.component, dt)[1])
-        field = field.at[i, j, k].add(cb * v_src / d_par)
+        increment = port_drive_waveform(
+            grid, cell, port.component, port.excitation, None, materials,
+            sigma_port=stamped_drive(port, cell)[0],
+            unit_field=stamped_drive(port, cell)[1], time=t)
+        field = field.at[i, j, k].add(increment)
 
     return state._replace(**{port.component: field})
 

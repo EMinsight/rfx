@@ -63,8 +63,6 @@ for lane in LANES:
     for port in ("lumped", "wire"):
         if lane in ("run_adi", "fwd_adi", "fwd_distributed_nu"):
             TABLE[port + "_none"][lane] = Cell("refuses")
-        elif lane in ("run_nonuniform", "fwd_nonuniform"):
-            TABLE[port + "_none"][lane] = Cell(issue="#1266", note="Cb/dV rather than Cb/d_parallel")
         for kind in ("field", "current"):
             TABLE[port + "_" + kind][lane] = Cell("not reachable",
                 note="add_port has no amplitude_kind argument")
