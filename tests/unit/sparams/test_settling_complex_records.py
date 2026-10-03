@@ -1,70 +1,147 @@
-"""Recorded energy includes both quadratures, independently of global phase."""
+"""Complex per-bin tail ratios and amplitude scaling."""
 import numpy as np
 import pytest
 
-from rfx.sources.waveguide_port import settling_db_from_named_records
+from rfx.sparams._tail_witness import tail_share_witness
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_pure_imaginary_ringdown_has_the_same_coverage_as_real(dtype):
-    record = np.exp(-np.arange(400) / 20.).astype(dtype)
-    real = settling_db_from_named_records([("record", record)])
-    imaginary = settling_db_from_named_records([("record", 1j * record)])
-    assert np.isfinite(imaginary)
-    assert imaginary == real
+def score(y):
+    return tail_share_witness([('record', y)], 1., 0, [.07, .12], freq_max=.15)
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_distinct_quadrature_decays_follow_their_total_power(dtype):
-    time = np.arange(400)
-    first = np.exp(-time / 20.).astype(dtype)
-    second = (.5 * np.exp(-time / 50.)).astype(dtype)
-    record = first + 1j * second
-    power = first.astype(np.float64)**2 + second.astype(np.float64)**2
-    expected = 10 * np.log10(power[-40:].mean() / power.max())
-    actual = settling_db_from_named_records([("record", record)])
-    rotated = settling_db_from_named_records([("record", 1j * record)])
-    assert actual == pytest.approx(expected, abs=1e-12)
-    assert rotated == actual
+@pytest.mark.parametrize('dtype', [np.complex64, np.complex128])
+def test_global_phase_preserves_each_read_bin(dtype):
+    t = np.arange(400)
+    y = (np.exp((-.02+2j*np.pi*.07)*t)
+         + .03*np.exp((-.005+2j*np.pi*.12)*t)).astype(dtype)
+    first, rotated = score(y), score(1j*y)
+    assert first.status == rotated.status == 'fail'
+    np.testing.assert_allclose(first.share_per_bin, rotated.share_per_bin, rtol=1e-6)
 
 
-def test_complex64_coverage_uses_the_same_storage_floor():
-    good = np.full(100, np.complex64(3e-36j))
-    quiet = np.full(100, np.complex64(1e-37j))
-    value, detail = settling_db_from_named_records(
-        [("good", good), ("quiet", quiet)], return_detail=True)
-    assert value == pytest.approx(0.)
-    assert detail["skipped_records"] == ["quiet"]
-    assert detail["n_witnessed"] == 1
+@pytest.mark.parametrize('scale', [1., 1e200, 1e-200, 1e-38])
+def test_amplitude_units_preserve_tail_share(scale):
+    y = np.exp((-.02 + 2j*np.pi*.07)*np.arange(200))
+    first, changed = score(y), score(y*scale)
+    assert first.status == changed.status == 'fail'
+    np.testing.assert_allclose(first.share_per_bin, changed.share_per_bin, rtol=1e-7)
 
 
-@pytest.mark.parametrize("scale", [1., 1e200, 1e-200])
-def test_finite_amplitude_units_do_not_change_the_power_ratio(scale):
-    record = np.exp(-np.arange(100) / 8.) * (1. + .5j)
-    baseline = settling_db_from_named_records([("record", record)])
-    changed = settling_db_from_named_records([("record", record * scale)])
-    assert np.isfinite(changed)
-    assert changed == pytest.approx(baseline, abs=1e-12)
+def test_tail_ratio_matches_geometric_sum():
+    n = 200
+    pole = np.exp(-.02 + 2j*np.pi*.07)
+    y = pole**np.arange(n)
+    result = score(y)
+    z = np.exp(-2j*np.pi*np.array([.07, .12]))
+    expected = np.abs((pole*z)**n / (1-(pole*z)**n))
+    np.testing.assert_allclose(result.share_per_bin, expected, rtol=1e-6)
 
 
-@pytest.mark.parametrize("constant", [1e200, complex(1e308, 1e308)])
-def test_large_constant_record_cannot_hide_behind_a_decaying_record(constant):
-    decayed = np.exp(-np.arange(100) / 8.)
-    loud = np.full(100, constant)
-    assert np.isfinite(loud).all()
-    value, detail = settling_db_from_named_records(
-        [("decayed", decayed), ("constant", loud)], return_detail=True)
-    assert value == 0.0
-    assert detail["per_record_db"]["constant"] == 0.0
-    assert detail["n_witnessed"] == 2 and not detail["skipped_records"]
+@pytest.mark.parametrize('bad', [np.nan, np.inf])
+def test_invalid_channel_is_not_hidden(bad):
+    y = np.exp((-.05 + 2j*np.pi*.07)*np.arange(200))
+    result = score(np.column_stack([y, np.full(200, bad)]))
+    assert result.status == 'undetermined'
+    assert result.reason
+    assert np.isnan(result.db)
 
 
-def test_complex_storage_floor_reads_both_components_together():
-    floor = np.finfo(np.float32).tiny * 100.
-    above = np.full(100, .75 * floor * (1. + 1j), dtype=np.complex64)
-    below = np.full(100, .5 * floor * (1. + 1j), dtype=np.complex64)
-    value, detail = settling_db_from_named_records(
-        [("above", above), ("below", below)], return_detail=True)
-    assert value == 0.0
-    assert detail["skipped_records"] == ["below"]
-    assert detail["n_witnessed"] == 1
+@pytest.mark.parametrize('source_end', [0, 40])
+def test_zero_post_source_channels_have_zero_share(monkeypatch, source_end):
+    import rfx.ringdown as ringdown
+
+    original = ringdown.identify
+    shapes = []
+
+    def observed(series, *args, **kwargs):
+        shapes.append(series.shape)
+        return original(series, *args, **kwargs)
+
+    y = np.exp((-.02 + 2j*np.pi*.07)*np.arange(200))
+    zero_tail = np.zeros_like(y)
+    zero_tail[:source_end] = 1.
+    expected = tail_share_witness([('live', y)], 1., source_end,
+                                  [.07, .12], freq_max=.15)
+    monkeypatch.setattr(ringdown, 'identify', observed)
+    per_record = {}
+    result = tail_share_witness(
+        [('live', np.column_stack([zero_tail, y])), ('zero', zero_tail)],
+        1., source_end, [.07, .12], freq_max=.15, _record_results=per_record)
+    assert result.status == expected.status == 'fail'
+    assert result.reason == ''
+    assert shapes == [(200, 1), (200, 1)]
+    np.testing.assert_allclose(result.share_per_bin, expected.share_per_bin)
+    np.testing.assert_allclose(result.error_per_bin, expected.error_per_bin)
+    assert per_record['live'] == pytest.approx(expected.db)
+    assert 10**(per_record['zero']/20) == 0.
+
+
+@pytest.mark.parametrize('source_end', [0, 40])
+def test_all_zero_post_source_group_is_undetermined(monkeypatch, source_end):
+    import rfx.ringdown as ringdown
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('an all-zero group reached identification')
+
+    monkeypatch.setattr(ringdown, 'identify', unexpected)
+    y = np.zeros((200, 2))
+    y[:source_end] = 1.
+    result = tail_share_witness([('zero', y)], 1., source_end,
+                                [.07, .12], freq_max=.15)
+    assert result.status == 'undetermined'
+    assert result.reason == 'zero: no ringing to identify'
+    assert np.isnan(result.db)
+    np.testing.assert_array_equal(result.share_per_bin, [0., 0.])
+
+
+def test_named_records_share_one_multichannel_identification(monkeypatch):
+    import rfx.ringdown as ringdown
+
+    original = ringdown.identify
+    calls = []
+
+    def observed(series, dt, start, stop, **kwargs):
+        calls.append((series.shape, start, stop))
+        return original(series, dt, start, stop, **kwargs)
+
+    monkeypatch.setattr(ringdown, 'identify', observed)
+    y = np.exp((-.02 + 2j*np.pi*.07)*np.arange(200))
+    result = tail_share_witness([('v', y), ('i', np.column_stack([2*y, 3j*y]))],
+                                1., 0, [.07], freq_max=.15)
+    assert result.status == 'fail'
+    assert calls == [((200, 3), 100, 200), ((200, 3), 50, 200)]
+
+
+def test_late_source_end_uses_remaining_window(monkeypatch):
+    import rfx.ringdown as ringdown
+
+    original = ringdown.identify
+    windows = []
+
+    def observed(series, dt, start, stop, **kwargs):
+        windows.append((start, stop))
+        return original(series, dt, start, stop, **kwargs)
+
+    monkeypatch.setattr(ringdown, 'identify', observed)
+    n = 700
+    y = np.exp((-.002 + 2j*np.pi*.07)*np.arange(n))
+    result = tail_share_witness([('record', y)], 1., round(.95*n),
+                                [.07], freq_max=.15)
+    assert result.status == 'fail', result.reason
+    assert windows == [(665, 700), (665, 697)]
+    np.testing.assert_allclose(result.share_per_bin, [np.exp(-.002*n)/(1-np.exp(-.002*n))],
+                               rtol=1e-6)
+
+
+@pytest.mark.parametrize('source_end', [190, 191, 199])
+def test_short_identification_check_is_undetermined(monkeypatch, source_end):
+    import rfx.ringdown as ringdown
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('a short identification window reached the pencil')
+
+    monkeypatch.setattr(ringdown, 'identify', unexpected)
+    y = np.exp((-.002 + 2j*np.pi*.07)*np.arange(200))
+    result = tail_share_witness([('record', y)], 1., source_end, [.07], freq_max=.15)
+    assert result.status == 'undetermined'
+    assert result.reason == 'record: post-source window too short for the identification check'

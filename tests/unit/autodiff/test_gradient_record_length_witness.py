@@ -582,6 +582,8 @@ def _build_cavity():
                    waveform=GaussianPulse(f0=c["f0"], bandwidth=c["bandwidth"]),
                    amplitude_kind="current")
     sim.add_probe((3 * a / 4, 2 * b / 3, d / 2), "ez")
+    sim.add_dft_plane_probe(axis="z", coordinate=d / 2, component="ez",
+                            freqs=np.asarray(c["freqs_hz"]))
     return sim
 
 
@@ -652,21 +654,6 @@ def test_cavity_gradient_needs_a_longer_record_than_its_value():
     # compared against the gradient.
     power_rel_change = np.abs(
         np.expm1(np.asarray(red.value_long) - np.asarray(red.value)))
-
-    print("\nshort record:", red.summary())
-    print("long record: ", green.summary())
-    print(f"  power |dP/P| per bin: {power_rel_change * 100} %")
-    print(f"  rel_by_bin short {red.rel_by_bin * 100} %  "
-          f"cos {red.cosine_by_bin}")
-    print(f"  rel_by_bin long  {green.rel_by_bin * 100} %  "
-          f"cos {green.cosine_by_bin}")
-    for name, w in (("short", red), ("long", green)):
-        for path, arr in sorted(w.grad_rel_change.items()):
-            for i, f in enumerate(c["freqs_hz"]):
-                print(f"  {name} {path:14s} {f/1e9:5.2f} GHz  "
-                      f"g={w.grad[path][i]: .5f} -> "
-                      f"g_long={w.grad_long[path][i]: .5f}  "
-                      f"rel {arr[i] * 100:7.3f}%")
 
     # The short record passes the settling rule -- that is what makes this a
     # defect and not a too-short run.
