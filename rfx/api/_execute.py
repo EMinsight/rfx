@@ -1386,6 +1386,11 @@ class _ExecuteMixin:
         # propagate loudly (Phase D) — do NOT degrade a validator bug to a soft
         # warning that hides it and lets a broken run proceed.
         issues = self.preflight(strict=False, check_ntff=check_ntff)
+        # One frame deeper than the gate: point at the caller of run()/forward().
+        self._run_preflight_gate(issues, context=context, stacklevel=4)
+
+    def _run_preflight_gate(self, issues, *, context: str, stacklevel: int = 3) -> None:
+        """Apply the same warning/error policy to full or scoped preflight."""
         if not len(issues):          # PreflightReport refuses bool() (#980)
             return
         import warnings
@@ -1396,7 +1401,7 @@ class _ExecuteMixin:
             warnings.warn(
                 f"[{context}] preflight found {len(warns)} advisory issue(s) - "
                 f"pass skip_preflight=True to suppress:\n  - {body}",
-                UserWarning, stacklevel=3,
+                UserWarning, stacklevel=stacklevel,
             )
         if errors:
             # Error-severity findings are structurally-impossible configs

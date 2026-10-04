@@ -311,3 +311,111 @@ def test_vertical_sheet_refusal_names_z_profile_remedy():
                          **edge_aware_profiles(domain, DX, sheets=[sheet], axes="xyz"))
     aligned.add(sheet, material="pec")
     assert not aligned.preflight().by_code(CODE)
+
+
+@pytest.mark.parametrize("snap,skip", [("strict", False), ("declared", False),
+                                       ("strict", True)])
+def test_coax_msl_sheet_verdict_before_runner(monkeypatch, snap, skip):
+    from tests._coax_msl_instrument_fixture import (
+        build_instrument_junction, instrument_kwargs,
+    )
+
+    sim = build_instrument_junction()
+    sim._snap = snap
+    expected, = sim.preflight().by_code(CODE)
+    calls = []
+
+    def runner(*args, **kwargs):
+        calls.append(True)
+        raise _ReachedRunner
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("coax-MSL must not run the full preflight")
+
+    monkeypatch.setattr("rfx.simulation.run", runner)
+    monkeypatch.setattr(sim, "preflight", forbidden)
+    if skip:
+        monkeypatch.setattr("rfx.preflight.pec_geometry._warn_sheet_effective_size",
+                            forbidden)
+    kwargs = instrument_kwargs(n_steps=1)
+    kwargs["skip_preflight"] = skip
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
+        if snap == "strict" and not skip:
+            with pytest.raises(ValueError, match="conductor sheet dimension") as exc:
+                sim.compute_coax_msl_transition(**kwargs)
+            assert str(expected) in str(exc.value)
+            assert not calls
+        else:
+            with pytest.raises(_ReachedRunner):
+                sim.compute_coax_msl_transition(**kwargs)
+            assert calls == [True]
+    sheet_notes = [w for w in emitted if "conductor sheet dimension" in str(w.message)]
+    assert len(sheet_notes) == (snap == "declared" and not skip)
+    if sheet_notes:
+        assert str(expected) in str(sheet_notes[0].message)
+
+
+@pytest.mark.parametrize("error", ["context-build failed", "traced-mesh"])
+def test_coax_msl_unavailable_context_advisory(monkeypatch, error):
+    from types import SimpleNamespace
+    from tests._coax_msl_instrument_fixture import (
+        build_instrument_junction, instrument_kwargs,
+    )
+    from rfx.preflight.pec_geometry import _warn_campaign_statics_unavailable
+
+    sim = build_instrument_junction()
+
+    def forbidden():
+        pytest.fail("unavailable context must not enumerate conductors")
+
+    monkeypatch.setattr(sim, "_campaign_ctx", lambda: SimpleNamespace(
+        error=error, interior_pec_entries=forbidden))
+    monkeypatch.setattr("rfx.simulation.run", lambda *a, **k: (_ for _ in ()).throw(_ReachedRunner()))
+    with warnings.catch_warnings(record=True) as expected:
+        warnings.simplefilter("always")
+        _warn_campaign_statics_unavailable(warnings, error)
+    kwargs = instrument_kwargs(n_steps=1)
+    kwargs["skip_preflight"] = False
+    with pytest.warns(UserWarning, match="could NOT run") as emitted:
+        with pytest.raises(_ReachedRunner):
+            sim.compute_coax_msl_transition(**kwargs)
+    assert any(str(expected[0].message) in str(w.message) for w in emitted)
+
+
+def test_coax_msl_preserves_nonpreflight_warning(monkeypatch):
+    from tests._coax_msl_instrument_fixture import (
+        build_instrument_junction, instrument_kwargs,
+    )
+    sim = build_instrument_junction()
+    note = RuntimeWarning("ordinary diagnostic")
+
+    def verdict(*args):
+        warnings.warn_explicit(note, RuntimeWarning, "ordinary_origin.py", 42)
+
+    monkeypatch.setattr("rfx.preflight.pec_geometry._warn_sheet_effective_size", verdict)
+    monkeypatch.setattr("rfx.simulation.run", lambda *a, **k: (_ for _ in ()).throw(_ReachedRunner()))
+    kwargs = instrument_kwargs(n_steps=1)
+    kwargs["skip_preflight"] = False
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
+        with pytest.raises(_ReachedRunner):
+            sim.compute_coax_msl_transition(**kwargs)
+    ordinary, = [w for w in emitted if w.message is note]
+    assert ordinary.category is RuntimeWarning
+    assert (ordinary.filename, ordinary.lineno) == ("ordinary_origin.py", 42)
+
+
+def test_run_preflight_warning_points_at_the_callers_line():
+    """The shared preflight gate must attribute run()'s advisory to the user's line, not to rfx."""
+    import warnings
+    sim = Simulation(domain=(0.02, 0.02, 0.02), dx=0.001, freq_max=10e9,
+                     boundary="pec", snap="declared")
+    sim.add_source((0.002, 0.002, 0.002), component="ez", amplitude_kind="current")
+    sim.add_thin_conductor(Box((0.004, 0.004, 0.006), (0.014, 0.014, 0.006)))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        sim.run(n_steps=1)
+    hits = [w for w in caught if "preflight found" in str(w.message)]
+    assert hits and all(w.filename == __file__ for w in hits), [
+        (w.filename, w.lineno) for w in hits]
