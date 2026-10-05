@@ -1051,7 +1051,7 @@ def apply_cpml_e(
 
 def apply_cpml_h(
     state, cpml_params, cpml_state: CPMLState, grid,
-    axes: str = "xyz", materials=None,
+    axes: str = "xyz", materials=None, *, periodic=None,
 ) -> tuple:
     """Apply CPML correction to H-field update on all 6 faces.
 
@@ -1070,28 +1070,18 @@ def apply_cpml_h(
     dt = grid.dt if is_tracer(grid.dt) else float(grid.dt)
     from rfx.core.yee import MaterialArrays, component_h_materials
     magnetic_materials = materials if hasattr(materials, "mu_r") else None
+    if periodic is None:
+        periodic = tuple(a in getattr(grid, "periodic_axes", "") for a in "xyz")
     mu = component_h_materials(
-        magnetic_materials if magnetic_materials is not None else MaterialArrays(None, None, 1.0))
-    no_radius = getattr(magnetic_materials, "mu_r_wire", None) is None
-    if no_radius:
-        # Preserve main's exact arithmetic and slice order when no radius record exists.
-        if materials is not None and hasattr(materials, 'mu_r'):
-            _ch_full = dt / (materials.mu_r * MU_0)  # (nx, ny, nz)
-            ch_xlo = _ch_full[:n_x, :, :]
-            ch_xhi = _ch_full[-n_x:, :, :]
-            ch_ylo = _ch_full[:, :n_y, :]
-            ch_yhi = _ch_full[:, -n_y:, :]
-            ch_zlo = _ch_full[:, :, :n_z]
-            ch_zhi = _ch_full[:, :, -n_z:]
-        else:
-            ch_xlo = ch_xhi = ch_ylo = ch_yhi = ch_zlo = ch_zhi = dt / MU_0
-    else:
-        ch = tuple(dt / (m * MU_0) for m in mu)
+        magnetic_materials if magnetic_materials is not None else MaterialArrays(None, None, 1.0),
+        periodic=periodic,
+        cell_sizes=(grid.dx_arr, grid.dy_arr, grid.dz) if hasattr(grid, "dx_arr") else None)
+    ch = tuple(dt / (m * MU_0) for m in mu)
 
     def _h_face(component, axis, lo):
-        if no_radius:
-            return ((ch_xlo, ch_xhi), (ch_ylo, ch_yhi), (ch_zlo, ch_zhi))[axis][not lo]
         arr = ch[component]
+        if jnp.ndim(arr) == 0:
+            return arr
         n_face = (n_x, n_y, n_z)[axis]
         sl = [slice(None)] * 3
         sl[axis] = slice(None, n_face) if lo else slice(-n_face, None)

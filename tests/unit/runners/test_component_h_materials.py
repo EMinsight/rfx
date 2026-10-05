@@ -12,12 +12,83 @@ from rfx.runners import _distributed_common as dc
 
 
 @pytest.mark.parametrize("periodic", [(False,)*3, (True, False, True)])
-def test_no_record_keeps_the_exact_cell_objects(periodic):
+def test_face_harmonic_mean_and_equal_cell_bits(periodic):
     mats = yee.init_materials((4,)*3)
     mu = jnp.arange(64, dtype=jnp.float32).reshape((4,)*3)+1
     mats = mats._replace(mu_r=mu)
     parts = yee.component_h_materials(mats, periodic=periodic)
-    assert all(part is mu for part in parts)
+    for axis, part in enumerate(parts):
+        lo = np.roll(np.asarray(mu), 1, axis=axis)
+        if not periodic[axis]:
+            sl = [slice(None)] * 3
+            sl[axis] = 0
+            lo[tuple(sl)] = np.asarray(mu)[tuple(sl)]
+        expected = 2 / (1 / lo + 1 / np.asarray(mu))
+        np.testing.assert_allclose(part, expected, rtol=2e-7)
+    for value in (1., 2.2, 7.3):
+        homogeneous = jnp.full(mu.shape, value, dtype=jnp.float32)
+        for part in yee.component_h_materials(mats._replace(mu_r=homogeneous), periodic):
+            assert np.asarray(part).tobytes() == np.asarray(homogeneous).tobytes()
+
+
+def test_face_mean_uses_actual_cell_lengths_then_adds_contours():
+    mats = yee.init_materials((3, 2, 2))
+    mu = jnp.broadcast_to(jnp.array([1., 4., 4.])[:, None, None], mats.mu_r.shape)
+    widths = (jnp.array([.9, 1.1, 1.]), jnp.ones(2), jnp.ones(2))
+    mats = mats._replace(mu_r=mu, mu_r_wire=(jnp.full(mu.shape, .3), None, None))
+    hx, hy, hz = yee.component_h_materials(mats, cell_sizes=widths)
+    np.testing.assert_allclose(hx[1], (2 / (.9 / 1 + 1.1 / 4)) + .3, rtol=2e-7)
+    np.testing.assert_array_equal(hy, mu)
+    np.testing.assert_array_equal(hz, mu)
+
+
+def test_equal_cell_rounding_guard_keeps_both_material_derivatives():
+    mats = yee.init_materials((2, 1, 1))
+    widths = (jnp.array([.9, 1.1]), jnp.ones(1), jnp.ones(1))
+    def face(values):
+        material = mats._replace(mu_r=values[:, None, None])
+        return yee.component_h_materials(material, cell_sizes=widths)[0][1, 0, 0]
+    derivative = jax.grad(face)(jnp.array([2.2, 2.2]))
+    np.testing.assert_allclose(derivative, [.45, .55], rtol=3e-7)
+
+
+@pytest.mark.parametrize("value", [1., 2.2, 7.3])
+def test_homogeneous_fast_bake_keeps_legacy_field_bits(value):
+    grid, mats, _, state = _fixture()
+    mats = mats._replace(mu_r=jnp.full(grid.shape, value, dtype=jnp.float32))
+    old_ch = jnp.float32(grid.dt / (yee.MU_0 * grid.dx)) / mats.mu_r
+    new_ch = yee.precompute_coeffs(mats, grid.dt, grid.dx).ch
+    expected = yee.update_h_fast(state, old_ch)
+    got = yee.update_h_fast(state, new_ch)
+    for a, b in zip(got[:6], expected[:6]):
+        assert np.asarray(a).tobytes() == np.asarray(b).tobytes()
+
+
+@pytest.mark.parametrize("homogeneous", [False, True])
+def test_normal_h_face_reads_neighbour_ghost_across_x_split(homogeneous):
+    shape = (8, 3, 3)
+    mats = yee.init_materials(shape)
+    mu = jnp.full(shape, 2.2) if homogeneous else mats.mu_r.at[4:].set(4.)
+    mats = mats._replace(mu_r=mu)
+    widths = (jnp.array([1., 1., 1., .9, 1.1, 1., 1., 1.]),
+              jnp.ones(3), jnp.ones(3))
+    state = yee.init_state(shape)._replace(ez=jnp.indices(shape)[1].astype(jnp.float32))
+    inv = tuple(1 / d for d in widths)
+    reference = yee.update_h_nu(state, mats, 1e-12, *inv, cell_sizes=widths)
+    split_m = dc._split_materials(mats, 2)
+    split_s = dc._split_state(state, 2)
+    got = []
+    for rank in range(2):
+        local_m = jax.tree.map(lambda a: a[rank], split_m)
+        local_m = local_m._replace(mu_r=dc.magnetic_low_ghost(local_m.mu_r, rank))
+        local_s = jax.tree.map(lambda a: a[rank], split_s)
+        local_x = jnp.take(widths[0], jnp.clip(jnp.arange(rank * 4 - 1, rank * 4 + 5), 0, 7))
+        local_widths = (local_x, *widths[1:])
+        local_inv = tuple(1 / d for d in local_widths)
+        result = dc._update_h_local_nu(local_s, local_m, 1e-12,
+                                      *local_inv, *local_inv, cell_sizes=local_widths)
+        got.append(np.asarray(result.hx)[1:5])
+    np.testing.assert_array_equal(np.concatenate(got), np.asarray(reference.hx))
 
 
 def _fixture():
