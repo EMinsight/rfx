@@ -27,6 +27,8 @@ from rfx import _realized
 
 import jax
 import jax.numpy as jnp
+
+from rfx.core.drives import drive_layout, inject_drives
 import numpy as np
 
 from rfx.core.yee import (
@@ -2633,6 +2635,7 @@ def _build_nu_scan(
     else:
         src_waveforms = jnp.zeros((n_steps, 0), dtype=jnp.float32)
     src_meta = [(s[0], s[1], s[2], s[3]) for s in sources]
+    drives = drive_layout(src_meta, src_waveforms.dtype)
     prb_meta = [(p[0], p[1], p[2], p[3]) for p in probes]
 
     state = init_state((grid.nx, grid.ny, grid.nz))
@@ -2984,10 +2987,7 @@ def _build_nu_scan(
                 new_rlc_states.append(rlc_st_new)
 
         # Sources (point sources + wire port excitation)
-        for idx_s, (si, sj, sk, sc) in enumerate(src_meta):
-            field = getattr(st, sc)
-            field = field.at[si, sj, sk].add(src_vals[idx_s])
-            st = st._replace(**{sc: field})
+        st = inject_drives(st, drives, src_vals)
 
         # Waveguide-port injection + DFT probe accumulation. The dx
         # arg is unused by the per-cell-weighted integrals (cfg already

@@ -44,6 +44,8 @@ from rfx import _realized
 
 import jax
 import jax.numpy as jnp
+
+from rfx.core.drives import drive_layout
 import numpy as np
 from jax import lax
 from rfx.runners._rank import mesh_ranks, rank_shard_map
@@ -2196,6 +2198,9 @@ def run_nonuniform_distributed_pec(
         )
 
     sources = list(sources) if sources is not None else []
+    for source in sources:
+        if source.component not in ("ex", "ey", "ez"):
+            raise ValueError(f"distributed_nu: unsupported source component {source.component}")
     probes = list(probes) if probes is not None else []
 
     # Defer the `Mesh` import to runtime so module import remains
@@ -2602,10 +2607,14 @@ def run_nonuniform_distributed_pec(
             return new_state, new_db_st, new_lr_st
 
     def _inject_sources_shmap(st, src_vals_step, *, ranks):
+        # Construct host constants while tracing: the outer scan closes over
+        # Python metadata only, never concrete device or NumPy arrays.
+        source_drives = drive_layout(src_local_specs, src_vals_step.dtype,
+                                     electric_only_path="distributed_nu")
         return inject_sources_shmap(
             st, src_vals_step, mesh, n_src,
             src_local_specs, src_device_ids,
-            ranks=ranks)
+            ranks=ranks, drives=source_drives)
 
     def _sample_probes_shmap(st, *, ranks):
         return sample_probes_shmap(
