@@ -615,7 +615,7 @@ def _build_waveguide_port_config_nu(sim, entry, grid: NonUniformGrid,
 
 def _setup_msl_ports_nu(sim, grid, materials, materials_drive, sources,
                         n_steps, pec_edge_masks, *, geometry_edge_masks=None,
-                        sheet_specs=(), drawn_eps_r=None):
+                        sheet_specs=(), drawn_eps_r=None, conductors=None):
     """Set up MSL ports on the non-uniform mesh (Ez static-Laplace feed only).
 
     Mirrors the uniform MSL block (``rfx/runners/uniform.py``: ``_msl_ports``)
@@ -657,8 +657,14 @@ def _setup_msl_ports_nu(sim, grid, materials, materials_drive, sources,
         msl_port_from_entry,
         setup_msl_port,
     )
+    from rfx.model.conductors import kernel_conductors, clear_conductor_edges
+    return_object = conductors is not None
+    if conductors is None:
+        from dataclasses import replace
+        conductors = replace(kernel_conductors(sim, grid, materials, None,
+            periodic=(False, False, False)), pec_edges=pec_edge_masks)
     original_edges = pec_edge_masks if geometry_edge_masks is None else geometry_edge_masks
-    for pe in sim._msl_ports:
+    for _msl_port_index, pe in enumerate(sim._msl_ports):
         # Issue #661: one shared projection of position -> port frame.
         mp = msl_port_from_entry(pe)
         port_mode = getattr(pe, "mode", "laplace")
@@ -697,18 +703,20 @@ def _setup_msl_ports_nu(sim, grid, materials, materials_drive, sources,
                 grid, mp, materials_drive, n_steps, mode_profile=mode_profile,
             ))
         if pec_edge_masks is not None:
-            from rfx.boundaries.pec import clear_edges
             # Only the SUBSTRATE-NORMAL component: the edge the modal
             # source drives.  The three-component form opened a
             # width-long slot in the ground plane at the feed (#931
             # §1.9, corrected).
-            pec_edge_masks = clear_edges(
-                pec_edge_masks, list(_msl_yz_cells(grid, mp)),
-                component=_msl_normal_component(mp))
-    return materials, pec_edge_masks
+            conductors = clear_conductor_edges(
+                conductors, list(_msl_yz_cells(grid, mp)),
+                component=_msl_normal_component(mp),
+                entity_id=f"msl_port[{_msl_port_index}]")
+            pec_edge_masks = conductors.pec_edges
+    return materials, conductors if return_object else pec_edge_masks
 
 
 def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=None,
+                        preflight=None, conductors=None,
                         eps_override=None, sigma_override=None,
                         pec_mask_override=None, pec_occupancy_override=None,
                         checkpoint=False,
@@ -886,34 +894,21 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     # DFT-plane / flux / wire-port accumulators simply stop accumulating).
     sizing_n = int(decay_max_steps) if until_decay is not None else n_steps
 
-    grid = build_nonuniform_grid(
-        sim._freq_max, sim._domain, sim._dx, sim._cpml_layers, sim._dz_profile,
-        dx_profile=sim._dx_profile, dy_profile=sim._dy_profile,
-        face_layers=sim._resolve_face_layers(),
-        pec_faces=sim._boundary_spec.pec_faces()
-            if sim._boundary_spec is not None else None,
-        pmc_faces=sim._boundary_spec.pmc_faces()
-            if sim._boundary_spec is not None else None,
-        cpml_axes="".join(
-            ax for ax in "xyz"
-            if ax not in (sim._periodic_axes or "")
-        ),
-        dt=getattr(sim, "_dt_pin", None),
-        dt_min_cell=getattr(sim, "_dt_min_cell", None),
-        dt_caller="Simulation",
-    )
+    # Public run/forward lend their preflighted solve object; internal callers
+    # without one still use the same builder here.
+    grid = conductors.grid if conductors is not None else sim._build_nonuniform_grid()
     _sheet_specs: list = []
     _pec_sheets: list = []
     _pec_wires: list = []
     _geometry_masks, _assembly_entries = ([], []) if lane == "run_nonuniform" else (None, None)
-    materials, debye_spec, lorentz_spec, pec_mask = assemble_materials_nu(
-        sim, grid, sheet_specs=_sheet_specs, pec_sheets=_pec_sheets,
+    from rfx.model.conductors import assembled_materials, solve_conductors, kernel_conductors, clear_conductor_edges, at_kernel
+    if conductors is None:
+        conductors = solve_conductors(sim, grid, nonuniform=True)
+    if preflight is not None:
+        sim._auto_preflight(conductors=conductors, **preflight)
+    materials, debye_spec, lorentz_spec, pec_mask = assembled_materials(
+        conductors, sheet_specs=_sheet_specs, pec_sheets=_pec_sheets,
         pec_wires=_pec_wires, geometry_masks=_geometry_masks, assembly_entries=_assembly_entries)
-    from rfx.realized_geometry import record_from_assembly
-    geometry_record = (record_from_assembly(
-        sim, grid, materials, pec_mask, _pec_sheets, _pec_wires,
-        _geometry_masks, _assembly_entries, lane="run_nonuniform")
-        if lane == "run_nonuniform" else None)
     del _geometry_masks, _assembly_entries
     if getattr(sim, "_interface_eps", "sampled") == "dual_average" and (
             debye_spec is not None or lorentz_spec is not None):
@@ -997,17 +992,12 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     # periodic BC and NU grids are 3-D, so the non-periodic #689 convention
     # is the one the step function uses.  Port clearing, wire-port liveness
     # and the sheet ctx all read THIS object from here on.
-    from rfx.boundaries.pec import (
-        clear_edges as _clear_edges,
-        edge_is_pec as _edge_is_pec,
-        realized_pec_edge_masks as _rpem,
-    )
+    from rfx.boundaries.pec import edge_is_pec as _edge_is_pec
     _pec_sheets = tuple(_pec_sheets)
     _pec_wires = tuple(_pec_wires)
-    pec_edge_masks = None
-    if pec_mask is not None or _pec_sheets or _pec_wires:
-        pec_edge_masks = _rpem(pec_mask, sheets=_pec_sheets,
-                               wires=_pec_wires)
+    conductors = kernel_conductors(sim, grid, materials, pec_mask,
+        _pec_sheets, _pec_wires, periodic=(False, False, False), sheet_specs=_sheet_specs, root=conductors)
+    pec_edge_masks = conductors.pec_edges
     _msl_geometry_edges = pec_edge_masks  # before ANY port clearing
 
     if subpixel_smoothing:
@@ -1089,7 +1079,7 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
         }
         return min(rel, key=rel.get)
 
-    for pe in sim._ports:
+    for _port_index, pe in enumerate(sim._ports):
         idx = pos_to_nu_index(grid, pe.position)
         if pe.impedance == 0.0:
             # Current source with dV normalization; amplitude_kind (issue
@@ -1298,8 +1288,10 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
             if pec_edge_masks is not None:
                 # The lumped port drives ONE edge: its own component at
                 # its own cell (#931 §1.9, corrected).
-                pec_edge_masks = _clear_edges(
-                    pec_edge_masks, [(i, j, k)], component=pe.component)
+                conductors = clear_conductor_edges(
+                    conductors, [(i, j, k)], component=pe.component,
+                    entity_id=f"port[{_port_index}]")
+                pec_edge_masks = conductors.pec_edges
             if pe.excite:
                 waveform = port_drive_waveform(
                     grid, idx, pe.component, pe.waveform, sizing_n, materials_drive,
@@ -1457,12 +1449,13 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     # ride the generic point-source `sources` list; per-probe DFT planes are
     # registered by compute_msl_s_matrix via add_dft_plane_probe.
     if getattr(sim, "_msl_ports", None):
-        materials, pec_edge_masks = _setup_msl_ports_nu(
+        materials, conductors = _setup_msl_ports_nu(
             sim, grid, materials, materials_drive, sources, sizing_n,
             pec_edge_masks,
             geometry_edge_masks=_msl_geometry_edges, sheet_specs=_sheet_specs,
-            drawn_eps_r=_drawn_eps_r,
+            drawn_eps_r=_drawn_eps_r, conductors=conductors,
         )
+        pec_edge_masks = conductors.pec_edges
 
     # Debye/Lorentz coefficients, AFTER the last stamp into ``materials``
     # (the wire, lumped and MSL port loads above), as the uniform lane builds
@@ -1633,6 +1626,9 @@ def run_nonuniform_path(sim, *, n_steps, compute_s_params=None, s_param_freqs=No
     admit(sim, lane, run_args={"conformal_pec": conformal_pec,
                                "compute_s_params": compute_s_params})
 
+    conductors, geometry_record = at_kernel(sim, conductors, lane=lane, pec_edges=pec_edge_masks, sheet_operator=sheet_ctx)
+    pec_edge_masks = conductors.pec_edges
+    sheet_ctx = conductors.sheet_operator
     _shared_run_kwargs = dict(
         design_box=design_box,
         sheet_impedance=sheet_ctx,
