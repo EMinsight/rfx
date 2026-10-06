@@ -27,6 +27,10 @@ def msl_nearest_downstream_reflector(
     pec_sigma_threshold: float = 1e6,
     signed_front_distance: bool = False,
     width_cell: float | None = None,
+    ground_plane: float | None = None,
+    ground_cell: float | None = None,
+    port_position=None,
+    grid=None,
 ):
     """Distance from ``x_probe`` to the nearest downstream conductor edge.
 
@@ -102,7 +106,9 @@ def msl_nearest_downstream_reflector(
       far-wall coordinate (latent arithmetic bug, now moot: the estimate
       is gone). A same-width series element that does NOT contain the
       feed plane is a genuine discontinuity and is still counted.
-    * **ground-plane-like boxes** (y-extent ≥ 80 % of the domain y).
+    * **ground conductors** entirely at or below ``ground_plane`` on the
+      substrate-normal axis, independent of their width. If that reference
+      is unavailable, retain the legacy width ≥ 80 % of domain heuristic.
     """
     from rfx.geometry.csg import Box as _Box
     from rfx.sources.msl_port import _MSL_AXIS_INDEX, msl_axis_roles
@@ -110,8 +116,16 @@ def msl_nearest_downstream_reflector(
     if width_cell is None:
         width_cell = dx
     _prop_ax, _width_ax, _n_ax, sign = msl_axis_roles(direction)
+    # Production callers hand over the port's position (and the grid); the
+    # ground reference is its coordinate on the port's normal axis.
+    if port_position is not None and ground_plane is None:
+        ground_plane = float(port_position[_MSL_AXIS_INDEX[_n_ax]])
+        if grid is not None and ground_cell is None:
+            from rfx.preflight._common import local_cell
+            ground_cell = local_cell(grid, _n_ax, ground_plane)
     _ip = _MSL_AXIS_INDEX[_prop_ax]
     _iw = _MSL_AXIS_INDEX[_width_ax]
+    _in = _MSL_AXIS_INDEX[_n_ax]
     nearest_d = float("inf")
     nearest_label = None
     unevaluated: list[str] = []
@@ -205,8 +219,16 @@ def msl_nearest_downstream_reflector(
             and box_x_lo - dx <= x_feed <= box_x_hi + dx
         ):
             continue
-        # Skip ground-plane-like boxes.
-        if box_y_extent >= 0.8 * domain_y:
+        # The port reference, not lateral domain coverage, identifies ground.
+        # Use the upper bound so metal rising into the substrate still counts.
+        # Half a normal-axis cell of slack: a ground whose top sits a rounding
+        # error or a rasterization residual above the reference is still the
+        # ground, not a conductor containing the feed.
+        if ground_plane is not None:
+            if float(hi[_in]) <= ground_plane + 0.5 * (
+                    dx if ground_cell is None else ground_cell):
+                continue
+        elif box_y_extent >= 0.8 * domain_y:
             continue
         # Distance from x_probe to the nearest edge of this box,
         # measured ALONG the propagation direction.

@@ -783,7 +783,7 @@ def _resolve_msl_auto_offsets(sim, entries, grid):
             width_cell=min(local_cell(grid, _iw, float(pe.position[_iw]) - float(pe.width) / 2),
                            local_cell(grid, _iw, float(pe.position[_iw]) + float(pe.width) / 2)),
             domain_y=float(sim._domain[_iw]),
-            direction=pe.direction,
+            direction=pe.direction, port_position=pe.position,
             # Issue #685: same conductor rule as the assembler, and thin
             # conductors included, so the solved offset is not derived
             # from a scan that was blind to most of the metal.
