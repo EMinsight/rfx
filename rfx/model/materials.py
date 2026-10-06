@@ -34,6 +34,7 @@ from rfx.nonuniform import NonUniformGrid, e_node_dual_spacings
 def assemble_cells(
     sim, grid, *, include_thin_conductors=True, include_cpml_pad_extension=True,
     sheet_specs=None, pec_sheets=None, pec_wires=None, pad_fill_findings=None,
+    check_declared_span=True,
     geometry_masks=None, assembly_entries=None,
 ):
     """Build material arrays plus per-pole dispersion masks.
@@ -183,7 +184,9 @@ def assemble_cells(
     # concrete mask -- under an outer jit the mask is a tracer and the
     # question cannot be asked on the host.
     # The declared-span audit is a uniform-only contract (#1070).
-    _check_pad_fill = (not nonuniform and include_cpml_pad_extension
+    # The shared solve builder runs the same check on every grid itself
+    # (rfx.model.pad_fill) and passes check_declared_span=False.
+    _check_pad_fill = (check_declared_span and not nonuniform and include_cpml_pad_extension
                        and sim._boundary in ("cpml", "upml")
                        and sim._cpml_layers > 0)
     from rfx.geometry.smoothing import continued_conductor_shape, warn_unextendable_shapes

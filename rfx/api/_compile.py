@@ -167,6 +167,7 @@ class _CompileMixin:
         *,
         include_thin_conductors: bool = True,
         include_cpml_pad_extension: bool = True,
+        _check_declared_span: bool = True,
         sheet_specs: list | None = None,
         pec_sheets: list | None = None,
         pec_wires: list | None = None,
@@ -186,6 +187,7 @@ class _CompileMixin:
             sheet_specs=sheet_specs, pec_sheets=pec_sheets, pec_wires=pec_wires,
             pad_fill_findings=pad_fill_findings, geometry_masks=geometry_masks,
             assembly_entries=assembly_entries,
+            check_declared_span=_check_declared_span,
         )
 
     @staticmethod
