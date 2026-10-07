@@ -7,23 +7,23 @@
 # gates now live in scripts; this file is the one command that runs them in the
 # order CI does, and stops at the first failure.
 #
-# What it does NOT run: the six-shard fast suite and the guard/preflight suite.
+# What it does NOT run in full: the fast suite and the guard/preflight suite.
 # Those are 35 minutes, and `.github/workflows/pr-tests.yml` only starts them
 # when the diff touches code (`scripts/ci/changed_paths.py` decides).
 #
-#   scripts/ci/local.sh                 # the eight steps; pr-body reports skipped
+#   scripts/ci/local.sh                 # the nine steps; pr-body reports skipped
 #   scripts/ci/local.sh /tmp/body.md    # also check that PR body
 #   PYTHON=.venv/bin/python scripts/ci/local.sh
 #   CHANGELOG_BASE=origin/main CHANGELOG_HEAD=HEAD scripts/ci/local.sh
 #
 # $PYTHON is exported, so every step and every script this one calls uses it.
 #
-# The step names below are listed in the same order in docs/agent/agent-runbook.mdx
-# and pinned against it by tests/contracts/test_ci_workflows_contract.py.
+# The first eight step names are listed in docs/agent/agent-runbook.mdx.
+# The final selected-tests session extends that baseline (issue #1528).
 
 set -uo pipefail
 
-STEP_NAMES=(ruff docs-hygiene changelog-fragment data-budget file-size-ratchet pr-body workflow-yaml contract-tests)
+STEP_NAMES=(ruff docs-hygiene changelog-fragment data-budget file-size-ratchet pr-body workflow-yaml contract-tests selected-tests)
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -125,6 +125,35 @@ begin 7
 # local-is-weaker-than-CI gap these scripts exist to close. Costs about 27 s.
 "$PYTHON" -m pytest tests/contracts -q -x \
   -o addopts="" -m "not gpu and not docs_consistency" --strict-markers || fail
+
+begin 8
+selection_dir=$(mktemp -d) || fail
+trap 'rm -rf "$selection_dir"' EXIT
+central_path_args=()
+if [ "${RFX_GATE_CENTRAL_PATHS:-}" = "1" ]; then
+  central_path_args+=(--central-paths)
+fi
+"$PYTHON" scripts/ci/select_gate_tests.py ${central_path_args[@]+"${central_path_args[@]}"} \
+  --base "$CHANGELOG_BASE" --head "$CHANGELOG_HEAD" \
+  --durations .test_durations --summary "$selection_dir/summary" \
+  > "$selection_dir/files" || fail
+selected_tests=()
+while IFS= read -r test_file; do
+  selected_tests+=("$test_file")
+done < "$selection_dir/files"
+selected_status=0
+if [ "${#selected_tests[@]}" -eq 0 ]; then
+  echo "nothing selected"
+else
+  "$PYTHON" -m pytest "${selected_tests[@]}" -q \
+    -o addopts="" -m "not gpu and not slow and not slow_physics and not docs_consistency" --strict-markers || selected_status=$?
+fi
+cat "$selection_dir/summary"
+if [ "$selected_status" -eq 5 ]; then
+  echo "nothing to run (all selected tests deselected or no tests collected)"
+elif [ "$selected_status" -ne 0 ]; then
+  fail
+fi
 
 echo
 echo "all ${#STEP_NAMES[@]} steps passed"
