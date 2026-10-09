@@ -94,6 +94,9 @@
     "DesignRegion": {
       "kind": "class"
     },
+    "Diagnostic": {
+      "kind": "class"
+    },
     "FarFieldResult": {
       "kind": "class"
     },

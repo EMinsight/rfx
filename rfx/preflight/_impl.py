@@ -85,6 +85,7 @@ def _preflight_impl(
                     code=getattr(e, "code", "uncoded"),
                     loc=getattr(e, "loc", None),
                     source=getattr(e, "source", None),
+                    diagnostic=getattr(e, "diagnostic", None),
                 ))
 
     # The explicit per-film reader owns DC findings. Diagnostic assembly may
@@ -117,9 +118,16 @@ def _preflight_impl(
             code = "uncoded"
             loc = None
             source = None
-        issues.append(PreflightIssue(
-            msg, severity=severity, code=code, loc=loc, source=source
-        ))
+        issues.append(
+            PreflightIssue(
+                msg,
+                severity=severity,
+                code=code,
+                loc=loc,
+                source=source,
+                diagnostic=getattr(inst, "diagnostic", None),
+            )
+        )
 
     if check_ad_memory:
         if n_steps_for_memory is None:
@@ -140,7 +148,7 @@ def _preflight_impl(
         # (pydantic / Tidy3D pattern). For an errors-only gate that lets
         # advisories through, call ``report.raise_for_failure()`` on a
         # ``strict=False`` report instead.
-        raise ValueError(
+        raise issues.exception(
             f"preflight (strict) found {len(issues)} issue(s):\n  - "
             + "\n  - ".join(issues)
         )
@@ -167,3 +175,40 @@ def _preflight_impl(
 
 # Restored so rfx/api/__init__.py rewrites it to "Simulation._preflight_impl" like every other moved preflight body.
 _preflight_impl.__qualname__ = "_PreflightMixin._preflight_impl"
+
+
+def run_preflight_gate(issues, context: str, stacklevel: int = 3) -> None:
+    """Apply the same warning/error policy to full or scoped preflight."""
+    issues = PreflightReport(issues)
+    if not len(issues):          # PreflightReport refuses bool() (#980)
+        return
+    import warnings
+    errors = [i for i in issues if getattr(i, "severity", "warning") == "error"]
+    warns = [i for i in issues if getattr(i, "severity", "warning") != "error"]
+    if warns:
+        body = "\n  - ".join(warns)
+        warnings.warn(
+            f"[{context}] preflight found {len(warns)} advisory issue(s) - "
+            f"pass skip_preflight=True to suppress:\n  - {body}",
+            UserWarning,
+            stacklevel=stacklevel + 1,
+        )
+    if errors:
+        # Error-severity findings are structurally-impossible configs
+        # (e.g. upml+refinement, Floquet+non-uniform-z) whose validators
+        # raise ValueError. run()/forward() used to call those validators
+        # directly so the error PROPAGATED; routing through preflight must
+        # preserve that hard-fail, else a known-invalid run silently
+        # proceeds. Re-raise (aligns with Tidy3D/Meep raise-on-setup-error).
+        # skip_preflight=True remains the explicit escape hatch.
+        detail = "\n  - ".join(errors)
+        from rfx._diagnostic_transport import diagnostic_refusal
+
+        raise diagnostic_refusal(
+            ValueError(
+                f"[{context}] preflight found {len(errors)} blocking error(s) "
+                f"(pass skip_preflight=True to bypass):\n  - {detail}"
+            ),
+            issues.diagnostics,
+            causes=PreflightReport(errors).diagnostics,
+        )

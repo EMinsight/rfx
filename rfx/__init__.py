@@ -13,6 +13,7 @@ from rfx._runtime_floor import check as _check_runtime_floor
 
 _check_runtime_floor(_sys.version_info, _jax.__version__, _jaxlib.__version__)
 
+from rfx.diagnostic_records import Diagnostic
 from rfx.grid import Grid
 from rfx.simulation import run, run_until_decay, make_source, make_probe, make_port_source, SimResult
 from rfx.adi import ADIState2D, ADIState3D, thomas_solve, adi_step_2d, run_adi_2d, adi_step_3d, run_adi_3d
@@ -266,6 +267,7 @@ from rfx.convergence import (
 #     replay_smatrix_from_port_vi_dump, save_optimization_trajectory,
 #     render_artifact_markdown, validate_artifact_report, build_*_report/artifact
 __all__ = [
+    "Diagnostic",
     # grid / core simulation entry points
     "Grid", "NonUniformGrid", "make_nonuniform_grid",
     "make_band_profile",

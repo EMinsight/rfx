@@ -1003,7 +1003,7 @@ def message(lane: str, rows, sim, run_args=None) -> str:
             "carries it runs.")
 
 
-def admit(sim, lane: str, *, run_args=None, grid=None) -> None:
+def admit(sim, lane: str, *, run_args=None, grid=None, diagnostics=None) -> None:
     """Raise ``NotImplementedError``, as the lanes' own refusals do, if
     ``lane`` does not carry every input ``sim`` declares. ``run_args`` are
     the call's static arguments that ``CALL_GATES`` read; ``grid`` is the
@@ -1012,6 +1012,9 @@ def admit(sim, lane: str, *, run_args=None, grid=None) -> None:
     require_radius_support(sim, lane)
     rows = refused(sim, lane, run_args, grid)
     if rows:
+        if diagnostics is not None:
+            from rfx._diagnostic_transport import diagnostic_refusal
+            raise diagnostic_refusal(NotImplementedError(message(lane, rows, sim, run_args)), diagnostics)
         raise NotImplementedError(message(lane, rows, sim, run_args))
     from rfx.boundaries.features import admit_waveguide
     from rfx.boundaries.tfsf import admit_simulation

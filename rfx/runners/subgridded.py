@@ -25,6 +25,7 @@ def _run_subgridded_once(
     pec_mask_coarse,
     n_steps,
     *,
+    diagnostics=(),
     _warn_experimental=True,
     diagnostic_lumped_sparam_freqs_override=None,
     diagnostic_lumped_sparam_driven_index_override=None,
@@ -50,7 +51,10 @@ def _run_subgridded_once(
     Result
     """
     from rfx.subgridding._notice import require_experimental, warn_experimental
-    require_experimental(sim)
+    require_experimental(
+        sim,
+        diagnostics=diagnostics,
+    )
     if _warn_experimental:
         warn_experimental()
     from rfx.sources.tfsf import _refuse_extended_tfsf
@@ -158,13 +162,25 @@ def _run_subgridded_once(
     # every validation mode, after the production refusals above and before
     # the first step.
     from rfx.runners._admission import admit
-    admit(sim, "run_subgridded", run_args={"conformal_pec": conformal_pec}, grid=grid_coarse)
+    admit(
+        sim,
+        "run_subgridded",
+        run_args={"conformal_pec": conformal_pec},
+        grid=grid_coarse,
+        diagnostics=diagnostics,
+    )
 
     topology = ref.get("topology", "overlap_z_slab")
     if topology != "overlap_z_slab":
         from rfx.runners.disjoint import run_disjoint_stage2_path
 
-        return run_disjoint_stage2_path(sim, grid_coarse, n_steps, _warn_experimental=False)
+        return run_disjoint_stage2_path(
+            sim,
+            grid_coarse,
+            n_steps,
+            _warn_experimental=False,
+            diagnostics=diagnostics,
+        )
 
     is_full_xy_region = (
         config.fi_lo == grid_coarse.pad_x_lo
@@ -686,6 +702,7 @@ def _run_subgridded_once(
         s_params = np.asarray(s_mat)
 
     return Result(
+        diagnostics=diagnostics,
         state=result.state_f,
         time_series=result.time_series,
         s_params=s_params,
@@ -694,7 +711,7 @@ def _run_subgridded_once(
         ntff_box=result.ntff_box_f,
         grid=fine_grid,
         dt=dt,
-        freq_range=(sim._freq_max / 10, sim._freq_max, 'cpml'),
+        freq_range=(sim._freq_max / 10, sim._freq_max, "cpml"),
     )
 
 
@@ -705,6 +722,7 @@ def run_subgridded_path(
     pec_mask_coarse,
     n_steps,
     *,
+    diagnostics=(),
     compute_s_params=None,
     s_param_freqs=None,
     s_param_n_steps=None,
@@ -718,7 +736,10 @@ def run_subgridded_path(
     physics support. One instability warning covers the run and its replays.
     """
     from rfx.subgridding._notice import require_experimental, warn_experimental
-    require_experimental(sim)
+    require_experimental(
+        sim,
+        diagnostics=diagnostics,
+    )
     warn_experimental()
     from rfx.current_moments import refuse_current_moment_monitor
     refuse_current_moment_monitor(sim, "subgridded lane")
@@ -729,6 +750,7 @@ def run_subgridded_path(
         pec_mask_coarse,
         n_steps,
         _warn_experimental=False,
+        diagnostics=diagnostics,
         conformal_pec=conformal_pec,
     )
 
@@ -785,6 +807,7 @@ def run_subgridded_path(
                 pec_mask_coarse,
                 sp_n_steps,
                 _warn_experimental=False,
+                diagnostics=diagnostics,
                 diagnostic_lumped_sparam_freqs_override=freqs,
                 diagnostic_lumped_sparam_driven_index_override=driven,
                 conformal_pec=conformal_pec,

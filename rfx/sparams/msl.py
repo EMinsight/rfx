@@ -19,6 +19,7 @@ step; the move itself is gated on bit identity of the extracted S arrays
 from __future__ import annotations
 
 from rfx.preflight.line_stub import line_stub_admission as _line_stub_admit
+from rfx._diagnostic_transport import merge_diagnostics, report_diagnostics, diagnostic_refusal
 
 import jax
 import jax.numpy as jnp
@@ -245,6 +246,7 @@ def compute_msl_s_matrix(
     -------
     MSLSMatrixResult
     """
+    _diagnostics = ()
     from rfx.probes.msl_wave_decomp import extract_msl_nprobe
     from rfx.sources.msl_eigenmode import hammerstad_jensen_z0_eps_eff
     from rfx.sources.msl_port import (
@@ -260,25 +262,25 @@ def compute_msl_s_matrix(
     )
 
     if not self._msl_ports:
-        raise ValueError("No MSL ports registered. Call add_msl_port() first.")
+        raise diagnostic_refusal(ValueError("No MSL ports registered. Call add_msl_port() first."), _diagnostics)
     if self._ports or self._waveguide_ports or self._floquet_ports:
-        raise NotImplementedError(
+        raise diagnostic_refusal(NotImplementedError(
             "compute_msl_s_matrix() is defined only for add_msl_port(...) "
             "families in the current simulation. Use separate "
             "simulations for add_port(...), add_waveguide_port(...), "
             "or add_floquet_port(...) S-parameter workflows."
-        )
+        ), _diagnostics)
     if self._tfsf is not None:
-        raise NotImplementedError(
+        raise diagnostic_refusal(NotImplementedError(
             "compute_msl_s_matrix() is not supported together with TFSF; "
             "TFSF is a plane-wave source, not an MSL port."
-        )
+        ), _diagnostics)
     if self._coaxial_ports:
-        raise NotImplementedError(
+        raise diagnostic_refusal(NotImplementedError(
             "compute_msl_s_matrix() does not include add_coaxial_port(...); "
             "coaxial-port S-parameters need a separate validated V/I "
             "extraction and calibration contract."
-        )
+        ), _diagnostics)
     is_nonuniform = (
         self._dz_profile is not None
         or self._dx_profile is not None
@@ -288,23 +290,23 @@ def compute_msl_s_matrix(
         getattr(pe, "mode", "laplace") == "eigenmode"
         for pe in self._msl_ports
     ):
-        raise NotImplementedError(
+        raise diagnostic_refusal(NotImplementedError(
             "compute_msl_s_matrix() on a non-uniform mesh supports "
             "mode='laplace'/'uniform' (Ez static-Laplace feed) only; the "
             "eigenmode J+M launch needs the magnetic-source channel that "
             "the non-uniform runner does not carry. Use mode='laplace' "
             "(the add_msl_port default) on the graded-mesh lane."
-        )
+        ), _diagnostics)
     if self._refinement is not None:
-        raise NotImplementedError(
+        raise diagnostic_refusal(NotImplementedError(
             "compute_msl_s_matrix() is not supported with SBP-SAT "
             "subgridding."
-        )
+        ), _diagnostics)
     if self._solver == "adi":
-        raise NotImplementedError(
+        raise diagnostic_refusal(NotImplementedError(
             "compute_msl_s_matrix() is not supported with solver='adi'; "
             "use the uniform Yee solver."
-        )
+        ), _diagnostics)
 
     # Issue #704: an NTFF box would be silently dropped on this path.
     _warn_ntff_box_dropped(self, "compute_msl_s_matrix()")
@@ -708,6 +710,8 @@ def compute_msl_s_matrix(
                 )
                 planes = result.dft_planes or {}
                 _ts_result = result
+
+            _diagnostics = merge_diagnostics(_diagnostics, report_diagnostics(_ts_result))
 
             # Score recorded S channels and witness probes.
             _ts = getattr(_ts_result, "time_series", None)
@@ -1155,7 +1159,7 @@ def compute_msl_s_matrix(
                     "S11/S21 at this bin are UNRELIABLE."
                 )
                 if strict_extractor:
-                    raise ValueError(msg)
+                    raise diagnostic_refusal(ValueError(msg), _diagnostics)
                 _w.warn(msg, stacklevel=2)
             # Secondary — reported-Z0 sanity (retained N-probe fit).
             if z0_dev_max > _Z0_TOL:
@@ -1340,13 +1344,15 @@ def compute_msl_s_matrix(
                 S = s_projected
 
         result = MSLSMatrixResult(
+            diagnostics=_diagnostics,
             S=S,
             freqs=np.asarray(freqs_arr),
             Z0=Z0_per_run,
             beta=beta_first,
             port_names=tuple(pe.name for pe in entries),
             reliable=reliable,
-            settling_db=settling_db_runs, settling_witness=tuple(settling_details),
+            settling_db=settling_db_runs,
+            settling_witness=tuple(settling_details),
             S_raw=s_raw,
             passivity_correction=passivity_correction,
             sigma_max_excess=sigma_max_excess,

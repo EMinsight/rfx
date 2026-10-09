@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import NamedTuple
 import numpy as np
 
+from rfx._diagnostic_transport import diagnostic_refusal
+
 
 class _DispatchPlan(NamedTuple):
     """Resolved execution lane for a single ``run()`` / ``forward()`` call.
@@ -43,6 +45,7 @@ def _dispatch_plan(
     self,
     *,
     mode: str,
+    diagnostics=(),
     n_steps: int | None,
     num_periods: float,
     # forward-only inputs
@@ -178,11 +181,11 @@ def _dispatch_plan(
         if distributed:
             # NU-only in v1.6.2 (DP3 locked decision).
             if not is_nonuniform:
-                raise NotImplementedError(
+                raise diagnostic_refusal(NotImplementedError(
                     "distributed=True on forward() is currently implemented "
                     "only for non-uniform meshes; use run(..., devices=...) "
                     "for the uniform distributed path."
-                )
+                ), diagnostics)
             # Reject TFSF / waveguide ports up front (V3 §3 unsupported).
             if self._tfsf is not None:
                 raise NotImplementedError(
