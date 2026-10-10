@@ -2261,7 +2261,8 @@ def run(
         # the baked step applies no per-face masks after its H update, so a
         # magnetic wall would be neither electric nor magnetic there (#1164)
         and not _ctx["use_pmc_faces"]
-        and not _ctx["use_tfsf"]
+        # the baked step has no slot for a TFSF or a waveguide-port correction
+        and not (_ctx["use_tfsf"] or _ctx["use_waveguide_ports"])
         and not _ctx["use_debye"]
         and not _ctx["use_lorentz"]
         and not _ctx["use_pec_edges"]
@@ -2288,7 +2289,12 @@ def run(
         # no occupancy slot at all -- it would drop the design variable and
         # return an all-zero gradient, which reads like a converged design.
         and not _ctx["use_design_occupancy"]
-        and aniso_eps is None
+        # Either permittivity tensor (Stage 1, or the inverse one that
+        # ``subpixel_smoothing="kottke_pec"`` and the occupancy tensor build):
+        # the baked coefficients come from the scalar realized permittivity,
+        # so a tensor would be dropped (kottke_pec returned the unsmoothed
+        # field bit for bit on this path).
+        and aniso_eps is None and aniso_inv_eps is None
         and periodic == (False, False, False)
     )
     # On GPU the baked-PEC path eliminates expensive scatter-update
