@@ -13,6 +13,7 @@ from rfx import _realized
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 class FDTDState(NamedTuple):
@@ -675,9 +676,80 @@ def _edge_mean_four(values):
     return ((values[0] + values[1]) + (values[2] + values[3])) * 0.25
 
 
+# Leading significant bits kept per part, (difference, fraction), by dtype:
+# every part product then fits the significand and is exact.
+_EXACT_PARTS = {"float32": ((12,), (12,), "uint32", 32, 24),
+                "float64": ((26,), (18, 18), "uint64", 64, 53)}
+
+
+def _exact_parts(x, leading, word, width, digits, xp):
+    """``x`` as a sum of parts with few significant bits each; exact."""
+    parts = []
+    for keep in leading:
+        mask = np.dtype(word).type(((1 << width) - 1) ^ ((1 << (digits - keep)) - 1))
+        if xp is np:
+            head = (np.ascontiguousarray(x).view(word) & mask).view(x.dtype)
+        else:
+            head = jax.lax.stop_gradient(jax.lax.bitcast_convert_type(
+                jax.lax.bitcast_convert_type(x, word) & mask, x.dtype))
+        parts.append(head)
+        x = x - head
+    return (*parts, x)
+
+
 def _edge_mean_pair(lo, hi, fraction):
-    """One pass of the separable primal-area rule for E materials and poles."""
-    return lo + (hi - lo) * fraction
+    """One pass of the separable primal-area rule for E materials and poles.
+
+    ``lo + (hi - lo) * fraction``, with the product written as a sum of exact
+    part products added in a fixed order. A multiply that feeds an add may be
+    fused by the compiler, and the plain form then rounds differently eager,
+    under jit and per device (one last bit on a graded mesh). A fused exact
+    product rounds the same sum the same way, so this value has one bit
+    pattern in every compile context, also when a stamp is added after it.
+
+    That holds for operands that arrive as rounded arrays. A caller that
+    forms the cells as a product in the same compiled program (a traced
+    ``background + rho * contrast``) can still have THAT multiply fused into
+    the subtraction here; non-finite cells and differences below about 1e-28
+    (float32) are outside it as well.
+    """
+    spec = _EXACT_PARTS.get(str(getattr(hi, "dtype", "")))
+    if spec is None or not hasattr(fraction, "dtype") or fraction.dtype != hi.dtype:
+        # A Python 0.5 (an ungraded axis) is a power of two: already exact.
+        return lo + (hi - lo) * fraction
+    d_bits, f_bits, word, width, digits = spec
+    xp = np if all(isinstance(v, (np.ndarray, np.generic)) for v in (lo, hi, fraction)) else jnp
+    if xp is jnp:
+        lo, hi, fraction = jnp.broadcast_arrays(jnp.asarray(lo), jnp.asarray(hi), jnp.asarray(fraction))
+    else:
+        lo, hi, fraction = np.broadcast_arrays(lo, hi, fraction)
+    d_parts = _exact_parts(hi - lo, d_bits, word, width, digits, xp)
+    f_parts = _exact_parts(fraction, f_bits, word, width, digits, xp)
+    result = lo
+    for rank in range(len(d_parts) + len(f_parts) - 1):
+        for i, d in enumerate(d_parts):
+            j = rank - i
+            if 0 <= j < len(f_parts):
+                result = result + d * f_parts[j]
+    return result
+
+
+def _width_fraction(lo, d, array_module=jnp):
+    """``d / (lo + d)`` for the pair mean, divided on the HOST when the widths
+    are concrete.
+
+    A GPU's float division is not correctly rounded, and a compiled program
+    folds a division of captured constants on the host: the same widths gave
+    one quotient in an eager call on a GPU and another under ``jax.jit``
+    (RTX 4070 SUPER: 3 of 9 distinct quotients one bit apart). Concrete widths
+    are therefore divided once, in NumPy, wherever the mean is formed. Traced
+    widths are divided where they live; a lane that wants the same bits as the
+    others keeps its widths concrete.
+    """
+    if array_module is np or isinstance(lo, jax.core.Tracer) or isinstance(d, jax.core.Tracer):
+        return d / (lo + d)
+    lo, d = np.asarray(lo), np.asarray(d)
+    return jnp.asarray(d / (lo + d))
 
 
 def _edge_mean_component(arr, t1, t2, periodic, cell_sizes, array_module=jnp):
@@ -692,7 +764,7 @@ def _edge_mean_component(arr, t1, t2, periodic, cell_sizes, array_module=jnp):
                 shape[t] = arr.shape[t]
                 d = array_module.asarray(d, dtype=arr.dtype).reshape(shape)
                 lo = _material_bwd_neighbour(d, t, periodic, array_module=array_module)
-                fraction = d / (lo + d)
+                fraction = _width_fraction(lo, d, array_module)
             lo = _material_bwd_neighbour(result, t, periodic, array_module=array_module)
             result = _edge_mean_pair(lo, result, fraction)
         return result
@@ -822,12 +894,13 @@ def cell_component_e_materials(materials, cell, component,
                     fractions.append(0.5)
                 else:
                     d = jnp.asarray(cell_sizes[t], dtype=arr.dtype)
-                    fractions.append(d[cell[t]] / (d[back(cell[t], t)] + d[cell[t]]))
+                    fractions.append(_width_fraction(d[back(cell[t], t)], d[cell[t]]))
             hi = _edge_mean_pair(v[2], v[0], fractions[0])
             lo = _edge_mean_pair(v[3], v[1], fractions[0])
             m = _edge_mean_pair(lo, hi, fractions[1])
         else:
-            m = _edge_mean_four(v)
+            # the grid-wide order: (cell + back t1) + (back t2 + both)
+            m = _edge_mean_four((v[0], v[2], v[1], v[3]))
         own = parts[axis]
         return m if own is None else m + own[cell]
 
