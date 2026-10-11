@@ -1,7 +1,7 @@
 ---
 title: "Waveguide Ports"
 sidebar:
-  order: 10
+  order: 3
 ---
 
 A waveguide port launches one TE or TM mode of a rectangular aperture and
@@ -194,7 +194,7 @@ depth. A physical junction S-matrix also needs:
 
 The walls here are PEC volumes, so the guide width the solver sees is the
 width you drew. See
-[How conductors land on the lattice](/rfx/guide/materials-geometry/#how-conductors-land-on-the-lattice).
+[How conductors land on the lattice](/rfx/model/materials/#how-conductors-land-on-the-lattice).
 
 ## Absorber depth
 
