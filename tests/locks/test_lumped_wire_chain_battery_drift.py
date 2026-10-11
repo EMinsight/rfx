@@ -35,10 +35,12 @@ LOCK_PROVENANCE = {
 }
 FAMILY = "lumped / wire internal TEM coax"
 DRIVER = "scripts/diagnostics/lumped_wire_chain_battery_measure.py"
-# The wire rows still run (weekly lane, ~100 s each while they diverge) so that the fix of
-# tracker 1549 shows up as an unexpected pass; they are not run before merge.
+# Tracker 1549 (conductors through the absorber grew) is fixed: the short, open and Zc/2 wire rows pass. The
+# 2*Zc and matched rows no longer diverge and miss their bars by a little at 25 um (2.31 dB against 2 dB at
+# 8.8 GHz; |Gamma_L| 0.102 against 0.1 at 10 GHz), cause undetermined: tracker 1614. They run in the weekly lane.
 WIRE_XFAIL = pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="conductors through the absorber grow at the cross-section's transverse resonance; #1549")
+    strict=True, raises=AssertionError,
+    reason="#1614 wire load-plane reflection misses the bar on the 2*Zc and matched loads at 25 um; cause undetermined")
 # The 2 dB magnitude bar is a statement about a converged mesh. For the 2*Zc row the one-cell
 # element inductance leaves 2.03 / 1.06 / 0.55 dB at 100 / 50 / 25 um (first order in dx), so
 # the always-on run of that row uses the 50 um mesh; the 100 um value is part of the slow
@@ -185,7 +187,9 @@ def record_chain(line, dut, live, record_property):
 
 
 @pytest.mark.parametrize("kind,dut", [
-    pytest.param(kind, dut, id=f"{kind}-{dut}", marks=((WIRE_XFAIL, pytest.mark.slow) if kind == "wire" else ()))
+    pytest.param(kind, dut, id=f"{kind}-{dut}", marks=(
+        ((WIRE_XFAIL, pytest.mark.slow) if dut in ("matched", "res_double") else (pytest.mark.slow,))
+        if kind == "wire" else ()))
     for kind in ("lumped", "wire") for dut in DUTS
 ])
 def test_chain_load_plane_magnitude(kind, dut, record_property):
@@ -434,7 +438,7 @@ def test_default_chain_mesh_uses_one_cache_entry():
 
 
 def test_healthy_wire_curves_are_not_hidden_by_the_one_cell_model(monkeypatch):
-    """Synthetic healthy wire rows must pass the body, so #1549 can XPASS."""
+    """Synthetic healthy wire rows must pass the body, so a fixed wire row (#1614) can XPASS."""
     _, line = chain("wire", "matched")
     loads = dict(short=0., open=np.inf, res_half=line.zc/2,
                  res_double=2*line.zc, matched=line.zc)
