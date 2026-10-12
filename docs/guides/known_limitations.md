@@ -93,6 +93,15 @@ refinements and compare it with `subpixel_smoothing=False`; if the two series di
 further, and do not take the unsmoothed series as the reference.
 Tracker: #1632
 
+### Conformal PEC makes a curved metal body electrically larger, and is less accurate than the staircase.
+
+`conformal_pec=True` (and `Boundary(conformal=True)`) gives each E edge cut by a metal surface the permittivity eps/w,
+with w the edge's open fraction (down to 0.1); only edges with w = 0 are metal. The cut cells become a high-permittivity
+skin about one cell thick, which makes the body electrically larger. On a PEC sphere against Mie, its extinction and
+backscatter errors were larger than the staircase's at each of three meshes, and fell only first order (tracker #1651). A run with conformal PEC warns. Until the Dey-Mittra update (cut H-face areas)
+lands, use the staircase and judge a curved body by a mesh series of at least three refinements.
+Tracker: #1651
+
 ### A Drude or Lorentz medium has its own time-step limit, and a medium above it is refused.
 
 Tracker: #1590
