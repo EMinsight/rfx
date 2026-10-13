@@ -594,14 +594,12 @@ def run_uniform(
     flux_monitors = build_flux_monitor_cfgs(sim, grid, n_steps)
 
     if sim._waveguide_ports:
+        from rfx.preflight.waveguide import resolve_waveguide_port_freqs
+
         cpml_axes = grid.cpml_axes
         pec_axes = None
         for pe in sim._waveguide_ports:
-            freqs_arr = (
-                pe.freqs
-                if pe.freqs is not None
-                else jnp.linspace(sim._freq_max / 10, sim._freq_max, pe.n_freqs)
-            )
+            freqs_arr = resolve_waveguide_port_freqs(sim, pe)
             waveguide_ports.append(sim._build_waveguide_port_config(pe, grid, freqs_arr, n_steps))
 
     if sim._tfsf is not None:
@@ -1032,6 +1030,8 @@ def run_uniform(
         if sim._waveguide_ports
         else None
     )
+    from rfx.sparams._waveguide_planes import resolve_reported_planes
+
     waveguide_sparams_result = None
     if sim._waveguide_ports:
         waveguide_sparams_result = {}
@@ -1040,26 +1040,9 @@ def run_uniform(
             source_plane = plane_positions["source"]
             measured_reference_plane = plane_positions["reference"]
             measured_probe_plane = plane_positions["probe"]
-            if entry.calibration_preset == "source_to_probe":
-                reference_plane = source_plane
-                probe_plane = measured_probe_plane
-                calibration_preset = "source_to_probe"
-            elif entry.reference_plane is not None or entry.probe_plane is not None:
-                reference_plane = (
-                    entry.reference_plane
-                    if entry.reference_plane is not None
-                    else measured_reference_plane
-                )
-                probe_plane = (
-                    entry.probe_plane
-                    if entry.probe_plane is not None
-                    else measured_probe_plane
-                )
-                calibration_preset = "explicit"
-            else:
-                reference_plane = measured_reference_plane
-                probe_plane = measured_probe_plane
-                calibration_preset = "measured"
+            reference_plane, probe_plane, calibration_preset = resolve_reported_planes(
+                entry, cfg,
+            )
             s11, s21 = extract_waveguide_sparams(
                 cfg,
                 ref_shift=reference_plane - measured_reference_plane,

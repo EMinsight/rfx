@@ -245,6 +245,14 @@ def _range_to_slice_nu(grid, axis, value_range):
     return (lo_idx, hi_idx), actual_span
 
 
+def _resolve_waveguide_run_freqs_nu(sim):
+    """The shared bins built by the graded runner, also read by preflight."""
+    for entry in sim._waveguide_ports:
+        if entry.freqs is not None:
+            return jnp.asarray(entry.freqs, dtype=jnp.float32)
+    return jnp.linspace(sim._freq_max * 0.5, sim._freq_max, 20, dtype=jnp.float32)
+
+
 def _build_waveguide_port_config_nu(sim, entry, grid: NonUniformGrid,
                                      freqs: jnp.ndarray, n_steps: int):
     """NU-aware waveguide port config builder.
@@ -1138,15 +1146,7 @@ def run_nonuniform_path(sim, *, diagnostics=(), n_steps, compute_s_params=None, 
     # init_waveguide_port (duck-types on grid for per-axis widths).
     waveguide_port_cfgs = []
     if sim._waveguide_ports:
-        wg_freqs = None
-        for pe in sim._waveguide_ports:
-            if pe.freqs is not None:
-                wg_freqs = jnp.asarray(pe.freqs, dtype=jnp.float32)
-                break
-        if wg_freqs is None:
-            wg_freqs = jnp.linspace(
-                sim._freq_max * 0.5, sim._freq_max, 20, dtype=jnp.float32
-            )
+        wg_freqs = _resolve_waveguide_run_freqs_nu(sim)
         for pe in sim._waveguide_ports:
             waveguide_port_cfgs.append(
                 _build_waveguide_port_config_nu(
@@ -1488,8 +1488,10 @@ def run_nonuniform_path(sim, *, diagnostics=(), n_steps, compute_s_params=None, 
 
     # Waveguide-port output: dict[name -> cfg], optional sparams dict.
     waveguide_ports_result = None
+    from rfx.sparams._waveguide_planes import resolve_reported_planes
+
     waveguide_sparams_result = None
-    if sim._waveguide_ports and "waveguide_ports" in r:
+    if sim._waveguide_ports and "waveguide_ports" in r and lane != "fwd_nonuniform":
         from rfx.sources.waveguide_port import (
             extract_waveguide_sparams,
             waveguide_plane_positions,
@@ -1506,26 +1508,9 @@ def run_nonuniform_path(sim, *, diagnostics=(), n_steps, compute_s_params=None, 
             source_plane = plane_positions["source"]
             measured_reference_plane = plane_positions["reference"]
             measured_probe_plane = plane_positions["probe"]
-            if entry.calibration_preset == "source_to_probe":
-                reference_plane = source_plane
-                probe_plane = measured_probe_plane
-                calibration_preset = "source_to_probe"
-            elif entry.reference_plane is not None or entry.probe_plane is not None:
-                reference_plane = (
-                    entry.reference_plane
-                    if entry.reference_plane is not None
-                    else measured_reference_plane
-                )
-                probe_plane = (
-                    entry.probe_plane
-                    if entry.probe_plane is not None
-                    else measured_probe_plane
-                )
-                calibration_preset = "explicit"
-            else:
-                reference_plane = measured_reference_plane
-                probe_plane = measured_probe_plane
-                calibration_preset = "measured"
+            reference_plane, probe_plane, calibration_preset = resolve_reported_planes(
+                entry, cfg, grid=grid,
+            )
             s11, s21 = extract_waveguide_sparams(
                 cfg,
                 ref_shift=reference_plane - measured_reference_plane,
