@@ -22,7 +22,7 @@ from rfx.model.graded_admission import (
 )
 from rfx.model.occupancy import select_occupancy_operator, with_edge_keep
 from rfx.model.source_coefficients import current_source_samples
-from rfx.model.thin_conductors import refuse_design_films
+from rfx.model.thin_conductors import admit_thin_conductor, refuse_design_films
 
 from rfx.model.waveguide_modes import (
     WaveguidePort,
@@ -40,7 +40,7 @@ __all__ = [
     "NominalProfile", "current_source_samples", "admit_adi_sources", "admit_graded_profiles", "distributed_kernel_inputs",
     "distributed_solve_inputs", "drawn_launch_eps", "forward_kernel_inputs",
     "forward_lumped_port_stage", "forward_port_stage", "forward_products", "forward_sheet_context",
-    "prepare_port_occupancy", "refuse_design_films", "select_occupancy_operator",
+    "admit_thin_conductor", "prepare_port_occupancy", "refuse_design_films", "select_occupancy_operator",
     "stage_distributed_edges", "traced_cell_mask", "uniform_solve_inputs", "with_edge_keep",
     "WaveguidePort",
     "WaveguidePortConfig",
