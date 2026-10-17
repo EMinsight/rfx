@@ -33,7 +33,7 @@ def execute_distributed(self, *, plan, _solve_assembly, _diagnostics, _call_args
             "DFT plane probes or omit devices=... (use a "
             "single-device run() instead)."
         )
-    from rfx.runners.distributed_v2 import (
+    from rfx.model.distributed_ports import (
         refuse_unsupported_distributed_features,
     )
     refuse_unsupported_distributed_features(
@@ -100,6 +100,11 @@ def execute_distributed(self, *, plan, _solve_assembly, _diagnostics, _call_args
     admit_run_s_matrix(self, compute_s_params=compute_s_params,
                        conformal_pec=conformal_pec, distributed=True)
     if plan.lane == "run_distributed_nu":
+        # Same drive-isolation refusal as one-device run_nonuniform, before the solve.
+        if (compute_s_params is not False
+                and any(p.impedance > 0 and p.extent is not None for p in self._ports)):
+            from rfx.runners._admission import require_isolated_s_drive
+            require_isolated_s_drive(self, fields_only=True)
         from rfx.runners.distributed_v2 import _spans_other_processes
         if devices is not None and _spans_other_processes(devices):
             # The graded runner does not gather the final fields
@@ -119,13 +124,19 @@ def execute_distributed(self, *, plan, _solve_assembly, _diagnostics, _call_args
             gather_final_state=True,
             lane="run_distributed_nu",
             diagnostics=_diagnostics,
+            s_param_freqs=s_param_freqs,
+            compute_s_params=compute_s_params,
         )
         _res = Result(
             diagnostics=result.get("diagnostics", _diagnostics),
             state=result["final_state"],
             time_series=result["time_series"],
-            s_params=None,
-            freqs=None,
+            s_params=result.get('s_params'),
+            freqs=result.get('s_param_freqs'),
+            wire_port_sparams=(tuple(zip(result['wire_sparams_meta'], result['wire_sparams_raw']))
+                               if 'wire_sparams_raw' in result else None),
+            sparam_time_records=result.get('sparam_time_records'),
+            sparam_read_ids=result.get('sparam_read_ids'),
             grid=grid,
             dt=grid.dt,
             freq_range=(self._freq_max / 10, self._freq_max, self._boundary),
@@ -142,7 +153,7 @@ def execute_distributed(self, *, plan, _solve_assembly, _diagnostics, _call_args
             assembly=_solve_assembly,
             conformal_pec=conformal_pec,
         )
-    if compute_s_params:
+    if compute_s_params and plan.lane != "run_distributed_nu":
         from rfx.measurement import default_frequency_grid
         from rfx.probes.sparam_driver import compute_lumped_wire_s_matrix_via_scan
         if s_param_freqs is None:
