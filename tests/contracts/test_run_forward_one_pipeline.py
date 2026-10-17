@@ -15,8 +15,6 @@ from tests.contracts.run_forward_census import (
 )
 
 KNOWN_ROWS = (
-    ('P-lumped', 'uniform', 'L2', 'D9', "#1373 D9 (ports): run()'s driver discards each drive run's port records (raw V/I/V_ref accumulators, per-step port records) after forming S; forward(port_s11_freqs) returns them"),
-    ('P-lumped2', 'uniform', 'L2', 'D9', "#1373 D9 (ports): run()'s driver discards each drive run's port records (raw V/I/V_ref accumulators, per-step port records) after forming S; forward(port_s11_freqs) returns them"),
     ('P-lumped', 'multi-device-uniform', 'L2', 'D5', '#1373 D5 (ports): settling witness arrays differ between entries'),
     ('P-lumped', 'multi-device-uniform', 'L2', 'D8', '#1373 D8 (ports): run computes the port S-matrix by default; forward returns no S without port_s11_freqs'),
     ('P-lumped', 'uniform', 'L2', 'D5', '#1373 D5 (ports): settling witness arrays differ between entries'),
@@ -326,7 +324,6 @@ ID_PATTERNS = {
     'D5': {'L1': (), 'L2': ('settling_witness/*',)},
     'D7': {'L1': (), 'L2': ('waveguide_ports/*', 'waveguide_sparams/*')},
     'D8': {'L1': (), 'L2': ('s_params', 'freqs', 'freqs_hz')},
-    'D9': {'L1': (), 'L2': ('lumped_port_sparams*', 'sparam_time_records*')},
     'A2': {'run': ('raised', 'NotImplementedError',
             'Lumped/wire S-matrix requests do not support plain sources / 0-ohm ports'),
            'forward': ('admitted',)},
@@ -428,10 +425,19 @@ def test_assembly(declaration, path):
     # Uniform seam spelling resolves before the step. Compare the complete ctx,
     # effective invariants, setup carry, actual scan init and xs. Graded compares
     # its scan builder, not the outer seam's conductor maps.
+    def options(entry):
+        requested = entry_options(declaration)
+        if entry == 'forward' and path == 'uniform' and declaration in ('P-lumped', 'P-lumped2'):
+            from rfx.measurement import default_frequency_grid
+            # run's main scan now registers its default S bins. Compare equal
+            # requests here too, as port_s_pair already does for L2.
+            requested = {**requested, 'port_s11_freqs': default_frequency_grid(20e9, 50)}
+        return requested
+
     differences = []
     for level in (('a', 'b') if path == 'multi-device-graded' else ('b',)):
         pair = {entry: capture(BUILDERS[declaration], entry, path, level,
-                               entry_options=entry_options(declaration), seams=SEAMS)
+                               entry_options=options(entry), seams=SEAMS)
                 for entry in ('run', 'forward')}
         ids = outcomes(declaration, path, 'L1', pair)
         required = {'ctx', 'invariants', 'carry_init', 'init', 'xs'} if path == 'uniform' else (
