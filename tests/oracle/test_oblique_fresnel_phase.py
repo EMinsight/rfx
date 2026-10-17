@@ -88,7 +88,9 @@ def _build(theta):
     probe_idx = np.array([grid.position_to_index((float(xp), 0.06, 0.003))[0] for xp in xprobes], float)
     n = np.sqrt(EPS_R)
     t_back = (2 * (X_IFACE - PLATEAU[1]) / C0) + (2 * (X_SLAB_END - X_IFACE) / (C0 / n))
-    ns = min(int(0.9 * t_back / grid.dt), 1700)
+    # + 223 steps = 2 tau (f0 5 GHz, bw 0.15, dt 3.81 ps): the Bloch pulse, and its back-face echo,
+    # arrive 2 tau later since #1831, when the pulse began to peak at 5 tau.
+    ns = min(int(0.9 * t_back / grid.dt), 1700) + 223
     sim = Simulation(freq_max=10e9, domain=DOMAIN, dx=DX, boundary="cpml", cpml_layers=10, mode="3d")
     sim.add_tfsf_source(f0=F0, bandwidth=BW, polarization="ez", direction="+x",
                         angle_deg=theta, waveform="modulated_gaussian")
@@ -99,7 +101,11 @@ def _build(theta):
 
 def _build_lean(theta):
     """Small oblique cell for the GRADIENT test only (AD=FD is config-independent). The
-    full-size reverse tape OOMs the GPU (~5.6GB); this keeps the AD peak under GPU memory."""
+    full-size reverse tape OOMs the GPU (~5.6GB); this keeps the AD peak under GPU memory.
+    Its count is not lengthened for the Bloch pulse peaking 2 tau later since #1831 (that would
+    grow the tape by a third): the record ends 0.4 ns after the source peak and holds about the
+    leading half of the reflected pulse, so AD = FD is checked on that truncated quantity, not on
+    the reflection coefficient."""
     dom = (0.40, 0.08, 0.006)
     xif, xend, plat = 0.10, 0.30, (0.04, 0.08)
     yc, zc = dom[1] / 2, dom[2] / 2
