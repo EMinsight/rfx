@@ -115,6 +115,8 @@ class GradedFrame:
     new_waveguide_port_accs: Any = None
     new_wire_sp: Any = None
     port_samples: Any = None
+    port_refs: Any = None
+    new_port_refs: Any = None
     new_dft_planes: Any = None
     new_flux_monitors: Any = None
     plane_samples: Any = None
@@ -136,8 +138,29 @@ def make_graded_step(
         (m[3], m[13], 'wire', m[:3], i) for i, m in enumerate(ctx.wp_meta))
     acc_indices = ctx.port_acc_indices if ctx.port_record_specs is not None else tuple(range(len(ctx.wp_meta)))
     widths = tuple(3 if p[2] == 'wire' else 2 for p in port_specs)
-    offsets = tuple(sum(widths[:i]) for i in range(len(widths)))
+    from rfx.measurement.port_sampler import (
+        pre_injection_samples, ref_dft_update, wire_dft_update, stack_samples)
     port_tables = {}
+
+    def graded_port_table(frame: GradedFrame):
+        table = frame.invariants.get('port_table')
+        dtype = frame.st.ex.dtype
+        if table is None and dtype not in port_tables:
+            # Graded widths are JAX arrays: evaluate the weights once, outside
+            # the traced step, as they were before the table (a coefficient
+            # formed inside the loop is rounded by its context).
+            with jax.ensure_compile_time_eval():
+                port_tables[dtype] = port_table(ctx.grid, port_specs, nu=True,
+                                                boundary=ctx.curl_boundary, dtype=dtype)
+        return port_tables[dtype] if table is None else table
+
+    def before_sources(frame: GradedFrame):
+        # The reference reads the V row's own weight, so a traced width
+        # (a dz_profile design variable) stays a tracer.
+        frame.port_refs = pre_injection_samples(frame.st, port_specs, None, table=graded_port_table(frame))
+        frame.new_port_refs = [ref_dft_update(
+            accs[4], frame.port_refs[acc_indices[p]], frame.step_idx, ctx.sp_freqs, ctx.dt)
+            for p, accs in enumerate(frame.carry.get('wire_sparams', ()))]
 
     def prepare(frame: GradedFrame):
         frame.materials = frame.invariants["materials"]
@@ -369,33 +392,17 @@ def make_graded_step(
         # source loop writes E only, at the SOURCE cell.
         frame.new_wire_sp = None
         if port_specs:
-            from rfx.core.dft_utils import port_dft_phase
             frame.new_wire_sp = []
             frame.port_samples = []
-            dtype = frame.st.ex.dtype
-            table = frame.invariants.get('port_table')
-            if table is None and dtype not in port_tables:
-                # Graded widths are JAX arrays: evaluate the weights once, outside
-                # the traced step, as they were before the table (a coefficient
-                # formed inside the loop is rounded by its context).
-                with jax.ensure_compile_time_eval():
-                    port_tables[dtype] = port_table(ctx.grid, port_specs, nu=True,
-                                                    boundary=ctx.curl_boundary, dtype=dtype)
-            port_values = project(frame.st, port_tables[dtype] if table is None else table)
-            frame.port_samples = [jnp.stack(tuple(port_values[offset:offset+width]))
-                                  for offset, width in zip(offsets, widths)]
-            for p, (v_dft, i_dft, vinc_dft, v_port_dft) in enumerate(frame.carry.get("wire_sparams", ())):
+            port_values = project(frame.st, graded_port_table(frame))
+            frame.port_samples = stack_samples(port_values, port_specs, frame.port_refs)
+            for p, accs in enumerate(frame.carry.get("wire_sparams", ())):
                 sample = frame.port_samples[acc_indices[p]]
                 v, i_val = sample[:2]
                 v_port = sample[2] if widths[acc_indices[p]] == 3 else v
-                phase = port_dft_phase(frame.step_idx, ctx.sp_freqs, ctx.dt, dtype=v_dft.dtype)
-                i_phase = port_dft_phase(frame.step_idx, ctx.sp_freqs, ctx.dt, 'H', dtype=i_dft.dtype)
-                frame.new_wire_sp.append((
-                    v_dft + v * phase,
-                    i_dft + i_val * i_phase,
-                    vinc_dft,
-                    v_port_dft + v_port * phase,
-                ))
+                v_ref, phase = frame.new_port_refs[p]
+                frame.new_wire_sp.append((*wire_dft_update(
+                    accs, (v, i_val, v_port), frame.step_idx, ctx.sp_freqs, ctx.dt, phase), v_ref))
 
         from rfx.measurement.accumulators import planes, flux
         frame.new_dft_planes = frame.new_flux_monitors = None
@@ -475,6 +482,7 @@ def make_graded_step(
         return new_carry, frame.probe_out
 
     attachments = {point: () for point in HookPoint}
+    attachments[HookPoint.BEFORE_SOURCES] = (before_sources,) if port_specs else ()
     attachments[HookPoint.AFTER_SOURCES] = (after_sources,)
     for point, extra in (hooks or {}).items():
         attachments[point] += tuple(extra)
