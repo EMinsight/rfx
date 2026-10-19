@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from tests.contracts.run_forward_census import BUILDERS, invoke
+from tests.contracts.run_forward_census import BUILDERS, invoke, port_drive_witness_leaves, port_s_pair
 from tests.contracts.test_run_forward_one_pipeline import check_fields
 
 
@@ -53,6 +53,75 @@ def test_d5_census_disposition(declaration, path, direction):
     check_fields(declaration, path, direction)
 
 
+@pytest.fixture(scope='module')
+def two_port_s_results():
+    return port_s_pair('P-lumped2', 'uniform')
+
+
+@pytest.mark.parametrize('reverse_rows', [False, True])
+def test_two_port_drive_witnesses_use_port_record_kind(two_port_s_results, reverse_rows):
+    from copy import deepcopy
+    run, forward = (two_port_s_results[entry]['result'] for entry in ('run', 'forward'))
+    if reverse_rows:
+        # Probe and port rows may move independently on either entry.
+        witness = deepcopy(forward.settling_witness)
+        witness['runs'] = type(witness['runs'])(reversed(witness['runs']))
+        # ForwardResult derives its witness; hand the helper a view with the moved rows.
+        from types import SimpleNamespace
+        forward = SimpleNamespace(sparam_time_records=forward.sparam_time_records,
+                                  settling_witness=witness, s_params=forward.s_params)
+    leaves = port_drive_witness_leaves(BUILDERS['P-lumped2']('uniform'), run, forward)
+    assert set(leaves) == {
+        f'{prefix}/per_drive/{column}/{key}'
+        for prefix in ('settling_witness', 'settling_witness/runs/0')
+        for column in (0, 1) for key in ('error_per_bin', 'share_per_bin')
+    }
+
+
+def test_two_port_drive_witnesses_follow_run_row_location(two_port_s_results):
+    from copy import deepcopy
+    run, forward = (two_port_s_results[entry]['result'] for entry in ('run', 'forward'))
+    witness = deepcopy(run.settling_witness)
+    witness['runs'] = type(witness['runs'])(reversed(witness['runs']))
+    run = run._replace(settling_witness=witness)
+    leaves = port_drive_witness_leaves(BUILDERS['P-lumped2']('uniform'), run, forward)
+    assert set(leaves) == {
+        f'{prefix}/per_drive/{column}/{key}'
+        for prefix in ('settling_witness', 'settling_witness/runs/1')
+        for column in (0, 1) for key in ('error_per_bin', 'share_per_bin')
+    }
+
+
+def test_two_port_drive_witnesses_tell_driven_from_passive():
+    # 600 steps: both drive witnesses are determined and differ, so the
+    # driven entry's equality with forward's port row is not a constant.
+    from copy import deepcopy
+    pair = port_s_pair('P-lumped2', 'uniform', n_steps=600)
+    run, forward = (pair[entry]['result'] for entry in ('run', 'forward'))
+    sim = BUILDERS['P-lumped2']('uniform')
+    port_drive_witness_leaves(sim, run, forward)
+    row = next(r for r in run.settling_witness['runs'] if r.get('route') == 's_channels')
+    driven, passive = row['per_drive']
+    assert driven['status'] == passive['status'] == 'pass'
+    assert not np.array_equal(driven['error_per_bin'], passive['error_per_bin'])
+    # Each entry judges the S it returns: run's S row (and its top level when
+    # that repeats per_drive) is the worst drive, the passive one here;
+    # forward's S row is its driven record (decision C).
+    worst = max((driven, passive), key=lambda drive: drive['db'])
+    assert worst is passive
+    forward_row = next(r for r in forward.settling_witness['runs'] if r.get('route') == 's_channels')
+    for key in ('db', 'error_per_bin', 'share_per_bin'):
+        np.testing.assert_array_equal(row[key], worst[key])
+        np.testing.assert_array_equal(forward_row[key], driven[key])
+        if 'per_drive' in run.settling_witness:
+            np.testing.assert_array_equal(run.settling_witness[key], worst[key])
+    assert row['db'] != forward_row['db']
+    witness = deepcopy(run.settling_witness)
+    for holder in [witness] + [r for r in witness['runs'] if r.get('route') == 's_channels']:
+        if 'per_drive' in holder:
+            holder['per_drive'] = type(holder['per_drive'])(reversed(holder['per_drive']))
+    with pytest.raises(AssertionError):
+        port_drive_witness_leaves(sim, run._replace(settling_witness=witness), forward)
 
 
 @pytest.mark.parametrize('mode,drives', [('passive', 1), ('two_ports', 2), ('no_s', 0),
