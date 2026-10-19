@@ -46,9 +46,9 @@ c. Vacuum and homogeneous models (vacuum, and eps_r 4.4 / sigma 0.02 filling
    a CPML box, both lanes): bitwise the records of the same kernels fed the
    cell values, i.e. main's rule. main itself, run out of process on the same
    host, gave the same bytes (measured when this change was made).
-d. CPML dispersive parity uses the per-step 9-ULP cross-trace bar (rfx
-   CLAUDE.md), since R15g replaces the vacuum-relative gate that collapsed
-   when one CPML made its reference exact.
+d. Debye/Lorentz CPML forward snapshots use law C and bar S for accumulated
+   pole rounding (rfx-archive records/20261017-item5-dispersive); the other
+   rows retain their existing gates.
    A Debye block: both lanes take per-component epsilon/sigma and pole-mask
    edge means. CPML reads the same component epsilon as the E update.
 e. The permittivity gradient of forward(distributed=True) through a traced
@@ -736,16 +736,6 @@ def test_a_dispersive_model_matches_one_device(boundary, lane, kind):
     _check(f"{kind}/{boundary}/{lane}", got, floor)
 
 
-@pytest.mark.parametrize("kind", ["debye", "lorentz"])
-def test_cpml_dispersive_pr_snapshots(kind):
-    """Snapshots under-read the per-step maximum by up to 65 % on the saved
-    records; the weekly test is the judge (R15n). The bar remains 9 ULP.
-    """
-    from tests._distributed_cpml_cross_trace import PR_PREFIXES, cross_trace
-    cross_trace(lambda: _debye_box("cpml", "fwd", kind), "fwd", _devices(2),
-                f"pr/{kind}/cpml/fwd", prefixes=PR_PREFIXES)
-
-
 @pytest.mark.parametrize("kind", ["debye", "lorentz", "mixed"])
 def test_a_large_dispersive_objective_has_finite_gradients(kind):
     """The raw squared-field objective exercises the coefficient reverse pass."""
@@ -817,8 +807,8 @@ def test_a_dispersive_cpml_box_stays_finite_and_matches_one_device(lane):
     PEC backing of the absorber's outer node planes. Forward rows live in
     test_distributed_cpml_dispersive_weekly.py.
     The run row keeps FLOOR_FACTOR x the vacuum agreement, measured here.
-    (Graded run(devices=) refuses CPML with poles; the graded lane is
-    forward(distributed=True).)"""
+    Graded run(devices=) and forward(distributed=True) pole rows use law C
+    and bar S in test_distributed_dispersive_cpml.py."""
     devices = _devices(2)
     floor = _rel(_cpml_1302_record("vacuum", lane, devices),
                  _cpml_1302_record("vacuum", lane))

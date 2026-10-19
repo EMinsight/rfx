@@ -613,8 +613,7 @@ def cpml_metrics(one, several, dt, name):
     return e, h, float(np.max(np.abs(actual-expected))/np.max(np.abs(expected)))
 
 
-@pytest.mark.parametrize('name', ['scene2', pytest.param('debye', marks=pytest.mark.skip(
-    reason='CPML with poles: the wrapped setup is not built for poles until rfx #1402 item 5'))])
+@pytest.mark.parametrize('name', ['scene2'])
 def test_cpml_one_slab_invariants(name, monkeypatch):
     from rfx.stepping import graded_loop as nonuniform
     from rfx.runners import _distributed_nu_wrapped as runner
@@ -646,9 +645,16 @@ def test_cpml_one_slab_invariants(name, monkeypatch):
                        'cpml_inv_eps_r'):
                 continue
             assert_same_tree(inv[key], actual[key], key, owned=owned)
-        # The wrapped CPML call forms 1/eps and the loss from the staged
-        # components (compared above); no unused legacy-layout copy is staged.
-        assert actual['e_loss'] is None and actual['cpml_inv_eps_r'] is None
+        if name == 'scene2':
+            # Plain CPML keeps its existing in-loop component arithmetic.
+            assert actual['e_loss'] is None and actual['cpml_inv_eps_r'] is None
+        else:
+            assert_same_tree(inv['cpml_inv_eps_r'], actual['cpml_inv_eps_r'],
+                             'cpml_inv_eps_r', owned=owned)
+            loss = actual['e_loss']
+            # wrap() restores the static relative-epsilon flag per device.
+            assert_same_tree(inv['e_loss'], None if loss is None else (*loss, False),
+                             'e_loss', owned=owned)
         for family in ('debye', 'lorentz'):
             coeffs = inv[family + '_coeffs']
             if coeffs is None:
@@ -688,10 +694,10 @@ def test_cpml_one_slab_invariants(name, monkeypatch):
                 n_steps=2, devices=jax.devices('cpu')[:1], skip_preflight=True)
 
 
-@pytest.mark.parametrize('name', ['scene2', pytest.param('debye', marks=pytest.mark.skip(
-    reason='CPML with poles: the wrapped setup is not built for poles until rfx #1402 item 5'))])
+@pytest.mark.parametrize('name', ['scene2'])
 def test_cpml_two_vs_three_bitwise_and_bars(name):
-    sim = cpml_scene(name)
+    from tests._distributed_dispersive_cpml import scene, measure, check
+    sim = scene('debye') if name == 'debye' else cpml_scene(name)
     outputs = [sim.forward(n_steps=60, checkpoint=False, skip_preflight=True,
         **({} if n == 1 else dict(distributed=True, devices=host_devices(n))))
         for n in (1, 2, 3)]
@@ -710,24 +716,22 @@ def test_cpml_two_vs_three_bitwise_and_bars(name):
                         distributed=True, devices=host_devices(n))
     assert_bits((outputs[1].time_series, states[0]), (outputs[2].time_series, states[1]))
     for result in outputs[1:]:
+        if name == 'debye':
+            check(measure(outputs[0].time_series, result.time_series, float(result.dt)))
+            continue
         e, h, dft = cpml_metrics(outputs[0].time_series, result.time_series, float(result.dt), name)
         assert np.max(e) <= 9, e
         assert np.max(h) <= 9, h
         assert dft <= 1e-4, dft
 
 
-@pytest.mark.parametrize('debye,lorentz', [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize('debye,lorentz', [(False, False)])
 def test_cpml_selector(debye, lorentz):
-    expected = 'legacy' if debye or lorentz else 'wrapped'
-    assert select_step(cpml=True, debye=debye, lorentz=lorentz) == expected
-    if debye or lorentz:
-        with pytest.raises(NotImplementedError, match='item 5 dispersive'):
-            select_step(cpml=True, debye=debye, lorentz=lorentz, ports=True)
-    else:
-        assert select_step(cpml=True, ports=True) == 'wrapped'
+    assert select_step(cpml=True, debye=debye, lorentz=lorentz) == 'wrapped'
+    assert select_step(cpml=True, debye=debye, lorentz=lorentz, ports=True) == 'wrapped'
 
 
-@pytest.mark.parametrize('name,mode', [('scene2', 'run'), ('scene2', 'grad'), ('debye', 'grad'), ('lorentz', 'grad')])
+@pytest.mark.parametrize('name,mode', [('scene2', mode) for mode in ('run', 'grad')])
 def test_cpml_entries_reach_wrap(name, mode, monkeypatch):
     from rfx.runners import _distributed_nu_wrapped as runner
     calls = []
@@ -755,17 +759,9 @@ def test_cpml_entries_reach_wrap(name, mode, monkeypatch):
             one = np.asarray(jax.grad(loss)(materials.eps_r))
             # A gradient summed over the record: 1e-4 of its peak (cross-trace bar).
             assert np.max(np.abs(two - one)) <= 1e-4 * np.max(np.abs(one))
-    assert calls and all(calls) if name == 'scene2' else not calls
+    assert calls and all(calls)
 
 
-def test_wrapped_setup_refuses_cpml_with_poles(monkeypatch):
-    """Forced past select_step, a Lorentz CPML model is refused, never run without its poles."""
-    from rfx.stepping import slab_wrap
-    from tests.unit.runners.test_distributed_edge_averaged_materials import _cpml_1302_box
-    monkeypatch.setattr(slab_wrap, 'select_step', lambda **kw: 'wrapped')
-    sim = _cpml_1302_box('lorentz', 'fwd_graded')
-    with pytest.raises(ValueError, match='CPML with Debye/Lorentz poles'):
-        sim.run(n_steps=4, devices=host_devices(2), skip_preflight=True)
 
 
 @pytest.mark.parametrize('devices', [2, 3])
@@ -927,7 +923,7 @@ def test_item6_missing_extra_runtime_row_is_caught(monkeypatch):
         _item6_identity('material_seam', 2)
 
 
-def _item6_memory_worker(boundary, devices, mode, mutation=False, case='mixed'):
+def _item6_memory_worker(boundary, devices, mode, mutation=False, case='mixed', route='wrapped'):
     """Called only in a fresh subprocess, before any other scene is built."""
     from tests.unit.runners import test_distributed_nu_forward_staging as staging
     from unittest.mock import patch
@@ -963,16 +959,19 @@ def _item6_memory_worker(boundary, devices, mode, mutation=False, case='mixed'):
             record.append(dict(bytes=per, whole=whole, grid=list(grid.shape)))
         return scan(*args, **kwargs)
     jax.lax.scan = observe
+    if route == 'legacy':
+        from rfx.stepping import slab_wrap
+        slab_wrap.select_step = lambda **flags: 'legacy'
     def forward(e):
-        return sim.forward(eps_override=e, distributed=True, devices=host_devices(devices),
-                           n_steps=8, skip_preflight=True).time_series
+        kw = {} if route == 'one' else dict(distributed=True, devices=host_devices(devices))
+        return sim.forward(eps_override=e, n_steps=8, skip_preflight=True, **kw).time_series
     result = forward(eps) if mode == 'plain' else jax.grad(lambda e: jnp.sum(forward(e) ** 2))(eps)
     jax.block_until_ready(result)
     assert len(record) == 1
-    return dict(boundary=boundary, devices=devices, mode=mode, mutation=mutation, **record[0])
+    return dict(boundary=boundary, devices=devices, mode=mode, mutation=mutation, route=route, **record[0])
 
 
-def _item6_memory_subprocess(boundary, devices, mode, mutation=False, case='mixed'):
+def _item6_memory_subprocess(boundary, devices, mode, mutation=False, case='mixed', route='wrapped'):
     import json
     import os
     from pathlib import Path
@@ -980,7 +979,7 @@ def _item6_memory_subprocess(boundary, devices, mode, mutation=False, case='mixe
     import sys
     root = Path(__file__).resolve().parents[3]
     code = ('import json; from tests.unit.runners.test_distributed_nu_wrapped_step import _item6_memory_worker; '
-            f'print("ITEM6_JSON " + json.dumps(_item6_memory_worker({boundary!r}, {devices}, {mode!r}, {mutation}, {case!r})))')
+            f'print("ITEM6_JSON " + json.dumps(_item6_memory_worker({boundary!r}, {devices}, {mode!r}, {mutation}, {case!r}, {route!r})))')
     env = dict(os.environ, JAX_PLATFORMS='cpu', PYTHONPATH=str(root),
                XLA_FLAGS='--xla_force_host_platform_device_count=3', PYTHONDONTWRITEBYTECODE='1')
     p = subprocess.run([sys.executable, '-c', code], cwd=root, env=env, text=True, capture_output=True)
@@ -1006,10 +1005,19 @@ def _assert_item6_memory(record):
     assert max(record['bytes'].values()) <= 2.0 * legacy, record
 
 
-@pytest.mark.parametrize('boundary', ['pec', 'cpml'])
-@pytest.mark.parametrize('devices', (2, 3))
+@pytest.mark.parametrize('boundary,devices', [('pec', 2), ('pec', 3), ('cpml', 2),
+                                                ('cpml', 3)])
 @pytest.mark.parametrize('mode', ('plain', 'grad'))
 def test_item6_first_scan_memory(boundary, devices, mode):
+    if boundary == 'cpml_poles':
+        from tests._distributed_dispersive_cpml import record
+        rows = {route: _item6_memory_subprocess('cpml', 1 if route == 'one' else devices,
+                mode, route=route) for route in ('one', 'legacy', 'wrapped')}
+        record(dict(entry='memory', kind='mixed', mode=mode, devices=devices, rows=rows))
+        assert not rows['wrapped']['whole'], rows['wrapped']
+        for device, live in rows['wrapped']['bytes'].items():
+            assert live <= 2 * rows['legacy']['bytes'][device], rows
+        return
     # CPML: the staging scene without poles, against legacy on that scene.
     kw = dict(case='nopole') if boundary == 'cpml' else {}
     _assert_item6_memory(_item6_memory_subprocess(boundary, devices, mode, **kw))

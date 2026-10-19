@@ -1,4 +1,9 @@
-"""Judge 2: observe actual distributed face multipliers on both active copies."""
+"""Judge 2: observe actual distributed face multipliers on both active copies.
+
+Pole owners on the graded distributed lane observe legacy (production reaches
+it only with PMC); test_distributed_cpml_curl_operand.py pins the shipped
+wrapped route's coefficient byte-equal.
+"""
 import importlib.util
 import json
 
@@ -13,6 +18,7 @@ from rfx.materials.debye import DebyePole
 from tests.contracts.test_absorber_curl_coefficients import (
     LOSSLESS_BITS, coefficient_scene, coefficient_ulp_bar, edge_mean, ulps,
 )
+from tests.unit.runners.test_distributed_nu_forward_staging import _select_legacy_poles_cpml
 
 
 def observe_faces(monkeypatch, sim, lane, face, *, expected_layout=None):
@@ -26,6 +32,8 @@ def observe_faces(monkeypatch, sim, lane, face, *, expected_layout=None):
     observed, context = {}, {}
     components = (1, 2) if face.startswith("x") else (0, 2)
     module = graded if 'graded' in lane else uniform
+    if 'graded' in lane:
+        _select_legacy_poles_cpml(monkeypatch)
     original_step = module.apply_cpml_e
     original_coefficient = coefficients.corrected_coefficient
 
