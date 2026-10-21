@@ -274,8 +274,10 @@ def assemble_graded_ports(sim, grid, materials, materials_drive, conductors, *,
                     idx, pe.component, pe.waveform, sigma_port, 1 / d_parallel)))
 
             # Requested bins opt lumped ports into V/I/reference accumulators
-            # on both entries. An explicit run S request also admits default
-            # bins; no request keeps the historical wire-only default.
+            # on both entries. An explicit run S request, or an all-passive
+            # set on run (its V/I stay available with S off, as on uniform),
+            # also admits default bins; otherwise the wire-only default holds.
+            from rfx.measurement.port_s_contract import passive_record_diagnostic
             lumped_port_specs.append({
                 'mid_i': i, 'mid_j': j, 'mid_k': k,
                 'component': pe.component,
@@ -285,7 +287,8 @@ def assemble_graded_ports(sim, grid, materials, materials_drive, conductors, *,
                 'live_cells': ((i, j, k),),
                 'n_live': 1,
                 'kind': 'lumped', 'port_id': _port_index,
-                'record_only': not (s_param_freqs is not None or (lane == 'run_nonuniform' and compute_s_params is True)),
+                'record_only': not (s_param_freqs is not None or (lane == 'run_nonuniform' and (
+                    compute_s_params is True or passive_record_diagnostic(sim)))),
             })
 
     # Preserve wire indices when explicit bins also include lumped ports.
