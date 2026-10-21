@@ -42,7 +42,7 @@ import numpy as np
 import jax.numpy as jnp
 import pytest
 
-from rfx.grid import Grid, C0
+from rfx.grid import Grid, C0, cells_spanning
 from rfx.core.yee import (
     init_state, init_materials, update_e, update_e_aniso, update_h,
 )
@@ -88,7 +88,9 @@ def _measure_cavity_energy_at_boundary(radius, height, dx, n_steps, use_conforma
     Lz = height + 2 * margin
     center = (Lx / 2, Ly / 2, Lz / 2)
 
-    grid = Grid(freq_max=_tm010_freq(radius) * 3, domain=(Lx, Ly, Lz),
+    # Placement uses the declared lengths; the grid gets main's solved lengths (#1887).
+    grid = Grid(freq_max=_tm010_freq(radius) * 3,
+                domain=tuple(cells_spanning(L, dx) * dx for L in (Lx, Ly, Lz)),
                 dx=dx, cpml_layers=0)
 
     cyl = Cylinder(center=center, radius=radius, height=height, axis="z")
@@ -249,7 +251,9 @@ class TestConformalConvergence:
         Lz = height + 2 * margin
         center = (Lx / 2, Ly / 2, Lz / 2)
 
-        grid = Grid(freq_max=_tm010_freq(radius) * 3, domain=(Lx, Ly, Lz),
+        # Placement uses the declared lengths; the grid gets main's solved lengths (#1887).
+        grid = Grid(freq_max=_tm010_freq(radius) * 3,
+                    domain=tuple(cells_spanning(L, dx) * dx for L in (Lx, Ly, Lz)),
                     dx=dx, cpml_layers=0)
         cyl = Cylinder(center=center, radius=radius, height=height, axis="z")
 

@@ -10,8 +10,17 @@ from dataclasses import replace
 import inspect
 from pathlib import Path
 import warnings
+import weakref
 
 from rfx.boundaries.depths import Kind, grid_face_depths, resolve_face_depths, simulation_face_depths
+
+
+_WALL_AXIS_WARNED = weakref.WeakKeyDictionary()
+
+
+def share_wall_warning_history(sim, diagnostic_copy):
+    """An internal preflight reader represents the same Simulation warning scope."""
+    _WALL_AXIS_WARNED[diagnostic_copy] = _WALL_AXIS_WARNED.setdefault(sim, set())
 
 
 class WaveguideBoundaryWarning(UserWarning):
@@ -30,17 +39,17 @@ def _guide_axes(sim, extra=""):
 
 
 def full_aperture(sim, entry, grid):
-    """Compare the production port's snapped node bounds with the cross section."""
+    """Recognize declared full ranges before comparing snapped interior bounds."""
     for index, axis in enumerate("xyz"):
         if axis == entry.direction[1]:
             continue
         requested = getattr(entry, f"{axis}_range")
+        if requested is None or (requested[0] <= 1e-9
+                                  and requested[1] >= sim._domain[index] - 1e-9):
+            continue
         if sim._uses_nonuniform_mesh:
             from rfx.runners.nonuniform import _range_to_slice_nu
             span, _ = _range_to_slice_nu(grid, axis, requested)
-        elif requested is None:
-            pad = getattr(grid, f"pad_{axis}_lo")
-            span = (pad, grid.shape[index] - pad)
         else:
             # Like _range_to_slice, position_to_index retains the input
             # scalar division dtype and uses nearest_uniform_index.
@@ -100,29 +109,96 @@ def _record_defaults(sim, grid):
 
 def build_grid(sim, *, extra_waveguide_axes=""):
     """Build the uniform legacy lattice, then record its full-guide defaults."""
-    from rfx.grid import Grid, _periodic_resolution, _wall_closed_axes
+    from rfx.grid import C0, Grid, _periodic_resolution, axis_kinds
     sim._require_uniform_mesh("uniform grid construction")
     periodic = "".join(a for a, yes in zip("xyz", sim._periodic_flags()) if yes)
-    dx = sim._dx
-    if dx is not None and sim._declared_mesh["_dx"] is None:
-        physical = periodic.replace("z", "") if sim._mode.startswith("2d") else periodic
-        dx = _periodic_resolution(
-            sim._domain, physical, dx, automatic=True,
-            wall_axes=_wall_closed_axes(sim._boundary_spec.pec_faces(),
-                                       sim._boundary_spec.pmc_faces(),
-                                       is_2d=sim._mode.startswith("2d")))
-    # Smaller apertures retain the legacy rewrite, PR3b; Addendum 5.
+    dx = sim._dx if sim._dx is not None else C0 / sim._freq_max / 20.0
     axes = _guide_axes(sim, extra_waveguide_axes) if sim._waveguide_ports or extra_waveguide_axes else "xyz"
-    grid = Grid(
-        freq_max=sim._freq_max, domain=sim._domain, dx=dx,
+    kwargs = dict(
+        freq_max=sim._freq_max, domain=sim._domain,
         cpml_layers=sim._cpml_layers,
         cpml_axes="".join(axis for axis in axes if axis not in periodic),
         mode=sim._mode, kappa_max=sim._cpml_kappa_max,
         pec_faces=sim._boundary_spec.pec_faces(),
         pmc_faces=sim._boundary_spec.pmc_faces(),
         face_layers=sim._resolve_face_layers(),
-        conformal_faces=sim._boundary_spec.conformal_faces(), periodic_axes=periodic)
+        conformal_faces=sim._boundary_spec.conformal_faces())
+    depths = resolve_face_depths(
+        budget=sim._cpml_layers, absorbing_axes=kwargs["cpml_axes"],
+        pec_faces=kwargs["pec_faces"],
+        pmc_faces=kwargs["pmc_faces"],
+        periodic_axes=periodic, mode=sim._mode, face_layers=kwargs["face_layers"])
+    kinds = axis_kinds(depths)
+    physical = periodic.replace("z", "") if sim._mode.startswith("2d") else periodic
+    dx = _periodic_resolution(
+        sim._domain, physical, dx, automatic=sim._declared_mesh["_dx"] is None,
+        wall_axes="".join(a for a in "xyz" if kinds[a] == "wall"
+                          and not (a == "z" and sim._mode.startswith("2d"))))
+    grid = Grid(**kwargs, dx=dx, periodic_axes=periodic, boundary_depths=depths)
+    judge_wall_axes(sim, grid)
     return _record_defaults(sim, grid)
+
+
+def judge_wall_axes(sim, grid, *, boundary_depths=None):
+    """Judge the built unprofiled wall lengths where Simulation owns snap.
+
+    Low-level grid builders have no declaration acceptance policy. Declared
+    warnings are emitted once per axis/declared/solved/dx tuple on this sim.
+    """
+    from rfx.grid import axis_kinds, realized_cells
+    depths = grid_face_depths(grid) if boundary_depths is None else boundary_depths
+    messages = []
+    findings = []
+    for index, (axis, kind) in enumerate(axis_kinds(depths).items()):
+        if kind != "wall" or (axis == "z" and sim._mode.startswith("2d")):
+            continue
+        # The lattice counts a periodic axis without its closing node, whatever
+        # the face table says (a PEC box with a Floquet port, refused later).
+        if axis in getattr(grid, "periodic_axes", ""):
+            continue
+        if getattr(sim, f"_d{axis}_profile") is not None:
+            continue
+        length = float(sim._domain[index])
+        if hasattr(grid, "dx_arr_f64"):
+            from rfx.model.graded_grid import interior_cells
+            widths = (grid.dx_arr_f64, grid.dy_arr_f64, grid.dz_f64)[index]
+            cells = interior_cells(widths, getattr(grid, f"pad_{axis}_lo"),
+                                   getattr(grid, f"pad_{axis}_hi"))
+            n, solved = len(cells), float(sum(cells))
+            cell = float(cells[0])  # an unprofiled axis has one interior width
+        else:
+            span = grid.interior[index]
+            n = span.stop - span.start - 1
+            cell = float(grid.cells(axis)[span.start])
+            solved = n * cell
+        rel = solved / length - 1
+        if abs(rel) <= .01:
+            continue
+        nearest_n = realized_cells(length, cell, "wall")
+        adjacent = min((length / count for count in (nearest_n - 1, nearest_n + 1) if count >= 1),
+                       key=lambda spacing: abs(spacing - cell))
+        messages.append(
+            f"wall axis {axis!r}: declared {length * 1e3:.12g} mm, solved {solved * 1e3:.12g} mm, "
+            f"rel {rel * 100:+.12g} %, {n} cells, dx={cell * 1e3:.12g} mm; "
+            f"nearest dx={length / nearest_n * 1e3:.12g} mm, next dx={adjacent * 1e3:.12g} mm "
+            "(both pass 1 %)")
+        findings.append((axis, length, solved, cell, messages[-1]))
+    if messages:
+        message = "; ".join(messages) + "; set snap='declared' to accept."
+        if sim._snap == "declared":
+            from rfx.preflight._common import PreflightWarning
+            warned = _WALL_AXIS_WARNED.setdefault(sim, set())
+            for axis, length, solved, dx, text in findings:
+                key = (axis, length, solved, dx)
+                if key in warned:
+                    continue
+                warnings.warn(PreflightWarning(
+                    text + "; accepted with snap='declared'.",
+                    code="wall_axis_off_node", loc=axis, source="judge_wall_axes"),
+                    stacklevel=3)
+                warned.add(key)
+        else:
+            raise ValueError(message)
 
 
 def _warn_caller(message):
