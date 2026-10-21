@@ -60,6 +60,9 @@ from rfx.model.waveguide_modes import (
     WaveguidePort,
     WaveguidePortConfig,
 )
+from rfx.model.waveguide_waveform import (
+    waveguide_waveform_error,
+)
 
 __all__ = [
     "admit_adi_sources",
@@ -95,6 +98,7 @@ __all__ = [
     "stage_distributed_occupancy",
     "traced_cell_mask",
     "uniform_solve_inputs",
+    "waveguide_waveform_error",
     "WaveguidePort",
     "WaveguidePortConfig",
     "with_edge_keep",
