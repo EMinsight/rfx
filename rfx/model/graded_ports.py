@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import jax
+
 from rfx._grid_metric import field_index
+from rfx._traced_refusal import TracedStructureRefusal
 from rfx.boundaries.pec import edge_is_pec as _edge_is_pec
 from rfx.core.yee import MaterialArrays
 from rfx.model.conductors import lumped_port_stage, publish_port_release
@@ -27,6 +30,13 @@ class GradedPorts(NamedTuple):
     conductors: object
     drives: list
     port_specs: list
+
+
+class TracedWireLiveCellsError(TracedStructureRefusal, jax.errors.TracerArrayConversionError):
+    """Named host-read refusal compatible with the optimizer's eager fallback."""
+
+    def __init__(self, message):
+        TracedStructureRefusal.__init__(self, message)
 
 
 def assemble_graded_ports(sim, grid, materials, materials_drive, conductors, *,
@@ -100,6 +110,13 @@ def assemble_graded_ports(sim, grid, materials, materials_drive, conductors, *,
                 cell[axis] = k
                 _cells_ijk.append(tuple(cell))
             if pec_edge_masks is not None:
+                if any(isinstance(mask, jax.core.Tracer)
+                       for mask in jax.tree.leaves(pec_edge_masks)):
+                    raise TracedWireLiveCellsError(
+                        "A graded wire port beside a conductor cannot choose "
+                        "live cells from traced PEC edge masks. Use a concrete "
+                        "mesh, or eager jax.jvp/jax.grad. For optimization, "
+                        "use optimize(jit=False) to select the eager route.")
                 live_flags = [
                     not _edge_is_pec(pec_edge_masks, pe.component,
                                      c[0], c[1], c[2])

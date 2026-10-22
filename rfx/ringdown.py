@@ -1230,7 +1230,7 @@ class RingdownRun:
     #: The entry point named in refusal messages.
     caller = "run"
 
-    def __init__(self, sim, spec: RingdownSpec, *, lane: str, n_steps: int, grid, bins=None):
+    def __init__(self, sim, spec: RingdownSpec, *, lane: str, n_steps: int, grid, bins=None, warn_identification=True):
         if lane not in ("uniform", "graded"):
             raise ValueError(f"lane must be 'uniform' or 'graded', got {lane!r}")
         self.sim, self.spec, self.lane = sim, spec, lane
@@ -1254,7 +1254,7 @@ class RingdownRun:
                                    if float(pe.impedance) > 0.0 and pe.extent is not None)
         self.wire_entries = [sim._ports[i] for i in self.wire_port_ids]
         self.source_off, self.source_ratio_long = self._check_sources_off()
-        self.probe_keys = self._plan_probes()
+        self.probe_keys = self._plan_probes(warn_identification=warn_identification)
 
     # -- before the run ------------------------------------------------------
 
@@ -1293,7 +1293,7 @@ class RingdownRun:
                 ratio_long = max(ratio_long, float(np.max(w[self.n_long:]) / peak))
         return tuple(rows), ratio_long
 
-    def _plan_probes(self) -> tuple:
+    def _plan_probes(self, *, warn_identification=True) -> tuple:
         """(component, index) of every port-channel probe, deduplicated, in order.
 
         The E edges of each port's extent span and the H samples of an Ampere
@@ -1341,18 +1341,9 @@ class RingdownRun:
                                 "where the graded lane's probes cannot be placed. "
                                 "Move the port at least one cell inside.")
                         add(hname, back)
-        identification_keys = []
-        for position, component in self.spec.identification_probes:
-            # Refuse clamping as well as absorber samples before calling a lane.
-            for ax, coord in enumerate(position):
-                lo = pads[ax]
-                hi = self.grid.shape[ax] - int(getattr(self.grid, f"pad_{'xyz'[ax]}_hi", 0))
-                if not (self.grid.node_of(ax, lo) <= coord <= self.grid.node_of(ax, hi - 1)):
-                    raise ValueError("identification probe position is outside the probeable interior (absorber pad or domain)")
-            idx = tuple(int(v) for v in field_index(self.grid, position, component))
-            identification_keys.append((component, idx))
-            add(component, idx, wire=False)
-        self.identification_keys = tuple(identification_keys)
+        from rfx.measurement.identification import resolve_identification_probes
+        self.identification_keys = resolve_identification_probes(
+            self.spec.identification_probes, self.grid, pads, add, warn_duplicates=warn_identification)
         for comp, idx in keys:
             pos = _node_position(self.grid, idx)
             got = tuple(int(v) for v in field_index(self.grid, pos, comp))
@@ -2240,7 +2231,7 @@ class RingdownStop:
         n_rec = int(np.shape(result.time_series)[0])
         fin = (self.base if n_rec == self.n_max else
                RingdownRun(self.sim, self.spec, lane=self.lane, n_steps=n_rec,
-                           grid=self.grid))
+                           grid=self.grid, warn_identification=False))
         if fin.probe_keys != self.base.probe_keys:
             raise RuntimeError(
                 "run(until_identified=True): the port-channel probes planned for "
@@ -2268,7 +2259,7 @@ class RingdownStop:
 
         # (a), as run(n_steps=T, ringdown=spec) evaluates it
         try:
-            rr = RingdownRun(self.sim, spec, lane=self.lane, n_steps=T, grid=self.grid)
+            rr = RingdownRun(self.sim, spec, lane=self.lane, n_steps=T, grid=self.grid, warn_identification=False)
         except ValueError as exc:
             return finish(note=f"(a) not held: {exc}")
         ratio_long = float(rr.source_ratio_long)

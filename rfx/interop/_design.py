@@ -808,7 +808,7 @@ def _dump_list(
 #
 # Anti-drift ledger.  ``tests/interop/test_interop_design_document.py`` asserts that
 # every ``self._*`` attribute a fresh ``Simulation`` carries appears in exactly
-# one of these two tuples, so a new builder field cannot slip into rfx without
+# one of the constructor-state tuples, so a new builder field cannot slip into rfx without
 # a decision being recorded here.
 
 EXPORTED_SIMULATION_ATTRS: tuple[str, ...] = (
@@ -849,10 +849,7 @@ EXPORTED_SIMULATION_ATTRS: tuple[str, ...] = (
     "_solver",
     "_snap",
     "_stencil_order",
-    "_dt_pin",
-    # nominal_profiles= is accepted only beside a TRACED profile, and the dump
-    # refuses a traced profile, so a dumped design never carries one: None.
-    "_dt_min_cell", "_nominal_profiles",
+    "_dt_pin", "_dt_min_cell",
     "_tfsf",
     "_pinned_sheets",
     "_thin_conductors",
@@ -881,19 +878,15 @@ EXPORTED_SIMULATION_ATTRS: tuple[str, ...] = (
     # Issue #470: indices of library-internal witness probes. Populated and
     # restored strictly inside compute_msl_s_matrix — ALWAYS empty at
     # construction and at dump time, so it contributes nothing to the
-    # document by construction. (Classification note: EXPORTED vs EXCLUDED
-    # is decided by "present at a fresh __init__", not by "appears in the
-    # document" — both #469/#470 attrs are constructed in __init__, so
-    # EXPORTED is the test-legal bucket even though neither maps to a
-    # document section of its own.)
+    # document by construction. Concrete constructor bookkeeping belongs in
+    # EXPORTED even without a document section of its own. Constructor state
+    # accepted only with traced inputs has a separate inventory below.
     "_internal_probe_indices",
 )
 
 #: Attributes deliberately absent from the document.  These are derived,
-#: transient, or run-time state — see the module docstring, rule 4.  A
-#: ``Simulation`` does not carry them at construction (or carries them only
-#: as empty run-time bookkeeping); they matter only inside a
-#: preflight/driver pass, which is exactly why they are not design state.
+#: transient, or run-time state — see the module docstring, rule 4.
+#: None of these attributes is set by the constructor.
 EXCLUDED_SIMULATION_ATTRS: tuple[str, ...] = (
     "_mesh_resolution",
     "_boundary_default_warned",
@@ -901,6 +894,9 @@ EXCLUDED_SIMULATION_ATTRS: tuple[str, ...] = (
     # compute_msl_s_matrix runs and is removed on exit (never a design input)
     "_dft_plane_regions",
 )
+
+#: Constructor state accepted only with traced widths; export refuses that input.
+TRACED_ONLY_SIMULATION_ATTRS: tuple[str, ...] = ("_nominal_profiles",)
 
 
 def _msl_ports_with_resolved_offsets(sim: Any) -> list[Any]:
