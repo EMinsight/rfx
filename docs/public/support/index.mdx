@@ -19,7 +19,7 @@ can hit inside these limits are on
 |---|---|
 | **supported** | Documented for routine use within the stated limits. |
 | **limited** | Documented only for the geometry, mode, mesh or observable stated. Outside that, you have to validate it yourself. |
-| **experimental** | Runs and has regression tests, but there is not enough RF evidence to rely on the numbers. |
+| **experimental** | Runs and has regression tests, but it has not been compared with references enough to rely on the numbers. |
 | **not documented** | Code exists, but there is no public workflow. |
 | **unsupported** | Refused with an error. |
 | **refused** | The code raises before the first time step, with a message that says what to do instead. |
@@ -83,7 +83,7 @@ you, except for a model with only lumped or wire ports, which it refuses (call
 | wire `add_port(..., extent=...)` | `run(compute_s_params=True)` | **limited** | A pin radius (`radius=`) is accepted up to 0.2 of the transverse cell; a larger one is refused (`tests/unit/ports/test_wire_port_radius.py`). |
 | lumped / wire | `forward(port_s11_freqs=...)` | **limited** | S11 at the requested frequencies, on one device, uniform or graded mesh. |
 | `add_msl_port(...)` | `compute_msl_s_matrix()` | **limited** | Quasi-TEM (`mode="laplace"`), directions ±x and ±y. The strip is a zero-thickness sheet. A strip drawn behind a port is an open stub; it is refused when its quarter-wave resonance falls near the band. Graded mesh experimental; `mode="eigenmode"` outside scope. |
-| `add_waveguide_port(...)` | `compute_waveguide_s_matrix()` | **limited** | Single-mode magnitude on a uniform mesh is tested on the WR-90 chain (`tests/oracle/test_waveguide_chain_battery_v18_close.py`); phase, junctions and multimode have less evidence. A full-aperture port needs PEC transverse walls. S is a power-wave S only when all ports share one cross-section. Graded mesh experimental. |
+| `add_waveguide_port(...)` | `compute_waveguide_s_matrix()` | **limited** | Single-mode magnitude on a uniform mesh is tested on the WR-90 chain (`tests/oracle/test_waveguide_chain_battery_v18_close.py`); phase, junctions and multimode are checked less. A full-aperture port needs PEC transverse walls. S is a power-wave S only when all ports share one cross-section. Graded mesh experimental. |
 | `add_waveguide_port(...)` | `run(...)` → `waveguide_sparams` | **limited** | Per-port diagnostic, not the full matrix. |
 | `add_coaxial_port(...)` | `compute_coaxial_line_reflection(...)` | **limited** | One `face="top"` port, a line the calculator builds itself, float32, uniform mesh, CPML on every face. |
 | `add_coaxial_port(...)` | `compute_coaxial_two_port(...)` | **limited** | One through-line family. |
@@ -103,7 +103,7 @@ accurate.
 | Multi-band graded profile (`rfx.make_band_profile`), adjacent cell ratio ≤ 1.4 on z, ≤ 1.3 on x and y | **limited** | Solver-level checks only (energy, transition reflection, order, gradients). Keep grading out of the absorber. Not a port, flux or far-field validation. |
 | Far field (NTFF) + graded z | **limited** | One short-dipole directivity case on one mesh (`tests/unit/farfield/test_farfield_nonuniform.py`). Other cases need their own validation. |
 | Lumped R/L/C + graded mesh | **limited** | The elements take part in the update. Component-value gradients are not documented. |
-| Lumped and wire-port S11 + graded mesh | **limited** | `forward(port_s11_freqs=...)` on one device. |
+| Lumped and wire-port S11 + graded mesh | **limited** | `forward(port_s11_freqs=...)`, on one device or several; `run(compute_s_params=True)` forms lumped S, and by default when every port is lumped and exactly one is driven. |
 | DFT plane or flux monitor + graded mesh | **experimental** | Runs; no general accuracy statement. |
 | Plane wave + graded mesh | **experimental** | Normal incidence along ±x with x uniform, through `run()` and `forward()`. Oblique incidence, incidence along ±z, a closed box and a `CustomWaveform` are refused. |
 | Waveguide S-matrix + graded mesh | **experimental** | Single mode, `normalize=True` or `"flux"`. With `boundary` omitted a full-aperture guide is refused; declare the walls. A reference-plane shift across cells of more than one size is refused. |
@@ -129,5 +129,5 @@ Exported files (Touchstone, HDF5, CSV, JSON, plots) record what a run produced.
 They do not change its status. When you report a number, state the API and
 port family, the mesh (uniform or graded, cell size), the frequency range, the
 normalization, the rfx version and the comparison you made. Outside a listed
-range, run a [convergence study](/rfx/evidence/mesh-convergence/) and compare
+range, run a [convergence study](/rfx/check/mesh-convergence/) and compare
 against an analytic or independent reference first.

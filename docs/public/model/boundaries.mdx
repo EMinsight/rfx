@@ -60,7 +60,7 @@ The rules the spec enforces when you build it:
 
 - A periodic axis is periodic on both faces.
 - `lo_thickness` and `hi_thickness` apply only to absorbing faces. They set
-  that face's layer count and may not exceed `cpml_layers`, which is the
+  that face's layer count and may not exceed `cpml_layers` (preflight refuses it), which is the
   largest depth rfx allocates; a face without its own thickness gets
   `cpml_layers`.
 - CPML and UPML cannot be mixed in one model.
@@ -152,15 +152,16 @@ array) is not set on the boundary itself but by the source that needs it:
 - **Plane wave in a closed box** (`closed_box=True`, a total-field box with
   the scattered field around it) needs `boundary="cpml"`, not a PEC cavity.
 
-## What is checked
+## How rfx checks it
 
 When the spec is built: the face words, a periodic axis on both faces,
-thickness only on absorbing faces and never above `cpml_layers`, and no
-CPML–UPML mix. Before the run, preflight checks the absorber depth, the room
+thickness only on absorbing faces, and no CPML–UPML mix. A thickness above
+`cpml_layers` is refused by preflight and when the grid is built. Before the
+run, preflight checks the absorber depth, the room
 around the structure and the mesh next to each absorbing face (warnings), and
 the solver path checks that it implements every face (refusals, below).
 
-## What is refused, and the way through
+## Inputs rfx refuses
 
 | Input | Solver path | What happens | Instead |
 |---|---|---|---|
@@ -205,5 +206,6 @@ measured values themselves.
 - [Domain and mesh](/rfx/model/domain-mesh/): the domain and the cells next to the absorber.
 - [Ports](/rfx/model/ports/) and [Sources](/rfx/model/sources/): what each port and source needs.
 - [Check the model on the grid](/rfx/check/model-on-grid/): the preflight warnings above.
-- [Known limitations](https://github.com/bk-squared/rfx/blob/main/docs/guides/known_limitations.md): magnetic faces, plane-wave side faces, and full-aperture
-  guides on a graded mesh each have an entry there.
+- [Known limitations](https://github.com/bk-squared/rfx/blob/main/docs/guides/known_limitations.md): magnetic faces and plane-wave side faces each have an
+  entry there. A full-aperture guide on a graded mesh needs its walls declared; the
+  [support matrix](https://github.com/bk-squared/rfx/blob/main/docs/guides/support_matrix.md) lists that refusal.

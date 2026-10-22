@@ -22,6 +22,18 @@ not an accuracy guarantee, and a preflight pass is not a convergence study.
 
 ## General constraints
 
+### `plan_mesh` with a graded z mesh solves the board on the lower absorber, in a shorter domain than it reports
+
+Tracker: #1941
+
+When `plan_mesh(...)` grades z (a thin dielectric layer), its z cell profile runs from z = 0 to the top of the geometry
+plus one margin, but the domain it reports is the geometry height plus two margins. The planner does not move the
+geometry, so `to_sim_kwargs()` builds a model with the board's bottom face on the z-lo absorber and only the upper margin
+of air: a 1.6 mm FR4 board planned for 1.5–3.5 GHz reports a 101.5 mm z domain and is solved over about 53.5 mm. The
+lower margin, meant to keep the absorber away from the board, is missing. Until the fix lands, raise the geometry by
+the margin before planning (about 50 mm in this example; the profile then spans the lower margin and matches the
+reported domain), or build the model with a uniform z mesh and an explicit domain.
+
 ### Drude/Lorentz time-step admission limits on periodic and multi-device runs
 
 Tracker: #1934
@@ -88,17 +100,6 @@ Since this change, a source on such an edge is scaled by the same weight on sing
 A resistive sheet or lumped RLC element on such an edge is NOT scaled: its update replaces the field after the weight.
 Tracker: #1373
 → [#1373](https://github.com/bk-squared/rfx/issues/1373)
-
-### Placing a solve on CPU in a process whose default backend is GPU
-
-Tracker: #952
-
-The absorber write-back is selected from the process's default backend at trace
-time. A process whose default backend is GPU but which places a solve on its CPU
-device therefore uses the GPU form there. A plain call and a `jax.jit` call of
-the same solve can then differ in their last float32 digits. Results on the GPU,
-and in a CPU-only process, are not affected. Use the GPU device or a CPU-only
-process to avoid this spread.
 
 ### Lossy Box film area on a traced mesh is checked only on a concrete grid
 
@@ -200,7 +201,7 @@ the declared domain, so drawing the strip "into the absorber" is not possible to
 
 ### The default wire port is a mesh-sized probe.
 
-Tracker: #1138
+Tracker: #1373
 
 `add_port(..., extent=...)`
 with `radius=None` acts as a probe of radius approximately `0.20 * dx` on a
@@ -275,9 +276,11 @@ about this, and a measurement decided it.
 
 ### A source on a smoothed or conformal edge is injected with a coefficient that differs from the field update's.
 
-Tracker: #1524
+Tracker: #1373
 
-Pending for 2.0 — tracker 1524.
+Open for 2.0 in #1373 (folded from #1524 on 2026-10-07): it is to be measured
+against a run with the update's exact coefficient, and refused if the error is
+outside the accuracy bar.
 
 The field increment a source adds on its edge is the update's coefficient times the drive. One place still computes that coefficient apart from the update: a rectangular-waveguide port or plane-wave source whose edges touch `subpixel_smoothing` or conformal-PEC cells. The drive on those edges is scaled by the ratio of the two coefficients; S-parameters normalised to the incident wave are not known to move, absolute field and probe amplitudes are. Until it is fixed, read absolute amplitudes from such a run as uncalibrated, or declare the source on a plain edge.
 
@@ -335,18 +338,22 @@ What to do: record well past the slowest mode's decay, or use a one-cell wire po
 
 ### Magnetic faces require the single-device second-order Yee image.
 
-Tracker: #1221
+Tracker: none — accepted limitation (refused at default: tests/unit/sparams/test_pmc_waveguide_refusal.py::test_pmc_waveguide_mode_solver_refuses)
 
 Uniform and graded run/forward place the wall on the declared E-node face.
-Distributed kernels, subgridded and ADI paths refuse magnetic faces.
+The multi-device runners take a magnetic face through the same single-device
+image (#1761). There, wire ports and lumped-port S-parameters refuse it, and on
+the graded mesh so do DFT planes, flux monitors, snapshots and current moments.
+Subgridded and ADI paths refuse magnetic faces (the `pmc_face` row of
+`tests/contracts/path_disposition.py`; the graded multi-device records:
+`tests/contracts/test_distributed_graded_pmc_records.py`).
 Waveguide-port execution also refuses magnetic faces: its aperture mode solver
 implements PEC walls only. The fourth-order stencil refuses them because
 its far neighbors have no magnetic image. Subpixel smoothing refuses a material surface within half
 an adjacent cell of a magnetic face when the smoother would need the
 material's even extension; extending the material at least a cell beyond
-the face is supported. These refusals remain until the corresponding
-kernels and smoothing extension are implemented.
-→ [#1221](https://github.com/bk-squared/rfx/issues/1221)
+the face is supported. No issue plans these kernels or the smoothing
+extension for 2.0; they stay refusals.
 
 ### With the mesh as a design variable, a ground plane still ends at the absorber.
 
@@ -362,7 +369,7 @@ cell except the outermost row on the +x and +y faces.
 
 ### A plane wave requires compatible transverse faces and an invariant absorber replacement.
 
-Tracker: #1221
+Tracker: none — accepted limitation (refused at default: tests/contracts/test_tfsf_boundary_admission.py::test_finite_box_is_refused)
 
 At normal incidence, on the uniform and the graded mesh alike, dispatch refuses absorbing transverse faces for an open TF/SF plane wave when
 materials on the grid, conductors or localized field updates vary along that axis,
@@ -387,8 +394,7 @@ its probe record equals the uniform mesh's within 2×10⁻⁶ of its peak
 (`tests/contracts/test_plane_wave_admission_both_meshes.py`). Traced overrides keep the existing graded operator
 with the same warning. A finite scatterer or an array, also one given to `forward()` as an override or a design
 box, is refused there with the uniform mesh named as the remedy, since a closed box and a plane wave with periodic axes are
-refused on the graded mesh (the experimental operator remains a PR3b item).
-→ [#1221](https://github.com/bk-squared/rfx/issues/1221)
+refused on the graded mesh (an operator that admits them is not planned for 2.0).
 
 ### An oblique Bloch plane wave rings at its cutoff along the source plane, so a value read at f0 depends on the simulation time.
 
@@ -403,19 +409,6 @@ time. rfx warns when the pulse level at f_c is above −60 dB of its level at f0
 bandwidth, f_c and level. Narrow the bandwidth, or taper the tail of the time series
 before the DFT.
 
-### Full-aperture guides on a graded mesh require explicit transverse boundaries.
-
-Tracker: #1221
-
-The non-uniform and distributed non-uniform paths refuse a full-aperture waveguide
-when `boundary` was omitted, including with preflight skipped. Their default keeps
-transverse absorbers, so the port would not be in a guide. For an x-directed guide,
-write `boundary={'x': 'cpml', 'y': 'pec', 'z': 'pec'}`; substitute the port axis for
-other directions. Explicit absorbers retain the open cross-section. Uniform and
-graded builders can still differ by one transverse node when the width is not a
-whole number of cells; matching their boundary declarations does not remove that
-difference. → [#1221](https://github.com/bk-squared/rfx/issues/1221)
-
 ## Gradients and optimization
 
 ### A multi-device `forward()` on a uniform mesh takes no override or design argument
@@ -426,12 +419,13 @@ Tracker: #1373
 
 ### A gradient with respect to conductivity does not settle with simulation time on lossless or nearly lossless design cells
 
-Tracker: #1424
+Tracker: none — accepted limitation (warns at default: tests/unit/autodiff/test_conductivity_gradient_record.py::test_lossless_design)
 
 `jax.grad` through `forward()` admits a conductivity design. Where T·σ/ε on
 those design cells is not large, the gradient depends on the phase at each frequency bin set by the simulation time: a static sensitivity remains although the field
 decays. A longer record does not help.
-`gradient_record_length_witness` detects it. `gradient="adjoint"` refuses every
+`gradient_record_length_witness` detects it; the mechanism was measured in #1571.
+`gradient="adjoint"` refuses every
 conductivity design (`design_sigma_override`), lossy or not, and returns
 settled-spectrum gradients only.
 `forward()` now attaches an advisory record `conductivity_gradient_record_length` to `result.diagnostics` when a conductivity design is supplied.
@@ -564,8 +558,10 @@ covered only as far as its build.
 Tracker: #1471
 
 The patch-antenna accuracy figure is not claimed for 2.0 because
-its simulation time predates the current decay check. It is being
-re-measured in [#1471](https://github.com/bk-squared/rfx/issues/1471).
+its simulation time predates the current decay check. It is re-measured after
+2.0, with the MSL notch filter's, on a redesigned record length and mesh ladder
+(PI decision 2026-10-04, recorded on
+[#1471](https://github.com/bk-squared/rfx/issues/1471)).
 
 ---
 

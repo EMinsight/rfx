@@ -105,8 +105,8 @@ occupancy box combines with `eps_override` and `pec_occupancy_override`.
 Values in between are a smooth path for the optimizer, not a physical
 material: an edge of partial occupancy behaves as an artificial loss. Drive
 the design to 0 and 1 before you read its performance; `rfx.topology` has a
-density filter and a smooth threshold projection for that. See the known
-limitation "Intermediate conductor occupancy is an artificial loss".
+density filter and a smooth threshold projection for that. See the
+[known limitations](/rfx/support/known-limitations/) on partly metal cell edges.
 
 Design metal never covers what was declared at a cell edge. Under a
 whole-grid occupancy, the edges of lumped RLC elements and of
@@ -140,15 +140,15 @@ without compiling again. It is a switch for searching layouts, not a
 sensitivity: it cannot be differentiated (see
 [Conductors](/rfx/model/conductors/#pinned-sheets)).
 
-## What is checked
+## How rfx checks it
 
 The shape of each array against the grid or the realized box, the inputs a
 design box cannot be combined with, and the solver path, before the first
 step. A gradient is the exact derivative of the run you set up; whether the
 run is long enough for it is a separate check
-([Checking a gradient](/rfx/evidence/gradients/)).
+([Checking a gradient](/rfx/check/gradients/)).
 
-## What is refused, and the way through
+## Inputs rfx refuses
 
 | Input | Solver path | Instead |
 |---|---|---|
@@ -185,7 +185,7 @@ the same derivative:
 
 ## See also
 
-- [Checking a gradient](/rfx/evidence/gradients/): whether the run is long enough for the gradient.
+- [Checking a gradient](/rfx/check/gradients/): whether the run is long enough for the gradient.
 - [Optimization](/rfx/design/optimization/): optimizers built on these inputs.
 - [Autodiff and adjoint background](/rfx/design/gradients/).
 - [Memory and speed](/rfx/run/memory-and-speed/): checkpointing and the design box.

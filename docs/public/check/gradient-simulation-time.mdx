@@ -1,0 +1,216 @@
+---
+title: Simulation time for gradients
+description: How much longer a gradient must run than its S-parameter when a parameter moves a resonance, in decay times of the slowest mode.
+sidebar:
+  order: 4
+---
+
+After the source has ended, a resonance rings down as e^(−t/τ), where
+τ = 2Q/ω = Q/(πf) is the amplitude decay time of that mode. A design parameter
+that moves the resonance changes the phase of that ringing by an amount that
+grows with time, so the derivative of the ringing with respect to the parameter
+decays as t·e^(−t/τ), more slowly than the ringing itself. A run that ends at
+time T loses both tails. At resonance, the resonant part of the S-parameter
+loses e^(−T/τ) of itself, and its sensitivity to the parameter loses
+(1 + T/τ)·e^(−T/τ) [[Kim 2026]](#reference). The gradient needs a longer run
+than the value.
+
+This page gives that time in units of τ, what to do when it is too long to
+simulate, and when it changes a design. [Checking a gradient](/rfx/check/gradients/)
+is the check that a given run was long enough; run it in either case.
+
+## How long
+
+The two errors at resonance, for a few simulation times:
+
+| T/τ | resonant part of S lost, e^(−T/τ) | sensitivity error, (1 + T/τ)·e^(−T/τ) |
+|---|---|---|
+| 1 | 37 % | 74 % |
+| 2 | 14 % | 41 % |
+| 4.6 | 1.0 % | 5.6 % |
+| 6.6 | 0.14 % | 1.0 % |
+
+- A 1 % sensitivity needs T ≥ 6.6 τ (6.64 τ exactly), 1.44 times the 4.6 τ that
+  brings the resonant part of S to 1 %. A run stopped at 4.6 τ leaves 5.6 % in
+  the sensitivity. When S also has a part that does not ring, as at a weakly
+  coupled port, S reaches 1 % sooner and the gap is wider.
+- Away from resonance the sensitivity error grows. At a frequency d half-widths
+  from the resonance f_r (a half-width is f_r/(2Q), so d = 2Q·(f − f_r)/f_r),
+  the relative error of the sensitivity is e^(−T/τ)·|1 + (1 + jd)·T/τ|. Ten
+  half-widths away, a 1 % sensitivity needs 9.1 τ, 1.98 times the time for a
+  1 % S.
+- τ is that of the slowest mode the quantity depends on, including a mode that
+  is only weakly coupled to the port.
+
+For a resonance at 6 GHz with Q = 2000, τ is 106 ns. An objective that reads the
+resonance and one half-width (1.5 MHz) on either side needs 7.0 τ, about
+740 ns, for a 1 % gradient, against 4.6 τ, about 490 ns, for a 1 % S.
+
+### Every derivative of the run shares the error
+
+Automatic differentiation in forward or reverse mode (reverse mode is the
+discrete adjoint of the time stepping) and finite differences of two runs of
+the same length all differentiate the truncated result, and all carry this
+error. Their agreement therefore does not test it. The test is the same
+gradient from a longer run: `gradient_record_length_witness`, on
+[Checking a gradient](/rfx/check/gradients/). For a gradient taken through
+tail extrapolation, `rfx.ringdown.gradient_witness` compares the completion
+fitted on the run from T/2 with one fitted from T/4.
+
+A frequency-domain adjoint formula, which integrates truncated forward and
+adjoint fields over the design region, is not the derivative of the computed S
+and carries a different error; this page does not cover it.
+
+### Stop rules watch the value
+
+The [settling check](/rfx/check/simulation-time/) passes when at most 1 % of
+each frequency's value lies beyond the end of the run, and the decay stop
+`run(until_decay=...)` watches the field energy. Both judge the value. At a
+resonance that dominates the value, a 1 % tail comes at about 4.6 τ, where the
+sensitivity is still 5.6 % off.
+
+A rule that watches the port signals or the energy in the whole domain stops on
+the modes that dominate them, not on a slow mode that is weakly coupled. On a
+cavity whose slowest mode was weakly coupled to its port, a port-signal decay
+rule and domain-energy stops at −30 to −60 dB ended the run with |S11| within
+0.5 dB of its converged value at a 1.3 dB dip, and its sensitivity 10 to 72 %
+off [[Kim 2026]](#reference).
+
+## Set the simulation time for a gradient
+
+1. Find the slowest mode the objective depends on, its frequency f and its Q:
+   from a run with a probe inside the resonator and `result.find_resonances(...)`
+   ([Resonances](/rfx/measure/resonances/)), or, with tail extrapolation, from
+   the fitted poles in `out.ringdown.report.poles` (each with `f_hz`, `q`, and
+   `decay_per_s`, which is 1/τ). τ = Q/(πf).
+2. Take T for the frequency the objective reads farthest from that resonance,
+   from the formula above or from the two functions below, and set
+   `n_steps` to T divided by the time step (`sim.freeze_mesh().dt`).
+3. Run the [gradient check](/rfx/check/gradients/) at that length.
+
+The formula is in `rfx.ringdown`:
+
+```python
+import numpy as np
+from rfx.ringdown import required_t_over_tau, sensitivity_truncation_error
+
+f_r, q = 6.0e9, 2000.0                     # slowest mode: Resonances, or out.ringdown.report.poles
+tau = q / (np.pi * f_r)                    # amplitude decay time of that mode, 106 ns
+freqs = np.array([5.9985e9, 6.0e9, 6.0015e9])  # frequencies the objective reads
+d = 2 * q * (freqs - f_r) / f_r            # detuning of each, in half-widths: -1, 0, 1
+t_run = 4.6 * tau                          # n_steps * dt of the run
+err = sensitivity_truncation_error(t_run / tau, detuning_halfwidths=d)
+t_needed = required_t_over_tau(0.01, detuning_halfwidths=np.abs(d).max()) * tau
+print(np.round(err, 3), f"{t_needed / tau:.2f} tau = {t_needed * 1e9:.0f} ns")
+```
+
+```text
+[0.073 0.056 0.073] 6.96 tau = 739 ns
+```
+
+This is the case above: a run of 4.6 τ leaves the gradient 5.6 % off on
+resonance and 7.3 % one half-width away, and 1 % needs 7.0 τ.
+
+`sensitivity_truncation_error(t_over_tau, detuning_halfwidths=0.0)` returns
+e^(−T/τ)·|1 + (1 + jd)·T/τ| element by element. It takes numbers or NumPy and
+JAX arrays, keeps their dtype (float32 included), and works inside `jax.jit`
+and `jax.vmap`. `required_t_over_tau(error=0.01, detuning_halfwidths=0.0)`
+takes numbers and returns, as a float, the T/τ at which that error equals
+`error`. Both give the same result for d and −d.
+
+### When the run would be too long
+
+Instead of simulating the late time, it can be supplied:
+`forward(..., ringdown=RingdownSpec())` fits the ringing poles on the late part
+of the run, adds their tail to the port spectra, and carries the gradient
+through the fitted poles (wire ports only; see
+[Gradients through tail extrapolation](/rfx/check/gradients/#gradients-through-tail-extrapolation)).
+The signals it fits must contain the mode, and for a weakly coupled mode the
+port alone is not enough. On a cavity whose slowest mode (Q about 5000) was
+weakly coupled to the port, the fit from the port alone found that mode's pole
+accurately, but the gradient rfx carries through the fitted poles stayed 10 to
+42 % off. That gradient holds the fit's Jacobian fixed (a linearized fit), and
+the loss lies in that linearization, not in the port signals. With three field
+probes inside the cavity (`RingdownSpec(identification_probes=...)`), the
+gradient was within 1 % of the band's largest sensitivity from 0.1 τ, a run 66
+times shorter than 6.6 τ; on a second cavity it stayed near 2 %
+[[Kim 2026]](#reference). Check it with `gradient_witness` each time.
+
+## What it does to a design
+
+A design loop stops where the gradient of the truncated objective is zero. A
+wrong gradient changes the design only when truncation moves that point
+[[Kim 2026]](#reference):
+
+- One resonance and an objective symmetric about the target, such as |S21|²
+  read at the target frequency and at one half-width on either side, the two
+  sides weighted equally: the optimum does not move, as long as the mode's
+  residue (its coupling) is nearly constant over the frequencies read, the direct path
+  between the ports is small, and the resonance moves nearly independently of
+  its decay rate. An optimizer on runs of 2 τ reached the resonance of a long
+  run with a gradient up to 71 % wrong on the way. An objective read at one
+  frequency on the skirt of the resonance is not symmetric: truncation adds
+  local maxima there, and optimizers on runs of 1 and 2 τ stopped at them.
+- Two coupled resonances, as in a two-pole bandpass filter, with an objective
+  that asks for transmission across the passband: the truncated objective is
+  met with the poles further apart. On runs of 1 τ the optimum is over-coupled
+  by Δk ≈ 1.24/Q (k the coupling coefficient, Q the loaded Q of each pole). An
+  equal-ripple objective still moves it at 3 τ, by about 0.2 of a half-width.
+  By 4.6 τ, where the resonant part of S is within 1 %, the shift is below
+  what the scan resolved.
+
+Where the value of the gradient is used, in a comparison with a reference, a
+tolerance or yield estimate, or the length of a step, run 6.6 τ of the slowest
+mode. For the optimum of coupled resonators, S itself must have converged:
+4.6 τ for 1 %.
+
+## Where the estimate holds
+
+- The parameter must move a resonance. A parameter that changes only the
+  residue (how strongly the mode is coupled), not its frequency or decay, leaves
+  the sensitivity converging like S.
+- It is quantitative where one mode dominates. At cavity resonances with Q of
+  about 1000 to 7000, the simulated error was within 4 % of the estimate in
+  three FDTD solvers. At lower Q the error lies above it. At a transmission
+  zero, such as a notch, where the excitation still lasted 2 τ of the nearest
+  pole, it was 1.6 to 3.4 times the estimate. Below high Q the estimate is close
+  to a lower bound; it is not a strict one, because the residue term it leaves
+  out can also lower the error.
+- On nearly coincident poles the sensitivity can decay more slowly than
+  t·e^(−t/τ), and the estimate does not apply.
+- In units of τ the delay is the same at every Q; in time it grows with Q. It
+  matters for resonators, filters and narrowband antennas, and little for
+  broadband radiators.
+
+## Inputs rfx refuses
+
+| Input | What happens | Instead |
+|---|---|---|
+| `sensitivity_truncation_error` with `t_over_tau` zero, negative or not finite | `ValueError`; inside `jax.jit` or `jax.vmap` a value cannot raise, so that element is NaN | pass T/τ of the run, greater than 0 |
+| either function with `detuning_halfwidths` not finite | `ValueError`; inside `jax.jit` or `jax.vmap`, NaN for that element | pass the detuning in half-widths, any sign |
+| `required_t_over_tau` with `error` outside the open interval (0, 1), NaN or infinite | `ValueError`: a single T/τ with that error exists only inside it | pass a relative error between 0 and 1, such as 0.01 |
+
+## Where it is tested
+
+- Both functions are checked against values of the closed form computed by
+  hand, at and away from resonance
+  (`tests/oracle/test_sensitivity_truncation_error.py`).
+- The estimate against simulation, the stop rules, tail extrapolation inside
+  the gradient and the two filter designs are in [[Kim 2026]](#reference).
+- The cavity on [Checking a gradient](/rfx/check/gradients/#where-it-is-tested) (Q
+  about 20) is a low-Q case: its gradient is still more than 10 % off after the
+  settling check has passed.
+
+## Reference
+
+- B. Kim, ["Delayed Convergence of S-Parameter Sensitivities to Design
+  Parameters in FDTD Simulations"](https://arxiv.org/abs/2610.28496),
+  arXiv:2610.28496 (2026).
+
+## See also
+
+- [Checking a gradient](/rfx/check/gradients/): the check from a longer run,
+  finite differences, and gradients through tail extrapolation.
+- [Is the run long enough?](/rfx/check/simulation-time/): the settling check
+  for the value.
+- [Resonances](/rfx/measure/resonances/): f and Q of a mode from a probe.

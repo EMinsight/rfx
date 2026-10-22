@@ -32,7 +32,8 @@ to grade a mesh at all, see [Non-Uniform Mesh](/rfx/model/domain-mesh/).
 - A thin z feature makes the plan grade z and return a `dz_profile`.
 
 `plan_mesh` wraps `auto_configure` and adds a serializable record of what it
-chose. Prefer it.
+chose. Prefer it, except for `thin_conductors` and `waveform`, which only
+`auto_configure` takes.
 
 ```python
 import numpy as np
@@ -48,6 +49,15 @@ kwargs = plan.to_sim_kwargs()   # freq_max, domain, boundary, cpml_layers, dx (+
 sim = Simulation(**kwargs)
 print(sorted(kwargs))
 ```
+
+When the plan grades z, its z profile starts at the board's bottom face and
+covers only the board and the upper margin: for this board the plan reports a
+101.5 mm z domain, but the model is solved over about half of it, with the
+board on the lower absorber, and with neighbouring cells up to 2:1 (above the
+1.4 limit below). Until the planner is fixed, raise the geometry by the margin
+before planning, or build the model with a uniform z mesh and an explicit
+domain; see the
+[known limitations](https://github.com/bk-squared/rfx/blob/main/docs/guides/known_limitations.md).
 
 `MeshPlan` holds the derived `domain`, `cell_sizes`, `cfl`, `absorber`,
 `memory`, `grid_shape`, `support_checks` and `warnings`. Export it with
@@ -92,8 +102,8 @@ print(len(graded), f"{graded.sum() * 1e3:.3f} mm")   # longer: cells were insert
 planes: the total length and every interface are exact. `smooth_grading`
 **adds** cells, so the total length and the positions after the inserted
 cells change. Recompute your layer coordinates from the final profile's
-cumulative sum. Use `max_ratio=1.4` along z and 1.3 in-plane; those are the
-ratios rfx has evidence for, and preflight flags larger ones.
+cumulative sum. Use `max_ratio=1.4` along z and 1.3 in-plane; rfx has been
+checked up to those ratios, and preflight flags larger ones.
 
 ## Limits
 
@@ -101,7 +111,7 @@ ratios rfx has evidence for, and preflight flags larger ones.
   `Simulation.preflight()` for geometry you add later, nor a convergence study.
 - The cell count per wavelength in `accuracy` is a free-space figure. Check
   that dielectrics still get enough cells: preflight warns below 15 per
-  wavelength in the material.
+  wavelength in the material (20 with waveguide ports or flux monitors).
 - On a graded mesh, a `Box` whose faces fall between grid planes snaps to the
   nearest one. Preflight reports this as `graded_box_rasterization`. Align
   layers to the profile's cell edges.

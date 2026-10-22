@@ -67,7 +67,7 @@ order you declared them.
 - Each row is taken after the step completes: E at (n + 1)·dt and H at
   (n + ½)·dt for row n.
 - A probe at a point source or a lumped or wire port measures the source, not
-  the structure. The [settling check](/rfx/evidence/simulation-time/) ignores it
+  the structure. The [settling check](/rfx/check/simulation-time/) ignores it
   when other probes exist.
 
 ### DFT planes
@@ -79,11 +79,12 @@ storing the time history. `result.dft_planes[name].accumulator` is complex,
 shaped (frequencies, n1, n2), and holds Σ x(t)·e^(−j2πft)·dt over the run: a
 spectral density in field units times seconds, not a phasor amplitude.
 `region=` crops the plane to an index range. Name it with `name=`; the default
-is `{component}_{axis}_{index}`.
+is `{component}_{axis}_{index}`, where `index` counts the DFT planes declared
+before this one.
 
 ### Flux monitors
 
-`sim.add_flux_monitor(axis=, coordinate=, freqs=, size=, center=)` accumulates
+`sim.add_flux_monitor(axis=, coordinate=, freqs=, size=, center=, dft_window="rect", dft_window_alpha=0.25)` accumulates
 the tangential E and H over a plane; `flux_spectrum(monitor)` turns them into
 one real number per frequency, Σ Re(E × H*)·dA over the plane. It is positive
 along the plus direction of `axis`. A box is six planes; add the outward
@@ -118,23 +119,23 @@ fields at the end of the run.
 | Output | `run()` | `forward()` | Not available on |
 |---|---|---|---|
 | point probes | yes | yes | — |
-| DFT planes | yes | yes | multi-device, ADI, subgridded |
-| flux monitors | yes | yes | multi-device, ADI, subgridded |
-| snapshots | yes | no | graded mesh, multi-device, ADI, subgridded |
+| DFT planes | yes | yes | ADI, subgridded |
+| flux monitors | yes | yes | ADI, subgridded |
+| snapshots | yes | no | graded mesh on one device, ADI, subgridded |
 | final fields (`state`) | yes | no | — |
 
-## What is checked
+## How rfx checks it
 
 When you declare an output: the component name and the axis. On a solver path
 that does not implement an output, the run is refused before the first step.
 
-## What is refused, and the way through
+## Inputs rfx refuses
 
 | Input | Solver path | Instead |
 |---|---|---|
-| a DFT plane | multi-device, ADI, subgridded | one device on a uniform or graded mesh |
-| a flux monitor | multi-device, ADI, subgridded | one device on a uniform or graded mesh |
-| `snapshot=` | graded mesh, multi-device, ADI, subgridded | a uniform mesh on one device |
+| a DFT plane | ADI, subgridded | the standard solver, on one device or several |
+| a flux monitor | ADI, subgridded | the standard solver, on one device or several |
+| `snapshot=` | graded mesh on one device, ADI, subgridded | a uniform mesh, or several devices on either mesh |
 | a flux monitor with `dft_window="hann"` or `"tukey"` in a run stopped by `until_decay` | uniform and graded mesh | the default `dft_window="rect"`, or a fixed `n_steps`: a window needs the run's length in advance |
 
 [Refused inputs](/rfx/check/refusals/) explains how refusals read; the
@@ -155,7 +156,7 @@ that does not implement an output, the run is refused before the first step.
   (`tests/oracle/test_lossy_material_validation.py`).
 
 Every spectral output is a transform of a record of finite length; read the
-[settling check](/rfx/evidence/simulation-time/) before reporting one.
+[settling check](/rfx/check/simulation-time/) before reporting one.
 
 ## See also
 
