@@ -39,7 +39,7 @@ def _findings(sim):
     return [i for i in sim.preflight() if i.code == CODE]
 
 
-@pytest.mark.parametrize("cells,face", [(1, 87), (2, 84)])
+@pytest.mark.parametrize("cells,face", [(1, 87), (2, 84), (3, 81)])
 @pytest.mark.parametrize("dispatch", [False, True])
 def test_hidden_short_refused_by_calculator(cells, face, dispatch):
     sim = _guide(cells)
@@ -108,11 +108,57 @@ def test_filled_guide_admitted():
     assert not [i for i in report if i.code == CODE]
 
 
-def test_reference_endpoint_is_open():
+def test_face_on_reference_plane_refused():
+    """A sheet ON the measured plane (81 mm) read |S22| 0.504 / 0.505 for a
+    full short with no finding (review of #1923); the 4-cell short reads 0.999."""
     sim = _guide()
-    # A sheet ON the measured plane (81 mm) has no face in the open interval.
     sim.add(Box((0.081, 0, 0), (0.081, A, B)), material="pec")
+    findings = _findings(sim)
+    assert len(findings) == 1
+    assert "face at 81 mm" in str(findings[0])
+
+
+@pytest.mark.parametrize("hi,refused", [(0.0805, True), (0.0795, False)])
+def test_face_built_on_reference_plane_refused(hi, refused):
+    """Drawn at 80.5 mm the face is built at 81 mm and read |S22| 0.504 / 0.505
+    with no finding; drawn at 79.5 mm it is built at 78 mm and reads 0.999."""
+    sim = _guide()
+    sim.add(Box((0.075, 0, 0), (hi, A, B)), material="pec")
+    assert len(_findings(sim)) == int(refused)
+
+
+def test_object_behind_source_admitted():
+    # Behind the -x port: not between the planes (|S22| 0.0003 / 0.0002 measured).
+    sim = _guide()
+    sim.add(Box((0.096, 0, 0), (0.099, A, B)), material="pec")
     assert not _findings(sim)
+
+
+def test_graded_box_thinner_than_samples_refused():
+    """A PEC box 9 um thick on 5 um local cells is realized as a volume; both
+    10 um samples fell outside it and the face read as no medium change."""
+    from tests._x64_compat import enable_x64
+    from rfx.preflight.waveguide_port_span import _validate_cfg_waveguide_port_span
+    with enable_x64():
+        # 27 cells to 81 mm, 2.99 mm, four 5 um cells over 84 mm, 2.99 mm, 11 cells.
+        profile = np.r_[np.full(27, DX), 2.99e-3, np.full(4, 5e-6), 2.99e-3,
+                        np.full(11, DX)]
+        sim = Simulation(freq_max=10e9, domain=(0.12, A, B), dx=DX,
+                         boundary=BoundarySpec(x="cpml", y=Boundary(lo="pec", hi="pec"),
+                                               z=Boundary(lo="pec", hi="pec")),
+                         cpml_layers=10, dx_profile=profile)
+        sim.add(Box((0.084, 0, 0), (0.084009, A, B)), material="pec")
+        sim.add_waveguide_port(0.090, direction="-x", name="right",
+                               mode=(1, 0), mode_type="TE", freqs=FREQS, f0=6e9,
+                               ref_offset=8)
+        source, reference = entry_planes(sim._waveguide_ports[0], sim._build_nonuniform_grid())
+        assert reference < 0.084 < 0.084009 < source
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _validate_cfg_waveguide_port_span(sim, warnings)
+    findings = [w.message for w in caught if getattr(w.message, "code", None) == CODE]
+    assert len(findings) == 1
+    assert "face at 84" in str(findings[0])
 
 
 @pytest.mark.parametrize("registry", ["geometry", "thin", "pinned"])
@@ -325,3 +371,18 @@ def test_face_samples_keep_centre_when_overlap_contains_no_cell_centres():
         sim._build_realized_grid(), np.array([0.084, 0.0209, 0.0104]),
         np.array([0.087, 0.0211, 0.0106]), {1: (0, A), 2: (0, B)}))
     np.testing.assert_allclose(points, [[0, 0.021, 0.0105]], atol=1e-12)
+
+
+@pytest.mark.parametrize("graded", [False, True])
+def test_fill_drawn_past_the_domain_admitted(graded):
+    """A guide fill drawn from -1 m to 1 m changes no medium in the span and must
+    not reach the node lookup outside the domain (re-review of the built-node test)."""
+    from rfx.preflight.waveguide_port_span import _validate_cfg_waveguide_port_span
+    profile = {"dx_profile": np.full(40, DX)} if graded else {}
+    sim = _guide(one_port=True, **profile)
+    sim.add_material("fill", eps_r=2.2)
+    sim.add(Box((-1.0, 0, 0), (1.0, A, B)), material="fill")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _validate_cfg_waveguide_port_span(sim, warnings)
+    assert not [w for w in caught if getattr(w.message, "code", None) == CODE]
