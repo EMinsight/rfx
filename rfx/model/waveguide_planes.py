@@ -4,6 +4,15 @@ from __future__ import annotations
 import numpy as np
 
 
+def with_segment_declaration(config, entry):
+    """Carry the declared reference to setup, including every mode of a port."""
+    if isinstance(config, list):
+        return [with_segment_declaration(cfg, entry) for cfg in config]
+    return config._replace(
+        segment_planes=() if entry.reference_plane is None else (entry.reference_plane,),
+        port_name=entry.name or "")
+
+
 def offset_plane(source_m, source_index, offset, dx, *, grid=None, axis="x"):
     """Signed cell offset, integrating primal spacing on a graded axis."""
     if grid is None:

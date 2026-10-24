@@ -25,6 +25,8 @@ def _leaves(value, name):
         return
     if hasattr(value, "shape"):
         yield name, value
+    elif np.isscalar(value) and not isinstance(value, (str, bytes)):
+        yield name, np.asarray(value)
     elif is_dataclass(value):
         for field in fields(value):
             yield from _leaves(getattr(value, field.name), f"{name}.{field.name}")
@@ -342,9 +344,11 @@ _INJECTION_COMPONENTS = {
 }
 
 
-def _injection_arrays(grid, materials, updates, localized):
-    """Yield actual spatial operands with their vacuum values and labels."""
+def _injection_arrays(grid, materials, updates, localized, *, cell_scalar=False):
+    """Yield realized operands; optionally project onto scalar cell media only."""
     for name, array in _leaves(materials, "materials"):
+        if cell_scalar and name not in ("materials.eps_r", "materials.sigma", "materials.mu_r"):
+            continue
         if array.ndim < 3 and name not in ("materials.eps_r", "materials.sigma", "materials.mu_r"):
             continue
         vacuum, label = injection_material_rule(name)
@@ -354,6 +358,8 @@ def _injection_arrays(grid, materials, updates, localized):
         if vacuum is not None:
             yield name, array, vacuum, label
     for name, value in (*updates.items(), *localized):
+        if cell_scalar and name not in ("debye", "lorentz", "kerr_chi3", "pec_mask", "pec_occupancy"):
+            continue
         vacuum, label = INJECTION_OPERANDS[name]
         if value is None or vacuum is None or vacuum == "realized":
             continue
@@ -450,8 +456,10 @@ def admit_setup(*, grid, tfsf, materials, waveguide_ports, ntff, updates,
                 localized, periodic, pec_faces=None, pmc_faces=None,
                 feature_owned=False, nonuniform=False):
     """Last check on actual low-level inputs, including AD material overrides."""
-    from rfx.boundaries.features import admit_grid_waveguide
+    from rfx.boundaries.features import admit_grid_waveguide, refuse_waveguide_segment_medium
     admit_grid_waveguide(grid, waveguide_ports)
+    refuse_waveguide_segment_medium(waveguide_ports, grid, materials, updates, localized,
+                                   design_box=updates.get("design_box"))
     if tfsf is None:
         return
     cfg = tfsf[0]

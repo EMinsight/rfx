@@ -39,6 +39,13 @@ def _findings(sim):
     return [i for i in sim.preflight() if i.code == CODE]
 
 
+def _segment_refused(sim):
+    call = sim.compute_waveguide_s_matrix if len(sim._waveguide_ports) > 1 else sim.run
+    kwargs = {"normalize": "flux"} if len(sim._waveguide_ports) > 1 and sim._uses_nonuniform_mesh else {}
+    with pytest.raises(ValueError, match=r"(left|right).*(eps|PEC).*rfx#1994"):
+        call(n_steps=2, skip_preflight=True, **kwargs)
+
+
 @pytest.mark.parametrize("cells,face", [(1, 87), (2, 84), (3, 81)])
 @pytest.mark.parametrize("dispatch", [False, True])
 def test_hidden_short_refused_by_calculator(cells, face, dispatch):
@@ -78,6 +85,8 @@ def test_visible_short_has_closed_form_reflection(cells, record_property):
 def test_one_port_entry_refuses(method):
     with pytest.raises(ValueError, match="right.*face at 87 mm"):
         getattr(_guide(1, one_port=True), method)(n_steps=4)
+    with pytest.raises(ValueError, match="right.*PEC.*rfx#1994"):
+        getattr(_guide(1, one_port=True), method)(n_steps=2, skip_preflight=True)
 
 
 def test_skip_preflight_bypasses_calculator(monkeypatch):
@@ -106,6 +115,8 @@ def test_filled_guide_admitted():
     report = sim.preflight()
     assert report.ok
     assert not [i for i in report if i.code == CODE]
+    with pytest.raises(ValueError, match=r"left.*eps.*2\.2.*rfx#1994"):
+        sim.compute_waveguide_s_matrix(n_steps=2)
 
 
 def test_face_on_reference_plane_refused():
@@ -156,6 +167,7 @@ def test_graded_box_thinner_than_samples_refused():
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             _validate_cfg_waveguide_port_span(sim, warnings)
+        _segment_refused(sim)
     findings = [w.message for w in caught if getattr(w.message, "code", None) == CODE]
     assert len(findings) == 1
     assert "face at 84" in str(findings[0])
@@ -246,6 +258,11 @@ def test_uniform_guide_drawn_in_pieces_admitted():
         assert not [w for w in caught
                     if "waveguide_port_obstacle_before_reference" in str(getattr(w.message, "code", ""))
                     or "cannot see that object" in str(w.message)], boxes
+        if boxes[0][0] == "fill":
+            with pytest.raises(ValueError, match=r"right.*eps.*2\.2.*rfx#1994"):
+                sim.run(n_steps=2, skip_preflight=True)
+        else:
+            sim.run(n_steps=2, skip_preflight=True)
 
 
 def test_dielectric_step_inside_the_interval_refused():
@@ -262,6 +279,7 @@ def test_dielectric_step_inside_the_interval_refused():
         warnings.simplefilter("always")
         _validate_cfg_waveguide_port_span(sim, warnings)
     assert any("has a face at 85 mm" in str(w.message) for w in caught)
+    _segment_refused(sim)
 
 
 @pytest.mark.parametrize("carve", [
@@ -284,6 +302,8 @@ def test_carved_pec_plate_refused(carve, graded):
     assert plate[0].severity == "error"
     for text in ("right", "face at 87 mm", "at 81 mm"):
         assert text in str(plate[0])
+    if graded:
+        _segment_refused(sim)
 
 
 def test_two_side_pec_boxes_stay_refused():
@@ -307,6 +327,7 @@ def test_half_filled_guide_with_full_pec_short_stays_refused():
     assert findings[0].severity == "error"
     assert "pec (geometry[1])" in str(findings[0])
     assert "face at 87 mm" in str(findings[0])
+    _segment_refused(sim)
 
 
 def test_abutting_boxes_differing_only_in_chi3_refused():
@@ -386,3 +407,4 @@ def test_fill_drawn_past_the_domain_admitted(graded):
         warnings.simplefilter("always")
         _validate_cfg_waveguide_port_span(sim, warnings)
     assert not [w for w in caught if getattr(w.message, "code", None) == CODE]
+    _segment_refused(sim)

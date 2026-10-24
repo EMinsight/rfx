@@ -76,9 +76,12 @@ def _wr90_sim():
 
 
 def _override_base(sim, override_kw: str):
-    base = jnp.ones(sim._build_grid().shape, dtype=jnp.float32)
+    grid = sim._build_grid()
+    base = jnp.ones(grid.shape, dtype=jnp.float32)
     if override_kw == "sigma_override":
-        base = base * 1e-3  # a small conductivity field
+        # Conductivity belongs to the device region, not the vacuum port model.
+        lo, hi = (grid.index_of("x", x) for x in (.03, .06))
+        base = jnp.zeros_like(base).at[lo:hi].set(1e-3)
     return base
 
 
@@ -155,7 +158,10 @@ def test_two_run_lane_concrete_eps_override_still_runs_forward():
     """The guard is tracer-scoped: a concrete eps_override on normalize=True
     still produces a finite S-matrix (forward use of the override channel)."""
     sim = _wr90_sim()
-    eps = _override_base(sim, "eps_override") * 1.5
+    grid = sim._build_grid()
+    # Load only the device region; vacuum modal segments stay unchanged.
+    lo, hi = (grid.index_of("x", x) for x in (.03, .06))
+    eps = _override_base(sim, "eps_override").at[lo:hi].set(1.5)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = sim.compute_waveguide_s_matrix(
