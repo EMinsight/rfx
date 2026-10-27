@@ -61,7 +61,7 @@ def apply_tfsf_h(state, cfg, tfsf_st, dx: float, dt: float):
 
     Dispatches to 2D auxiliary grid version for oblique incidence.
     """
-    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0))[0] * MU_0
+    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0), high_wall=(False, False, False))[0] * MU_0
     # Dispatch to open-domain oblique Method B (real float32, 4-edge box).
     if is_tfsf_methodB(cfg):
         from rfx.stepping.tfsf_oblique import apply_methodB_h

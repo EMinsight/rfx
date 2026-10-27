@@ -568,7 +568,7 @@ def apply_tfsf_2d_h(state, cfg: TFSF2DConfig, tfsf_st: TFSF2DState,
     H_mag[x_lo-1, ...] -= curl_sign * coeff * E_aux[x_lo, ...]
     H_mag[x_hi, ...]   += curl_sign * coeff * E_aux[x_hi+1, ...]
     """
-    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0))[0] * MU_0
+    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0), high_wall=(False, False, False))[0] * MU_0
     coeff = dt / (mu_abs * dx)
     i0 = cfg.i0_x
     h_ref = getattr(state, cfg.magnetic_component)

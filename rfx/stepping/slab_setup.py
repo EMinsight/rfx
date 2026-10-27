@@ -249,10 +249,13 @@ def realize_materials(materials, grid, layout, mesh, occupancy=None, *, cpml=Fal
         inputs = input_materials(materials, layout, mesh)
         occ = uniform_from_cut(occupancy, layout, mesh, outside=0)
     model_grid = _host_arrays(grid) if device is not None else grid
+    from rfx.geometry.rasterize_grid import unpadded_high_walls
+    high_wall = unpadded_high_walls(grid)
 
     def local(cells, index, occupancy, widths):
         view = None if index is None else UniformSlabView(index, grid, {'x_widths': widths})
-        components = realize_components(cells, model_grid, periodic=(False,) * 3, view=view)
+        components = realize_components(cells, model_grid, periodic=(False,) * 3,
+                                        high_wall=high_wall, view=view)
         cells = cells._replace(components=components)
         cells = with_edge_keep(cells, occupancy, dtype=jnp.float32, view=view)
         inverse, loss = graded_cpml_operands(cells, None, use_cpml=cpml,

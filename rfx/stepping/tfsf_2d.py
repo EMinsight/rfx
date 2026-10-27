@@ -96,7 +96,7 @@ def _update_e_tmz(cfg, st, dx, dt, t):
 
 def _update_h_tez(cfg, st, dx, dt):
     """TEz H update: Hx += (dt/mu0)*dEy/dz,  Hz -= (dt/mu0)*dEy/dx."""
-    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0))[0] * MU_0
+    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0), high_wall=(False, False, False))[0] * MU_0
     ey = st.ez_2d   # Ey stored in ez_2d slot
     hx = st.hx_2d   # Hx
     hz = st.hy_2d   # Hz stored in hy_2d slot
@@ -126,7 +126,7 @@ def _update_h_tez(cfg, st, dx, dt):
 
 def _update_h_tmz(cfg, st, dx, dt):
     """TMz H update: Hx -= (dt/mu0)*dEz/dy,  Hy += (dt/mu0)*dEz/dx."""
-    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0))[0] * MU_0
+    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0), high_wall=(False, False, False))[0] * MU_0
     ez = st.ez_2d
     hx, hy = st.hx_2d, st.hy_2d
     coeff_h = dt / mu_abs

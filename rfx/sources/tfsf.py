@@ -639,7 +639,7 @@ def update_tfsf_1d_h(cfg: TFSFConfig, st: TFSFState, dx: float,
             return st
         from rfx.sources.tfsf_discrete_plane_wave import update_line_h
         return update_line_h(cfg, st, dx, dt)
-    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0))[0] * MU_0
+    mu_abs = component_h_materials(MaterialArrays(None, None, 1.0), high_wall=(False, False, False))[0] * MU_0
     n = cfg.n_cpml
     e1d, h1d = st.e1d, st.h1d
     dx_1d = cfg.dx_1d
